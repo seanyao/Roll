@@ -1,0 +1,56 @@
+{
+  "name": "cybernetix",
+  "version": "0.1.0",
+  "description": "Cybernetix (CNX) - The AI-Native Development Paradigm based on Control Theory and PDCA",
+  "keywords": [
+    "ai",
+    "agent",
+    "control-theory",
+    "pdca",
+    "cybernetics",
+    "software-engineering",
+    "development-paradigm",
+    "skills"
+  ],
+  "homepage": "https://github.com/seanyao/cybernetix",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seanyao/cybernetix.git"
+  },
+  "bugs": {
+    "url": "https://github.com/seanyao/cybernetix/issues"
+  },
+  "license": "MIT",
+  "author": "Sean Yao <seanyao@gmail.com>",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "module",
+  "bin": {
+    "cnx": "./bin/cnx.js",
+    "cybernetix": "./bin/cnx.js"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
+    },
+    "./skills/*": "./skills/*/SKILL.md"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "skills/",
+    "template/",
+    "README.md",
+    "PARADIGM.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "node ./bin/install.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

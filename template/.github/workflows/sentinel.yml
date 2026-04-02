@@ -1,0 +1,26 @@
+name: Sentinel Patrol
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时巡逻
+  workflow_dispatch:       # 支持手动触发
+
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Run Sentinel Patrol
+        run: |
+          echo "🔍 Running sentinel patrol..."
+          # 这里可以集成实际的 sentinel 检查脚本
+          npm run test:e2e:smoke || true
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
