@@ -1,7 +1,5 @@
 # Cybernetix (CNX)
 
-![Cybernetix Overview](docs/assets/cybernetix-overview.jpg)
-
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                           ║
@@ -49,6 +47,8 @@ AI Development Paradigm：
 - ✅ Agent 自动化执行，人类审阅结果
 - ✅ Agent 持续验证，数据驱动改进
 - ✅ PDCA 闭环，自我优化
+
+![Cybernetix Overview](docs/assets/cybernetix-overview.jpg)
 
 ---
 
