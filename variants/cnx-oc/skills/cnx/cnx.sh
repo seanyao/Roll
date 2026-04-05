@@ -64,19 +64,22 @@ case $COMMAND in
     echo "🌐 Running: cnx-fetch"
     echo ""
     echo "Usage:"
-    echo '  $cnx fetch <url>          # 单页提取'
-    echo '  $cnx crawl <url>          # 全站爬取'
+    echo '  $cnx fetch <url> [method]  # 单页提取'
+    echo '  $cnx crawl <url>           # 全站爬取'
     echo ""
     echo "Examples:"
     echo '  $cnx fetch https://example.com'
+    echo '  $cnx fetch https://example.com tavily'
     echo '  $cnx crawl https://docs.example.com --depth 2'
     echo ""
-    echo "Smart Web Fetch v3.1 - 五层 fallback 策略:"
-    echo "  1. Tavily (AI 提取)"
-    echo "  2. Jina AI Reader (免费反爬)"
-    echo "  3. HTTP 直连 (快速兜底)"
-    echo "  4. Scrapling (本地浏览器)"
-    echo "  5. Browser 自动化 (最终 fallback)"
+    echo "Smart Web Fetch v4.0 - 三层策略:"
+    echo "  1. Tavily API (AI 提取，需 TAVILY_API_KEY)"
+    echo "  2. LLM Native Fetch (内置 FetchURL)"
+    echo "  3. Browser Automation (本地优先，云端兜底)"
+    echo ""
+    echo "Environment Variables:"
+    echo "  TAVILY_API_KEY       - Required for Tavily"
+    echo "  BROWSER_USE_API_KEY  - Optional (cloud fallback)"
     ;;
   *)
     cat <<'EOF'

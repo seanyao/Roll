@@ -143,12 +143,16 @@ $cnx crawl https://docs.example.com      # 全站爬取
 $cnx crawl https://site.com --depth 2    # 指定深度
 ```
 
-**五层 fallback 策略：**
-1. Tavily (AI 提取，速度快)
-2. Jina AI Reader (免费，反爬强)
-3. HTTP 直连 (快速兜底)
-4. Scrapling (本地浏览器)
-5. Browser 自动化 (最终 fallback)
+**三层策略：**
+1. **Tavily API** - AI 提取，质量最佳（需要 `TAVILY_API_KEY`）
+2. **LLM Native Fetch** - 使用内置 FetchURL 能力
+3. **Browser Automation** - 本地 browser-use 优先，云端兜底（需要 `BROWSER_USE_API_KEY`）
+
+**环境变量配置（每台机器独立）：**
+```bash
+export TAVILY_API_KEY=tvly-...
+export BROWSER_USE_API_KEY=bu-...  # 可选，本地 browser-use 优先
+```
 
 #### `probe` - 节点发现与健康检查
 ```bash

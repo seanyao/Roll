@@ -1,22 +1,20 @@
 #!/usr/bin/env node
 /**
- * Smart Web Fetch Skill - Ultimate Web Extraction Solution
- * 终极网页提取方案 - 智能多层级 fallback
+ * Smart Web Fetch Skill - Simplified 3-Layer Strategy
+ * 三层策略: Tavily → LLM Native → Browser
+ * 移除 mcporter, 直接 HTTP 调用, Key 从环境变量获取
  */
 
 const { execSync } = require('child_process');
 const https = require('https');
-const zlib = require('zlib');
 
 // Configuration
 const TAVILY_TIMEOUT = 30000;
-const JINA_TIMEOUT = 30000;
-const SCRAPLING_TIMEOUT = 60000;
 const BROWSER_TIMEOUT = 90000;
 const MIN_CONTENT_LENGTH = 200;
 const MAX_RETRIES = 2;
 
-// Blocked content keywords (expanded)
+// Blocked content keywords
 const BLOCKED_KEYWORDS = [
   // Chinese
   '验证', 'captcha', '请登录', '环境异常', '登录后', '需要验证',
@@ -29,15 +27,8 @@ const BLOCKED_KEYWORDS = [
   'security check', 'human verification', 'prove you\'re human'
 ];
 
-// User agents for different strategies
-const USER_AGENTS = {
-  desktop: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  mobile: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
-  bot: 'Mozilla/5.0 (compatible; SmartFetch/2.0; +https://github.com/openclaw/openclaw)'
-};
-
 /**
- * Check if content is blocked or low quality (enhanced)
+ * Check if content is blocked or low quality
  */
 function isBlockedOrLowQuality(content, source = 'unknown') {
   if (!content || content.length < MIN_CONTENT_LENGTH) {
@@ -53,13 +44,6 @@ function isBlockedOrLowQuality(content, source = 'unknown') {
     }
   }
   
-  // Check content quality indicators
-  const hasParagraphs = content.includes('\n\n') || content.includes('\n');
-  const hasSentences = (content.match(/[。\.\!\?]/g) || []).length > 3;
-  const hasStructure = content.includes('#') || content.includes('##') || 
-                       content.includes('- ') || content.includes('* ');
-  
-  // Low quality detection
   if (foundKeywords.length > 0) {
     const isLikelyBlocked = foundKeywords.some(k => 
       ['验证', 'captcha', '环境异常', '请登录', '拖动滑块'].includes(k)
@@ -67,23 +51,15 @@ function isBlockedOrLowQuality(content, source = 'unknown') {
     return { 
       blocked: isLikelyBlocked, 
       reason: `Detected keywords: ${foundKeywords.slice(0, 3).join(', ')}`,
-      severity: isLikelyBlocked ? 'high' : 'medium',
-      foundKeywords
+      severity: isLikelyBlocked ? 'high' : 'medium'
     };
   }
   
-  // Check if it's just navigation/menu content
-  const menuIndicators = ['首页', '导航', '菜单', '分类', '关于我们', '联系我们'];
-  const menuCount = menuIndicators.filter(m => lowerContent.includes(m)).length;
-  if (menuCount >= 3 && content.length < 500) {
-    return { blocked: true, reason: 'Likely navigation/menu only', severity: 'medium' };
-  }
-  
-  return { blocked: false, quality: { hasParagraphs, hasSentences, hasStructure } };
+  return { blocked: false };
 }
 
 /**
- * Calculate content quality score (enhanced)
+ * Calculate content quality score
  */
 function calculateQualityScore(content) {
   if (!content) return 0;
@@ -91,7 +67,7 @@ function calculateQualityScore(content) {
   let score = 0;
   const length = content.length;
   
-  // Length score (0-30) - logarithmic scale
+  // Length score (0-30)
   score += Math.min(Math.log10(length) * 10, 30);
   
   // Content density (0-25)
@@ -107,473 +83,409 @@ function calculateQualityScore(content) {
   if (content.includes('```')) score += 6;
   
   // Rich content indicators (0-20)
-  if (content.match(/\[.*?\]\(.*?\)/)) score += 5; // Links
-  if (content.match(/!\[.*?\]\(.*?\)/)) score += 5; // Images
-  if (content.match(/\*\*.*?\*\*/)) score += 5; // Bold
-  if (content.match(/`.*?`/)) score += 5; // Code
+  if (content.match(/\[.*?\]\(.*?\)/)) score += 5;
+  if (content.match(/\!\[.*?\]\(.*?\)/)) score += 5;
+  if (content.match(/\*\*.*?\*\*/)) score += 5;
+  if (content.match(/`.*?`/)) score += 5;
   
   return Math.min(score / 100, 1.0);
 }
 
 /**
- * Try Tavily extract
+ * Level 1: Tavily API (HTTP direct call)
  */
 function tryTavily(url, retries = 0) {
-  console.error(`[SmartFetch] Trying Tavily for: ${url}`);
+  console.error(`[SmartFetch] Level 1: Trying Tavily for: ${url}`);
   
-  try {
-    const result = execSync(
-      `mcporter call tavily tavily_extract urls='["${url}"]' extract_depth=advanced`,
-      { 
-        encoding: 'utf-8', 
-        timeout: TAVILY_TIMEOUT,
-        stdio: ['pipe', 'pipe', 'pipe']
-      }
-    );
-    
-    const data = JSON.parse(result);
-    
-    if (data.results && data.results[0]) {
-      const result = data.results[0];
-      return {
-        success: true,
-        tool: 'tavily',
-        content: result.raw_content || result.content || '',
-        title: result.title || '',
-        url: result.url || url
-      };
-    }
-    
-    return { success: false, tool: 'tavily', error: 'No results' };
-  } catch (error) {
-    if (retries < MAX_RETRIES && error.message?.includes('timeout')) {
-      console.error(`[SmartFetch] Tavily timeout, retrying... (${retries + 1}/${MAX_RETRIES})`);
-      return tryTavily(url, retries + 1);
-    }
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) {
     return { 
       success: false, 
       tool: 'tavily', 
-      error: error.message || 'Tavily failed'
+      error: 'TAVILY_API_KEY not set in environment',
+      needs_fallback: true
     };
   }
-}
-
-/**
- * Try Jina AI Reader (free, no API key needed)
- * https://r.jina.ai/http://example.com
- */
-function tryJinaReader(url) {
-  console.error(`[SmartFetch] Trying Jina AI Reader for: ${url}`);
   
   return new Promise((resolve) => {
-    const jinaUrl = `https://r.jina.ai/http://${url.replace(/^https?:\/\//, '')}`;
+    const postData = JSON.stringify({
+      urls: [url],
+      api_key: apiKey,
+      extract_depth: 'advanced',
+      include_images: false
+    });
     
-    const req = https.get(jinaUrl, {
-      timeout: JINA_TIMEOUT,
+    const options = {
+      hostname: 'api.tavily.com',
+      path: '/extract',
+      method: 'POST',
       headers: {
-        'User-Agent': USER_AGENTS.desktop
-      }
-    }, (res) => {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: TAVILY_TIMEOUT
+    };
+    
+    const req = https.request(options, (res) => {
       let data = '';
       
       res.on('data', chunk => data += chunk);
       
       res.on('end', () => {
-        if (res.statusCode === 200 && data.length > MIN_CONTENT_LENGTH) {
-          // Parse Jina's markdown format
-          const lines = data.split('\n');
-          let title = '';
-          let content = data;
+        try {
+          const response = JSON.parse(data);
           
-          // Jina returns: Title\n\nURL\n\nContent
-          if (lines[0] && !lines[0].startsWith('http')) {
-            title = lines[0].trim();
-            const urlLine = lines.findIndex(l => l.startsWith('http'));
-            if (urlLine > 0) {
-              content = lines.slice(urlLine + 2).join('\n');
+          if (response.results && response.results[0]) {
+            const result = response.results[0];
+            const content = result.raw_content || result.content || '';
+            
+            if (content.length > MIN_CONTENT_LENGTH) {
+              resolve({
+                success: true,
+                tool: 'tavily',
+                content: content,
+                title: result.title || '',
+                url: result.url || url
+              });
+            } else {
+              resolve({ 
+                success: false, 
+                tool: 'tavily', 
+                error: 'Content too short',
+                needs_fallback: true
+              });
             }
+          } else if (response.error) {
+            resolve({ 
+              success: false, 
+              tool: 'tavily', 
+              error: response.error,
+              needs_fallback: true
+            });
+          } else {
+            resolve({ 
+              success: false, 
+              tool: 'tavily', 
+              error: 'No results',
+              needs_fallback: true
+            });
           }
-          
-          resolve({
-            success: true,
-            tool: 'jina',
-            content: content.trim(),
-            title: title,
-            url: url
+        } catch (e) {
+          resolve({ 
+            success: false, 
+            tool: 'tavily', 
+            error: `Parse error: ${e.message}`,
+            needs_fallback: true
           });
-        } else {
-          resolve({ success: false, tool: 'jina', error: `HTTP ${res.statusCode}` });
         }
       });
     });
     
     req.on('error', (err) => {
-      resolve({ success: false, tool: 'jina', error: err.message });
+      if (retries < MAX_RETRIES) {
+        console.error(`[SmartFetch] Tavily error, retrying... (${retries + 1}/${MAX_RETRIES})`);
+        resolve(tryTavily(url, retries + 1));
+      } else {
+        resolve({ 
+          success: false, 
+          tool: 'tavily', 
+          error: err.message,
+          needs_fallback: true
+        });
+      }
     });
     
     req.on('timeout', () => {
       req.destroy();
-      resolve({ success: false, tool: 'jina', error: 'Timeout' });
+      if (retries < MAX_RETRIES) {
+        console.error(`[SmartFetch] Tavily timeout, retrying... (${retries + 1}/${MAX_RETRIES})`);
+        resolve(tryTavily(url, retries + 1));
+      } else {
+        resolve({ 
+          success: false, 
+          tool: 'tavily', 
+          error: 'Timeout',
+          needs_fallback: true
+        });
+      }
     });
+    
+    req.write(postData);
+    req.end();
   });
 }
 
 /**
- * Try Scrapling extract
+ * Level 2: LLM Native Fetch (return instruction for caller)
  */
-function tryScrapling(url, mode = 'stealthy-fetch') {
-  console.error(`[SmartFetch] Trying Scrapling (${mode}) for: ${url}`);
+function tryLLMNative(url) {
+  console.error(`[SmartFetch] Level 2: LLM Native Fetch for: ${url}`);
   
-  const tempFile = `/tmp/scrapling_${Date.now()}.md`;
-  
+  return {
+    success: false,
+    tool: 'llm_native',
+    error: 'LLM Native fetch requires caller to use FetchURL tool',
+    instruction: `Use FetchURL tool to fetch "${url}" and return the content`,
+    needs_fallback: true,
+    native_fetch: true,
+    url: url
+  };
+}
+
+/**
+ * Check if browser-use is installed locally
+ */
+function isBrowserUseInstalled() {
   try {
-    // Try different Scrapling modes
-    const modes = mode === 'auto' ? ['stealthy-fetch', 'fetch', 'get'] : [mode];
-    
-    for (const m of modes) {
-      try {
-        execSync(
-          `scrapling-py312 extract ${m} '${url}' ${tempFile} 2>&1`,
-          { 
-            timeout: Math.floor(SCRAPLING_TIMEOUT / modes.length),
-            stdio: ['pipe', 'pipe', 'pipe']
-          }
-        );
-        
-        const fs = require('fs');
-        if (fs.existsSync(tempFile)) {
-          const content = fs.readFileSync(tempFile, 'utf-8');
-          fs.unlinkSync(tempFile);
-          
-          if (content.length > MIN_CONTENT_LENGTH) {
-            return {
-              success: true,
-              tool: 'scrapling',
-              mode: m,
-              content: content,
-              title: '',
-              url: url
-            };
-          }
-        }
-      } catch (e) {
-        console.error(`[SmartFetch] Scrapling mode ${m} failed: ${e.message.split('\n')[0]}`);
-      }
-    }
-    
-    return { success: false, tool: 'scrapling', error: 'All modes failed' };
-  } catch (error) {
-    try {
-      const fs = require('fs');
-      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-    } catch (e) {}
-    
-    return { 
-      success: false, 
-      tool: 'scrapling', 
-      error: error.message || 'Scrapling failed'
-    };
+    execSync('python3 -c "import browser_use"', { 
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: 'pipe'
+    });
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
 /**
- * Quick HTTP fetch (no browser, for fast fallback)
- * Handles gzip/deflate compression automatically
+ * Level 3: Browser Automation (Local first, then Cloud)
  */
-function tryHttpFetch(url) {
-  console.error(`[SmartFetch] Trying HTTP fetch for: ${url}`);
-  
-  return new Promise((resolve) => {
-    const client = url.startsWith('https:') ? https : require('http');
-    
-    const req = client.get(url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': USER_AGENTS.desktop,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive'
-      }
-    }, (res) => {
-      // Handle redirects
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        const redirectUrl = new URL(res.headers.location, url).toString();
-        console.error(`[SmartFetch] Following redirect to: ${redirectUrl}`);
-        resolve(tryHttpFetch(redirectUrl));
-        return;
-      }
-      
-      if (res.statusCode !== 200) {
-        resolve({ success: false, tool: 'http', error: `HTTP ${res.statusCode}` });
-        return;
-      }
-      
-      // Handle compression
-      let stream = res;
-      const encoding = res.headers['content-encoding'];
-      
-      if (encoding === 'gzip') {
-        stream = res.pipe(zlib.createGunzip());
-      } else if (encoding === 'deflate') {
-        stream = res.pipe(zlib.createInflate());
-      } else if (encoding === 'br') {
-        stream = res.pipe(zlib.createBrotliDecompress());
-      }
-      
-      let data = '';
-      stream.on('data', chunk => data += chunk);
-      
-      stream.on('end', () => {
-        // Simple HTML to text conversion
-        let text = data
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&amp;/g, '&')
-          .replace(/&quot;/g, '"')
-          .trim();
-        
-        if (text.length > MIN_CONTENT_LENGTH) {
-          resolve({
-            success: true,
-            tool: 'http',
-            content: text,
-            title: '',
-            url: url
-          });
-        } else {
-          resolve({ success: false, tool: 'http', error: 'Content too short' });
-        }
-      });
-      
-      stream.on('error', (err) => {
-        console.error(`[SmartFetch] HTTP stream error: ${err.message}`);
-        resolve({ success: false, tool: 'http', error: err.message });
-      });
-    });
-    
-    req.on('error', (err) => {
-      resolve({ success: false, tool: 'http', error: err.message });
-    });
-    
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({ success: false, tool: 'http', error: 'Timeout' });
-    });
-  });
-}
 async function tryBrowser(url) {
-  console.error(`[SmartFetch] Trying Browser automation for: ${url}`);
+  console.error(`[SmartFetch] Level 3: Trying Browser automation for: ${url}`);
   
-  try {
-    // Use OpenClaw's browser tool via mcporter
-    const result = execSync(
-      `mcporter call browser browser_snapshot url='${url}' timeout=10000`,
-      { 
-        encoding: 'utf-8', 
-        timeout: BROWSER_TIMEOUT,
-        stdio: ['pipe', 'pipe', 'pipe']
+  // Try local browser-use first
+  if (isBrowserUseInstalled()) {
+    console.error('[SmartFetch] Using local browser-use...');
+    
+    try {
+      const result = execSync(
+        `python3 -c "
+import asyncio
+import sys
+from browser_use import Browser, BrowserConfig
+
+async def fetch():
+    browser = Browser(config=BrowserConfig(headless=True))
+    await browser.start()
+    try:
+        page = await browser.get_current_page()
+        await page.goto('${url}', wait_until='networkidle')
+        content = await page.content()
+        title = await page.title()
+        print(f'TITLE:{title}')
+        print('---CONTENT---')
+        print(content)
+    finally:
+        await browser.stop()
+
+asyncio.run(fetch())
+        "`,
+        { 
+          encoding: 'utf-8', 
+          timeout: BROWSER_TIMEOUT,
+          stdio: ['pipe', 'pipe', 'pipe']
+        }
+      );
+      
+      // Parse output
+      const lines = result.split('\n');
+      let title = '';
+      let content = result;
+      
+      for (const line of lines) {
+        if (line.startsWith('TITLE:')) {
+          title = line.substring(6);
+        } else if (line === '---CONTENT---') {
+          const idx = lines.indexOf(line);
+          content = lines.slice(idx + 1).join('\n');
+          break;
+        }
       }
-    );
-    
-    const data = JSON.parse(result);
-    
-    // Extract text from snapshot
-    if (data.text) {
-      return {
-        success: true,
-        tool: 'browser',
-        content: data.text,
-        title: data.title || '',
-        url: url
+      
+      // Convert HTML to text (simple)
+      const textContent = content
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .trim();
+      
+      if (textContent.length > MIN_CONTENT_LENGTH) {
+        return {
+          success: true,
+          tool: 'browser_local',
+          content: textContent,
+          title: title,
+          url: url
+        };
+      }
+      
+      return { 
+        success: false, 
+        tool: 'browser_local', 
+        error: 'Content too short' 
       };
+      
+    } catch (error) {
+      console.error(`[SmartFetch] Local browser failed: ${error.message.split('\n')[0]}`);
+      // Fall through to cloud
     }
-    
-    return { success: false, tool: 'browser', error: 'No text extracted' };
-  } catch (error) {
+  } else {
+    console.error('[SmartFetch] Local browser-use not installed, trying cloud...');
+  }
+  
+  // Try Cloud browser-use (if API key available)
+  const cloudApiKey = process.env.BROWSER_USE_API_KEY;
+  if (!cloudApiKey) {
     return { 
       success: false, 
       tool: 'browser', 
-      error: error.message || 'Browser failed'
+      error: 'Browser automation failed. Local browser-use not installed, and BROWSER_USE_API_KEY not set for cloud.'
     };
   }
+  
+  // Cloud browser-use would be implemented here
+  // For now, return error with setup instructions
+  return {
+    success: false,
+    tool: 'browser_cloud',
+    error: 'Cloud browser-use not yet implemented. Please install local browser-use: pip install browser-use && playwright install chromium'
+  };
 }
 
 /**
- * Smart fetch with automatic fallback (ultimate version)
- * Strategy: Tavily → Jina → HTTP → Scrapling → Browser
+ * Smart fetch with 3-layer fallback
+ * Strategy: Tavily → LLM Native → Browser
  */
 async function smartFetch(url, options = {}) {
   const method = options.method || 'auto';
   const skipQualityCheck = options.skipQualityCheck || false;
   
-  console.error(`[SmartFetch] Starting ultimate fetch for: ${url} (method: ${method})`);
+  console.error(`[SmartFetch] Starting fetch for: ${url} (method: ${method})`);
   
-  const attempts = [];
-  
-  // If method is explicitly specified
+  // Explicit method selection
   if (method !== 'auto') {
-    let result;
     switch (method) {
-      case 'tavily': result = tryTavily(url); break;
-      case 'jina': result = await tryJinaReader(url); break;
-      case 'http': result = await tryHttpFetch(url); break;
-      case 'scrapling': result = tryScrapling(url); break;
-      case 'browser': result = await tryBrowser(url); break;
-      default: result = { success: false, error: 'Unknown method' };
+      case 'tavily': return await tryTavily(url);
+      case 'native': return tryLLMNative(url);
+      case 'browser': return await tryBrowser(url);
+      default: return { success: false, error: 'Unknown method' };
     }
-    return result;
   }
   
-  // Auto mode: Cascade through all tools
-  // Level 1: Tavily (fast, good for most sites)
-  const tavilyResult = tryTavily(url);
-  attempts.push({ tool: 'tavily', ...tavilyResult });
+  // Auto mode: 3-layer cascade
+  
+  // Level 1: Tavily
+  const tavilyResult = await tryTavily(url);
   
   if (tavilyResult.success) {
     const quality = isBlockedOrLowQuality(tavilyResult.content, 'tavily');
     
     if (skipQualityCheck || !quality.blocked) {
       const score = calculateQualityScore(tavilyResult.content);
-      console.error(`[SmartFetch] ✓ Tavily succeeded with quality score: ${score.toFixed(2)}`);
+      console.error(`[SmartFetch] ✓ Tavily succeeded (quality: ${score.toFixed(2)})`);
       
       return {
         ...tavilyResult,
         fallback_used: false,
         quality_score: score,
-        quality_check: 'passed',
-        attempts: attempts.length
+        quality_check: 'passed'
       };
     }
     
     console.error(`[SmartFetch] Tavily content blocked: ${quality.reason}`);
   } else {
     console.error(`[SmartFetch] Tavily failed: ${tavilyResult.error}`);
-  }
-  
-  // Level 2: Jina AI Reader (free, handles many anti-bot sites)
-  console.error('[SmartFetch] Falling back to Jina AI Reader...');
-  const jinaResult = await tryJinaReader(url);
-  attempts.push({ tool: 'jina', ...jinaResult });
-  
-  if (jinaResult.success) {
-    const quality = isBlockedOrLowQuality(jinaResult.content, 'jina');
     
-    if (skipQualityCheck || !quality.blocked) {
-      const score = calculateQualityScore(jinaResult.content);
-      console.error(`[SmartFetch] ✓ Jina succeeded with quality score: ${score.toFixed(2)}`);
-      
-      return {
-        ...jinaResult,
-        fallback_used: true,
-        fallback_chain: ['tavily'],
-        quality_score: score,
-        quality_check: 'passed',
-        attempts: attempts.length
-      };
+    // If Tavily key not set, skip to next level
+    if (!tavilyResult.needs_fallback) {
+      return tavilyResult;
     }
-    
-    console.error(`[SmartFetch] Jina content blocked: ${quality.reason}`);
-  } else {
-    console.error(`[SmartFetch] Jina failed: ${jinaResult.error}`);
   }
   
-  // Level 3: Quick HTTP fetch (fast, no browser overhead)
-  console.error('[SmartFetch] Falling back to HTTP fetch...');
-  const httpResult = await tryHttpFetch(url);
-  attempts.push({ tool: 'http', ...httpResult });
+  // Level 2: LLM Native Fetch
+  console.error('[SmartFetch] Falling back to LLM Native...');
+  const nativeResult = tryLLMNative(url);
   
-  if (httpResult.success) {
-    const quality = isBlockedOrLowQuality(httpResult.content, 'http');
-    
-    if (skipQualityCheck || !quality.blocked) {
-      const score = calculateQualityScore(httpResult.content);
-      console.error(`[SmartFetch] ✓ HTTP succeeded with quality score: ${score.toFixed(2)}`);
-      
-      return {
-        ...httpResult,
-        fallback_used: true,
-        fallback_chain: ['tavily', 'jina'],
-        quality_score: score,
-        quality_check: 'passed',
-        attempts: attempts.length
-      };
-    }
-    
-    console.error(`[SmartFetch] HTTP content blocked: ${quality.reason}`);
-  } else {
-    console.error(`[SmartFetch] HTTP failed: ${httpResult.error}`);
-  }
-  
-  // Level 4: Scrapling (local browser, good for JS-heavy sites)
-  console.error('[SmartFetch] Falling back to Scrapling...');
-  const scraplingResult = tryScrapling(url, 'auto');
-  attempts.push({ tool: 'scrapling', ...scraplingResult });
-  
-  if (scraplingResult.success) {
-    const quality = isBlockedOrLowQuality(scraplingResult.content, 'scrapling');
-    const score = calculateQualityScore(scraplingResult.content);
-    
-    return {
-      ...scraplingResult,
-      fallback_used: true,
-      fallback_chain: ['tavily', 'jina', 'http'],
-      quality_score: score,
-      quality_check: quality.blocked ? 'blocked' : 'passed',
-      attempts: attempts.length
-    };
-  }
-  
-  // Level 5: Browser automation (final fallback)
-  console.error('[SmartFetch] Falling back to Browser automation...');
-  const browserResult = await tryBrowser(url);
-  attempts.push({ tool: 'browser', ...browserResult });
-  
-  if (browserResult.success) {
-    const score = calculateQualityScore(browserResult.content);
-    return {
-      ...browserResult,
-      fallback_used: true,
-      fallback_chain: ['tavily', 'jina', 'http', 'scrapling'],
-      quality_score: score,
-      quality_check: 'passed',
-      attempts: attempts.length
-    };
-  }
-  
-  // All failed
+  // Return instruction for caller to handle
   return {
-    success: false,
-    url: url,
-    error: 'All extraction methods failed',
-    attempts: attempts.map(a => ({ tool: a.tool, success: a.success, error: a.error }))
+    ...nativeResult,
+    fallback_used: true,
+    fallback_chain: ['tavily']
   };
+  
+  // Note: Browser (Level 3) is called by the agent if native fetch fails
 }
 
 /**
- * Smart search with Tavily
+ * Smart search with Tavily (HTTP direct)
  */
 function smartSearch(query, maxResults = 5) {
   console.error(`[SmartFetch] Searching: ${query}`);
   
-  try {
-    const result = execSync(
-      `mcporter call tavily tavily_search query="${query}" max_results=${maxResults}`,
-      { 
-        encoding: 'utf-8', 
-        timeout: TAVILY_TIMEOUT
-      }
-    );
-    
-    return JSON.parse(result);
-  } catch (error) {
-    return { success: false, error: error.message };
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) {
+    return { 
+      success: false, 
+      error: 'TAVILY_API_KEY not set in environment'
+    };
   }
+  
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({
+      query: query,
+      api_key: apiKey,
+      max_results: maxResults,
+      search_depth: 'advanced',
+      include_answer: true
+    });
+    
+    const options = {
+      hostname: 'api.tavily.com',
+      path: '/search',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: TAVILY_TIMEOUT
+    };
+    
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          resolve({
+            success: true,
+            query: query,
+            results: response.results || [],
+            answer: response.answer || ''
+          });
+        } catch (e) {
+          resolve({ success: false, error: `Parse error: ${e.message}` });
+        }
+      });
+    });
+    
+    req.on('error', (err) => {
+      resolve({ success: false, error: err.message });
+    });
+    
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ success: false, error: 'Timeout' });
+    });
+    
+    req.write(postData);
+    req.end();
+  });
 }
 
 // CLI interface
@@ -607,241 +519,40 @@ if (require.main === module) {
       process.exit(1);
     }
     
-    const result = smartSearch(query, maxResults);
-    console.log(JSON.stringify(result, null, 2));
-  }
-  
-  else if (command === 'benchmark') {
-    const url = args[1];
-    if (!url) {
-      console.log(JSON.stringify({ error: 'URL required' }));
-      process.exit(1);
-    }
-    
-    console.error(`[SmartFetch] Benchmarking all methods for: ${url}`);
-    
-    (async () => {
-      const results = {};
-      const start = Date.now();
-      
-      // Test each method
-      results.tavily = tryTavily(url);
-      results.tavily.time = Date.now() - start;
-      
-      const jinaStart = Date.now();
-      results.jina = await tryJinaReader(url);
-      results.jina.time = Date.now() - jinaStart;
-      
-      const scraplingStart = Date.now();
-      results.scrapling = tryScrapling(url);
-      results.scrapling.time = Date.now() - scraplingStart;
-      
-      console.log(JSON.stringify(results, null, 2));
-    })();
-  }
-  
-  else if (command === 'crawl') {
-    const url = args[1];
-    const maxDepth = parseInt(args[2]) || 2;
-    const maxPages = parseInt(args[3]) || 50;
-    const stayInPath = args.includes('--stay-in-path');
-    
-    if (!url) {
-      console.log(JSON.stringify({ error: 'URL required' }));
-      process.exit(1);
-    }
-    
-    crawlWebsite(url, { maxDepth, maxPages, stayInPath }).then(result => {
+    smartSearch(query, maxResults).then(result => {
       console.log(JSON.stringify(result, null, 2));
-    }).catch(err => {
-      console.log(JSON.stringify({ error: err.message }));
-      process.exit(1);
     });
   }
   
   else {
     console.log(`
-Smart Web Fetch Skill - Ultimate Web Extraction Solution v3.1
+Smart Web Fetch Skill - 3-Layer Strategy
 
 Usage:
   smart-web-fetch fetch <url> [method]
   smart-web-fetch search <query> [max_results]
-  smart-web-fetch benchmark <url>
-  smart-web-fetch crawl <url> [max_depth] [max_pages] [--stay-in-path]
 
-Methods: auto (default), tavily, jina, http, scrapling, browser
+Methods: auto (default), tavily, native, browser
 
-Fallback Chain (auto mode):
-  1. Tavily        - AI extraction, fast, 90% success
-  2. Jina Reader   - Free, anti-bot, +8% success
-  3. HTTP Fetch    - Direct request, +3% success
-  4. Scrapling     - Local browser, JS support
-  5. Browser       - Real Chrome, final fallback
+3-Layer Strategy:
+  1. Tavily        - AI extraction, best quality (needs TAVILY_API_KEY)
+  2. LLM Native    - Use FetchURL tool (for agents with native capability)
+  3. Browser       - Local browser-use (fallback for stubborn pages)
 
-Crawl Options:
-  max_depth       - How many levels deep to crawl (default: 2)
-  max_pages       - Maximum pages to fetch (default: 50)
-  --stay-in-path  - Only crawl pages under the starting URL path
+Environment Variables:
+  TAVILY_API_KEY       - Required for Tavily API
+  BROWSER_USE_API_KEY  - Optional for cloud browser (local preferred)
 
 Examples:
   smart-web-fetch fetch https://example.com
-  smart-web-fetch fetch https://example.com jina
-  smart-web-fetch crawl https://example.com 2 30
-  smart-web-fetch crawl https://example.com/blog/ 2 30 --stay-in-path
+  smart-web-fetch fetch https://example.com tavily
   smart-web-fetch search "OpenAI GPT-5" 10
-  smart-web-fetch benchmark https://example.com
 
-Total Success Rate: ~99.9%
+Install local browser:
+  pip install browser-use
+  playwright install chromium
 `);
   }
 }
 
-/**
- * Crawl a website starting from URL
- * Depth-first crawl with configurable depth and limit
- */
-async function crawlWebsite(startUrl, options = {}) {
-  const maxDepth = options.maxDepth || 2;
-  const maxPages = options.maxPages || 50;
-  const sameDomain = options.sameDomain !== false; // default true
-  const stayInPath = options.stayInPath || false;  // 新增：限制在起始路径下
-  const outputDir = options.outputDir || `/tmp/crawl_${Date.now()}`;
-  
-  console.error(`[SmartFetch] Starting crawl: ${startUrl}`);
-  console.error(`[SmartFetch] Max depth: ${maxDepth}, Max pages: ${maxPages}`);
-  if (stayInPath) console.error(`[SmartFetch] Restricted to path: ${new URL(startUrl).pathname}`);
-  
-  const fs = require('fs');
-  const path = require('path');
-  
-  // Create output directory
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-  
-  const startUrlObj = new URL(startUrl);
-  const startHost = startUrlObj.hostname;
-  const startPath = startUrlObj.pathname;  // 如：/resources/
-  
-  const visited = new Set();
-  const queue = [{ url: startUrl, depth: 0 }];
-  const results = [];
-  
-  while (queue.length > 0 && visited.size < maxPages) {
-    const { url, depth } = queue.shift();
-    
-    if (visited.has(url) || depth > maxDepth) continue;
-    visited.add(url);
-    
-    console.error(`[SmartFetch] Crawling [${visited.size}/${maxPages}] (depth ${depth}): ${url}`);
-    
-    // Try to fetch the page
-    const result = await smartFetch(url, { method: 'auto' });
-    
-    if (result.success) {
-      // Save to file
-      const filename = `${visited.size.toString().padStart(4, '0')}_${new URL(url).pathname.replace(/\//g, '_') || 'index'}.md`;
-      const filepath = path.join(outputDir, filename);
-      
-      const content = `# ${result.title || 'Untitled'}\n\nURL: ${url}\nTool: ${result.tool_used}\n\n---\n\n${result.content}`;
-      fs.writeFileSync(filepath, content);
-      
-      results.push({
-        url,
-        depth,
-        title: result.title,
-        tool: result.tool_used || result.tool,
-        file: filepath,
-        quality_score: result.quality_score
-      });
-      
-      // Extract links if not at max depth
-      if (depth < maxDepth) {
-        const links = extractLinks(result.content, url);
-        for (const link of links) {
-          try {
-            const linkUrl = new URL(link, url).toString();
-            const linkUrlObj = new URL(linkUrl);
-            const linkHost = linkUrlObj.hostname;
-            const linkPath = linkUrlObj.pathname;
-            
-            // Check same domain constraint
-            if (sameDomain && linkHost !== startHost) continue;
-            
-            // Check path constraint (stay in subpath)
-            if (stayInPath && !linkPath.startsWith(startPath)) {
-              console.error(`[SmartFetch] Skipping (outside path): ${linkUrl}`);
-              continue;
-            }
-            
-            // Skip non-HTML files
-            if (linkUrl.match(/\.(pdf|jpg|png|gif|css|js|zip|exe)$/i)) continue;
-            
-            if (!visited.has(linkUrl)) {
-              queue.push({ url: linkUrl, depth: depth + 1 });
-            }
-          } catch (e) {
-            // Invalid URL, skip
-          }
-        }
-      }
-    } else {
-      console.error(`[SmartFetch] Failed to crawl: ${url} - ${result.error}`);
-      results.push({
-        url,
-        depth,
-        error: result.error,
-        failed: true
-      });
-    }
-    
-    // Small delay to be polite
-    await new Promise(r => setTimeout(r, 500));
-  }
-  
-  // Generate summary
-  const summary = {
-    start_url: startUrl,
-    total_pages: results.length,
-    successful: results.filter(r => !r.failed).length,
-    failed: results.filter(r => r.failed).length,
-    output_directory: outputDir,
-    pages: results
-  };
-  
-  fs.writeFileSync(path.join(outputDir, '_summary.json'), JSON.stringify(summary, null, 2));
-  
-  return summary;
-}
-
-/**
- * Extract links from HTML/markdown content
- */
-function extractLinks(content, baseUrl) {
-  const links = [];
-  
-  // Match markdown links [text](url)
-  const mdRegex = /\[.*?\]\((https?:\/\/[^\s\)]+)\)/g;
-  let match;
-  while ((match = mdRegex.exec(content)) !== null) {
-    links.push(match[1]);
-  }
-  
-  // Match HTML links
-  const htmlRegex = /href=["'](https?:\/\/[^"']+)["']/g;
-  while ((match = htmlRegex.exec(content)) !== null) {
-    links.push(match[1]);
-  }
-  
-  // Match relative links in HTML
-  const relRegex = /href=["'](\/[^"']*)["']/g;
-  while ((match = relRegex.exec(content)) !== null) {
-    try {
-      links.push(new URL(match[1], baseUrl).toString());
-    } catch (e) {}
-  }
-  
-  return [...new Set(links)]; // Remove duplicates
-}
-
-module.exports = { smartFetch, smartSearch, tryTavily, tryJinaReader, tryHttpFetch, tryScrapling, tryBrowser, crawlWebsite };
+module.exports = { smartFetch, smartSearch, tryTavily, tryLLMNative, tryBrowser };

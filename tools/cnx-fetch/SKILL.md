@@ -14,6 +14,24 @@ Extract content from web pages for research and analysis.
 - Code examples and best practices
 - Full site crawling for backup/analysis
 
+## Environment Setup
+
+Configure API keys per machine:
+
+```bash
+# Required for Tavily
+export TAVILY_API_KEY=tvly-dev-...
+
+# Optional for cloud browser fallback
+export BROWSER_USE_API_KEY=bu-...
+```
+
+Or create `.env` file in project root:
+```
+TAVILY_API_KEY=tvly-dev-...
+BROWSER_USE_API_KEY=bu-...
+```
+
 ## Methods
 
 ### 1. Tavily API (Recommended)
@@ -91,11 +109,40 @@ playwright install chromium
 
 ## Usage
 
+### CLI Usage (via smart-web-fetch.js)
+
+```bash
+# Auto mode (Tavily → Native → Browser)
+node smart-web-fetch.js fetch https://example.com
+
+# Explicit method
+node smart-web-fetch.js fetch https://example.com tavily
+node smart-web-fetch.js fetch https://example.com native
+node smart-web-fetch.js fetch https://example.com browser
+
+# Search
+node smart-web-fetch.js search "Python async" 5
+```
+
+### Programmatic Usage
+
+```javascript
+const { smartFetch, smartSearch } = require('./smart-web-fetch.js');
+
+// Fetch a page
+const result = await smartFetch('https://example.com');
+console.log(result.content);
+
+// Search
+const searchResult = await smartSearch('OpenAI GPT-5', 5);
+console.log(searchResult.results);
+```
+
 ### Single Page Fetch
 
 ```
 User: "Fetch https://docs.example.com/api"
-→ Use Tavily API or native fetch
+→ Use smart-web-fetch.js with auto mode
 → Return clean markdown content
 ```
 
@@ -103,7 +150,7 @@ User: "Fetch https://docs.example.com/api"
 
 ```
 User: "Crawl https://docs.example.com"
-→ Start from homepage
+→ Use smart-web-fetch.js recursively
 → Extract all internal links
 → Recursively fetch up to max depth (default: 2)
 → Save each page as separate markdown file
@@ -127,7 +174,8 @@ Validate extracted content:
 
 | Task | Method | Command |
 |------|--------|---------|
-| Quick article | Tavily/Native | Direct fetch |
-| API docs | Crawl | Recursively fetch all pages |
-| SPA site | Browser | Playwright automation |
-| Paywall content | Browser | Manual extraction |
+| Quick article | Auto | `node smart-web-fetch.js fetch https://blog.example.com` |
+| API docs | Tavily | `node smart-web-fetch.js fetch https://docs.example.com tavily` |
+| SPA site | Browser | `node smart-web-fetch.js fetch https://spa.example.com browser` |
+| Search | Tavily | `node smart-web-fetch.js search "Python async" 5` |
+| Fallback test | Native | `node smart-web-fetch.js fetch https://example.com native` |
