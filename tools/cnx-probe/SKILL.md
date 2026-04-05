@@ -1,5 +1,5 @@
 ---
-name: cnx-sentry
+name: cnx-probe
 description: Node discovery and health check for CNX environment. Find machines on LAN by name, check node health, verify OpenClaw Gateway status. Use when user asks to find a machine, check node status, diagnose gateway issues, or verify node connectivity.
 ---
 

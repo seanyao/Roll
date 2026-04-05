@@ -1,5 +1,5 @@
 ---
-name: cnx-scout
+name: cnx-fetch
 version: 3.1.0
 description: |
   CNX 情报收集工具 - 网页抓取、搜索、爬取，支持产品调研、技术方案搜索、信息情报收集。

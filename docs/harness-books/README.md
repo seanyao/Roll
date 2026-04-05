@@ -64,7 +64,7 @@
 CNX 的 PDCA 循环（Plan → Do → Check → Act）正是对这一哲学的工程化实现：
 - **Plan** = cnx-backlog（需求规划）
 - **Do** = cnx-roll-build / cnx-story-build（执行）
-- **Check** = cnx-sentinel / cnx-sentry（检查）
+- **Check** = cnx-sentinel / cnx-probe（检查）
 - **Act** = cnx-fix-build（修复改进）
 
 ---

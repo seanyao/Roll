@@ -29,10 +29,10 @@ ln -s ~/workspace/cybernetix/variants/cnx-oc/skills/cnx \
   ~/.openclaw/workspace/skills/cnx
 
 # 同时链接 tools
-ln -s ~/workspace/cybernetix/tools/cnx-scout \
+ln -s ~/workspace/cybernetix/tools/cnx-fetch \
   ~/.openclaw/workspace/skills/cnx-fetch
 
-ln -s ~/workspace/cybernetix/tools/cnx-sentry \
+ln -s ~/workspace/cybernetix/tools/cnx-probe \
   ~/.openclaw/workspace/skills/cnx-probe
 ```
 
@@ -71,8 +71,8 @@ git checkout v1.2.3
 | 特性 | Cybernetix (原始) | CNX-OC (OpenClaw) |
 |------|-------------------|-------------------|
 | 调用方式 | 直接调用各 skill | `$cnx` 统一入口 |
-| 工具名 | `cnx-scout` | `cnx-fetch` |
-| 工具名 | `cnx-sentry` | `cnx-probe` |
+| 工具名 | `cnx-fetch` | `cnx-fetch` |
+| 工具名 | `cnx-probe` | `cnx-probe` |
 | 集成 | 独立 CLI | OpenClaw 生态 |
 
 ## 维护
