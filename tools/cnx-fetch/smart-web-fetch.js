@@ -237,7 +237,7 @@ function tryLLMNative(url) {
  */
 function isBrowserUseInstalled() {
   try {
-    execSync('python3 -c "import browser_use"', { 
+    execSync('/opt/homebrew/bin/python3.11 -c "import browser_use"', { 
       encoding: 'utf-8',
       timeout: 5000,
       stdio: 'pipe'
@@ -260,7 +260,7 @@ async function tryBrowser(url) {
     
     try {
       const result = execSync(
-        `python3 -c "
+        `/opt/homebrew/bin/python3.11 -c "
 import asyncio
 import sys
 from browser_use import Browser, BrowserConfig
