@@ -43,17 +43,28 @@ Use your built-in URL fetching capability directly.
 
 ### 3. Browser Automation (Fallback)
 
-Local browser automation for stubborn pages using **browser-use**.
+Local browser automation for stubborn pages using **[browser-use](https://github.com/browser-use/browser-use)**.
 
+**How to Choose:**
+
+| If | Then Use | Why |
+|----|---------|-----|
+| `BROWSER_USE_API_KEY` in env | **Cloud** | Managed browsers, less setup |
+| No API key, but `browser-use` installed | **Local** | Free, no external dependency |
+| Neither | Skip to manual extraction | Tell user "Need browser automation setup" |
+
+**Option A: Local (Free, No API Key)**
 ```python
-from browser_use import Browser
+from browser_use import Agent, Browser, BrowserConfig
 import asyncio
 
 async def fetch_page(url):
-    browser = Browser(headless=True)
+    # Pure local, no API key needed
+    browser = Browser(config=BrowserConfig(headless=True))
     await browser.start()
-    await browser.navigate_to(url)
-    content = await browser.get_page_content()
+    page = await browser.get_current_page()
+    await page.goto(url)
+    content = await page.content()
     await browser.stop()
     return content
 
@@ -61,13 +72,20 @@ async def fetch_page(url):
 content = asyncio.run(fetch_page("https://example.com"))
 ```
 
-**Pros**: Handles JS-rendered sites, most reliable, local control
-**Cons**: Requires browser-use setup, slower
+**Option B: Cloud API**
+```python
+from browser_use import Agent
 
-**Setup**:
+agent = Agent(
+    task=f"Extract the main content from {url} and return as markdown",
+    llm="moonshot"  # or openai, anthropic
+)
+result = await agent.run()
+```
+
+**Setup** (Local):
 ```bash
 pip install browser-use
-# Requires Playwright browsers
 playwright install chromium
 ```
 
