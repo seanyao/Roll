@@ -372,15 +372,18 @@ AI助手工作指南：
 - 需求分析、方案设计
 - 拆分 Stories
 - 写入 BACKLOG.md
+- **必须检查**: 依赖完整性 & 数据流完整性
 
 ### Do → $cnx-story-build / $cnx-fix-build / $cnx-roll-build
 - 读取 BACKLOG 执行
 - TCR 开发
 - CI/CD 部署
+- **必须验证**: 数据流集成测试通过
 
 ### Check → $cnx-sentinel / $cnx-bb-debug
 - Sentinel: 定时巡检
 - cnx-bb-debug: 深度诊断
+- **数据完整性**: 验证生产者→消费者数据流
 
 ### Act → $cnx-fix-build / $cnx-backlog
 - 修复问题
@@ -452,7 +455,67 @@ AI时代的软件架构原则：
 - 所有业务逻辑必须有单元测试
 - API 有集成测试
 - 关键流程有 E2E 测试
+- **数据流必须有集成测试** (Producer → Consumer)
 - Sentinel 会定期回归测试
+
+## Engineering Common Sense (强制要求)
+
+**底线原则 - 违反即 Bug：**
+
+See [Cybernetix Engineering Common Sense](https://github.com/seanyao/cybernetix/blob/main/docs/practices/engineering-common-sense.md)
+
+### 快速检查清单
+```markdown
+- [ ] **幂等性**: 可重复运行吗？重复3次结果一致吗？
+- [ ] **跨模块契约**: ID/格式/算法在所有模块一致吗？
+- [ ] **数据流**: 生产者→消费者链路完整吗？有集成测试吗？
+- [ ] **原子性**: 部分失败会回滚吗？
+- [ ] **输入验证**: 所有外部输入都验证了吗？
+- [ ] **优雅降级**: 依赖失败时系统还能工作吗？
+- [ ] **可观测性**: 用户能看到进度/状态吗？
+- [ ] **并发安全**: 多线程/多进程访问安全吗？
+```
+
+### 教训案例
+- **ingest 幂等性失败**: 重复运行7次，文件被添加7次
+- **ID 生成不一致**: scanner 和 inbox 用不同 ID 算法，去重失效
+- **数据流断裂**: ingest 不写 state，status 读取不到
+
+## Architecture Evolution Checklist
+
+当引入新核心架构（State, Cache, EventBus等）时：
+
+### 前置检查
+- [ ] 识别所有数据生产者（写入新架构的模块）
+- [ ] 识别所有数据消费者（读取新架构的模块）
+- [ ] 创建 Follow-up Stories 更新每个受影响模块
+- [ ] 添加数据流集成测试
+
+### 数据流测试模板
+```typescript
+// tests/integration/data-flow.test.ts
+describe('Data Flow: {Module} -> State -> {Consumer}', () => {
+  it('should write data that can be read back', async () => {
+    // 1. Write via producer
+    await producerModule.write(testData)
+    
+    // 2. Read via consumer
+    const result = await consumerModule.read()
+    
+    // 3. Verify
+    expect(result).toMatchObject(testData)
+  })
+})
+```
+
+### 常见错误预防
+```markdown
+❌ 错误: 只测试了"读取"，假设"写入"已完成
+✅ 正确: 先验证"写入"，再实现"读取"
+
+❌ 错误: 引入 State 架构但 ingest 没更新写入
+✅ 正确: State 引入后，创建 Follow-up 更新所有生产者
+```
 
 ## Service Configurations
 
@@ -576,6 +639,10 @@ JWT_SECRET=your-jwt-secret-key
 - All work tracked in BACKLOG.md
 - Sentinel patrols every 6 hours
 - TCR required for all changes
+- **Engineering Common Sense**: See [Cybernetix Practices](https://github.com/seanyao/cybernetix/blob/main/docs/practices/engineering-common-sense.md)
+  - Idempotency, Cross-Module Contract, Data Flow Integrity
+  - Atomicity, Input Validation, Graceful Degradation
+  - Observability, Concurrency Safety
 ```
 
 ## Usage Flow

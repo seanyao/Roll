@@ -1,5 +1,30 @@
 # Project Agents Configuration
 
+## Workspace Configuration
+
+### Plan Documents Location
+**所有 Plan 文档必须存放在项目目录下，禁止写入 `.kimi/` 目录。**
+
+```yaml
+# Plan 文件存放配置
+plans:
+  base_dir: docs/plans/          # 相对于项目根目录
+  auto_create: true              # 目录不存在时自动创建
+  naming_convention: "{topic}.md" # 命名规范
+```
+
+**规则:**
+1. **优先位置**: `{project_root}/docs/plans/`
+2. **自动创建**: 如果 `docs/plans/` 不存在，自动创建目录
+3. **禁止位置**: 绝对禁止写入 `~/.kimi/` 或任何全局配置目录
+4. **项目无关的 Plan**: 只有在没有项目上下文时，才允许使用临时位置
+
+**示例:**
+- ✅ `my-project/docs/plans/auth-system.md`
+- ✅ `my-project/docs/plans/api-redesign.md`
+- ❌ `~/.kimi/skills/some-plan.md`
+- ❌ 任何项目外的全局位置
+
 ## PDCA Workflow
 
 ### Plan → $cnx-backlog

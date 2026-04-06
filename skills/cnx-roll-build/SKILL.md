@@ -60,6 +60,30 @@ Do not use for:
 
 **Key Principle**: Each commit represents a **guaranteed working state**. No "WIP" commits, no broken commits.
 
+## Workspace Configuration
+
+Plan 文档存放位置（在 AGENTS.md 中配置）:
+
+```yaml
+plans:
+  base_dir: docs/plans/          # 相对于项目根目录
+  auto_create: true              # 目录不存在时自动创建
+```
+
+**重要规则:**
+1. Plan 文件**必须**写入项目目录的 `docs/plans/`
+2. 如果目录不存在，**自动创建**
+3. **禁止**写入 `~/.kimi/` 或任何全局配置目录
+4. 只有在没有项目上下文时，才使用临时位置
+
+**创建 Plan 时的文件路径:**
+```bash
+# 默认路径
+PLANS_DIR="./docs/plans"
+mkdir -p "$PLANS_DIR"
+PLAN_FILE="$PLANS_DIR/{kebab-case-description}.md"
+```
+
 ## Adaptive Workflow
 
 ### Phase 1: Clarify & Test Design Review (Always)

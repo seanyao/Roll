@@ -30,6 +30,20 @@ Do not use for:
 - pure investigation without landing code
 - experiments that are explicitly not meant to deploy
 
+## Workspace Configuration
+
+Plan 文档引用位置（在 AGENTS.md 中配置）:
+
+```yaml
+plans:
+  base_dir: docs/plans/          # 相对于项目根目录
+```
+
+**规则:**
+1. 读取 BACKLOG.md 中的 US 时，检查是否有链接到 `docs/plans/` 的方案文档
+2. 如果 US 需要参考 Plan 文档，优先从项目目录的 `docs/plans/` 读取
+3. **禁止**从 `~/.kimi/` 读取任何项目相关的 plan 文档
+
 ## Hard Rules
 
 1. **No local-only "done"**
