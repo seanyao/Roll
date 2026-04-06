@@ -273,9 +273,12 @@ Do not claim delivery until CI is green (or the exception is explicitly accepted
 
 Follow the repo's deployment path (e.g. Vercel) and record the deployed target.
 
-### 11. Online verification
+### 11. Runtime verification
 
-Perform the agreed verification on the deployed environment:
+Perform the agreed verification in the runtime environment:
+- For **Web apps**: verify on deployed URL (happy path, edge cases, no regression)
+- For **CLI tools**: verify via command execution (`kkb ingest && kkb compile`)
+- For **Libraries**: verify via test usage or example scripts
 - confirm happy path works
 - confirm edge case handled
 - confirm no regression for previously working paths
