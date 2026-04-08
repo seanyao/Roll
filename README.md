@@ -14,8 +14,6 @@
 ║                         Let's roll, no sprints!                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════════════════════╝
 ```
-
-> 基于控制论的 Agent-First 软件工程范式
 > 
 > **C**yber**n**eti**x** - The AI-Native Development Paradigm  
 > _Let's roll, no sprints!_
