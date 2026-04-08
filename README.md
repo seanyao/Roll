@@ -34,24 +34,6 @@
 控制论 + Agent First + PDCA = AI 时代软件工程
 ```
 
-### 解决的问题
-
-传统软件开发：
-- ❌ 需求理解偏差
-- ❌ 人工重复劳动
-- ❌ 测试覆盖不足
-- ❌ 问题发现滞后
-
-AI Development Paradigm：
-- ✅ Agent 理解需求，人类做决策
-- ✅ Agent 自动化执行，人类审阅结果
-- ✅ Agent 持续验证，数据驱动改进
-- ✅ PDCA 闭环，自我优化
-
-![Cybernetix Overview](docs/assets/cybernetix-overview.jpg)
-
----
-
 ## 核心理念
 
 ### 1. Agent First
@@ -79,17 +61,6 @@ System: 自我感知、自我改进
      └──────────────────────────────────────────────┘
                  持续改进循环
 ```
-
-### 3. 控制论基础
-
-基于 Norbert Wiener 的控制论：
-- **目标（Goal）**：BACKLOG.md 定义的期望状态
-- **感知（Sense）**：Sentinel 定时巡检监控实际状态
-- **比较（Compare）**：分析目标与实际的差距
-- **行动（Act）**：开发/修复以缩小差距
-- **反馈（Feedback）**：验证行动结果
-
----
 
 ## 架构全景
 
@@ -147,45 +118,18 @@ flowchart TB
 | `$cnx-bb-analyzer` | CHECK | 分析诊断报告 | ✅ |
 | `$cnx-qa-cover` | Support | 测试规范 | ✅ |
 
----
-
-## Tools 工具集
-
-CNX Tools 提供编程范式之外的**环境协同能力**：
-
-| Tool | 类型 | 功能 | 状态 |
-|------|------|------|------|
-| `$cnx-fetch` | 🕵️ 情报 | 网页抓取、搜索、爬取，支持产品调研和技术方案搜索 | ✅ |
-| `$cnx-probe` | 🔭 监控 | 节点发现、健康检查、环境诊断 | ✅ |
-
-### Scout + Sentry 组合
-
-```
-Scout (侦察兵)      Sentry (哨兵)
-    🕵️                 🔭
-情报收集            环境监控
-- 产品调研          - 节点发现
-- 竞品分析          - 健康检查
-- 技术方案          - 故障诊断
-```
-
----
-
 ## 快速开始
 
 ### 安装
 
 ```bash
-# 克隆项目
 git clone https://github.com/seanyao/cybernetix.git
-
-# 安装 Skill（未来：npm install -g cybernetix）
-# 当前：手动配置 .codex/skills 软连接
+# 手动配置 .codex/skills 软连接
 ```
 
-### Codex 配置（可选）
+### 配置 Codex
 
-将以下内容添加到你的 Codex 配置，即可启用 CNX 工作流：
+复制以下内容到你的 Codex 配置：
 
 ```markdown
 # Cybernetix (CNX) AI 开发助手
@@ -213,23 +157,6 @@ git clone https://github.com/seanyao/cybernetix.git
 
 Skills 相互独立，按需调用即可。
 ```
-
-### 怎么选 Skill
-
-- 新需求规划、方案设计、拆 Story：`$cnx-backlog`
-- 已有 `US-XXX`，直接开始开发：`$cnx-story-build`
-- 修单个 bug / hotfix / 小范围改动：`$cnx-fix-build`
-- 只有一句模糊需求，想直接做出来：`$cnx-roll-build`
-- 巡检、回归、线上抽查：`$cnx-sentinel`
-- 页面或线上问题排查：`$cnx-bb-debug`
-- 已有诊断文件，需要分析：`$cnx-bb-analyzer`
-
-### 约定
-
-- `BACKLOG.md` 是核心工作区
-- 方案文档写入 `docs/plans/`
-- build 类任务默认遵循 TCR
-- 完成后更新 backlog / status
 
 ### 示例
 
@@ -271,48 +198,6 @@ my-project/
 ├── 🧪 tests/                  # 测试
 └── ⚙️ .github/workflows/      # CI/CD + Sentinel
 ```
-
----
-
-## 架构原则
-
-| 原则 | 说明 |
-|------|------|
-| **Agent First** | 系统为 AI Agent 设计 |
-| **Data Schema** | 清晰的数据契约 |
-| **Domain Driven** | 业务领域建模 |
-| **API/CLI** | 能力完全开放 |
-| **Stateless** | 无状态可扩展 |
-
----
-
-## 文档
-
-- [PARADIGM.md](./PARADIGM.md) - 完整范式文档（控制论、PDCA、多智能体）
-- [template/README.md](./template/README.md) - 项目模板说明
-
----
-
-## 当前状态 & 未来方向
-
-### 当前（已实践）✅
-
-- 单一 Agent（Kimi Code CLI）+ Skill 生态系统
-- PDCA 闭环完整可运行
-- 10+ Skills 已开发
-- 项目模板已验证
-
-### 未来（理论+载体）🔮
-
-- 多智能体协同（Claude/Codex/Kimi/...）
-- **bridge.ai** 作为协同平台
-- 自动编排，降低人工决策
-
----
-
-## 贡献
-
-欢迎贡献新的 Skills 和改进建议！
 
 ---
 
