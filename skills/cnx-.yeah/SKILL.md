@@ -1,4 +1,5 @@
 ---
+hidden: true
 name: cnx-.yeah
 description: Build 流程完成后的庆祝仪式 🎉 在 cnx-story-build / cnx-fix-build / cnx-roll-build 成功完成后输出礼花。
 ---

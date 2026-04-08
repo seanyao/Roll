@@ -1,11 +1,24 @@
 ---
+hidden: true
 name: cnx-init
 description: Initialize a new AI-Coding project with complete PDCA workflow support. Creates standard directory structure, BACKLOG.md, CHANGELOG.md, docs/plans/, and GitHub Actions for sentinel patrols.
 ---
 
 # Project Init
 
-**PDCA-ready project scaffolding** - 初始化支持完整 AI 开发流程的项目。
+初始化一个支持 CNX 工作流的项目骨架。
+
+## When to Use
+
+- 新建一个采用 CNX 工作流的项目
+- 需要生成 `BACKLOG.md`、`docs/plans/`、`AGENTS.md`、CI/CD、Sentinel 基础结构
+
+## What It Sets Up
+
+- `BACKLOG.md` 作为核心工作区
+- `docs/plans/` 作为方案设计目录
+- `AGENTS.md` 作为约束与路由入口
+- `.github/workflows/` 作为 CI/CD 与巡检入口
 
 ## Generated Project Structure
 
@@ -600,7 +613,7 @@ JWT_SECRET=your-jwt-secret-key
 
 ## Auto-Generated Files
 
-`$cnx-project-init` 会自动创建以下文件：
+`$cnx-init` 会自动创建以下文件：
 
 ### ✅ 项目管理文件
 - `BACKLOG.md` - PDCA核心工作区
@@ -650,7 +663,7 @@ JWT_SECRET=your-jwt-secret-key
 ### 1. Start New Project
 
 ```bash
-$cnx-project-init
+$cnx-init
 # 回答几个问题...
 # ✅ 项目创建完成
 ```

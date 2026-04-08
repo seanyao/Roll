@@ -1,4 +1,5 @@
 ---
+hidden: true
 name: cnx-.code-review
 description: TCR 流程中的代码自审查环节。每个 micro-step 完成后、Commit 前执行，检查代码质量、安全性和设计问题。
 ---

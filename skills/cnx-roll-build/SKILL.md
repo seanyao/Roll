@@ -1,23 +1,20 @@
 ---
+hidden: true
 name: cnx-roll-build
 description: Convert vague one-sentence request into stories, insert into BACKLOG.md, then execute like cnx-story-build. Auto-clarifies, plans, splits into US/Actions, delivers via TCR workflow.
 ---
 
 # Roll (TCR Edition)
 
-Convert vague one-sentence requests into structured stories and execute.
-
-Unlike `story-build` (reads existing US from backlog) or `fix-build` (reads existing FIX), `roll-build` **creates** the stories first, inserts them into BACKLOG.md, then executes like `story-build`.
+把一句模糊需求先转成 backlog 条目，再直接执行。
 
 ## Trigger
 
-Use when the user asks:
+Use when:
 
-- "帮我加个登录功能" (vague, no US exists)
-- "这个页面有点问题修一下" (no BUG exists)
-- "把这个改成异步的"
-- "重构一下这个模块"
-- Any vague, one-line request without clear scope
+- 用户只有一句话需求
+- 当前没有现成的 `US-XXX` / `FIX-XXX`
+- 既要补规划，又想直接做出来
 
 **Workflow:**
 1. Clarify & analyze the vague request
@@ -27,9 +24,9 @@ Use when the user asks:
 
 Do not use for:
 
-- Explicit "ship this to prod" requests (use `cnx-story-build`)
-- Single obvious one-liners that are clearly tiny (use `cnx-fix-build`)
-- Pure investigation without code changes
+- 已有明确 `US-XXX`（用 `cnx-story-build`）
+- 明显是单个小 bug / 小修复（用 `cnx-fix-build`）
+- 纯分析、纯调研、不改代码
 
 ## Core Philosophy
 

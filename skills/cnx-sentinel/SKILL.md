@@ -1,4 +1,5 @@
 ---
+hidden: true
 name: cnx-sentinel
 description: Smart patrol inspector for production systems. Scheduled randomized sampling checks based on BACKLOG requirements. Cost-controlled AI validation with intelligent spot-checking logic.
 ---

@@ -137,14 +137,14 @@ flowchart TB
 
 | Skill | PDCA | 功能 | 状态 |
 |-------|------|------|------|
-| `$cnx-project-init` | - | 初始化 PDCA-ready 项目 | ✅ |
-| `$cnx-backlog` | PLAN | 需求规划，拆分 Stories | ✅ |
-| `$cnx-story-build` | DO | Story 开发（TCR→CI/CD） | ✅ |
-| `$cnx-fix-build` | DO/ACT | Bug 修复 | ✅ |
-| `$cnx-roll-build` | PLAN+DO | 一句话快速实现 | ✅ |
-| `$cnx-sentinel` | CHECK | 定时巡检/回归测试 | ✅ |
-| `$cnx-bb-debug` | CHECK | 深度诊断 | ✅ |
-| `$cnx-bb-analyzer` | CHECK | 诊断分析 | ✅ |
+| `$cnx-init` | - | 初始化 PDCA-ready 项目 | ✅ |
+| `$cnx-backlog` | PLAN | 新需求规划、方案设计、拆 Stories | ✅ |
+| `$cnx-story-build` | DO | 执行 BACKLOG 中已有的 US | ✅ |
+| `$cnx-fix-build` | DO/ACT | 修单个 BUG / FIX / 小改动 | ✅ |
+| `$cnx-roll-build` | PLAN+DO | 一句话模糊需求，边拆边做 | ✅ |
+| `$cnx-sentinel` | CHECK | 巡检、回归检查 | ✅ |
+| `$cnx-bb-debug` | CHECK | 页面或线上问题深度排查 | ✅ |
+| `$cnx-bb-analyzer` | CHECK | 分析诊断报告 | ✅ |
 | `$cnx-qa-cover` | Support | 测试规范 | ✅ |
 
 ---
@@ -183,30 +183,45 @@ git clone https://github.com/seanyao/cybernetix.git
 # 当前：手动配置 .codex/skills 软连接
 ```
 
-### 使用
+### 怎么选 Skill
+
+- 新需求规划、方案设计、拆 Story：`$cnx-backlog`
+- 已有 `US-XXX`，直接开始开发：`$cnx-story-build`
+- 修单个 bug / hotfix / 小范围改动：`$cnx-fix-build`
+- 只有一句模糊需求，想直接做出来：`$cnx-roll-build`
+- 巡检、回归、线上抽查：`$cnx-sentinel`
+- 页面或线上问题排查：`$cnx-bb-debug`
+- 已有诊断文件，需要分析：`$cnx-bb-analyzer`
+
+### 约定
+
+- `BACKLOG.md` 是核心工作区
+- 方案文档写入 `docs/plans/`
+- build 类任务默认遵循 TCR
+- 完成后更新 backlog / status
+
+### 示例
 
 ```bash
-# 1. 初始化项目
-$cnx-project-init my-app
+# 初始化项目
+$cnx-init my-app
 cd my-app
 
-# 2. PLAN - 规划需求
+# 规划新需求
 $cnx-backlog "用户登录功能"
-# → 创建 docs/plans/2024-01-20-auth/design.md
-# → BACKLOG.md 新增 US-001
 
-# 3. DO - 开发实现
+# 执行已有 Story
 $cnx-story-build US-001
-# → TCR 开发 → CI/CD → Deploy
-# → BACKLOG.md: US-001 ✅
 
-# 4. CHECK - 自动巡检（GitHub Actions）
-# Sentinel 每6小时自动运行
-# → 发现问题 → 创建 FIX-001
-
-# 5. ACT - 修复改进
+# 修复已有问题
 $cnx-fix-build FIX-001
-# → TCR 修复 → Deploy → Sentinel 验证 ✅
+
+# 一句话快速实现
+$cnx-roll-build "给后台加一个登录入口"
+
+# 巡检 / 排查
+$cnx-sentinel patrol --mode=normal
+$cnx-bb-debug https://example.com/page
 ```
 
 ---

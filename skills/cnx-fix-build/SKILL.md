@@ -1,22 +1,20 @@
 ---
+hidden: true
 name: cnx-fix-build
 description: Execute bugfix/hotfix from backlog. Reads FIX/BUG from BACKLOG.md, delivers via TCR workflow. Lighter than story-build, focused on single-issue fixes.
 ---
 
 # Fix Ship (TCR Edition)
 
-Use this skill for small, bounded delivery work that still needs to ship end-to-end using **TCR (Test && Commit || Revert)** workflow.
-
-This skill is intentionally lighter than `cnx-story-build`. It is for single-issue fixes, small enhancements, and hotfixes that should move quickly without pretending they need a full backlog story, while maintaining the discipline of atomic, test-guaranteed commits.
+执行单个 `FIX-XXX` / `BUG-XXX`，适合小范围修复或 hotfix。
 
 ## Trigger
 
-Use when the user asks for any of:
+Use when:
 
-- "修复 backlog 里的 BUG-XXX"
-- "执行 FIX-XXX"
-- "修个 bug [backlog 中已有的]"
-- small fix/hotfix from backlog
+- 已经有明确的 `FIX-XXX` 或 `BUG-XXX`
+- 是单个问题、单个 hotfix、单个小增强
+- 不需要拆成多个 Story / Action 才能落地
 
 **Workflow:**
 1. Read BACKLOG.md → Find specified FIX/BUG
@@ -26,11 +24,10 @@ Use when the user asks for any of:
 
 Do not use for:
 
-- multi-step features
-- changes spanning multiple subsystems
-- work that needs explicit Story → Action splitting
-- migrations, schema changes, or architectural shifts
-- anything that should be tracked as roadmap work
+- 多步骤功能开发
+- 跨多个子系统的大改动
+- 需要先规划再拆分的需求
+- 应该按 Story 跟踪的 roadmap work
 
 If the issue expands beyond a single bounded change, switch to `cnx-story-build`.
 

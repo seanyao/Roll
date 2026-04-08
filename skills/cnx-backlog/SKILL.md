@@ -1,19 +1,25 @@
 ---
+hidden: true
 name: cnx-backlog
 description: Unified entry for planning and backlog management. Analyzes requirements, designs solutions, splits into INVEST-compliant user stories, and writes to BACKLOG.md. Use when user wants to plan, create stories, or manage project backlog.
 ---
 
 # Backlog
 
-一站式需求规划与 Backlog 管理。
+规划新需求，并把结果写回 `BACKLOG.md`。
 
 ## When to Use
 
-- "帮我规划一下这个功能"
-- "分析一下需求"
-- "拆分成 Stories"
-- "创建 Backlog"
-- "plan approved, 开始执行"
+- 需求还没进入 backlog
+- 需要先设计方案，再拆成 Stories
+- 需要从已有 plan 写入 `BACKLOG.md`
+
+## Use This Skill For
+
+- 新需求规划
+- 方案设计
+- 拆分 Stories
+- 创建 US / FIX 条目
 
 ## Quick Start
 

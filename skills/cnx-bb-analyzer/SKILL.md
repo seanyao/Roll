@@ -1,4 +1,5 @@
 ---
+hidden: true
 name: cnx-bb-analyzer
 description: Analyze diagnostic reports from cnx-bb-debug. Reads BB diagnostic JSON files (native BB or universal mode) and provides structured analysis of app state, errors, API responses, and performance issues.
 ---

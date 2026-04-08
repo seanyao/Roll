@@ -1,4 +1,5 @@
 ---
+hidden: true
 name: cnx-.changelog
 description: Build 完成后，从 BACKLOG.md 提取已完成的 Stories 生成 CHANGELOG.md。在 Deploy 成功后自动触发，保持对外更新日志与内部 backlog 同步。
 ---

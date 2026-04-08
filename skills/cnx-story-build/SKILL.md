@@ -1,22 +1,20 @@
 ---
+hidden: true
 name: cnx-story-build
 description: Execute User Story from backlog. Reads US from BACKLOG.md, splits into Actions, delivers via TCR workflow through commit + push + CI + deploy + verification. Updates backlog status on completion.
 ---
 
 # Story Ship (TCR Edition)
 
-Use this skill to turn "development" into "delivery" by enforcing a tight, repeatable shipping loop per User Story / Action using **TCR (Test && Commit || Revert)** workflow.
-
-This skill is intentionally narrow and strict. It does not provide domain knowledge; it enforces delivery rhythm with atomic, test-guaranteed commits.
+执行 `BACKLOG.md` 中已有的 `US-XXX`，按 TCR 做端到端交付。
 
 ## Trigger
 
-Use when the user asks for any of:
+Use when:
 
-- "执行 backlog 里的 US-XXX"
-- "开始 User Story XXX"
-- "开发 [backlog 中已有的功能]"
-- shipping a US from backlog end-to-end
+- 已经有明确的 `US-XXX`
+- 需要从 backlog 读取 Story 并继续开发
+- 目标是完整交付，而不是只做分析或局部实验
 
 **Workflow:**
 1. Read BACKLOG.md → Find specified US
@@ -26,9 +24,9 @@ Use when the user asks for any of:
 
 Do not use for:
 
-- one-line changes or tiny local refactors (use `cnx-fix-build`)
-- pure investigation without landing code
-- experiments that are explicitly not meant to deploy
+- 单个 bug / 热修 / 小改动（用 `cnx-fix-build`）
+- 只有一句模糊需求、还没有 US（用 `cnx-roll-build`）
+- 纯调研、不落代码的任务
 
 ## Workspace Configuration
 
