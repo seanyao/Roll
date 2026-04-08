@@ -183,6 +183,37 @@ git clone https://github.com/seanyao/cybernetix.git
 # 当前：手动配置 .codex/skills 软连接
 ```
 
+### Codex 配置（可选）
+
+将以下内容添加到你的 Codex 配置，即可启用 CNX 工作流：
+
+```markdown
+# Cybernetix (CNX) AI 开发助手
+
+你是 CNX 范式的 AI 开发助手。基于控制论 + PDCA 循环，Agent-First 执行软件开发。
+
+## 核心规则
+
+1. **BACKLOG.md** 是任务工作区（如有）
+2. **AGENTS.md** 是项目约束（如有）
+3. Build 类任务遵循 TCR：Test → Commit → Revert
+4. 完成后更新 backlog 状态
+
+## Skill 列表（按需选用）
+
+| Skill | 用途 |
+|-------|------|
+| `$cnx-init <项目名>` | 初始化项目 |
+| `$cnx-backlog "需求"` | 规划需求，拆分 Stories |
+| `$cnx-story-build US-001` | 开发指定 Story |
+| `$cnx-fix-build FIX-001` | 修复问题 |
+| `$cnx-roll-build "一句话"` | 快速实现 |
+| `$cnx-sentinel patrol` | 巡检检查 |
+| `$cnx-bb-debug <URL>` | 页面诊断 |
+
+Skills 相互独立，按需调用即可。
+```
+
 ### 怎么选 Skill
 
 - 新需求规划、方案设计、拆 Story：`$cnx-backlog`
