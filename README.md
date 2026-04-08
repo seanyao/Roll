@@ -26,15 +26,9 @@
 
 ## 什么是 Cybernetix？
 
-**Cybernetix (CNX)** 是一套完整的 AI 时代软件开发范式，基于**控制论**（Cybernetics）理论，实现**Agent-First** 的 PDCA 持续改进循环。
+**Cybernetix (CNX)** 是一套 AI 开发工作流，用 PDCA 循环管理软件开发：规划 → 开发 → 检查 → 修复。
 
-### 核心公式
-
-```
-控制论 + Agent First + PDCA = AI 时代软件工程
-```
-
-## 核心理念
+核心理念
 
 ### 1. Agent First
 
