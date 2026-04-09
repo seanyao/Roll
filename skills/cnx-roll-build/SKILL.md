@@ -59,26 +59,27 @@ Do not use for:
 
 ## Workspace Configuration
 
-Plan 文档存放位置（在 AGENTS.md 中配置）:
+文档结构（两层分离）:
 
-```yaml
-plans:
-  base_dir: docs/plans/          # 相对于项目根目录
-  auto_create: true              # 目录不存在时自动创建
+```
+BACKLOG.md                        # US 索引页（状态 + 一句话 + 链接）
+docs/features/
+  <feature>.md                    # US 详情（AC / Files / Dependencies）
+  <feature>-plan.md               # 设计文档（why / how）
 ```
 
 **重要规则:**
-1. Plan 文件**必须**写入项目目录的 `docs/plans/`
-2. 如果目录不存在，**自动创建**
-3. **禁止**写入 `~/.kimi/` 或任何全局配置目录
-4. 只有在没有项目上下文时，才使用临时位置
+1. Plan 文件写入 `docs/features/<feature>-plan.md`（**不再使用** `docs/plans/`）
+2. US 详情写入对应的 `docs/features/<feature>.md`
+3. BACKLOG.md 只写索引行（一行一个 US），**不写** AC / Files / Notes
+4. **禁止**写入 `~/.kimi/` 或任何全局配置目录
 
 **创建 Plan 时的文件路径:**
 ```bash
-# 默认路径
-PLANS_DIR="./docs/plans"
-mkdir -p "$PLANS_DIR"
-PLAN_FILE="$PLANS_DIR/{kebab-case-description}.md"
+# 确定 Feature 归属（如 compiler / ingest / qa）
+FEATURE="<feature-name>"
+PLAN_FILE="docs/features/${FEATURE}-plan.md"
+FEATURE_FILE="docs/features/${FEATURE}.md"
 ```
 
 ## Adaptive Workflow
@@ -242,30 +243,41 @@ $cnx-.code-review staged
 
 **Note**: `code-reviewer` placeholder replaced with `$cnx-.code-review` for local execution without external dependencies.
 
-### Phase 6: Update BACKLOG.md (REQUIRED)
+### Phase 6: Write Back Status (REQUIRED)
 
-**Every change must be recorded in BACKLOG.md:**
+两处都必须更新，缺一不可：
+
+**① 更新 BACKLOG.md 索引行（Status 列）:**
 
 ```markdown
-### US-XXX-{N} {简短描述} ✅
-**Completed**: {YYYY-MM-DD}
-
-- As a {角色}
-- I want {需求}
-- So that {价值}
-
-**AC:**
-- [x] {完成的验收标准}
-
-**Files:**
-- `{修改的文件}`
+| [US-{ID}](docs/features/<feature>.md#us-{id}) | {Title} | ✅ Done |
 ```
 
-**Rules:**
-- 如果是新功能 → 添加到 "Completed Stories" 或 "In Progress"
-- 如果是 bug 修复 → 添加到 "🐛 Bug Fixes" 表格
-- 如果涉及多个文件 → 列出所有关键文件
-- 如果创建了新的 Plan → 链接到 `docs/plans/`
+将对应行的 Status 从 `📋 Todo` 改为 `✅ Done`。
+若是新建的 Story，先在对应 Epic > Feature 分组下追加索引行，再标记完成。
+
+**② 更新 `docs/features/<feature>.md` US 段落:**
+
+```markdown
+## US-{ID} {Story 名称} ✅
+
+**Completed**: {YYYY-MM-DD}
+
+**AC:**
+- [x] {完成的验收标准1}
+- [x] {完成的验收标准2}
+
+**Files:**
+- `{新增/修改的文件1}`
+- `{新增/修改的文件2}`
+```
+
+- 标题加 ✅
+- 补 `**Completed**` 日期
+- AC 从 `[ ]` 改为 `[x]`
+- Files 更新为实际变更文件
+
+若 US 段落尚不存在，新建完整段落（含 AC / Files / Dependencies）。
 
 ### Phase 7: Commit & Push
 
@@ -303,8 +315,8 @@ Follow repo's deployment path (Vercel/Railway/etc).
 ### Phase 9: Update BACKLOG & Report
 
 ```bash
-# Update BACKLOG.md with completion status
-git add BACKLOG.md
+# Update BACKLOG.md index + docs/features/<feature>.md US section
+git add BACKLOG.md docs/features/
 git commit -m "docs: mark US-XXX-{N} as completed"
 git push
 ```
@@ -373,7 +385,8 @@ git push
 - [ ] CI is green (or explicit, recorded exception)
 - [ ] Deployed to production
 - [ ] Online verification performed
-- [ ] BACKLOG.md updated with completion status
+- [ ] **BACKLOG.md index status updated** (📋 → ✅, REQUIRED)
+- [ ] **docs/features/\<feature\>.md US section updated** (Completed date + [x] ACs, REQUIRED)
 - [ ] Summary reported to user
 
 ## TCR Recovery Patterns

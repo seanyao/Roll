@@ -17,10 +17,10 @@ Use when:
 - 目标是完整交付，而不是只做分析或局部实验
 
 **Workflow:**
-1. Read BACKLOG.md → Find specified US
+1. Read BACKLOG.md index → Find US row → Follow link to `docs/features/<feature>.md`
 2. Split US into Actions
 3. Execute via TCR workflow
-4. Update BACKLOG.md on completion
+4. Write back: update BACKLOG.md status column + update US section in Feature file
 
 Do not use for:
 
@@ -30,17 +30,20 @@ Do not use for:
 
 ## Workspace Configuration
 
-Plan 文档引用位置（在 AGENTS.md 中配置）:
+文档结构（两层分离）:
 
-```yaml
-plans:
-  base_dir: docs/plans/          # 相对于项目根目录
+```
+BACKLOG.md                        # US 索引页（状态 + 一句话 + 链接）
+docs/features/
+  <feature>.md                    # US 详情（AC / Files / Dependencies）
+  <feature>-plan.md               # 设计文档（why / how）
 ```
 
-**规则:**
-1. 读取 BACKLOG.md 中的 US 时，检查是否有链接到 `docs/plans/` 的方案文档
-2. 如果 US 需要参考 Plan 文档，优先从项目目录的 `docs/plans/` 读取
-3. **禁止**从 `~/.kimi/` 读取任何项目相关的 plan 文档
+**读取 US 规则:**
+1. 在 BACKLOG.md 索引表中找到 US 行，获取链接路径
+2. 读取对应的 `docs/features/<feature>.md` 获取完整 AC / Files / Dependencies
+3. 如有 Plan 文档（`<feature>-plan.md`），一并读取作为背景
+4. **禁止**从 `~/.kimi/` 读取任何项目相关文档
 
 ## Hard Rules
 
@@ -297,15 +300,22 @@ Perform the agreed verification in the runtime environment:
 
 ### 12. Write back status/backlog (REQUIRED)
 
-**Update BACKLOG.md with strict format:**
+两处都必须更新，缺一不可：
+
+**① 更新 BACKLOG.md 索引表（Status 列）:**
 
 ```markdown
-### US-{ID} {Story 名称} ✅
-**Completed**: {YYYY-MM-DD}
+| [US-{ID}](docs/features/<feature>.md#us-{id}) | {Title} | ✅ Done |
+```
 
-- As a {角色}
-- I want {需求}
-- So that {价值}
+将对应行的 Status 从 `📋 Todo` 改为 `✅ Done`。
+
+**② 更新 `docs/features/<feature>.md` US 段落:**
+
+```markdown
+## US-{ID} {Story 名称} ✅
+
+**Completed**: {YYYY-MM-DD}
 
 **AC:**
 - [x] {完成的验收标准1}
@@ -314,18 +324,18 @@ Perform the agreed verification in the runtime environment:
 **Files:**
 - `{新增/修改的文件1}`
 - `{新增/修改的文件2}`
-
-**Dependencies:**
-- 依赖: {前置 US-XXX}
-- 被依赖: {后续 US-XXX}
 ```
 
-**Must also update:**
-- `progress/status.md` - 当前 Action 完成状态
-- 指标统计（Completed Stories 计数等）
-- Next Action 候选
+- 标题加 ✅
+- 补 `**Completed**` 日期
+- AC 从 `[ ]` 改为 `[x]`
+- Files 更新为实际变更文件
 
-**If BACKLOG.md doesn't exist, create it.**
+**Must also update:**
+- `progress/status.md` - 当前 Action 完成状态（如存在）
+- BACKLOG.md 底部 Stats 计数
+
+**If BACKLOG.md doesn't exist, create it with the index structure.**
 
 ### 13. Report
 
@@ -364,7 +374,8 @@ An Action is only "done" when all are true:
 - [ ] CI is green (or explicit, recorded exception exists)
 - [ ] Deployment completed
 - [ ] Online verification performed
-- [ ] **BACKLOG.md updated with US-{ID}** (REQUIRED - not optional)
+- [ ] **BACKLOG.md index status updated** (📋 → ✅, REQUIRED)
+- [ ] **docs/features/\<feature\>.md US section updated** (Completed date + [x] ACs, REQUIRED)
 
 ## TCR in CI Failure Recovery
 

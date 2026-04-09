@@ -28,7 +28,7 @@ description: Unified entry for planning and backlog management. Analyzes require
 $cnx-backlog "用户系统设计方案"
 
 # 从已有 Plan 拆分 Stories
-$cnx-backlog --from-plan docs/plans/auth-system.md
+$cnx-backlog --from-plan docs/features/auth-plan.md
 
 # 直接创建 Story
 $cnx-backlog --story "用户登录功能"
@@ -36,25 +36,26 @@ $cnx-backlog --story "用户登录功能"
 
 ## Workspace Configuration
 
-Plan 文档存放位置（在 AGENTS.md 中配置）:
+文档结构（两层分离）:
 
-```yaml
-plans:
-  base_dir: docs/plans/          # 相对于项目根目录
-  auto_create: true              # 目录不存在时自动创建
+```
+BACKLOG.md                        # US 索引页（状态 + 一句话 + 链接）
+docs/features/
+  <feature>.md                    # US 详情（AC / Files / Dependencies）
+  <feature>-plan.md               # 设计文档（why / how）
 ```
 
 **重要规则:**
-1. Plan 文件**必须**写入项目目录的 `docs/plans/`
-2. 如果目录不存在，**自动创建**
-3. **禁止**写入 `~/.kimi/` 或任何全局配置目录
-4. 只有在没有项目上下文时，才使用临时位置
+1. Plan 文件写入 `docs/features/<feature>-plan.md`（**不再使用** `docs/plans/`）
+2. US 详情写入对应的 `docs/features/<feature>.md`
+3. BACKLOG.md 只写索引行（一行一个 US），**不写** AC / Files / Notes
+4. **禁止**写入 `~/.kimi/` 或任何全局配置目录
 
 **文件路径解析顺序:**
-1. 检查 `AGENTS.md` 中的 `plans.base_dir` 配置
-2. 默认使用 `{project_root}/docs/plans/`
-3. 确保目录存在（自动创建）
-4. 生成 Plan 文件: `docs/plans/{kebab-case-topic}.md`
+1. 确定 Feature 归属（由需求领域决定：compiler / ingest / qa / ...）
+2. Feature 文件: `docs/features/<feature>.md`（不存在则新建）
+3. Plan 文件: `docs/features/<feature>-plan.md`（不存在则新建）
+4. BACKLOG.md 索引行放入对应 Epic > Feature 分组下
 
 ## Workflow
 
@@ -75,7 +76,8 @@ User: "帮我设计用户系统"
 │    - 架构设计                │
 │    - 模块划分                │
 │    - 依赖梳理                │
-│    - 写入 docs/plans/        │
+│    - 写入 docs/features/     │
+│      <feature>-plan.md       │
 └─────────────┬───────────────┘
               │
               ▼
@@ -102,31 +104,38 @@ User: "帮我设计用户系统"
     └── 否 ──→ 等待用户确认
 ```
 
-**Plan 文件保存规则:**
+**创建新 Story 的操作顺序:**
 
 ```bash
-# 1. 确定项目根目录（包含 BACKLOG.md 或 AGENTS.md 的目录）
-PROJECT_ROOT=$(find_project_root)
+# 1. 确定 Feature 归属（如 compiler / ingest / qa）
+FEATURE="compiler"
 
-# 2. 检查/创建 docs/plans/ 目录
-PLANS_DIR="$PROJECT_ROOT/docs/plans"
-mkdir -p "$PLANS_DIR"  # 自动创建，如果不存在
+# 2. 写入 Plan 文档（如有方案设计）
+PLAN_FILE="docs/features/${FEATURE}-plan.md"
 
-# 3. 生成 Plan 文件名
-PLAN_FILE="$PLANS_DIR/user-system-design.md"
+# 3. 在 docs/features/<feature>.md 中追加 US 段落（含完整 AC）
+FEATURE_FILE="docs/features/${FEATURE}.md"
 
-# 4. 写入 Plan 文档
-echo "# User System Design" > "$PLAN_FILE"
-
-# 5. 在 BACKLOG.md 中引用
-# See: docs/plans/user-system-design.md
+# 4. 在 BACKLOG.md 对应 Epic > Feature 分组下追加索引行
+# | [US-XXX](docs/features/compiler.md#us-xxx) | 一句话描述 | 📋 Todo |
 ```
 
 ## Story Format
 
+**BACKLOG.md 索引行（只写这一行）:**
+
 ```markdown
-### US-{DOMAIN}-{N} {Story Title} 📋
+| [US-{DOMAIN}-{N}](docs/features/<feature>.md#us-{domain}-{n}) | {一句话描述} | 📋 Todo |
+```
+
+**docs/features/\<feature\>.md 中的 US 段落（完整详情）:**
+
+```markdown
+<a id="us-{domain}-{n}"></a>
+## US-{DOMAIN}-{N} {Story Title} 📋
+
 **Created**: {YYYY-MM-DD}
+**Plan**: [{feature}-plan.md]({feature}-plan.md)  ← 如有方案文档
 
 - As a {role}
 - I want {action}
@@ -149,9 +158,6 @@ echo "# User System Design" > "$PLAN_FILE"
 - 生产者: {哪个模块写入数据}
 - 消费者: {哪个模块读取数据}
 - 集成测试: `tests/integration/{flow}.test.ts`
-
-**Notes:**
-{design notes}
 ```
 
 ## Integration
@@ -245,14 +251,12 @@ describe('Data Flow: {Producer} -> {Consumer}', () => {
 ```markdown
 # Project Backlog
 
-## 🎯 Active Stories
-| ID | Title | Status | Priority |
-|----|-------|--------|----------|
-| US-XXX | ... | 📋 Todo | P0 |
-
-## ✅ Completed
-...
-
-## 🐛 Bug Fixes
-...
+## Epic Name
+### Feature Name
+| Story | Description | Status |
+|-------|-------------|--------|
+| [US-XXX](docs/features/<feature>.md#us-xxx) | 一句话描述 | 📋 Todo |
+| [US-YYY](docs/features/<feature>.md#us-yyy) | 一句话描述 | ✅ Done |
 ```
+
+**注意**: BACKLOG.md 只写索引行，完整 AC / Files / Dependencies 在 `docs/features/<feature>.md` 中。

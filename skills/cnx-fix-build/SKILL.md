@@ -17,10 +17,17 @@ Use when:
 - 不需要拆成多个 Story / Action 才能落地
 
 **Workflow:**
-1. Read BACKLOG.md → Find specified FIX/BUG
+1. Read BACKLOG.md index → Find FIX/BUG row → Follow link to `docs/features/<feature>.md`
 2. Single Action (no splitting)
 3. Execute via TCR workflow
-4. Update BACKLOG.md on completion
+4. Write back: update BACKLOG.md status column + update US section in Feature file
+
+**文档结构（两层分离）:**
+```
+BACKLOG.md                        # 索引页（状态 + 一句话 + 链接）
+docs/features/
+  <feature>.md                    # 详情（AC / Files / Dependencies）
+```
 
 Do not use for:
 
@@ -248,12 +255,25 @@ Verify the shipped fix on the deployed target:
 - confirm the previously working path still works
 - for hotfixes: verify in production environment
 
-### 11. Update BACKLOG.md (REQUIRED)
+### 11. Write Back Status (when tracking is needed)
 
-**Every change must be recorded in BACKLOG.md:**
+仅当满足 Hard Rules 第 6 条时更新（用户要求、影响 roadmap 可见行为、需后续跟踪）。
+
+两处都必须更新，缺一不可：
+
+**① 更新 BACKLOG.md 索引行（Status 列）:**
 
 ```markdown
-### FIX-{N} {Bug 描述} ✅
+| [FIX-{ID}](docs/features/<feature>.md#fix-{id}) | {Title} | ✅ Done |
+```
+
+将对应行的 Status 从 `📋 Todo` 改为 `✅ Done`。
+
+**② 更新 `docs/features/<feature>.md` FIX 段落:**
+
+```markdown
+## FIX-{ID} {描述} ✅
+
 **Fixed**: {YYYY-MM-DD}
 
 **Problem**: {问题描述}
@@ -264,23 +284,10 @@ Verify the shipped fix on the deployed target:
 - `{修改的文件}`
 ```
 
-Or for small enhancements:
-
-```markdown
-### FEAT-{N} {功能描述} ✅
-**Completed**: {YYYY-MM-DD}
-
-- {简短描述}
-
-**Files:**
-- `{修改的文件}`
-```
-
-**Rules:**
-- Bug fix → 添加到 "🐛 Bug Fixes" 表格
-- Small feature → 添加到 "✅ Completed Stories"
-- Hotfix → 标注 production impact
-- 必须列出修改的文件
+- 标题加 ✅
+- 补 `**Fixed**` 日期
+- AC（如有）从 `[ ]` 改为 `[x]`
+- Files 更新为实际变更文件
 
 ### 12. Report
 
