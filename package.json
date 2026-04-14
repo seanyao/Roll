@@ -14,9 +14,14 @@
     "type": "git",
     "url": "https://github.com/seanyao/cybernetix.git"
   },
+  "bin": {
+    "cybernetix": "./bin/cybernetix"
+  },
   "license": "MIT",
   "author": "Sean Yao <seanyao@gmail.com>",
   "files": [
+    "bin/",
+    "conventions/",
     "skills/",
     "tools/",
     "template/",

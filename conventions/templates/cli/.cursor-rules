@@ -1,0 +1,17 @@
+# Project Rules — CLI Tool (Cursor)
+
+# Extends global .cursor-rules + project AGENTS.md.
+
+## Stack
+
+- Node.js / TypeScript
+- CLI framework: commander or citty
+
+## Rules
+
+- No server, no frontend. CLI tool only.
+- One file per command in src/commands/.
+- Exit codes: 0 = success, 1 = user error, 2 = system error.
+- Errors to stderr, results to stdout.
+- Support --help and --version on every command.
+- Follow AGENTS.md for architecture constraints and CNX workflow.

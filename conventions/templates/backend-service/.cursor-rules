@@ -1,0 +1,17 @@
+# Project Rules — Backend Service (Cursor)
+
+# Extends global .cursor-rules + project AGENTS.md.
+
+## Stack
+
+- Node.js / TypeScript
+- Database: Prisma or Drizzle ORM
+- Testing: Vitest + Supertest
+
+## Rules
+
+- No frontend code in this project. API-only service.
+- Routes are thin — delegate to services for business logic.
+- Validate all inputs at route level (zod/joi).
+- Environment config via .env. Never hardcode secrets.
+- Follow AGENTS.md for architecture constraints and CNX workflow.

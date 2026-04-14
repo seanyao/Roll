@@ -1,0 +1,566 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Cybernetix — AI Agent Convention Manager
+# Single source of truth for how all AI coding agents behave.
+
+VERSION="0.2.0"
+CNX_HOME="${HOME}/.cybernetix"
+CNX_CONFIG="${CNX_HOME}/config.yaml"
+CNX_GLOBAL="${CNX_HOME}/conventions/global"
+CNX_TEMPLATES="${CNX_HOME}/conventions/templates"
+
+# Find repo root (where this script lives)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_CONVENTIONS="${REPO_ROOT}/conventions"
+
+# Colors
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+CYAN=$'\033[0;36m'
+BOLD=$'\033[1m'
+NC=$'\033[0m'
+
+# Respect NO_COLOR
+if [[ -n "${NO_COLOR:-}" ]]; then
+  RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
+fi
+
+info()  { echo -e "${CYAN}[cnx]${NC} $*"; }
+ok()    { echo -e "${GREEN}[cnx]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[cnx]${NC} $*"; }
+err()   { echo -e "${RED}[cnx]${NC} $*" >&2; }
+
+# ─── Helper: read config value ───────────────────────────────────────────────
+# Simple YAML reader — no dependencies. Handles flat key: value pairs.
+config_get() {
+  local key="$1"
+  local default="${2:-}"
+  if [[ -f "$CNX_CONFIG" ]]; then
+    local val
+    val=$(grep -E "^${key}:" "$CNX_CONFIG" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    if [[ -n "$val" ]]; then
+      # Expand ~ to $HOME
+      echo "${val/#\~/$HOME}"
+      return
+    fi
+  fi
+  echo "${default/#\~/$HOME}"
+}
+
+# ─── Helper: safe copy with overwrite prompt ─────────────────────────────────
+safe_copy() {
+  local src="$1"
+  local dst="$2"
+  local force="${3:-false}"
+
+  if [[ ! -f "$src" ]]; then
+    return
+  fi
+
+  local dst_dir
+  dst_dir="$(dirname "$dst")"
+  mkdir -p "$dst_dir"
+
+  if [[ -f "$dst" ]] && [[ "$force" != "true" ]]; then
+    # Check if content is identical
+    if diff -q "$src" "$dst" &>/dev/null; then
+      return  # identical, skip silently
+    fi
+    echo ""
+    warn "File exists and differs: ${dst/#$HOME/~}"
+    echo -e "  ${BOLD}Overwrite?${NC} [y/N/d(iff)] "
+    read -r answer
+    case "$answer" in
+      d|D|diff)
+        diff --color=auto "$dst" "$src" || true
+        echo ""
+        echo -e "  ${BOLD}Overwrite?${NC} [y/N] "
+        read -r answer2
+        [[ "$answer2" =~ ^[Yy]$ ]] || { info "Skipped: ${dst/#$HOME/\~}"; return; }
+        ;;
+      y|Y) ;;
+      *) info "Skipped: ${dst/#$HOME/~}"; return ;;
+    esac
+  fi
+
+  cp "$src" "$dst"
+  ok "Wrote: ${dst/#$HOME/~}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: setup
+# Initialize ~/.cybernetix/ on a new machine
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_setup() {
+  info "Setting up Cybernetix on this machine..."
+  echo ""
+
+  # Verify repo source exists
+  if [[ ! -d "$REPO_CONVENTIONS" ]]; then
+    err "Convention source not found at: $REPO_CONVENTIONS"
+    err "Run this from the cybernetix repo, or symlink bin/cybernetix to PATH."
+    exit 1
+  fi
+
+  # Create directory structure
+  mkdir -p "$CNX_GLOBAL"
+  mkdir -p "$CNX_TEMPLATES"/{fullstack,frontend-only,backend-service,cli}
+
+  # Copy global conventions
+  info "Copying global conventions..."
+  for f in "$REPO_CONVENTIONS"/global/*; do
+    [[ -f "$f" ]] && safe_copy "$f" "$CNX_GLOBAL/$(basename "$f")"
+  done
+  # Handle dotfiles (not matched by *)
+  for f in "$REPO_CONVENTIONS"/global/.*; do
+    [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
+      safe_copy "$f" "$CNX_GLOBAL/$(basename "$f")"
+  done
+
+  # Copy templates
+  info "Copying project templates..."
+  for tpl_dir in "$REPO_CONVENTIONS"/templates/*/; do
+    local tpl_name
+    tpl_name="$(basename "$tpl_dir")"
+    for f in "$tpl_dir"*; do
+      [[ -f "$f" ]] && safe_copy "$f" "$CNX_TEMPLATES/$tpl_name/$(basename "$f")"
+    done
+    for f in "$tpl_dir".*; do
+      [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
+        safe_copy "$f" "$CNX_TEMPLATES/$tpl_name/$(basename "$f")"
+    done
+  done
+
+  # Create config if it doesn't exist
+  if [[ ! -f "$CNX_CONFIG" ]]; then
+    info "Creating default config..."
+    cat > "$CNX_CONFIG" << 'YAML'
+# Cybernetix Configuration
+# Edit this file, then run `cybernetix sync` to apply.
+
+# Sync targets: where global conventions are distributed to
+sync_claude: ~/.claude/CLAUDE.md
+sync_kimi: ~/.kimi/AGENTS.md
+sync_codex: ~/.codex/AGENTS.md
+sync_gemini: ~/.gemini/GEMINI.md
+
+# User preferences
+default_language: zh
+default_project_type: fullstack
+editor: ${EDITOR:-vim}
+YAML
+    ok "Created: ~/.cybernetix/config.yaml"
+  fi
+
+  echo ""
+  ok "Setup complete. Directory: ~/.cybernetix/"
+  echo ""
+  info "Next steps:"
+  echo "  1. Edit global conventions:  ${BOLD}cybernetix update${NC}"
+  echo "  2. Sync to AI tools:         ${BOLD}cybernetix sync${NC}"
+  echo "  3. Init a new project:       ${BOLD}cybernetix init${NC}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: sync
+# Distribute global conventions to each AI tool's config path
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_sync() {
+  if [[ ! -d "$CNX_GLOBAL" ]]; then
+    err "No global conventions found. Run 'cybernetix setup' first."
+    exit 1
+  fi
+
+  info "Syncing global conventions to AI tool config paths..."
+  echo ""
+
+  local force="${1:-false}"
+
+  # Claude Code: CLAUDE.md → ~/.claude/CLAUDE.md
+  local claude_target
+  claude_target="$(config_get sync_claude ~/.claude/CLAUDE.md)"
+  if [[ -f "$CNX_GLOBAL/CLAUDE.md" ]]; then
+    safe_copy "$CNX_GLOBAL/CLAUDE.md" "$claude_target" "$force"
+  fi
+
+  # Kimi Code: AGENTS.md → ~/.kimi/AGENTS.md
+  local kimi_target
+  kimi_target="$(config_get sync_kimi ~/.kimi/AGENTS.md)"
+  if [[ -f "$CNX_GLOBAL/AGENTS.md" ]]; then
+    safe_copy "$CNX_GLOBAL/AGENTS.md" "$kimi_target" "$force"
+  fi
+
+  # OpenAI Codex: AGENTS.md → ~/.codex/AGENTS.md
+  local codex_target
+  codex_target="$(config_get sync_codex ~/.codex/AGENTS.md)"
+  if [[ -f "$CNX_GLOBAL/AGENTS.md" ]]; then
+    safe_copy "$CNX_GLOBAL/AGENTS.md" "$codex_target" "$force"
+  fi
+
+  # Gemini CLI: GEMINI.md → ~/.gemini/GEMINI.md
+  local gemini_target
+  gemini_target="$(config_get sync_gemini ~/.gemini/GEMINI.md)"
+  if [[ -f "$CNX_GLOBAL/GEMINI.md" ]]; then
+    safe_copy "$CNX_GLOBAL/GEMINI.md" "$gemini_target" "$force"
+  fi
+
+  echo ""
+  ok "Sync complete."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: update
+# Open global conventions for editing, then sync
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_update() {
+  if [[ ! -d "$CNX_GLOBAL" ]]; then
+    err "No global conventions found. Run 'cybernetix setup' first."
+    exit 1
+  fi
+
+  local editor
+  editor="$(config_get editor "${EDITOR:-vim}")"
+  # Expand $EDITOR in the config value
+  editor=$(eval echo "$editor")
+
+  info "Opening global conventions in $editor..."
+  info "Directory: ~/.cybernetix/conventions/global/"
+  echo ""
+
+  # Open the directory or specific file based on editor
+  if command -v "$editor" &>/dev/null; then
+    "$editor" "$CNX_GLOBAL"
+  else
+    err "Editor not found: $editor"
+    err "Set your editor: export EDITOR=code (or vim, nano, etc.)"
+    exit 1
+  fi
+
+  echo ""
+  info "Editor closed. Running sync..."
+  cmd_sync
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: init
+# Initialize a project with convention files from a template
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_init() {
+  if [[ ! -d "$CNX_TEMPLATES" ]]; then
+    err "No templates found. Run 'cybernetix setup' first."
+    exit 1
+  fi
+
+  local project_dir="${1:-.}"
+  local project_type="${2:-}"
+  local tools_arg="${3:-}"
+
+  # Interactive project type selection if not provided
+  if [[ -z "$project_type" ]]; then
+    echo ""
+    echo -e "${BOLD}Select project type:${NC}"
+    echo ""
+    echo "  1) fullstack        React + API + CLI (default)"
+    echo "  2) frontend-only    React SPA, no backend"
+    echo "  3) backend-service   API/microservice, no frontend"
+    echo "  4) cli              Command-line tool"
+    echo ""
+    echo -n "Choice [1-4]: "
+    read -r choice
+    case "$choice" in
+      1|"") project_type="fullstack" ;;
+      2)    project_type="frontend-only" ;;
+      3)    project_type="backend-service" ;;
+      4)    project_type="cli" ;;
+      *)    err "Invalid choice: $choice"; exit 1 ;;
+    esac
+  fi
+
+  # AI tool selection — only generate files for tools you actually use
+  local use_claude=false use_gemini=false use_cursor=false
+
+  if [[ -n "$tools_arg" ]]; then
+    # Parse comma-separated tool list: --tools=claude,gemini
+    IFS=',' read -ra tool_list <<< "$tools_arg"
+    for t in "${tool_list[@]}"; do
+      case "$t" in
+        claude) use_claude=true ;;
+        gemini) use_gemini=true ;;
+        cursor) use_cursor=true ;;
+        all)    use_claude=true; use_gemini=true; use_cursor=true ;;
+        *) warn "Unknown tool: $t" ;;
+      esac
+    done
+  else
+    echo ""
+    echo -e "${BOLD}Which AI tools do you use?${NC} (space-separated, or 'a' for all)"
+    echo ""
+    echo "  c) Claude Code"
+    echo "  g) Gemini CLI"
+    echo "  r) Cursor IDE"
+    echo "  a) All of the above"
+    echo ""
+    echo -n "Choice [c/g/r/a] (default: c): "
+    read -r tool_choice
+    tool_choice="${tool_choice:-c}"
+    for ch in $tool_choice; do
+      case "$ch" in
+        c) use_claude=true ;;
+        g) use_gemini=true ;;
+        r) use_cursor=true ;;
+        a) use_claude=true; use_gemini=true; use_cursor=true ;;
+      esac
+    done
+  fi
+
+  local tpl_dir="$CNX_TEMPLATES/$project_type"
+  if [[ ! -d "$tpl_dir" ]]; then
+    err "Template not found: $project_type"
+    err "Available: fullstack, frontend-only, backend-service, cli"
+    exit 1
+  fi
+
+  # Resolve project directory
+  if [[ "$project_dir" != "." ]]; then
+    mkdir -p "$project_dir"
+  fi
+  project_dir="$(cd "$project_dir" && pwd)"
+
+  info "Initializing ${BOLD}$project_type${NC} conventions in: $project_dir"
+  echo ""
+
+  # AGENTS.md → project root (master conventions, tool-agnostic)
+  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "AGENTS.md"
+
+  # Tool-specific files go into each tool's hidden directory
+  local created_files="AGENTS.md"
+  if [[ "$use_claude" == "true" ]]; then
+    mkdir -p "$project_dir/.claude"
+    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" ".claude/CLAUDE.md"
+    created_files+=", .claude/CLAUDE.md"
+  fi
+  if [[ "$use_gemini" == "true" ]]; then
+    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "GEMINI.md"
+    created_files+=", GEMINI.md"
+  fi
+  if [[ "$use_cursor" == "true" ]]; then
+    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" ".cursor-rules"
+    created_files+=", .cursor-rules"
+  fi
+
+  echo ""
+  ok "Convention files created for ${BOLD}$project_type${NC} project."
+  echo ""
+  info "Created: $created_files"
+  echo ""
+  info "Tip: use ${BOLD}\$cnx-init${NC} to scaffold the full project structure."
+}
+
+# ─── Helper: merge global preamble + template into output ────────────────────
+# Args: source_filename tpl_dir out_dir display_name
+merge_convention() {
+  local filename="$1"
+  local tpl_dir="$2"
+  local out_dir="$3"
+  local display="${4:-$filename}"
+  local global_file="$CNX_GLOBAL/$filename"
+  local tpl_file="$tpl_dir/$filename"
+  local out_file="$out_dir/$filename"
+
+  if [[ ! -f "$tpl_file" ]]; then
+    return
+  fi
+
+  # Build merged file: global content + separator + template content
+  local merged
+  merged="$(cat "$global_file" 2>/dev/null || true)"
+  merged+=$'\n\n'
+  merged+="---"
+  merged+=$'\n\n'
+  merged+="$(cat "$tpl_file")"
+
+  if [[ -f "$out_file" ]]; then
+    if diff -q <(echo "$merged") "$out_file" &>/dev/null; then
+      return  # identical
+    fi
+    warn "File exists: $display"
+    echo -n "  Overwrite? [y/N] "
+    read -r answer
+    [[ "$answer" =~ ^[Yy]$ ]] || { info "Skipped: $display"; return; }
+  fi
+
+  echo "$merged" > "$out_file"
+  ok "Created: $display"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: reset
+# Re-copy conventions from repo source, then sync
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_reset() {
+  if [[ ! -d "$REPO_CONVENTIONS" ]]; then
+    err "Convention source not found at: $REPO_CONVENTIONS"
+    err "Is the cybernetix repo still at $(dirname "$REPO_CONVENTIONS")?"
+    exit 1
+  fi
+
+  warn "This will overwrite ~/.cybernetix/conventions/ with repo defaults."
+  echo -n "  Continue? [y/N] "
+  read -r answer
+  [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted."; return; }
+
+  echo ""
+  info "Resetting global conventions..."
+  for f in "$REPO_CONVENTIONS"/global/*; do
+    [[ -f "$f" ]] && safe_copy "$f" "$CNX_GLOBAL/$(basename "$f")" true
+  done
+  for f in "$REPO_CONVENTIONS"/global/.*; do
+    [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
+      safe_copy "$f" "$CNX_GLOBAL/$(basename "$f")" true
+  done
+
+  info "Resetting templates..."
+  for tpl_dir in "$REPO_CONVENTIONS"/templates/*/; do
+    local tpl_name
+    tpl_name="$(basename "$tpl_dir")"
+    mkdir -p "$CNX_TEMPLATES/$tpl_name"
+    for f in "$tpl_dir"*; do
+      [[ -f "$f" ]] && safe_copy "$f" "$CNX_TEMPLATES/$tpl_name/$(basename "$f")" true
+    done
+    for f in "$tpl_dir".*; do
+      [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
+        safe_copy "$f" "$CNX_TEMPLATES/$tpl_name/$(basename "$f")" true
+    done
+  done
+
+  echo ""
+  ok "Reset complete. Syncing to AI tools..."
+  echo ""
+  cmd_sync true
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: status
+# Show current state of conventions
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_status() {
+  echo -e "${BOLD}Cybernetix Convention Status${NC}"
+  echo ""
+
+  # Check ~/.cybernetix
+  if [[ -d "$CNX_HOME" ]]; then
+    ok "~/.cybernetix/ exists"
+  else
+    err "~/.cybernetix/ not found — run 'cybernetix setup'"
+    return
+  fi
+
+  # Check global conventions
+  echo ""
+  echo -e "${BOLD}Global conventions:${NC}"
+  for f in AGENTS.md CLAUDE.md GEMINI.md .cursor-rules; do
+    if [[ -f "$CNX_GLOBAL/$f" ]]; then
+      echo -e "  ${GREEN}+${NC} $f"
+    else
+      echo -e "  ${RED}-${NC} $f (missing)"
+    fi
+  done
+
+  # Check sync targets
+  echo ""
+  echo -e "${BOLD}Sync targets:${NC}"
+
+  local claude_target kimi_target codex_target gemini_target
+  claude_target="$(config_get sync_claude ~/.claude/CLAUDE.md)"
+  kimi_target="$(config_get sync_kimi ~/.kimi/AGENTS.md)"
+  codex_target="$(config_get sync_codex ~/.codex/AGENTS.md)"
+  gemini_target="$(config_get sync_gemini ~/.gemini/GEMINI.md)"
+
+  check_sync_status "Claude Code" "$CNX_GLOBAL/CLAUDE.md" "$claude_target"
+  check_sync_status "Kimi Code"   "$CNX_GLOBAL/AGENTS.md"  "$kimi_target"
+  check_sync_status "Codex"       "$CNX_GLOBAL/AGENTS.md"  "$codex_target"
+  check_sync_status "Gemini CLI"  "$CNX_GLOBAL/GEMINI.md"  "$gemini_target"
+
+  # Check templates
+  echo ""
+  echo -e "${BOLD}Templates:${NC}"
+  for tpl in fullstack frontend-only backend-service cli; do
+    if [[ -d "$CNX_TEMPLATES/$tpl" ]]; then
+      local count
+      count=$(find "$CNX_TEMPLATES/$tpl" -type f | wc -l | tr -d ' ')
+      echo -e "  ${GREEN}+${NC} $tpl ($count files)"
+    else
+      echo -e "  ${RED}-${NC} $tpl (missing)"
+    fi
+  done
+}
+
+check_sync_status() {
+  local name="$1"
+  local src="$2"
+  local dst="$3"
+
+  local display="${dst/#$HOME/~}"
+  if [[ ! -f "$dst" ]]; then
+    echo -e "  ${RED}-${NC} $name: $display (not synced)"
+  elif diff -q "$src" "$dst" &>/dev/null 2>&1; then
+    echo -e "  ${GREEN}=${NC} $name: $display (in sync)"
+  else
+    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync)"
+  fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+usage() {
+  echo -e "${BOLD}Cybernetix${NC} v${VERSION} — AI Agent Convention Manager"
+  echo ""
+  echo "Usage: cybernetix <command> [options]"
+  echo ""
+  echo "Commands:"
+  echo "  setup              Initialize ~/.cybernetix/ on this machine"
+  echo "  sync               Distribute global conventions to AI tool config paths"
+  echo "  update             Edit global conventions, then sync"
+  echo "  init [dir] [type]  Initialize project with convention files"
+  echo "  reset              Reset ~/.cybernetix/ from repo source, then sync"
+  echo "  status             Show current state of conventions and sync"
+  echo ""
+  echo "Init options:"
+  echo "  Types: fullstack, frontend-only, backend-service, cli"
+  echo "  Tools: pass 3rd arg as comma-separated list (claude,gemini,cursor,all)"
+  echo ""
+  echo "Examples:"
+  echo "  cybernetix setup                           # First-time setup"
+  echo "  cybernetix sync                            # After editing global conventions"
+  echo "  cybernetix init .                          # Interactive prompts"
+  echo "  cybernetix init my-app fullstack claude    # Claude Code only"
+  echo "  cybernetix init . cli claude,cursor        # CLI project, Claude + Cursor"
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    setup)   cmd_setup "$@" ;;
+    sync)    cmd_sync "$@" ;;
+    update)  cmd_update "$@" ;;
+    init)    cmd_init "$@" ;;
+    reset)   cmd_reset "$@" ;;
+    status)  cmd_status "$@" ;;
+    version|--version|-v) echo "cybernetix v${VERSION}" ;;
+    help|--help|-h|"") usage ;;
+    *)
+      err "Unknown command: $cmd"
+      echo ""
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

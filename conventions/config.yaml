@@ -1,0 +1,15 @@
+# Cybernetix Configuration
+# Edit this file, then run `cybernetix sync` to apply.
+
+# Sync targets: where global conventions are distributed to.
+# These are the default paths for each AI tool's global config.
+# Override if your tool uses a non-standard location.
+sync_claude: ~/.claude/CLAUDE.md
+sync_kimi: ~/.kimi/AGENTS.md
+sync_codex: ~/.codex/AGENTS.md
+sync_gemini: ~/.gemini/GEMINI.md
+
+# User preferences
+default_language: zh
+default_project_type: fullstack
+editor: ${EDITOR:-vim}

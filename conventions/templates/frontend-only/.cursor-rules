@@ -1,0 +1,16 @@
+# Project Rules — Frontend Only (Cursor)
+
+# Extends global .cursor-rules + project AGENTS.md.
+
+## Stack
+
+- React + shadcn/ui + Tailwind CSS + Vite
+- Testing: Vitest + Playwright
+
+## Rules
+
+- No backend code in this project. API consumption only.
+- src/components/ui/ is shadcn-generated. Never edit manually.
+- Organize code by domain: src/domains/{domain}/
+- All business logic in hooks or services, not in components.
+- Follow AGENTS.md for architecture constraints and CNX workflow.

@@ -1,0 +1,31 @@
+# Global Rules — Cursor
+
+# Extends AGENTS.md in ~/.cybernetix/conventions/global/ — read that first.
+# This file adds Cursor-specific rules only.
+
+## Identity
+
+- Git: Sean Yao <sean.dlut@gmail.com>
+- Default branch: main
+
+## Commit Message Format
+
+- Format: [sean's claw] <type>: <description>
+- TCR micro-commits: tcr: <description> (no prefix)
+- Types: Story N, Fix, Refactor, Docs, Chore
+
+## Cursor-Specific
+
+- When using Composer, break large changes into reviewable chunks.
+- Prefer inline edits over full file rewrites.
+- Use @-references to relevant files when context is needed.
+- Tab completion suggestions should follow the code style in AGENTS.md.
+- When a project has CNX workflow, follow the AGENTS.md conventions.
+
+## Frontend Default Stack
+
+- React + shadcn/ui + Tailwind CSS is the default.
+- Use shadcn/ui components first. Custom only when shadcn doesn't cover it.
+- Tailwind utility classes only. No inline styles, no CSS modules.
+
+## All shared conventions are defined in AGENTS.md.
