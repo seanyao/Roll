@@ -8,7 +8,9 @@
 
 ## 📖 Start Here
 
-Before diving into commands and skills, read the **[Engineering Methodology](docs/methodology.md)** — it explains the three-loop architecture (Research → Build → Observe), why each skill exists, and how they connect into a complete delivery system.
+Before diving into commands and skills, read the Engineering Methodology — it explains the three-loop architecture (Research → Build → Observe), why each skill exists, and how they connect into a complete delivery system.
+
+**[English](docs/methodology-en.md)** · **[中文](docs/methodology.md)**
 
 ---
 
