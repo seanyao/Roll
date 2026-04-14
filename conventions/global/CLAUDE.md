@@ -10,10 +10,10 @@
 
 ## Commit Message Format
 
-- Format: `[sean's claw] <type>: <description>`
-- TCR micro-commits: `tcr: <description>` (no prefix)
+- Format: `<type>: <description>` (遵循 Git Hook 自动生成的前缀)
+- TCR micro-commits: `tcr: <description>` (No prefix)
 - Types: Story N, Fix, Refactor, Docs, Chore
-- Example: `[sean's claw] Story 7: Review assignment by org structure`
+- Example: `Story 7: Review assignment by org structure`
 
 ## Claude Code-Specific
 

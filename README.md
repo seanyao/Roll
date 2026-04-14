@@ -28,25 +28,30 @@ Unified management of behavioral conventions for Claude Code / Kimi Code / Gemin
 
 | Command | Use Case |
 |---------|----------|
-| `cybernetix setup` | First-time initialization of `~/.cybernetix/` on a new machine |
+| `cybernetix setup` | First-time initialization of `~/.cybernetix/`, link skills to AI tools |
 | `cybernetix sync` | Distribute conventions to each AI tool after editing |
 | `cybernetix update` | Open editor to modify conventions, auto-sync on save |
+| `cybernetix update-skills` | Refresh skills in `~/.cybernetix/skills` from repo source |
 | `cybernetix init [dir] [type] [tools]` | Generate convention files for a project |
-| `cybernetix reset` | Reset global conventions from repo source |
-| `cybernetix status` | View current state and sync status |
+| `cybernetix refresh [dir]` | Auto-detect and re-merge project conventions from templates |
+| `cybernetix reset` | Reset global conventions and skills from repo source |
+| `cybernetix status` | View current state, sync status, and skill links |
 
 ### Steps
 
 ```bash
 # 1. New machine — one-time setup
-cybernetix setup          # Create ~/.cybernetix/, generate global conventions and templates
-cybernetix sync           # Distribute to ~/.claude/, ~/.gemini/, ~/.codex/
+cybernetix setup          # Create ~/.cybernetix/, link skills to AI tools
+cybernetix sync           # Distribute conventions to ~/.claude/, ~/.gemini/, etc.
 
-# 2. New project — choose project type and AI tools
+# 2. Daily updates — get latest skills from repo
+cybernetix update-skills  # Refresh skills in ~/.cybernetix/skills
+
+# 3. New project — choose project type and AI tools
 cybernetix init . fullstack claude       # Fullstack project, Claude only
 cybernetix init my-app cli claude,cursor # CLI project, Claude + Cursor
 cybernetix init .                        # Interactive selection
-
+```
 # 3. Modify global conventions
 cybernetix update         # Edit → auto sync
 # Or edit manually, then:

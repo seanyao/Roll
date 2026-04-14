@@ -10,8 +10,14 @@ CNX_CONFIG="${CNX_HOME}/config.yaml"
 CNX_GLOBAL="${CNX_HOME}/conventions/global"
 CNX_TEMPLATES="${CNX_HOME}/conventions/templates"
 
-# Find repo root (where this script lives)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Find repo root (resolve symlinks so it works from ~/.local/bin/cybernetix)
+_source="${BASH_SOURCE[0]}"
+while [[ -L "$_source" ]]; do
+  _dir="$(cd "$(dirname "$_source")" && pwd)"
+  _source="$(readlink "$_source")"
+  [[ "$_source" != /* ]] && _source="$_dir/$_source"
+done
+SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO_CONVENTIONS="${REPO_ROOT}/conventions"
 
@@ -120,7 +126,7 @@ cmd_setup() {
       safe_copy "$f" "$CNX_GLOBAL/$(basename "$f")"
   done
 
-  # Copy templates
+  # Copy project templates
   info "Copying project templates..."
   for tpl_dir in "$REPO_CONVENTIONS"/templates/*/; do
     local tpl_name
@@ -132,6 +138,51 @@ cmd_setup() {
       [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
         safe_copy "$f" "$CNX_TEMPLATES/$tpl_name/$(basename "$f")"
     done
+  done
+
+  # Copy skills
+  info "Installing skills..."
+  mkdir -p "$CNX_HOME/skills"
+  for skill_dir in "$REPO_ROOT"/skills/*/; do
+    if [[ -d "$skill_dir" ]]; then
+      local skill_name
+      skill_name="$(basename "$skill_dir")"
+      mkdir -p "$CNX_HOME/skills/$skill_name"
+      for f in "$skill_dir"*; do
+        [[ -f "$f" ]] && safe_copy "$f" "$CNX_HOME/skills/$skill_name/$(basename "$f")"
+      done
+    fi
+  done
+
+  # Create symlinks for AI tools
+  info "Creating skill symlinks for AI tools..."
+  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  for ai_dir in "${ai_dirs[@]}"; do
+    ai_dir=$(eval echo "$ai_dir") # expand ~
+    if [[ -d "$ai_dir" ]]; then
+      local target_link="$ai_dir/skills"
+      if [[ ! -e "$target_link" ]]; then
+        ln -s "$CNX_HOME/skills" "$target_link"
+        ok "Linked skills to ${target_link/#$HOME/~}"
+      elif [[ -L "$target_link" ]]; then
+        local current_target
+        current_target="$(readlink "$target_link")"
+        if [[ "$current_target" != "$CNX_HOME/skills" ]]; then
+          warn "Symlink ${target_link/#$HOME/~} exists but points to $current_target"
+          echo -n "  Overwrite symlink? [y/N] "
+          read -r answer
+          if [[ "$answer" =~ ^[Yy]$ ]]; then
+            rm "$target_link"
+            ln -s "$CNX_HOME/skills" "$target_link"
+            ok "Updated link: ${target_link/#$HOME/~}"
+          fi
+        else
+          ok "Link exists: ${target_link/#$HOME/~}"
+        fi
+      else
+        warn "Directory or file exists at ${target_link/#$HOME/~}, skipping symlink"
+      fi
+    fi
   done
 
   # Create config if it doesn't exist
@@ -411,9 +462,167 @@ merge_convention() {
   ok "Created: $display"
 }
 
+# ─── Helper: detect project type from existing AGENTS.md ─────────────────────
+detect_project_type() {
+  local agents_file="$1/AGENTS.md"
+  [[ -f "$agents_file" ]] || { echo "unknown"; return; }
+
+  local content
+  content="$(cat "$agents_file")"
+
+  if echo "$content" | grep -qi "Fullstack Web"; then
+    echo "fullstack"
+  elif echo "$content" | grep -qi "Backend Service"; then
+    echo "backend-service"
+  elif echo "$content" | grep -qi "Frontend Only"; then
+    echo "frontend-only"
+  elif echo "$content" | grep -qi "CLI Tool"; then
+    echo "cli"
+  else
+    echo "unknown"
+  fi
+}
+
+# ─── Helper: detect AI tools from existing convention files ──────────────────
+detect_tools() {
+  local dir="$1"
+  local tools=""
+  [[ -f "$dir/.claude/CLAUDE.md" ]] && tools+="claude,"
+  [[ -f "$dir/GEMINI.md" ]] && tools+="gemini,"
+  [[ -f "$dir/.cursor-rules" ]] && tools+="cursor,"
+  echo "${tools%,}"
+}
+
+# ─── Helper: refresh a single project ────────────────────────────────────────
+refresh_project() {
+  local project_dir="$1"
+  local project_name
+  project_name="$(basename "$project_dir")"
+
+  local ptype
+  ptype="$(detect_project_type "$project_dir")"
+
+  if [[ "$ptype" == "unknown" ]]; then
+    warn "  ${BOLD}$project_name${NC}: cannot detect project type — skipping"
+    return 1
+  fi
+
+  local tools
+  tools="$(detect_tools "$project_dir")"
+
+  local tpl_dir="$CNX_TEMPLATES/$ptype"
+  if [[ ! -d "$tpl_dir" ]]; then
+    warn "  ${BOLD}$project_name${NC}: template '$ptype' not found — skipping"
+    return 1
+  fi
+
+  info "  ${BOLD}$project_name${NC} ($ptype | ${tools:-AGENTS.md only})"
+
+  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "  AGENTS.md"
+
+  if echo "$tools" | grep -q "claude"; then
+    mkdir -p "$project_dir/.claude"
+    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" "  .claude/CLAUDE.md"
+  fi
+  if echo "$tools" | grep -q "gemini"; then
+    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "  GEMINI.md"
+  fi
+  if echo "$tools" | grep -q "cursor"; then
+    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" "  .cursor-rules"
+  fi
+
+  return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: refresh
+# Auto-detect project type & tools, re-merge with latest templates
+# Single project: cybernetix refresh .
+# Batch: cybernetix refresh ~/CodeSpace/
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_refresh() {
+  local target="${1:-.}"
+  target="$(cd "$target" 2>/dev/null && pwd)" || { err "Directory not found: $1"; exit 1; }
+
+  if [[ ! -d "$CNX_GLOBAL" ]]; then
+    err "~/.cybernetix/ not set up. Run: cybernetix setup"
+    exit 1
+  fi
+
+  # Single project mode: target dir itself has AGENTS.md
+  if [[ -f "$target/AGENTS.md" ]]; then
+    info "Refreshing single project..."
+    echo ""
+    refresh_project "$target"
+    echo ""
+    ok "Done."
+    return
+  fi
+
+  # Batch mode: scan subdirectories for CNX projects
+  info "Scanning ${BOLD}$target${NC} for CNX projects..."
+  echo ""
+
+  local found=0 updated=0 skipped=0
+
+  while IFS= read -r agents_file; do
+    local project_dir
+    project_dir="$(dirname "$agents_file")"
+
+    # Skip cybernetix repo itself and template directories
+    case "$project_dir" in
+      */.cybernetix/*|*/conventions/*|*/template*) continue ;;
+    esac
+
+    found=$((found + 1))
+    if refresh_project "$project_dir"; then
+      updated=$((updated + 1))
+    else
+      skipped=$((skipped + 1))
+    fi
+    echo ""
+  done < <(find "$target" -maxdepth 2 -name "AGENTS.md" -type f 2>/dev/null | sort)
+
+  if [[ $found -eq 0 ]]; then
+    warn "No CNX projects found in $target"
+    info "Looking for directories with AGENTS.md (depth <= 2)"
+    return
+  fi
+
+  ok "Done: ${BOLD}$found${NC} projects found, ${BOLD}$updated${NC} refreshed, ${BOLD}$skipped${NC} skipped."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: update-skills
+# Refresh skills in ~/.cybernetix/skills from repo source
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_update_skills() {
+  if [[ ! -d "$REPO_ROOT/skills" ]]; then
+    err "Skills source not found at: $REPO_ROOT/skills"
+    exit 1
+  fi
+
+  info "Updating skills in ~/.cybernetix/skills..."
+  mkdir -p "$CNX_HOME/skills"
+  
+  # Copy subdirectories
+  for skill_dir in "$REPO_ROOT"/skills/*/; do
+    if [[ -d "$skill_dir" ]]; then
+      local skill_name
+      skill_name="$(basename "$skill_dir")"
+      mkdir -p "$CNX_HOME/skills/$skill_name"
+      for f in "$skill_dir"*; do
+        [[ -f "$f" ]] && cp "$f" "$CNX_HOME/skills/$skill_name/$(basename "$f")"
+      done
+    fi
+  done
+  
+  ok "Skills updated successfully."
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: reset
-# Re-copy conventions from repo source, then sync
+# Re-copy conventions and skills from repo source, then sync
 # ═══════════════════════════════════════════════════════════════════════════════
 cmd_reset() {
   if [[ ! -d "$REPO_CONVENTIONS" ]]; then
@@ -422,7 +631,7 @@ cmd_reset() {
     exit 1
   fi
 
-  warn "This will overwrite ~/.cybernetix/conventions/ with repo defaults."
+  warn "This will overwrite ~/.cybernetix/conventions/ and skills with repo defaults."
   echo -n "  Continue? [y/N] "
   read -r answer
   [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted."; return; }
@@ -449,6 +658,19 @@ cmd_reset() {
       [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
         safe_copy "$f" "$CNX_TEMPLATES/$tpl_name/$(basename "$f")" true
     done
+  done
+
+  info "Resetting skills..."
+  mkdir -p "$CNX_HOME/skills"
+  for skill_dir in "$REPO_ROOT"/skills/*/; do
+    if [[ -d "$skill_dir" ]]; then
+      local skill_name
+      skill_name="$(basename "$skill_dir")"
+      mkdir -p "$CNX_HOME/skills/$skill_name"
+      for f in "$skill_dir"*; do
+        [[ -f "$f" ]] && cp "$f" "$CNX_HOME/skills/$skill_name/$(basename "$f")"
+      done
+    fi
   done
 
   # Re-install global git hook
@@ -493,6 +715,18 @@ cmd_status() {
     fi
   done
 
+  # Check skills
+  echo ""
+  echo -e "${BOLD}Global skills:${NC}"
+  if [[ -d "$CNX_HOME/skills" ]]; then
+    local count
+    count=$(find "$CNX_HOME/skills" -maxdepth 1 -type d | wc -l | tr -d ' ')
+    count=$((count - 1)) # Subtract . itself
+    echo -e "  ${GREEN}+${NC} ~/.cybernetix/skills ($count skills installed)"
+  else
+    echo -e "  ${RED}-${NC} ~/.cybernetix/skills (missing)"
+  fi
+
   # Check sync targets
   echo ""
   echo -e "${BOLD}Sync targets:${NC}"
@@ -507,6 +741,34 @@ cmd_status() {
   check_sync_status "Kimi Code"   "$CNX_GLOBAL/AGENTS.md"  "$kimi_target"
   check_sync_status "Codex"       "$CNX_GLOBAL/AGENTS.md"  "$codex_target"
   check_sync_status "Gemini CLI"  "$CNX_GLOBAL/GEMINI.md"  "$gemini_target"
+
+  # Check skill symlinks
+  echo ""
+  echo -e "${BOLD}Skill symlinks:${NC}"
+  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  for ai_dir in "${ai_dirs[@]}"; do
+    ai_dir=$(eval echo "$ai_dir")
+    if [[ -d "$ai_dir" ]]; then
+      local name
+      name=$(basename "$ai_dir" | sed 's/^\.//')
+      # Use tr for capitalization to support older bash versions
+      name=$(echo "$name" | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo "$name" | cut -c2-)
+      local target_link="$ai_dir/skills"
+      if [[ -L "$target_link" ]]; then
+        local current_target
+        current_target="$(readlink "$target_link")"
+        if [[ "$current_target" == "$CNX_HOME/skills" ]]; then
+          echo -e "  ${GREEN}=${NC} $name: ${target_link/#$HOME/~} (in sync)"
+        else
+          echo -e "  ${YELLOW}~${NC} $name: ${target_link/#$HOME/~} (points to $current_target)"
+        fi
+      elif [[ -e "$target_link" ]]; then
+        echo -e "  ${RED}!${NC} $name: ${target_link/#$HOME/~} (exists but not a link)"
+      else
+        echo -e "  ${RED}-${NC} $name: ${target_link/#$HOME/~} (not linked)"
+      fi
+    fi
+  done
 
   # Check global git hook
   echo ""
@@ -564,6 +826,7 @@ usage() {
   echo "  setup              Initialize ~/.cybernetix/ on this machine"
   echo "  sync               Distribute global conventions to AI tool config paths"
   echo "  update             Edit global conventions, then sync"
+  echo "  update-skills      Refresh skills in ~/.cybernetix/skills from repo source"
   echo "  init [dir] [type]  Initialize project with convention files"
   echo "  reset              Reset ~/.cybernetix/ from repo source, then sync"
   echo "  status             Show current state of conventions and sync"
@@ -575,6 +838,7 @@ usage() {
   echo "Examples:"
   echo "  cybernetix setup                           # First-time setup"
   echo "  cybernetix sync                            # After editing global conventions"
+  echo "  cybernetix update-skills                   # Refresh skills from repo"
   echo "  cybernetix init .                          # Interactive prompts"
   echo "  cybernetix init my-app fullstack claude    # Claude Code only"
   echo "  cybernetix init . cli claude,cursor        # CLI project, Claude + Cursor"
@@ -585,12 +849,13 @@ main() {
   shift || true
 
   case "$cmd" in
-    setup)   cmd_setup "$@" ;;
-    sync)    cmd_sync "$@" ;;
-    update)  cmd_update "$@" ;;
-    init)    cmd_init "$@" ;;
-    reset)   cmd_reset "$@" ;;
-    status)  cmd_status "$@" ;;
+    setup)         cmd_setup "$@" ;;
+    sync)          cmd_sync "$@" ;;
+    update)        cmd_update "$@" ;;
+    update-skills|update_skills) cmd_update_skills "$@" ;;
+    init)          cmd_init "$@" ;;
+    reset)         cmd_reset "$@" ;;
+    status)        cmd_status "$@" ;;
     version|--version|-v) echo "cybernetix v${VERSION}" ;;
     help|--help|-h|"") usage ;;
     *)
