@@ -155,6 +155,21 @@ YAML
     ok "Created: ~/.cybernetix/config.yaml"
   fi
 
+  # Install global git hook
+  info "Installing global git hook..."
+  local hooks_dir="$HOME/.config/git/hooks"
+  local hook_src="$REPO_ROOT/hooks/prepare-commit-msg"
+  local hook_dst="$hooks_dir/prepare-commit-msg"
+  if [[ -f "$hook_src" ]]; then
+    mkdir -p "$hooks_dir"
+    safe_copy "$hook_src" "$hook_dst"
+    chmod +x "$hook_dst"
+    git config --global core.hooksPath "$hooks_dir"
+    ok "Global git hook installed: AI client auto-detected on every commit"
+  else
+    warn "Hook source not found: $hook_src"
+  fi
+
   echo ""
   ok "Setup complete. Directory: ~/.cybernetix/"
   echo ""
@@ -436,6 +451,15 @@ cmd_reset() {
     done
   done
 
+  # Re-install global git hook
+  local hook_src="$REPO_ROOT/hooks/prepare-commit-msg"
+  local hook_dst="$HOME/.config/git/hooks/prepare-commit-msg"
+  if [[ -f "$hook_src" ]]; then
+    safe_copy "$hook_src" "$hook_dst" true
+    chmod +x "$hook_dst"
+    ok "Global git hook updated"
+  fi
+
   echo ""
   ok "Reset complete. Syncing to AI tools..."
   echo ""
@@ -483,6 +507,21 @@ cmd_status() {
   check_sync_status "Kimi Code"   "$CNX_GLOBAL/AGENTS.md"  "$kimi_target"
   check_sync_status "Codex"       "$CNX_GLOBAL/AGENTS.md"  "$codex_target"
   check_sync_status "Gemini CLI"  "$CNX_GLOBAL/GEMINI.md"  "$gemini_target"
+
+  # Check global git hook
+  echo ""
+  echo -e "${BOLD}Git hook:${NC}"
+  local hook_dst="$HOME/.config/git/hooks/prepare-commit-msg"
+  local hooks_path
+  hooks_path=$(git config --global core.hooksPath 2>/dev/null)
+  if [[ -f "$hook_dst" ]] && [[ "$hooks_path" == "$HOME/.config/git/hooks" ]]; then
+    echo -e "  ${GREEN}+${NC} prepare-commit-msg (global, AI client auto-detect)"
+  elif [[ -f "$hook_dst" ]]; then
+    echo -e "  ${YELLOW}~${NC} prepare-commit-msg exists but core.hooksPath not set"
+    echo -e "      run: git config --global core.hooksPath ~/.config/git/hooks"
+  else
+    echo -e "  ${RED}-${NC} not installed — run 'cybernetix setup'"
+  fi
 
   # Check templates
   echo ""

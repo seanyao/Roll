@@ -1,0 +1,51 @@
+#!/bin/sh
+# Dynamically prefix commit messages with the AI client that made the commit.
+# Detection order: process tree (innermost wins) → env vars → git config fallback
+
+COMMIT_MSG_FILE=$1
+FIRST_LINE=$(head -1 "$COMMIT_MSG_FILE")
+
+# Skip merge commits and commits that already have a bracket prefix
+echo "$FIRST_LINE" | grep -qE "^Merge|^\[" && exit 0
+
+# ─── Detect AI client ────────────────────────────────────────────────────────
+detect_ai_client() {
+  # 1. Walk the process tree — innermost matching process wins.
+  #    This correctly handles "Claude Code running inside Kimi shell" etc.
+  pid=$$
+  depth=0
+  while [ "$pid" -gt 1 ] && [ "$depth" -lt 15 ]; do
+    cmd=$(ps -p "$pid" -o comm= 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    case "$cmd" in
+      *claude*) echo "claude code"; return ;;
+      *kimi*)   echo "kimi cli";    return ;;
+      *gemini*) echo "gemini cli";  return ;;
+      *codex*)  echo "codex";       return ;;
+      *cursor*) echo "cursor";      return ;;
+    esac
+    ppid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+    [ "$ppid" = "$pid" ] && break
+    pid=$ppid
+    depth=$((depth + 1))
+  done
+
+  # 2. Env var fallback (check most specific first)
+  [ -n "$CLAUDECODE" ]       && echo "claude code" && return
+  [ -n "$KIMI_CLI" ]         && echo "kimi cli"    && return
+  [ -n "$GEMINI_CLI_TOOL" ]  && echo "gemini cli"  && return
+  [ -n "$CODEX_CLI" ]        && echo "codex"       && return
+  [ -n "$CURSOR_TRACE" ]     && echo "cursor"      && return
+
+  # 3. Per-repo or global git config: git config commit.aiClient "my tool"
+  git config --get commit.aiClient 2>/dev/null && return
+
+  # 4. Not an AI commit — no prefix
+  echo ""
+}
+
+CLIENT=$(detect_ai_client)
+
+[ -z "$CLIENT" ] && exit 0
+
+printf '[%s] %s\n%s' "$CLIENT" "$FIRST_LINE" "$(tail -n +2 "$COMMIT_MSG_FILE")" > "$COMMIT_MSG_FILE.tmp"
+mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
