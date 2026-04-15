@@ -39,6 +39,9 @@ ok()    { echo -e "${GREEN}[wk]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[wk]${NC} $*"; }
 err()   { echo -e "${RED}[wk]${NC} $*" >&2; }
 
+# Tracks merge actions across a single init run; reset before each batch
+_WK_MERGE_SUMMARY=()
+
 canonical_dir() {
   local path="$1"
   [[ -d "$path" ]] || return 1
@@ -478,7 +481,9 @@ cmd_init() {
     if [[ -f "$project_dir/AGENTS.md" && "$project_type" == "$detected" ]]; then
       info "Re-merging from latest templates...  正在从最新模板重新合并..."
       echo ""
+      _WK_MERGE_SUMMARY=()
       refresh_project "$project_dir"
+      print_merge_summary
       echo ""
       ok "Done.  完成。"
       return
@@ -533,27 +538,22 @@ cmd_init() {
   info "Initializing ${BOLD}$project_type${NC} conventions in: $project_dir  正在初始化 ${BOLD}$project_type${NC} 约定，目录: $project_dir"
   echo ""
 
+  _WK_MERGE_SUMMARY=()
   merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "AGENTS.md"
 
-  local created_files="AGENTS.md"
   if [[ "$use_claude" == "true" ]]; then
     mkdir -p "$project_dir/.claude"
     merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" ".claude/CLAUDE.md"
-    created_files+=", .claude/CLAUDE.md"
   fi
   if [[ "$use_gemini" == "true" ]]; then
     merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "GEMINI.md"
-    created_files+=", GEMINI.md"
   fi
   if [[ "$use_cursor" == "true" ]]; then
     merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" ".cursor-rules"
-    created_files+=", .cursor-rules"
   fi
 
-  echo ""
-  ok "Convention files created for ${BOLD}$project_type${NC} project.  已为 ${BOLD}$project_type${NC} 项目创建约定文件。"
-  echo ""
-  info "Created: $created_files  已创建: $created_files"
+  ok "Convention files initialized for ${BOLD}$project_type${NC} project.  已为 ${BOLD}$project_type${NC} 项目初始化约定文件。"
+  print_merge_summary
 
   # ── Scaffold phase ──────────────────────────────────────────────────────────
   if is_fresh_project "$project_dir"; then
@@ -593,7 +593,8 @@ merge_convention() {
 
   if [[ -f "$out_file" ]]; then
     if diff -q <(echo "$merged") "$out_file" &>/dev/null; then
-      return  # identical
+      _WK_MERGE_SUMMARY+=("unchanged|$display")
+      return  # identical, nothing to do
     fi
     warn "File exists: $display  文件已存在: $display"
     echo -n "  [o] Overwrite  [k] Keep  [M] Merge (default): "
@@ -601,9 +602,14 @@ merge_convention() {
     answer="${answer:-M}"
     case "$answer" in
       o|O)
-        ;;  # fall through to write
+        echo "$merged" > "$out_file"
+        ok "Overwritten: $display  已覆盖: $display"
+        _WK_MERGE_SUMMARY+=("overwritten|$display")
+        return
+        ;;
       k|K)
         info "Kept: $display  已保留: $display"
+        _WK_MERGE_SUMMARY+=("kept|$display")
         return
         ;;
       m|M|"")
@@ -623,6 +629,7 @@ merge_convention() {
           fi
         done <<< "$(cat "$tpl_file")"
         ok "Merged: $display  已合并: $display"
+        _WK_MERGE_SUMMARY+=("merged|$display")
         return
         ;;
     esac
@@ -630,6 +637,28 @@ merge_convention() {
 
   echo "$merged" > "$out_file"
   ok "Created: $display  已创建: $display"
+  _WK_MERGE_SUMMARY+=("created|$display")
+}
+
+# ─── Helper: print a tidy summary of merge actions ───────────────────────────
+print_merge_summary() {
+  if [[ ${#_WK_MERGE_SUMMARY[@]} -eq 0 ]]; then
+    return
+  fi
+  echo ""
+  echo "  ┌─ 操作摘要 Summary ──────────────────────────────────┐"
+  for entry in "${_WK_MERGE_SUMMARY[@]}"; do
+    local action="${entry%%|*}"
+    local file="${entry##*|}"
+    case "$action" in
+      merged)      printf "  │  ${GREEN}✦ merged${NC}      %-30s│\n" "$file" ;;
+      created)     printf "  │  ${GREEN}+ created${NC}     %-30s│\n" "$file" ;;
+      overwritten) printf "  │  ${YELLOW}↺ overwritten${NC} %-30s│\n" "$file" ;;
+      kept)        printf "  │  ${CYAN}· kept${NC}        %-30s│\n" "$file" ;;
+      unchanged)   printf "  │    unchanged    %-30s│\n" "$file" ;;
+    esac
+  done
+  echo "  └─────────────────────────────────────────────────────┘"
 }
 
 # ─── Helper: auto-detect project type by scanning project files ──────────────
