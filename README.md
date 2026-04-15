@@ -17,14 +17,12 @@ Before diving into commands and skills, read the Engineering Methodology — it 
 ## Installation
 
 ```bash
-git clone https://github.com/seanyao/cybernetix.git ~/CodeSpace/cybernetix
-
-# Add CLI to PATH
-ln -sf ~/CodeSpace/cybernetix/bin/cybernetix ~/.local/bin/cybernetix
-
-# Initialize global config (first run on a new machine)
-cybernetix setup
+git clone https://github.com/seanyao/cybernetix.git
+cd cybernetix
+bash install.sh
 ```
+
+The script handles everything: execute permissions, `~/.local/bin` creation, PATH configuration, and first-time setup.
 
 ---
 
