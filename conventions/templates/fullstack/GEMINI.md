@@ -12,4 +12,4 @@
 
 - When modifying API contracts, update both `api/types.ts` and `src/shared/types/` in the same commit.
 - Run `npm run build` to verify both frontend and backend compile before pushing.
-- Follow the project AGENTS.md for architecture constraints and CNX workflow.
+- Follow the project AGENTS.md for architecture constraints and WK workflow.

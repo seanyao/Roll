@@ -1,11 +1,11 @@
-# CNX-OC (Cybernetix for OpenClaw)
+# WK-OC (Wukong for OpenClaw)
 
-OpenClaw adaptation layer for Cybernetix - Integrates the CNX workflow into the OpenClaw ecosystem.
+OpenClaw adaptation layer for Wukong - Integrates the WK workflow into the OpenClaw ecosystem.
 
 ## What Is This?
 
-`wk-oc` is the **OpenClaw-specific variant** of Cybernetix, providing:
-- A unified `$cnx` command entry point
+`wk-oc` is the **OpenClaw-specific variant** of Wukong, providing:
+- A unified `$wk` command entry point
 - Seamless integration with the OpenClaw agent
 - Simplified skill invocation
 
@@ -15,9 +15,9 @@ OpenClaw adaptation layer for Cybernetix - Integrates the CNX workflow into the 
 variants/wk-oc/
 ├── README.md              # This file
 ├── skills/
-│   └── cnx/               # OpenClaw skill
+│   └── wk/                # OpenClaw skill
 │       ├── SKILL.md       # Skill documentation
-│       └── cnx.sh         # Command routing script
+│       └── wk.sh          # Command routing script
 └── install.sh             # Installation script (optional)
 ```
 
@@ -25,8 +25,8 @@ variants/wk-oc/
 
 ```bash
 # Create symlinks (recommended)
-ln -s ~/workspace/wukong/variants/wk-oc/skills/cnx \
-  ~/.openclaw/workspace/skills/cnx
+ln -s ~/workspace/wukong/variants/wk-oc/skills/wk \
+  ~/.openclaw/workspace/skills/wk
 
 # Also link tools
 ln -s ~/workspace/wukong/tools/wk-fetch \
@@ -41,10 +41,10 @@ ln -s ~/workspace/wukong/tools/wk-probe \
 After installation, use in any OpenClaw agent:
 
 ```bash
-$cnx backlog "user login feature"     # Requirement planning
-$cnx build US-001                     # Execute Story
-$cnx fetch https://example.com        # Web scraping
-$cnx probe find orin                  # Node discovery
+$wk backlog "user login feature"     # Requirement planning
+$wk build US-001                     # Execute Story
+$wk fetch https://example.com        # Web scraping
+$wk probe find orin                  # Node discovery
 ```
 
 ## Syncing with Upstream
@@ -68,9 +68,9 @@ git checkout v1.2.3
 
 ## Differences
 
-| Feature | Cybernetix (Original) | CNX-OC (OpenClaw) |
+| Feature | Wukong (Original) | WK-OC (OpenClaw) |
 |------|-------------------|-------------------|
-| Invocation | Call individual skills directly | Unified `$cnx` entry point |
+| Invocation | Call individual skills directly | Unified `$wk` entry point |
 | Tool name | `wk-fetch` | `wk-fetch` |
 | Tool name | `wk-probe` | `wk-probe` |
 | Integration | Standalone CLI | OpenClaw ecosystem |

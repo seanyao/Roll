@@ -4,7 +4,7 @@ name: wk-.changelog
 description: After build completion, extracts completed Stories from BACKLOG.md to generate CHANGELOG.md. Auto-triggered after successful deploy, keeping the external changelog in sync with the internal backlog.
 ---
 
-# CNX Generate Changelog
+# WK Generate Changelog
 
 After successful Build & Deploy, extracts completed Stories from BACKLOG.md to generate a user-friendly `CHANGELOG.md`.
 

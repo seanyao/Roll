@@ -13,6 +13,16 @@
 
 ---
 
+## The Idea
+
+Wukong (悟空) — the legendary trickster, bound by a golden headband (_金箍_). Full power, enforced discipline. That's the metaphor: AI agents are capable without constraint, but only consistent at team scale when their behavior is anchored by shared engineering standards.
+
+The specific problem: in teams where developers use different AI clients (Claude Code, Cursor, Gemini CLI, Codex), each agent receives different engineering constraints. One developer's Claude passes tests another's Cursor never even runs. Wukong makes **the constraints the constant**, not the model.
+
+It does this through two mechanisms: a CLI that distributes a single source of conventions to every AI client on the machine, and a set of Skills that encode proven engineering practices (TDD, TCR, SRE, INVEST) as instructions an AI Agent can actually follow.
+
+---
+
 ## 📖 Start Here
 
 Before diving into commands and skills, read the Engineering Methodology — it explains the three-loop architecture (Research → Build → Observe), why each skill exists, and how they connect into a complete delivery system.

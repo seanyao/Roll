@@ -13,4 +13,4 @@
 - No server, no frontend. CLI tool only.
 - Test commands by running them, not just unit tests.
 - Run `npm run build && node dist/index.js --help` before pushing.
-- Follow the project AGENTS.md for architecture constraints and CNX workflow.
+- Follow the project AGENTS.md for architecture constraints and WK workflow.

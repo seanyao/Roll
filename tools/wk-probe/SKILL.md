@@ -1,12 +1,12 @@
 ---
 hidden: true
 name: wk-probe
-description: Node discovery and health check for CNX environment. Find machines on LAN by name, check node health, verify OpenClaw Gateway status. Use when user asks to find a machine, check node status, diagnose gateway issues, or verify node connectivity.
+description: Node discovery and health check for Wukong environment. Find machines on LAN by name, check node health, verify OpenClaw Gateway status. Use when user asks to find a machine, check node status, diagnose gateway issues, or verify node connectivity.
 ---
 
-# CNX Checker
+# WK Probe
 
-**Node discovery and health check tool** - for node management and status diagnosis in CNX environments.
+**Node discovery and health check tool** - for node management and status diagnosis in Wukong environments.
 
 ## Capabilities
 

@@ -113,9 +113,9 @@
 
 **Created**: 2026-04-16
 
-- As a developer onboarding a legacy project into CNX
+- As a developer onboarding a legacy project into WK
 - I want the CLI to walk me through scaffold options one-by-one with benefit explanations
-- So that I can selectively adopt CNX structure without breaking existing code
+- So that I can selectively adopt WK structure without breaking existing code
 
 **AC:**
 - [ ] Triggered when cwd has existing source (package.json / src/ / etc.) but no AGENTS.md

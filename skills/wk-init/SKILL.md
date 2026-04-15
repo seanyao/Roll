@@ -1,6 +1,6 @@
 ---
 name: wk-init
-description: Initialize a new AI-Coding project with complete CNX workflow support. Detects existing project state and adapts: full scaffold for new projects, smart adoption for legacy projects, refresh for already-CNX projects.
+description: Initialize a new AI-Coding project with complete WK workflow support. Detects existing project state and adapts: full scaffold for new projects, smart adoption for legacy projects, refresh for already-WK projects.
 ---
 
 # Project Init
@@ -10,8 +10,8 @@ Unified entry for all project initialization scenarios. Detects current state fi
 ## When to Use
 
 - Starting a brand-new project
-- Onboarding a legacy project into CNX workflow
-- Refreshing or completing an existing CNX setup
+- Onboarding a legacy project into WK workflow
+- Refreshing or completing an existing WK setup
 
 ---
 
@@ -19,7 +19,7 @@ Unified entry for all project initialization scenarios. Detects current state fi
 
 Before doing anything, scan the current directory and determine which situation applies:
 
-**Check for CNX convention files:**
+**Check for WK convention files:**
 ```bash
 ls AGENTS.md .claude/CLAUDE.md GEMINI.md .cursor-rules 2>/dev/null
 ```
@@ -49,7 +49,7 @@ No existing code, no convention files.
 1. Project type (fullstack / frontend-only / backend-service / cli)
 2. AI tools to use (claude / gemini / cursor / all)
 
-### Situation B: Legacy Project (has code, no CNX conventions)
+### Situation B: Legacy Project (has code, no WK conventions)
 
 Has existing directory structure and/or source files, but no AGENTS.md.
 
@@ -60,19 +60,19 @@ Detected: Node.js / Express / TypeScript
 Structure: src/controllers/, src/services/, tests/
 
 How would you like to proceed?
-1) Merge (recommended) — keep your structure, add CNX conventions + workflow files, document your actual paths in AGENTS.md
+1) Merge (recommended) — keep your structure, add WK conventions + workflow files, document your actual paths in AGENTS.md
 2) Keep — only add convention files, nothing else
-3) Overwrite — replace with CNX standard structure (destructive, confirm required)
+3) Overwrite — replace with WK standard structure (destructive, confirm required)
 ```
 
-### Situation C: Already Has CNX Convention Files
+### Situation C: Already Has WK Convention Files
 
 AGENTS.md or .claude/CLAUDE.md already exists.
 
 → Show current status, then ask:
 
 ```
-Found existing CNX setup:
+Found existing WK setup:
   ✓ AGENTS.md
   ✓ .claude/CLAUDE.md
   ✗ BACKLOG.md (missing)
@@ -95,7 +95,7 @@ For each file (AGENTS.md / .claude/CLAUDE.md / GEMINI.md / .cursor-rules):
 | Exists, content identical | Skip silently |
 | Exists, content differs | Ask: **Overwrite / Keep / Merge** |
 
-**Merge** = keep the existing content as-is, append any CNX sections that are missing at the bottom.
+**Merge** = keep the existing content as-is, append any WK sections that are missing at the bottom.
 
 Run `wukong init . <type> <tools>` to generate the base convention files, then apply the above logic.
 
@@ -103,7 +103,7 @@ Run `wukong init . <type> <tools>` to generate the base convention files, then a
 
 ## Step 4A: Full Scaffold Mode (new projects)
 
-Create the complete CNX project structure:
+Create the complete WK project structure:
 
 ```
 my-project/

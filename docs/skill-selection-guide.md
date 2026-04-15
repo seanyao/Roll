@@ -1,4 +1,4 @@
-# CNX Skill Selection Guide
+# Wukong Skill Selection Guide
 
 Quickly select the right skill or tool.
 
@@ -44,10 +44,10 @@ Quickly select the right skill or tool.
 
 | Scenario | Skill | Trigger Timing |
 |------|-------|---------|
-| Celebrate after Build | `cnx-.yeah` 🎉 | Auto-executes after successful Build |
-| Code self-review | `cnx-.code-review` | Before Commit, or manually triggered |
-| Generate Changelog | `cnx-.changelog` | Auto-triggered after successful Deploy |
-| QA test reference | `cnx-.qa-cover` | Referenced when writing tests |
+| Celebrate after Build | `wk-.yeah` 🎉 | Auto-executes after successful Build |
+| Code self-review | `wk-.code-review` | Before Commit, or manually triggered |
+| Generate Changelog | `wk-.changelog` | Auto-triggered after successful Deploy |
+| QA test reference | `wk-.qa-cover` | Referenced when writing tests |
 
 ## Quick Decision Tree
 

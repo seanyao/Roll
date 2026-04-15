@@ -18,7 +18,7 @@
 
 - When running shell commands, prefer the most specific tool available.
 - For file operations, verify the file exists before modifying.
-- When a project has CNX workflow, follow the AGENTS.md conventions and use CNX skills.
+- When a project has WK workflow, follow the AGENTS.md conventions and use WK skills.
 - Prefer targeted edits over full file rewrites.
 
 ## Frontend Default Stack

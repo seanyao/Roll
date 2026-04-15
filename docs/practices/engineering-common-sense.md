@@ -1,4 +1,4 @@
-# Cybernetix Engineering Common Sense Checklist
+# Wukong Engineering Common Sense Checklist
 
 > **These are not best practices — they are baseline requirements.** Violations are Bugs.
 

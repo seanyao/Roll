@@ -4,11 +4,11 @@ name: wk-.code-review
 description: Self code review step in the TCR workflow. Runs after each micro-step is completed and before commit, checking code quality, security, and design issues.
 ---
 
-# CNX Self Code Review
+# WK Self Code Review
 
 **Quality gate for the TCR loop** - Self-review after each micro-step is completed and before commit.
 
-## Position in CNX
+## Position in WK Workflow
 
 ```
 TCR Loop:
@@ -41,7 +41,7 @@ $wk-code-review files src/utils.ts
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  CNX Quality Checklist                                  │
+│  WK Quality Checklist                                   │
 ├─────────────────────────────────────────────────────────┤
 │  ✅ Correctness     - Logic is correct, no bugs         │
 │  ✅ Security        - No vulnerabilities, input valid.  │
@@ -97,7 +97,7 @@ In each micro-step of `$wk-*-build`:
 4. git commit -m "tcr: description"
 ```
 
-## CNX Principle Alignment
+## WK Principle Alignment
 
 - **Agent-First**: Structured review checklist, executable by AI
 - **Check Phase**: Local quality control

@@ -1,4 +1,4 @@
-# CNX Command Quick Reference
+# WK-OC Command Quick Reference
 
 **Unified AI-Coding workflow entry point** - Complete toolchain for structured software development
 
@@ -7,7 +7,7 @@
 ## Getting Started
 
 ```bash
-$cnx <command> [options]
+$wk <command> [options]
 ```
 
 ---
@@ -35,49 +35,49 @@ $cnx <command> [options]
 
 ```bash
 # Plan a new feature, automatically split into Stories
-$cnx backlog "user login system"
+$wk backlog "user login system"
 
 # Plan from an existing design document
-$cnx backlog --from-plan docs/plans/auth.md
+$wk backlog --from-plan docs/plans/auth.md
 
 # Directly create a single Story
-$cnx backlog --story "add password reset feature"
+$wk backlog --story "add password reset feature"
 ```
 
 ### 🔨 Do - Execution Phase
 
 ```bash
 # Execute a specified Story
-$cnx build US-001
+$wk build US-001
 
 # Quick bug fix
-$cnx fix "login button click unresponsive"
+$wk fix "login button click unresponsive"
 
 # One-sentence quick delivery (auto plan + execute)
-$cnx roll "add dark mode toggle"
+$wk roll "add dark mode toggle"
 ```
 
 ### 👀 Check - Review Phase
 
 ```bash
 # Code review
-$cnx review
+$wk review
 
 # Scrape technical docs for reference
-$cnx fetch https://docs.example.com/api
+$wk fetch https://docs.example.com/api
 
 # Crawl competitor website for analysis
-$cnx crawl https://competitor.com --depth 2
+$wk crawl https://competitor.com --depth 2
 ```
 
 ### 🚀 Act - Deployment Phase
 
 ```bash
 # Generate changelog
-$cnx changelog
+$wk changelog
 
 # Check production environment nodes
-$cnx probe health production.local
+$wk probe health production.local
 ```
 
 ---
@@ -88,18 +88,18 @@ $cnx probe health production.local
 
 | Scenario | Command | Description |
 |------|------|------|
-| Read a single article | `$cnx fetch <url>` | Single page extraction, fast retrieval |
-| Back up an entire doc site | `$cnx crawl <url>` | Full site recursive, bulk save |
-| Get API docs | `$cnx fetch` | Fetch current page at once |
-| Competitor website analysis | `$cnx crawl` | Deep crawl across multiple pages |
+| Read a single article | `$wk fetch <url>` | Single page extraction, fast retrieval |
+| Back up an entire doc site | `$wk crawl <url>` | Full site recursive, bulk save |
+| Get API docs | `$wk fetch` | Fetch current page at once |
+| Competitor website analysis | `$wk crawl` | Deep crawl across multiple pages |
 
 ### build vs fix vs roll
 
 | Scenario | Command | Description |
 |------|------|------|
-| Develop a planned feature | `$cnx build US-001` | Execute existing Story |
-| Fix a production Bug | `$cnx fix "description"` | Quick fix workflow |
-| Ad-hoc small request | `$cnx roll "description"` | Auto-plan and execute |
+| Develop a planned feature | `$wk build US-001` | Execute existing Story |
+| Fix a production Bug | `$wk fix "description"` | Quick fix workflow |
+| Ad-hoc small request | `$wk roll "description"` | Auto-plan and execute |
 
 ---
 
@@ -107,16 +107,16 @@ $cnx probe health production.local
 
 ```bash
 # 1. Plan requirements -> generate US-001
-$cnx backlog "user login feature"
+$wk backlog "user login feature"
 
 # 2. Execute development -> TCR workflow
-$cnx build US-001
+$wk build US-001
 
 # 3. Code review
-$cnx review
+$wk review
 
 # 4. Release
-$cnx changelog
+$wk changelog
 ```
 
 ---

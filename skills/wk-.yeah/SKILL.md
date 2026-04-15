@@ -4,7 +4,7 @@ name: wk-.yeah
 description: Celebration ceremony after build workflow completion 🎉 Outputs fireworks after wk-story-build / wk-fix-build / wk-roll-build finishes successfully.
 ---
 
-# CNX Yeah! 🎉
+# WK Yeah! 🎉
 
 Celebration ceremony after a successful build completion.
 
@@ -45,4 +45,4 @@ Called as the final step in a build skill:
 
 - Only called after an actual successful completion
 - Not triggered if the workflow had a revert or failure
-- Part of the positive feedback loop in the CNX continuous delivery cycle 🎯
+- Part of the positive feedback loop in the WK continuous delivery cycle 🎯
