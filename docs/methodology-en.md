@@ -14,6 +14,8 @@ Wukong is an **instruction and workflow management framework for AI Agents**. It
 
 This document describes Wukong's three-loop engineering architecture and its corresponding technical implementation.
 
+The name is the design philosophy: Wukong (悟空), the shape-shifting trickster, gains discipline from the golden headband (_金箍_) without losing any of his power. Wukong the framework takes the same position — AI Agent capability is not diminished by constraint. Standardized constraints are precisely what make that capability composable and transferable at team scale.
+
 ---
 
 ## 1. Architecture Overview: Three Interlocking Loops
@@ -199,6 +201,8 @@ Translates research findings and business requirements into instruction contract
 - `<feature>-plan.md`: Technical design document with architectural decisions and implementation approach.
 
 This separation keeps BACKLOG.md concise and readable as a progress dashboard, while detailed design lives in a dedicated location.
+
+> **Design principle — Markdown as Code**: In Wukong, `BACKLOG.md` and `docs/features/` are not documentation artifacts generated after development — they are the input that drives development. A Story does not exist until it has a Markdown file. A Story is not done until its Verification Gate evidence is committed. The file system is the single source of truth; there is no separate project management tool to stay in sync with.
 
 ---
 
@@ -493,7 +497,7 @@ Executes a fix for a single issue — lighter-weight than `$wk-story-build`, but
 
 ## 6. Engineering Baseline: Engineering Common Sense
 
-Wukong defines 8 non-negotiable engineering baselines that apply across all three loops. These are not "best practice suggestions" — they are mandatory checks in the Test Design Review phase of every Story:
+Wukong defines 9 non-negotiable engineering baselines that apply across all three loops. These are not "best practice suggestions" — they are mandatory checks in the Test Design Review phase of every Story:
 
 | # | Baseline | Definition | Anti-Pattern |
 |---|----------|-----------|--------------|
@@ -505,6 +509,13 @@ Wukong defines 8 non-negotiable engineering baselines that apply across all thre
 | 6 | **Graceful Degradation** | When a dependency fails, degrade service rather than crash | "That service won't go down" |
 | 7 | **Observability** | Progress, state, and errors are visible to the user | "It can be looked up in the logs" |
 | 8 | **Concurrency Safety** | Shared resource access is safe under multi-thread / multi-process conditions | "We only have a single instance right now" |
+| 9 | **Infer First, Confirm Intent** | Never ask the user for facts the machine can deduce; only ask the user to decide intent (keep / switch / merge) | "Just let the user pick — safer that way" |
+
+**Baseline 9 expanded:** Before prompting the user, any tool must exhaust available context (files, config, environment). Present the inferred result as "confirm or override" — never ask users to fill in information from scratch when the system already has signals. Two modes:
+- **new-scratch** (no context whatsoever): a selection menu is the correct prompt
+- **legacy-auto** (code, config, or metadata exists): scan → infer → ask only "keep [Y] or switch [1-4]?"
+
+The full menu is a fallback, not the default entry point. An `--auto` / `auto` argument is reserved for non-interactive CI/script use.
 
 ---
 
