@@ -963,7 +963,8 @@ detect_project_type() {
   elif echo "$content" | grep -qi "CLI Tool"; then
     echo "cli"
   else
-    echo "unknown"
+    # AGENTS.md exists but has no type marker — fall back to file-based scan
+    scan_project_type_from_files "$1"
   fi
 }
 
