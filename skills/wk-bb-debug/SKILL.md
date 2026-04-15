@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-bb-debug
+name: wk-bb-debug
 description: Universal web debugger using Playwright. Works with or without Black Box (BB) integration. Auto-detects diagnostic capability, collects console/network/DOM data, analyzes issues, and suggests fixes.
 ---
 
@@ -49,17 +49,17 @@ Collects:
 
 ```bash
 # Diagnose and auto-analyze (recommended)
-$cnx-bb-debug https://example.com/page
-# Auto-collect → Auto-call $cnx-bb-analyzer to analyze → Output diagnosis
+$wk-bb-debug https://example.com/page
+# Auto-collect → Auto-call $wk-bb-analyzer to analyze → Output diagnosis
 
 # Collect data only (skip auto-analysis)
-$cnx-bb-debug https://example.com/page --no-analyze
+$wk-bb-debug https://example.com/page --no-analyze
 
 # Force universal diagnostic mode
-$cnx-bb-debug https://example.com/page --universal
+$wk-bb-debug https://example.com/page --universal
 
 # Diagnose and auto-fix
-$cnx-bb-debug https://example.com/page --fix
+$wk-bb-debug https://example.com/page --fix
 ```
 
 ## Usage Examples
@@ -67,7 +67,7 @@ $cnx-bb-debug https://example.com/page --fix
 ### Example 1: Auto-detect + Auto-analyze (default)
 
 ```bash
-$cnx-bb-debug https://yyy.up.railway.app/story/cars/chapter/1
+$wk-bb-debug https://yyy.up.railway.app/story/cars/chapter/1
 
 🔍 Detecting diagnostic capability...
 ├── ✅ BB found: [data-testid="bb-toggle"]
@@ -81,7 +81,7 @@ $cnx-bb-debug https://yyy.up.railway.app/story/cars/chapter/1
 
 📝 Report: /tmp/bb-report.json
 
-🔍 Auto-analyzing with $cnx-bb-analyzer...
+🔍 Auto-analyzing with $wk-bb-analyzer...
 
 ## 📊 BB Diagnostic Analysis Report
 
@@ -102,7 +102,7 @@ Modify Player.tsx line 45, change useEffect dependency from `[chapter?.id]` to `
 ### Example 2: Universal mode (no BB)
 
 ```bash
-$cnx-bb-debug https://example.com --universal
+$wk-bb-debug https://example.com --universal
 
 🔍 Universal diagnostic mode (no BB required)
 
@@ -131,10 +131,10 @@ $cnx-bb-debug https://example.com --universal
 
 ```bash
 # Diagnose multiple pages
-$cnx-bb-debug https://site.com/page1,https://site.com/page2,https://site.com/page3
+$wk-bb-debug https://site.com/page1,https://site.com/page2,https://site.com/page3
 
 # Or from file
-$cnx-bb-debug --file urls.txt
+$wk-bb-debug --file urls.txt
 ```
 
 ## Workflow
@@ -161,7 +161,7 @@ User: "Debug the page"
                    │
                    ▼
 ┌─────────────────────────────────────┐
-│ 3. Auto-analyze (call $cnx-bb-analyzer) │
+│ 3. Auto-analyze (call $wk-bb-analyzer) │
 │    ├── Read /tmp/bb-report.json     │
 │    ├── Root cause analysis          │
 │    ├── Issue severity               │
@@ -177,7 +177,7 @@ User: "Debug the page"
 └─────────────────────────────────────┘
 ```
 
-**Note:** Auto-calls `$cnx-bb-analyzer` for analysis by default. Use `--no-analyze` to skip analysis and only collect data.
+**Note:** Auto-calls `$wk-bb-analyzer` for analysis by default. Use `--no-analyze` to skip analysis and only collect data.
 
 ## Data Format
 
@@ -300,14 +300,14 @@ The injected collector:
 
 ## Integration with Build Skills
 
-After `$cnx-bb-debug` finds issues:
+After `$wk-bb-debug` finds issues:
 
 ```bash
 # User: "Fix this issue"
 # → Automatically create FIX-XXX in backlog
-# → $cnx-fix-build FIX-XXX
+# → $wk-fix-build FIX-XXX
 
 # Or for complex issues
 # → Create US-XXX in backlog  
-# → $cnx-story-build US-XXX
+# → $wk-story-build US-XXX
 ```

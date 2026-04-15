@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-fix-build
+name: wk-fix-build
 description: Execute bugfix/hotfix from backlog. Reads FIX/BUG from BACKLOG.md, delivers via TCR workflow. Lighter than story-build, focused on single-issue fixes.
 ---
 
@@ -31,7 +31,7 @@ Do not use for:
 - Requirements that need planning and splitting first
 - Roadmap work that should be tracked as Stories
 
-If the issue expands beyond a single bounded change, switch to `cnx-story-build`.
+If the issue expands beyond a single bounded change, switch to `wk-story-build`.
 
 ## Hard Rules
 
@@ -83,7 +83,7 @@ If the issue expands beyond a single bounded change, switch to `cnx-story-build`
    - pick the narrowest local check that proves the fix
    - define the online verification target
    - for hotfixes: include regression test to prevent recurrence
-   - reference `$cnx-qa-cover` for appropriate test type (unit/integration/E2E)
+   - reference `$wk-qa-cover` for appropriate test type (unit/integration/E2E)
 
 ### 3. Test Design Review (TCR Core)
 
@@ -97,8 +97,8 @@ If the issue expands beyond a single bounded change, switch to `cnx-story-build`
    └── Regression check: {how to ensure we didn't break anything}
 ```
 
-**Reference `$cnx-qa-cover` for test strategy:**
-- Even for fixes, follow `$cnx-qa-cover` test pyramid
+**Reference `$wk-qa-cover` for test strategy:**
+- Even for fixes, follow `$wk-qa-cover` test pyramid
 - Hotfixes may skip visual regression but must have E2E smoke test
 
 **Run self-review on test design:**
@@ -139,7 +139,7 @@ Run the repo's full CI check locally to catch issues before push:
 npm run ci:local 2>/dev/null || (npm run lint && npm run build && npm test -- --run)
 ```
 
-**Reference `$cnx-qa-cover` for coverage requirements:**
+**Reference `$wk-qa-cover` for coverage requirements:**
 - Fixes must not reduce overall coverage
 - Hotfixes need at least regression test coverage
 
@@ -181,7 +181,7 @@ chmod +x .git/hooks/pre-push
 **Run self-code-review on staged changes:**
 
 ```bash
-$cnx-.code-review staged
+$wk-.code-review staged
 ```
 
 **Review Output:**
@@ -207,7 +207,7 @@ $cnx-.code-review staged
 🟢/✅ All clear → Proceed to push
 ```
 
-**Note:** `code-reviewer` placeholder replaced with `$cnx-.code-review` for local execution.
+**Note:** `code-reviewer` placeholder replaced with `$wk-.code-review` for local execution.
 
 ### 7. Commit and push
 

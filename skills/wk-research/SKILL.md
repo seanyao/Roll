@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-research
+name: wk-research
 description: |
   Horizontal-Vertical (HV) Analysis deep research skill. A systematic framework for researching products, companies, concepts, technologies, or people.
   Core approach: dual-axis analysis — the vertical axis traces the complete lifecycle from origin to present (as a narrative), the horizontal axis performs systematic comparison with competitors/peers at the current point in time, then cross-axis insights emerge from combining both perspectives. Final output is a professionally formatted PDF research report.

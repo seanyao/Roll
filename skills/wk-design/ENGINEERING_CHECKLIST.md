@@ -224,7 +224,7 @@ During the **Test Design Review** phase of each Story, the following must be ans
 
 ### Sentinel Patrol Rules
 ```yaml
-# .github/cnx-sentinel-config.yml
+# .github/wk-sentinel-config.yml
 checks:
   idempotency:
     - pattern: "ingest|import|sync"

@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-spar
+name: wk-spar
 description: Adversarial TDD mode with Attacker/Defender agents. Attacker writes tests to break the system, Defender writes minimal code to pass. Use for high-risk logic like auth, payments, data integrity, or complex state machines.
 ---
 
@@ -11,7 +11,7 @@ Adversarial TDD: two agents collaborate in attack-and-defend mode to build a mor
 ## When to Use
 
 **Manual trigger:**
-- User explicitly requests `$cnx-spar`
+- User explicitly requests `$wk-spar`
 - Involves core business logic requiring higher quality assurance
 
 **Auto trigger (agent judgment):** Recommend enabling when any of these conditions are met
@@ -50,7 +50,7 @@ Adversarial TDD: two agents collaborate in attack-and-defend mode to build a mor
 ## Workflow
 
 ```
-User: "$cnx-spar implement transfer logic" or agent auto-triggers
+User: "$wk-spar implement transfer logic" or agent auto-triggers
     │
     ▼
 ┌─────────────────────────────────────┐
@@ -238,7 +238,7 @@ After user confirms, enter Spar. Once complete, return to story-build step 6 to 
 ## Example
 
 ```
-User: "$cnx-spar implement user balance transfer"
+User: "$wk-spar implement user balance transfer"
 
 ⚔️ Spar: User Balance Transfer
 

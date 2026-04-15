@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-.changelog
+name: wk-.changelog
 description: After build completion, extracts completed Stories from BACKLOG.md to generate CHANGELOG.md. Auto-triggered after successful deploy, keeping the external changelog in sync with the internal backlog.
 ---
 
@@ -10,7 +10,7 @@ After successful Build & Deploy, extracts completed Stories from BACKLOG.md to g
 
 ## When Triggered
 
-- **Auto-triggered**: After successful deploy of `$cnx-story-build` or `$cnx-fix-build`
+- **Auto-triggered**: After successful deploy of `$wk-story-build` or `$wk-fix-build`
 - **Manual trigger**: When user requests "update changelog" or "generate release notes"
 
 ## Workflow
@@ -71,9 +71,9 @@ git push
 
 ## Integration
 
-After successful deploy in `$cnx-story-build` / `$cnx-fix-build` / `$cnx-roll-build`:
+After successful deploy in `$wk-story-build` / `$wk-fix-build` / `$wk-roll-build`:
 
 ```markdown
 **Post-Deploy:**
-- `$cnx-changelog` - Sync external changelog
+- `$wk-changelog` - Sync external changelog
 ```

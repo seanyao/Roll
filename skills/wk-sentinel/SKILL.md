@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-sentinel
+name: wk-sentinel
 description: Smart patrol inspector for production systems. Scheduled randomized sampling checks based on BACKLOG requirements. Cost-controlled AI validation with intelligent spot-checking logic.
 ---
 
@@ -130,23 +130,23 @@ class UncertaintyHandler {
 
 ```bash
 # Daily patrol - randomly check a few each day
-$cnx-sentinel patrol --mode=normal
+$wk-sentinel patrol --mode=normal
 
 # Late-night patrol - full check during off-peak hours
-$cnx-sentinel patrol --mode=full --schedule="0 3 * * *"
+$wk-sentinel patrol --mode=full --schedule="0 3 * * *"
 
 # Weekend walkthrough - check the week's accumulation on Sunday
-$cnx-sentinel patrol --mode=weekly --schedule="0 10 * * 0"
+$wk-sentinel patrol --mode=weekly --schedule="0 10 * * 0"
 ```
 
 ### Event-Triggered
 
 ```bash
 # Intensive patrol for 2 hours after deployment
-$cnx-sentinel patrol --mode=intensive --duration=2h --after-deploy
+$wk-sentinel patrol --mode=intensive --duration=2h --after-deploy
 
 # Emergency check after an alert
-$cnx-sentinel patrol --mode=focus --target=US-XXX
+$wk-sentinel patrol --mode=focus --target=US-XXX
 ```
 
 ## Patrol Report
@@ -316,7 +316,7 @@ async function batchCheck(stories) {
 │                                                             │
 │  6. Human Fix                                               │
 │     └── User: "Fix FIX-AUDIO-015"                           │
-│     └── $cnx-fix-build FIX-AUDIO-015                            │
+│     └── $wk-fix-build FIX-AUDIO-015                            │
 │                                                             │
 │  7. Verification                                            │
 │     └── Next patrol will prioritize verifying this FIX      │
@@ -332,17 +332,17 @@ async function batchCheck(stories) {
 │                Complete Monitoring System                    │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  $cnx-sentinel patrol        Scheduled random patrol (main) │
+│  $wk-sentinel patrol        Scheduled random patrol (main) │
 │       ↓                                                     │
 │  Issue found? ──┬── Yes ──→ Create BACKLOG item             │
-│                 │           Await $cnx-fix-build             │
+│                 │           Await $wk-fix-build             │
 │                 │                                           │
 │                 └── No  ──→ Continue patrolling              │
 │                                                             │
-│  $cnx-bb-debug               On-demand deep diagnosis (aux) │
+│  $wk-bb-debug               On-demand deep diagnosis (aux) │
 │  (When Sentinel finds an issue, manually trigger deep dive) │
 │                                                             │
-│  $cnx-story-build            Post-fix regression verify     │
+│  $wk-story-build            Post-fix regression verify     │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```

@@ -1,7 +1,7 @@
 ---
 hidden: true
-name: cnx-.yeah
-description: Celebration ceremony after build workflow completion 🎉 Outputs fireworks after cnx-story-build / cnx-fix-build / cnx-roll-build finishes successfully.
+name: wk-.yeah
+description: Celebration ceremony after build workflow completion 🎉 Outputs fireworks after wk-story-build / wk-fix-build / wk-roll-build finishes successfully.
 ---
 
 # CNX Yeah! 🎉
@@ -10,10 +10,10 @@ Celebration ceremony after a successful build completion.
 
 ## When Triggered
 
-- After `$cnx-story-build` completes US development
-- After `$cnx-fix-build` completes a bug fix
-- After `$cnx-roll-build` completes a quick implementation
-- When any `$cnx-*` build workflow finishes successfully
+- After `$wk-story-build` completes US development
+- After `$wk-fix-build` completes a bug fix
+- After `$wk-roll-build` completes a quick implementation
+- When any `$wk-*` build workflow finishes successfully
 
 ## Output
 
@@ -37,8 +37,8 @@ Called as the final step in a build skill:
 ## Post-Deploy
 
 1. Update BACKLOG.md status
-2. `$cnx-generate-changelog` (if needed)
-3. **$cnx-yeah** 🎉
+2. `$wk-generate-changelog` (if needed)
+3. **$wk-yeah** 🎉
 ```
 
 ## Note

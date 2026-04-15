@@ -1,7 +1,7 @@
 ---
 hidden: true
-name: cnx-roll-build
-description: Convert vague one-sentence request into stories, insert into BACKLOG.md, then execute like cnx-story-build. Auto-clarifies, plans, splits into US/Actions, delivers via TCR workflow.
+name: wk-roll-build
+description: Convert vague one-sentence request into stories, insert into BACKLOG.md, then execute like wk-story-build. Auto-clarifies, plans, splits into US/Actions, delivers via TCR workflow.
 ---
 
 # Roll (TCR Edition)
@@ -21,13 +21,13 @@ Use when:
 **Workflow:**
 1. Clarify & analyze the vague request
 2. Create US/Actions (insert into BACKLOG.md)
-3. Execute via TCR workflow (same as cnx-story-build)
+3. Execute via TCR workflow (same as wk-story-build)
 4. Update BACKLOG.md on completion
 
 Do not use for:
 
-- An existing `US-XXX` is already defined (use `cnx-story-build`)
-- A single small bug / minor fix (use `cnx-fix-build`)
+- An existing `US-XXX` is already defined (use `wk-story-build`)
+- A single small bug / minor fix (use `wk-fix-build`)
 - Pure analysis, pure research, no code changes
 
 ## Core Philosophy
@@ -88,8 +88,8 @@ Before any code, output:
    └── Verification method: {unit|integration|manual script}
 ```
 
-**Reference `$cnx-qa-cover` for test strategy:**
-- Follow `$cnx-qa-cover` test pyramid (unit → E2E → visual → smoke)
+**Reference `$wk-qa-cover` for test strategy:**
+- Follow `$wk-qa-cover` test pyramid (unit → E2E → visual → smoke)
 - Each created US should define its test coverage requirements
 
 **Run self-review on test design:**
@@ -143,7 +143,7 @@ else:
    npm run lint && npm run build && npm test -- --run
 ```
 
-**Reference `$cnx-qa-cover` for coverage requirements:**
+**Reference `$wk-qa-cover` for coverage requirements:**
 - Unit test coverage threshold
 - E2E test critical path coverage
 - Visual regression baseline check
@@ -192,7 +192,7 @@ After CI passes locally:
 **Run self-code-review on staged changes:**
 
 ```bash
-$cnx-.code-review staged
+$wk-.code-review staged
 ```
 
 **Review Output:**
@@ -218,7 +218,7 @@ $cnx-.code-review staged
 🟢/✅ All clear → Proceed to push
 ```
 
-**Note**: `code-reviewer` placeholder replaced with `$cnx-.code-review` for local execution without external dependencies.
+**Note**: `code-reviewer` placeholder replaced with `$wk-.code-review` for local execution without external dependencies.
 
 ### Phase 6: Write Back Status (REQUIRED)
 
@@ -358,7 +358,7 @@ git push
    - **Action granularity constraint**: Each Action should be completable in 2-5 minutes
    - **No placeholders**: Action/AC descriptions must be specific and actionable — no "TBD", "to be determined", "to be added later"
 
-4. **Complete delivery like cnx-story-build**
+4. **Complete delivery like wk-story-build**
    - Code reaches GitHub (`git push origin main`)
    - CI passes (or explicitly handled failures)
    - Deployed to production
@@ -366,7 +366,7 @@ git push
    - User can choose to batch multiple Actions before deploy/verify
 
 5. **Pre-push self-review required**
-   - Run `$cnx-.code-review staged` on final diff
+   - Run `$wk-.code-review staged` on final diff
    - Fix blocking (Critical) issues via TCR cycle
    - Review focuses on quality, not correctness
 

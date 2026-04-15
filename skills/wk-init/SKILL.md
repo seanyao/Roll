@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-init
+name: wk-init
 description: Initialize a new AI-Coding project with complete CNX workflow support. Detects existing project state and adapts: full scaffold for new projects, smart adoption for legacy projects, refresh for already-CNX projects.
 ---
 
@@ -118,7 +118,7 @@ my-project/
     ├── workflows/
     │   ├── ci.yml          # CI/CD pipeline
     │   └── sentinel.yml    # Scheduled patrol
-    └── cnx-sentinel-config.yml
+    └── wk-sentinel-config.yml
 │
 ├── docs/
 │   ├── setup.md
@@ -168,7 +168,7 @@ Do NOT touch existing source code or directory structure.
 4. Append a `## Project Structure` block to AGENTS.md (update if already exists, don't duplicate):
 
 ```markdown
-## Project Structure (detected by $cnx-init)
+## Project Structure (detected by $wk-init)
 
 Tech stack: <detected stack>
 
@@ -194,10 +194,10 @@ Commands:
 ```
 Design → Build → Check → Fix → Continuous cycle
 
-Design:  $cnx-design      → docs/plans/ + BACKLOG.md
-Build:   $cnx-story-build → TCR → CI/CD → Deploy
-Check:   $cnx-sentinel    → Scheduled patrol → Discover issues
-Fix:     $cnx-fix-build   → TCR → Deploy → Verify
+Design:  $wk-design      → docs/plans/ + BACKLOG.md
+Build:   $wk-story-build → TCR → CI/CD → Deploy
+Check:   $wk-sentinel    → Scheduled patrol → Discover issues
+Fix:     $wk-fix-build   → TCR → Deploy → Verify
 ```
 
 ---
@@ -271,7 +271,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: $cnx-sentinel patrol --mode=normal
+      - run: $wk-sentinel patrol --mode=normal
 ```
 
 ---
@@ -280,12 +280,12 @@ jobs:
 
 | Phase | Command | Purpose |
 |-------|---------|---------|
-| Plan | `$cnx-design "requirement"` | Plan design, split into Stories |
-| Do | `$cnx-story-build US-XXX` | Develop a Story |
-| Do | `$cnx-fix-build FIX-XXX` | Fix a Bug |
-| Do | `$cnx-roll-build "one-liner"` | Quick implementation |
-| Check | `$cnx-sentinel patrol` | Scheduled patrol |
-| Check | `$cnx-bb-debug URL` | Deep diagnosis |
+| Plan | `$wk-design "requirement"` | Plan design, split into Stories |
+| Do | `$wk-story-build US-XXX` | Develop a Story |
+| Do | `$wk-fix-build FIX-XXX` | Fix a Bug |
+| Do | `$wk-roll-build "one-liner"` | Quick implementation |
+| Check | `$wk-sentinel patrol` | Scheduled patrol |
+| Check | `$wk-bb-debug URL` | Deep diagnosis |
 
 ---
 

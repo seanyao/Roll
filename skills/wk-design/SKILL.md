@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-design
+name: wk-design
 description: Unified entry for discussion, design and planning. Explores options when uncertain, designs solutions, splits into INVEST-compliant user stories, and writes to BACKLOG.md. Use when user wants to discuss approaches, design solutions, plan features, or create stories.
 ---
 
@@ -29,16 +29,16 @@ Discuss approaches, design architecture, plan requirements, and write to `BACKLO
 
 ```bash
 # Approach is uncertain → discuss first, then plan
-$cnx-design "What approach should we use for search? Postgres FTS or Meilisearch?"
+$wk-design "What approach should we use for search? Postgres FTS or Meilisearch?"
 
 # Plan new requirement → design solution → split into Stories → write to BACKLOG
-$cnx-design "user system design"
+$wk-design "user system design"
 
 # Split Stories from an existing Plan
-$cnx-design --from-plan docs/features/auth-plan.md
+$wk-design --from-plan docs/features/auth-plan.md
 
 # Directly create a Story
-$cnx-design --story "user login feature"
+$wk-design --story "user login feature"
 ```
 
 ## Workspace Configuration
@@ -116,7 +116,7 @@ User: "Help me design the user system" / "What approach should we use for search
               ▼
     "Confirm and execute?"
     │
-    ├── Yes ──→ $cnx-story-build US-XXX
+    ├── Yes ──→ $wk-story-build US-XXX
     │
     └── No  ──→ Wait for user confirmation
 ```
@@ -189,18 +189,18 @@ FEATURE_FILE="docs/features/${FEATURE}.md"
 ### With story-build
 
 ```
-$cnx-design "login feature" → Create US-AUTH-001
+$wk-design "login feature" → Create US-AUTH-001
 User: "Execute US-AUTH-001"
     ↓
-$cnx-story-build US-AUTH-001 → TCR → CI/CD → Deploy
+$wk-story-build US-AUTH-001 → TCR → CI/CD → Deploy
 ```
 
 ### With fix-build
 
 ```
-$cnx-bb-debug discovers issue → Suggest creating FIX
-$cnx-design --fix "fix login API 404" → Create FIX-AUTH-001
-$cnx-fix-build FIX-AUTH-001 → Quick fix
+$wk-bb-debug discovers issue → Suggest creating FIX
+$wk-design --fix "fix login API 404" → Create FIX-AUTH-001
+$wk-fix-build FIX-AUTH-001 → Quick fix
 ```
 
 ## INVEST Principles

@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-.code-review
+name: wk-.code-review
 description: Self code review step in the TCR workflow. Runs after each micro-step is completed and before commit, checking code quality, security, and design issues.
 ---
 
@@ -21,20 +21,20 @@ TCR Loop:
 
 ## When Triggered
 
-- **Auto-triggered**: After each TCR micro-step in `$cnx-story-build` / `$cnx-fix-build` / `$cnx-roll-build`
+- **Auto-triggered**: After each TCR micro-step in `$wk-story-build` / `$wk-fix-build` / `$wk-roll-build`
 - **Manual trigger**: When the user wants to review current changes
 
 ## Review Scope
 
 ```bash
 # Default: review staged changes (recommended for TCR)
-$cnx-code-review staged
+$wk-code-review staged
 
 # Review all uncommitted changes
-$cnx-code-review unstaged
+$wk-code-review unstaged
 
 # Review specific files
-$cnx-code-review files src/utils.ts
+$wk-code-review files src/utils.ts
 ```
 
 ## Review Dimensions (6 Core Dimensions)
@@ -83,14 +83,14 @@ $cnx-code-review files src/utils.ts
 
 ## TCR Integration
 
-In each micro-step of `$cnx-*-build`:
+In each micro-step of `$wk-*-build`:
 
 ```markdown
 **Micro-Step X: [Description]**
 
 1. Write/Update Test
 2. Run Test → ✅ Green
-3. **$cnx-code-review staged**
+3. **$wk-code-review staged**
    - 🔴 Critical? → Fix → Redo step
    - 🟡 Warning? → Quick fix or document
    - ✅ Pass? → Proceed

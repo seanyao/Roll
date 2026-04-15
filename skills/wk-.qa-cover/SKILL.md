@@ -1,12 +1,12 @@
 ---
 hidden: true
-name: cnx-.qa-cover
+name: wk-.qa-cover
 description: QA coverage reference for build skills. Defines test pyramid (unit/E2E/visual/smoke), coverage requirements, and CI gates. Ensures quality assurance across all testing layers.
 ---
 
 # QA Cover
 
-This is a **reference skill** used by `cnx-story-build`, `cnx-fix-build`, and `cnx-roll-build` for quality assurance and test coverage.
+This is a **reference skill** used by `wk-story-build`, `wk-fix-build`, and `wk-roll-build` for quality assurance and test coverage.
 
 ## When to Apply
 

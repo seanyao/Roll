@@ -1,9 +1,9 @@
 ---
 hidden: true
-name: cnx-.echo
+name: wk-.echo
 description: |
   Passive intent clarification skill. Automatically activates when user input is vague, rambling, contradictory, or unclear. Restates the user's intent in structured, concise form and confirms before proceeding. Does NOT activate when intent is already clear — in that case, just execute directly.
-  This is a passive skill. Never announce "I'm using cnx-.echo." Just do it naturally: restate, confirm, proceed.
+  This is a passive skill. Never announce "I'm using wk-.echo." Just do it naturally: restate, confirm, proceed.
 ---
 
 # Echo
@@ -24,7 +24,7 @@ This skill fires **automatically** when the AI detects unclear intent. It should
 
 **Do NOT activate when**:
 - Intent is already clear and actionable ("add a login button to the header")
-- User gives a specific command with a skill trigger ("$cnx-story-build US-001")
+- User gives a specific command with a skill trigger ("$wk-story-build US-001")
 - User is answering a question you asked (they're clarifying, not initiating)
 - The task is simple enough that misinterpretation risk is negligible
 
@@ -108,6 +108,6 @@ End with a natural confirmation prompt, then act on the response:
 
 ### No Echo Needed (skill trigger)
 
-**User**: "$cnx-design search improvements"
+**User**: "$wk-design search improvements"
 
-*→ Route to cnx-design. No echo needed.*
+*→ Route to wk-design. No echo needed.*

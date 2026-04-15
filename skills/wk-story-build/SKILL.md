@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-story-build
+name: wk-story-build
 description: Execute User Story from backlog. Reads US from BACKLOG.md, splits into Actions, delivers via TCR workflow through commit + push + CI + deploy + verification. Updates backlog status on completion.
 ---
 
@@ -26,8 +26,8 @@ Use when:
 
 Do not use for:
 
-- Single bug / hotfix / small change (use `cnx-fix-build`)
-- Only a vague one-line requirement with no US yet (use `cnx-roll-build`)
+- Single bug / hotfix / small change (use `wk-fix-build`)
+- Only a vague one-line requirement with no US yet (use `wk-roll-build`)
 - Pure research tasks that don't produce code
 
 **Reading a US:**
@@ -150,7 +150,7 @@ git worktree add .worktrees/{action-id} -b dispatch/{action-id}
 ### 3. Define verification
    - test matrix (at least: happy path + one edge/failure/regression where relevant)
    - what "online verification" means for this repo (URL, endpoint, UI flow, log signal)
-   - reference `$cnx-qa-cover` for test pyramid strategy (unit/E2E/visual/smoke)
+   - reference `$wk-qa-cover` for test pyramid strategy (unit/E2E/visual/smoke)
 
 ### 4. Test Design Review (NEW - TCR Core)
 
@@ -168,10 +168,10 @@ git worktree add .worktrees/{action-id} -b dispatch/{action-id}
    └── Manual verification for: {UI/visual elements}
 ```
 
-**Reference `$cnx-qa-cover` for test strategy:**
-- Unit tests for: {logic components} - see `$cnx-qa-cover` Unit Tests section
-- E2E tests for: {user flows} - see `$cnx-qa-cover` E2E Tests section
-- Visual regression for: {UI stability} - see `$cnx-qa-cover` Visual Regression section
+**Reference `$wk-qa-cover` for test strategy:**
+- Unit tests for: {logic components} - see `$wk-qa-cover` Unit Tests section
+- E2E tests for: {user flows} - see `$wk-qa-cover` E2E Tests section
+- Visual regression for: {UI stability} - see `$wk-qa-cover` Visual Regression section
 
 **Run self-review on test design:**
 - Check: Are we testing the right things?
@@ -215,7 +215,7 @@ After all micro-steps, run full CI locally before push:
 npm run ci:local 2>/dev/null || (npm run lint && npm run build && npm test -- --run)
 ```
 
-**Reference `$cnx-qa-cover` for coverage requirements:**
+**Reference `$wk-qa-cover` for coverage requirements:**
 - Unit test coverage threshold
 - E2E test critical path coverage
 - Visual regression baseline check
@@ -259,7 +259,7 @@ chmod +x .git/hooks/pre-push
 **Run self-code-review on staged changes:**
 
 ```bash
-$cnx-.code-review staged
+$wk-.code-review staged
 ```
 
 **Review Output:**
@@ -286,7 +286,7 @@ $cnx-.code-review staged
 ✅ All clear → Proceed to push
 ```
 
-**Note:** `code-reviewer` placeholder replaced with `$cnx-.code-review` for local execution without external dependencies.
+**Note:** `code-reviewer` placeholder replaced with `$wk-.code-review` for local execution without external dependencies.
 
 ### 8. Commit and push
 
@@ -462,7 +462,7 @@ When CI fails after push:
 
 ## Recommended Pairing
 
-- Use `cnx-fix-build` when the work is a single small shipped fix, hotfix, or enhancement and backlog tracking is unnecessary.
+- Use `wk-fix-build` when the work is a single small shipped fix, hotfix, or enhancement and backlog tracking is unnecessary.
 - Use `$plan` when the Story is unclear or the Action split is ambiguous.
 - Use `$testing-quality-gate` when the repo needs stronger gates added.
 
