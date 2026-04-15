@@ -1,7 +1,7 @@
 {
-  "name": "cybernetix",
-  "version": "0.1.0",
-  "description": "Cybernetix (CNX) - AI-Native Development Workflow",
+  "name": "wukong",
+  "version": "0.2.0",
+  "description": "Wukong — AI Agent Convention Manager",
   "keywords": [
     "ai",
     "agent",
@@ -9,13 +9,13 @@
     "skills",
     "agent-first"
   ],
-  "homepage": "https://github.com/seanyao/cybernetix",
+  "homepage": "https://github.com/seanyao/wukong",
   "repository": {
     "type": "git",
-    "url": "https://github.com/seanyao/cybernetix.git"
+    "url": "https://github.com/seanyao/wukong.git"
   },
   "bin": {
-    "cybernetix": "./bin/cybernetix"
+    "wukong": "./bin/wukong"
   },
   "license": "MIT",
   "author": "Sean Yao <seanyao@gmail.com>",
@@ -25,7 +25,6 @@
     "skills/",
     "tools/",
     "template/",
-    "README.md",
-    "PARADIGM.md"
+    "README.md"
   ]
 }
