@@ -651,21 +651,6 @@ cmd_refresh() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COMMAND: update-skills (legacy alias)
-# Kept for backward compatibility — maps to: cybernetix sync skills
-# ═══════════════════════════════════════════════════════════════════════════════
-cmd_update_skills() {
-  local force=false
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --force|-f) force=true; shift ;;
-      *) shift ;;
-    esac
-  done
-  cmd_sync skills "$([[ "$force" == "true" ]] && echo --force)"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: reset
 # Re-copy conventions and skills from repo source, then sync all with force
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -820,31 +805,23 @@ usage() {
   echo "Usage: cybernetix <command> [options]"
   echo ""
   echo "Commands:"
-  echo "  setup                    Initialize ~/.cybernetix/ on this machine"
-  echo "  sync [scope] [--force]   Distribute to AI tool config paths"
-  echo "  update                   Edit global conventions, then sync conventions"
-  echo "  init [dir] [type]        Initialize project with convention files"
-  echo "  reset                    Reset ~/.cybernetix/ from repo, then force-sync all"
-  echo "  status                   Show current state of conventions and sync"
+  echo "  setup              Initialize ~/.cybernetix/ on this machine"
+  echo "  sync [scope] [-f]  Distribute to AI tool config paths"
+  echo "  update             Edit global conventions, then sync"
+  echo "  init [dir] [type]  Initialize project with convention files"
+  echo "  reset              Reset ~/.cybernetix/ from repo, then force-sync"
+  echo "  status             Show current state"
   echo ""
-  echo "Sync scopes:"
-  echo "  conventions (default)    Copy CLAUDE.md / AGENTS.md / GEMINI.md to AI tools"
-  echo "  skills                   Refresh skills from repo + create/repair symlinks"
-  echo "  all                      conventions + skills"
-  echo ""
-  echo "Init options:"
-  echo "  Types: fullstack, frontend-only, backend-service, cli"
-  echo "  Tools: pass 3rd arg as comma-separated list (claude,gemini,cursor,all)"
+  echo "Sync scopes: conventions | skills | all"
+  echo "Init types:  fullstack | frontend-only | backend-service | cli"
+  echo "Init tools:  claude,gemini,cursor,all"
   echo ""
   echo "Examples:"
-  echo "  cybernetix setup                           # First-time setup"
-  echo "  cybernetix sync                            # Sync conventions only"
-  echo "  cybernetix sync skills                     # Refresh skills + fix symlinks"
-  echo "  cybernetix sync skills --force             # Force rebuild all skill symlinks"
-  echo "  cybernetix sync all                        # Sync conventions + skills"
-  echo "  cybernetix init .                          # Interactive prompts"
-  echo "  cybernetix init my-app fullstack claude    # Claude Code only"
-  echo "  cybernetix init . cli claude,cursor        # CLI project, Claude + Cursor"
+  echo "  cybernetix setup                    # First-time setup"
+  echo "  cybernetix sync                     # Sync conventions"
+  echo "  cybernetix sync skills -f           # Force rebuild skill symlinks"
+  echo "  cybernetix sync all                 # Sync everything"
+  echo "  cybernetix init . fullstack claude  # New project"
 }
 
 main() {
@@ -855,7 +832,7 @@ main() {
     setup)         cmd_setup "$@" ;;
     sync)          cmd_sync "$@" ;;
     update)        cmd_update "$@" ;;
-    update-skills|update_skills) cmd_update_skills "$@" ;;
+
     init)          cmd_init "$@" ;;
     reset)         cmd_reset "$@" ;;
     status)        cmd_status "$@" ;;

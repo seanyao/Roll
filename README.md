@@ -36,9 +36,9 @@ Unified management of behavioral conventions for Claude Code / Kimi Code / Gemin
 |---------|----------|
 | `cybernetix setup` | First-time initialization of `~/.cybernetix/`, link skills to AI tools |
 | `cybernetix sync` | Sync conventions to AI tool config paths (default scope) |
-| `cybernetix sync skills` | Refresh skills only from repo source |
+| `cybernetix sync skills` | Refresh skills and repair symlinks |
 | `cybernetix sync all` | Sync both conventions and skills |
-| `cybernetix sync --force` | Force overwrite without prompting |
+| `cybernetix sync skills -f` | Force rebuild skill symlinks |
 | `cybernetix update` | Open editor to modify conventions, auto-sync conventions on save |
 | `cybernetix init [dir] [type] [tools]` | Generate convention files for a project |
 | `cybernetix refresh [dir]` | Auto-detect and re-merge project conventions from templates |

@@ -90,9 +90,15 @@ On first run, the CLI performs three operations:
 2. **Symlink mounting**: Uses filesystem symlinks to mount `~/.cybernetix/skills/` into each AI client's configuration directory (`~/.claude/skills`, `~/.gemini/skills`, `~/.kimi/skills`, etc.). All clients share one canonical set of skill definitions — a change in one place propagates everywhere.
 3. **Git Hook injection**: Installs a global `prepare-commit-msg` hook that automatically detects which AI client authored the current commit (via environment variables) and stamps it (e.g., `[claude code]`, `[gemini cli]`), enabling audit tracing in multi-agent workflows.
 
-**2.2.2 Configuration Sync (`cybernetix sync`)**
+**2.2.2 Configuration Sync (`cybernetix sync [scope]`)**
 
-One command performs a full distribution: convention files from `~/.cybernetix/conventions/global/` are delivered to each client's expected path in the appropriate format.
+Distributes content from `~/.cybernetix/` to each AI client's configuration path based on the selected scope.
+
+- `conventions` (default): distributes convention files from `conventions/global/`
+- `skills`: refreshes skills from the repo into the local cache and creates/repairs symlinks for each client
+- `all`: runs both conventions and skills
+
+Append `--force` (or `-f`) to overwrite target files or force symlink recreation.
 
 ```
 ~/.cybernetix/conventions/global/
@@ -590,7 +596,7 @@ The key distinction lies in the shift of execution subject: these methodologies 
 | Command | Purpose |
 |---------|---------|
 | `cybernetix setup` | First-time initialization of `~/.cybernetix/`, mount skills, inject Git Hooks |
-| `cybernetix sync` | Full distribution of convention files to all AI client configuration paths |
+| `cybernetix sync [scope]` | Distribute conventions or skills to AI client config paths (scope: conventions/skills/all) |
 | `cybernetix init [dir] [type] [tools]` | Generate project convention files (merges Global + Template) |
 | `cybernetix refresh [dir]` | Detect project type and re-merge convention files from the latest templates |
 | `cybernetix reset` | Reset `~/.cybernetix/` from the repository source, then sync |
