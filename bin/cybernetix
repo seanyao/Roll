@@ -39,6 +39,12 @@ ok()    { echo -e "${GREEN}[cnx]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[cnx]${NC} $*"; }
 err()   { echo -e "${RED}[cnx]${NC} $*" >&2; }
 
+canonical_dir() {
+  local path="$1"
+  [[ -d "$path" ]] || return 1
+  (cd "$path" >/dev/null 2>&1 && pwd -P)
+}
+
 # ─── Helper: read config value ───────────────────────────────────────────────
 config_get() {
   local key="$1"
@@ -186,19 +192,46 @@ YAML
 _link_skills() {
   local force="${1:-false}"
   local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  local cnx_skills_real repo_skills_real
+  cnx_skills_real="$(canonical_dir "$CNX_HOME/skills" 2>/dev/null || true)"
+  repo_skills_real="$(canonical_dir "$REPO_ROOT/skills" 2>/dev/null || true)"
 
   for ai_dir in "${ai_dirs[@]}"; do
     ai_dir=$(eval echo "$ai_dir")
     [[ -d "$ai_dir" ]] || continue
 
-    mkdir -p "$ai_dir/skills"
+    local ai_name skills_dir
+    ai_name=$(basename "$ai_dir")
+    skills_dir="$ai_dir/skills"
+
+    # Guard: resolve ALL symlink chains — block writing anywhere inside the repo
+    local skills_real
+    skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
+    if [[ -n "$skills_real" && -n "$repo_skills_real" && \
+          ( "$skills_real" == "$repo_skills_real" || "$skills_real" == "$repo_skills_real"/* ) ]]; then
+      warn "Skipped ~/${ai_name}/skills (resolves to repo — check if ~/.${ai_name} symlinks to cybernetix repo)"
+      continue
+    fi
+
+    # Handle legacy whole-dir symlink (still works; skip per-skill linking)
+    if [[ -L "$skills_dir" ]]; then
+      local skills_target
+      skills_target="$(readlink "$skills_dir")"
+      if [[ -n "$skills_real" && "$skills_real" == "$cnx_skills_real" ]]; then
+        continue  # Old whole-dir symlink to CNX skills — still functional
+      fi
+      warn "Skipped ~/${ai_name}/skills -> ${skills_target/#$HOME/~} (unknown symlink target)"
+      continue
+    fi
+
+    mkdir -p "$skills_dir"
     local linked=0 repaired=0
 
     for skill_dir in "$CNX_HOME/skills"/*/; do
       [[ -d "$skill_dir" ]] || continue
       local skill_name
       skill_name="$(basename "$skill_dir")"
-      local skill_link="$ai_dir/skills/$skill_name"
+      local skill_link="$skills_dir/$skill_name"
 
       if [[ -L "$skill_link" ]]; then
         local current_target
@@ -214,9 +247,6 @@ _link_skills() {
       fi
       # real file/dir at that path: skip — never touch user content
     done
-
-    local ai_name
-    ai_name=$(basename "$ai_dir")
     if [[ $((linked + repaired)) -gt 0 ]]; then
       ok "Skills linked in ~/${ai_name}/skills (+${linked} new, ~${repaired} repaired)"
     fi
@@ -737,8 +767,10 @@ cmd_status() {
   echo -e "${BOLD}Skill symlinks:${NC}"
   local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
   local total_skills=0
+  local cnx_skills_real
   if [[ -d "$CNX_HOME/skills" ]]; then
     total_skills=$(find "$CNX_HOME/skills" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')
+    cnx_skills_real="$(canonical_dir "$CNX_HOME/skills" 2>/dev/null || true)"
   fi
   for ai_dir in "${ai_dirs[@]}"; do
     ai_dir=$(eval echo "$ai_dir")
@@ -748,6 +780,18 @@ cmd_status() {
     name=$(echo "$name" | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo "$name" | cut -c2-)
     local skills_dir="$ai_dir/skills"
     if [[ -d "$skills_dir" ]]; then
+      if [[ -L "$skills_dir" ]]; then
+        local skills_target skills_real
+        skills_target="$(readlink "$skills_dir")"
+        skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
+        if [[ -n "$skills_real" && "$skills_real" == "$cnx_skills_real" ]]; then
+          echo -e "  ${GREEN}=${NC} $name: ~/${name,,}/skills -> ~/.cybernetix/skills (mounted)"
+        else
+          echo -e "  ${YELLOW}~${NC} $name: ~/${name,,}/skills -> ${skills_target/#$HOME/~} (symlinked dir)"
+        fi
+        continue
+      fi
+
       local linked_count
       linked_count=$(find "$skills_dir" -maxdepth 1 -mindepth 1 -type l -name "cnx-*" 2>/dev/null | wc -l | tr -d ' ')
       if [[ "$linked_count" -eq "$total_skills" ]] && [[ "$total_skills" -gt 0 ]]; then
