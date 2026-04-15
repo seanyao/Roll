@@ -124,9 +124,11 @@ Design → Build → Check → Fix → Loop
 ### Steps
 
 ```bash
-# New project
-cybernetix init my-app fullstack claude  # Generate convention files
-$cnx-init my-app                         # Generate project scaffold (BACKLOG, directory structure, CI)
+# New project (conventions + full scaffold in one step)
+$cnx-init my-app
+
+# Legacy project (detects existing structure, asks: merge / keep / overwrite)
+$cnx-init
 
 # Day-to-day development
 $cnx-design "user login feature"         # Plan → produce BACKLOG Stories
