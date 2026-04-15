@@ -58,12 +58,12 @@
   - `wk-story-build` → `wk-story-build`
 - [ ] Inside every SKILL.md: all `$wk-*` references → `$wk-*`
 - [ ] `name:` frontmatter field in each SKILL.md updated
-- [ ] `variants/wk-oc/` → `variants/wk-oc/` (if applicable)
+- [x] `variants/wk-oc/` removed — OpenClaw now uses shared `~/.wukong/skills/` directly
 
 **Files:**
 - `skills/wk-*/` (all dirs renamed)
 - All `skills/wk-*/SKILL.md` (content updated)
-- `variants/wk-oc/` (rename)
+- `variants/` (removed — OpenClaw unified with main skill set)
 
 **Dependencies:**
 - Depends on: US-WK-001

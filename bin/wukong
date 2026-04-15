@@ -48,6 +48,18 @@ canonical_dir() {
   (cd "$path" >/dev/null 2>&1 && pwd -P)
 }
 
+# Return a human-readable name for an AI tool dir.
+# Handles nested paths like ~/.openclaw/workspace → "openclaw".
+ai_tool_name() {
+  local dir="$1"
+  local bn
+  bn="$(basename "$dir" | sed 's/^\.//')"
+  if [[ "$bn" == "workspace" ]]; then
+    bn="$(basename "$(dirname "$dir")" | sed 's/^\.//')"
+  fi
+  echo "$bn"
+}
+
 lower_name() {
   echo "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -214,7 +226,7 @@ YAML
 # ─── Internal: create or repair per-skill symlinks (non-destructive) ─────────
 _link_skills() {
   local force="${1:-false}"
-  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor ~/.openclaw/workspace)
   local wk_skills_real repo_skills_real
   wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
   repo_skills_real="$(canonical_dir "$REPO_ROOT/skills" 2>/dev/null || true)"
@@ -224,7 +236,7 @@ _link_skills() {
     [[ -d "$ai_dir" ]] || continue
 
     local ai_name ai_dir_real skills_dir
-    ai_name=$(basename "$ai_dir")
+    ai_name="$(ai_tool_name "$ai_dir")"
     ai_dir_real="$(canonical_dir "$ai_dir" 2>/dev/null || true)"
     skills_dir="$ai_dir/skills"
 
@@ -1122,7 +1134,7 @@ cmd_status() {
 
   echo ""
   echo -e "${BOLD}Skill symlinks:  技能软链接${NC}"
-  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor ~/.openclaw/workspace)
   local total_skills=0
   local wk_skills_real
   if [[ -d "$WK_HOME/skills" ]]; then
@@ -1133,10 +1145,9 @@ cmd_status() {
   for ai_dir in "${ai_dirs[@]}"; do
     ai_dir=$(eval echo "$ai_dir")
     [[ -d "$ai_dir" ]] || continue
-    local name
-    name=$(basename "$ai_dir" | sed 's/^\.//')
-    name=$(echo "$name" | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo "$name" | cut -c2-)
-    local name_lower
+    local name name_lower
+    name="$(ai_tool_name "$ai_dir")"
+    name="$(echo "$name" | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo "$name" | cut -c2-)"
     name_lower="$(lower_name "$name")"
     local skills_dir="$ai_dir/skills"
     if [[ -d "$skills_dir" ]]; then
@@ -1144,25 +1155,27 @@ cmd_status() {
         local skills_target skills_real
         skills_target="$(readlink "$skills_dir")"
         skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
+        local skills_display="${skills_dir/#$HOME/~}"
         if [[ -n "$skills_real" && "$skills_real" == "$wk_skills_real" ]]; then
-          echo -e "  ${GREEN}=${NC} $name: ~/${name_lower}/skills -> ~/.wukong/skills (mounted / 已挂载)"
+          echo -e "  ${GREEN}=${NC} $name: $skills_display -> ~/.wukong/skills (mounted / 已挂载)"
         else
-          echo -e "  ${YELLOW}~${NC} $name: ~/${name_lower}/skills -> ${skills_target/#$HOME/~} (symlinked dir)"
+          echo -e "  ${YELLOW}~${NC} $name: $skills_display -> ${skills_target/#$HOME/~} (symlinked dir)"
         fi
         continue
       fi
 
-      local linked_count
+      local linked_count skills_display
+      skills_display="${skills_dir/#$HOME/~}"
       linked_count=$(find "$skills_dir" -maxdepth 1 -mindepth 1 -type l -name "wk-*" 2>/dev/null | wc -l | tr -d ' ')
       if [[ "$linked_count" -eq "$total_skills" ]] && [[ "$total_skills" -gt 0 ]]; then
-        echo -e "  ${GREEN}=${NC} $name: ~/${name_lower}/skills ($linked_count/$total_skills skills linked)"
+        echo -e "  ${GREEN}=${NC} $name: $skills_display ($linked_count/$total_skills skills linked)"
       elif [[ "$linked_count" -gt 0 ]]; then
-        echo -e "  ${YELLOW}~${NC} $name: ~/${name_lower}/skills ($linked_count/$total_skills skills linked)"
+        echo -e "  ${YELLOW}~${NC} $name: $skills_display ($linked_count/$total_skills skills linked)"
       else
-        echo -e "  ${RED}-${NC} $name: ~/${name_lower}/skills (0 wk skills linked / 0 个 wk 技能已链接)"
+        echo -e "  ${RED}-${NC} $name: $skills_display (0 wk skills linked / 0 个 wk 技能已链接)"
       fi
     else
-      echo -e "  ${RED}-${NC} $name: ~/${name_lower}/skills (not found / 未找到)"
+      echo -e "  ${RED}-${NC} $name: ${skills_dir/#$HOME/~} (not found / 未找到)"
     fi
   done
 
