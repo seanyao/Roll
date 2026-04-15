@@ -411,6 +411,18 @@ cmd_init() {
   local project_dir
   project_dir="$(pwd)"
 
+  # ── Resolve "auto" type argument ──────────────────────────────────────────
+  if [[ "$project_type" == "auto" ]]; then
+    info "Scanning project files..."
+    project_type="$(scan_project_type_from_files "$project_dir")"
+    if [[ "$project_type" == "unknown" ]]; then
+      warn "Cannot determine project type from files. Defaulting to 'fullstack'."
+      project_type="fullstack"
+    else
+      ok "Detected: ${BOLD}$project_type${NC}"
+    fi
+  fi
+
   # ── Auto-refresh (no explicit type, AGENTS.md exists in cwd) ─────────────
   if [[ -z "$project_type" ]]; then
     if [[ -f "$project_dir/AGENTS.md" ]]; then
@@ -432,14 +444,25 @@ cmd_init() {
     echo "  2) frontend-only    React SPA, no backend"
     echo "  3) backend-service  API/microservice, no frontend"
     echo "  4) cli              Command-line tool"
+    echo "  5) auto             Scan project files and decide"
     echo ""
-    echo -n "Choice [1-4]: "
+    echo -n "Choice [1-5]: "
     read -r choice
     case "$choice" in
       1|"") project_type="fullstack" ;;
       2)    project_type="frontend-only" ;;
       3)    project_type="backend-service" ;;
       4)    project_type="cli" ;;
+      5)
+        info "Scanning project files..."
+        project_type="$(scan_project_type_from_files "$project_dir")"
+        if [[ "$project_type" == "unknown" ]]; then
+          warn "Cannot determine project type from files. Defaulting to 'fullstack'."
+          project_type="fullstack"
+        else
+          ok "Detected: ${BOLD}$project_type${NC}"
+        fi
+        ;;
       *)    err "Invalid choice: $choice"; exit 1 ;;
     esac
   fi
@@ -485,7 +508,7 @@ cmd_init() {
   local tpl_dir="$WK_TEMPLATES/$project_type"
   if [[ ! -d "$tpl_dir" ]]; then
     err "Template not found: $project_type"
-    err "Available: fullstack, frontend-only, backend-service, cli"
+    err "Available: fullstack, frontend-only, backend-service, cli, auto"
     exit 1
   fi
 
@@ -577,6 +600,44 @@ merge_convention() {
 
   echo "$merged" > "$out_file"
   ok "Created: $display"
+}
+
+# ─── Helper: auto-detect project type by scanning project files ──────────────
+scan_project_type_from_files() {
+  local dir="${1:-.}"
+  local has_frontend=false
+  local has_backend=false
+  local has_cli=false
+
+  # Frontend signals
+  if [[ -f "$dir/package.json" ]]; then
+    grep -qiE '"react"|"vue"|"next"|"nuxt"|"vite"|"svelte"' "$dir/package.json" 2>/dev/null \
+      && has_frontend=true
+  fi
+  [[ -d "$dir/src" || -d "$dir/app" || -d "$dir/pages" || -d "$dir/components" ]] \
+    && has_frontend=true
+
+  # Backend/API signals
+  [[ -d "$dir/server" || -d "$dir/api" || -d "$dir/backend" ]] && has_backend=true
+  [[ -f "$dir/go.mod" || -f "$dir/main.go" || -f "$dir/main.py" || -f "$dir/app.py" \
+    || -f "$dir/Cargo.toml" || -f "$dir/requirements.txt" || -f "$dir/pyproject.toml" ]] \
+    && has_backend=true
+
+  # CLI signals (bin/ with executables, or cmd/ layout common in Go CLIs)
+  [[ -d "$dir/bin" || -d "$dir/cmd" ]] && has_cli=true
+
+  # Determine type
+  if $has_frontend && $has_backend; then
+    echo "fullstack"
+  elif $has_frontend && ! $has_backend; then
+    echo "frontend-only"
+  elif $has_cli && ! $has_frontend; then
+    echo "cli"
+  elif $has_backend && ! $has_frontend; then
+    echo "backend-service"
+  else
+    echo "unknown"
+  fi
 }
 
 # ─── Helper: detect project type from existing AGENTS.md ─────────────────────
@@ -879,7 +940,7 @@ usage() {
   echo "  status                 Show current state"
   echo ""
   echo "Sync scopes: conventions (default) | skills | all"
-  echo "Init types:  fullstack | frontend-only | backend-service | cli"
+  echo "Init types:  fullstack | frontend-only | backend-service | cli | auto"
   echo "Init tools:  claude,gemini,cursor,all"
   echo ""
   echo "Examples:"
