@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-probe
+name: wk-probe
 description: Node discovery and health check for CNX environment. Find machines on LAN by name, check node health, verify OpenClaw Gateway status. Use when user asks to find a machine, check node status, diagnose gateway issues, or verify node connectivity.
 ---
 
@@ -25,13 +25,13 @@ description: Node discovery and health check for CNX environment. Find machines 
 
 ```bash
 # Discover machines
-$cnx-checker find <machine-name>
+$wk-checker find <machine-name>
 
 # Check node health
-$cnx-checker health <hostname>
+$wk-checker health <hostname>
 
 # Full diagnosis
-$cnx-checker diagnose <machine-name>
+$wk-checker diagnose <machine-name>
 ```
 
 ## Node Discovery

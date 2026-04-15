@@ -202,7 +202,7 @@ After the report is complete, use this skill's included `scripts/md_to_pdf.py` t
 2. **Install dependencies** (if not installed): `pip install weasyprint markdown --break-system-packages`
 3. **Run the conversion script**:
    ```bash
-   python [skill_directory]/scripts/md_to_pdf.py input.md output.pdf --title "Subject Name" --author "cybernetix"
+   python [skill_directory]/scripts/md_to_pdf.py input.md output.pdf --title "Subject Name" --author "wukong"
    ```
 4. The script automatically generates an intermediate HTML file (for debugging) and the final PDF
 

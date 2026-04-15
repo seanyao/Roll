@@ -27,21 +27,21 @@ plans:
 
 ## Workflow
 
-### Design → $cnx-design
+### Design → $wk-design
 - Solution exploration, architecture design
 - Split into Stories
 - Write to BACKLOG.md
 
-### Build → $cnx-story-build / $cnx-fix-build / $cnx-roll-build
+### Build → $wk-story-build / $wk-fix-build / $wk-roll-build
 - Read BACKLOG and execute
 - TCR development (independent Actions auto-parallelized + Worktree isolation)
 - CI/CD deployment
 
-### Check → $cnx-sentinel / $cnx-bb-debug
+### Check → $wk-sentinel / $wk-bb-debug
 - Sentinel: Scheduled patrol
-- cnx-bb-debug: Deep diagnosis
+- wk-bb-debug: Deep diagnosis
 
-### Fix → $cnx-fix-build / $cnx-design
+### Fix → $wk-fix-build / $wk-design
 - Fix issues
 - Or re-plan
 

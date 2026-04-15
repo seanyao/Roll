@@ -81,7 +81,7 @@ User: "Help me build a login feature"
     v
 +-------------------------------------+
 | $cnx design "login feature"         |
-|  -> cnx-design                      |
+|  -> wk-design                      |
 |  -> Discuss approach -> Design      |
 |     architecture -> Split Stories   |
 |  -> Write to BACKLOG.md             |
@@ -93,7 +93,7 @@ User: "Help me build a login feature"
     v
 +-------------------------------------+
 | $cnx build US-AUTH-001              |
-|  -> cnx-story-build                 |
+|  -> wk-story-build                 |
 |  -> TCR workflow -> CI/CD -> Deploy |
 |  -> Update BACKLOG.md               |
 +---------------+---------------------+
@@ -202,8 +202,8 @@ project/
 ```yaml
 # ~/.openclaw/openclaw.yaml
 skills:
-  cybernetix:
-    workspace: ~/workspace/cybernetix
+  wukong:
+    workspace: ~/workspace/wukong
     commands:
       - design
       - build
@@ -216,7 +216,7 @@ skills:
 
 #### Environment Variables
 ```bash
-export CYBERNETIX_WORKSPACE=~/workspace/cybernetix
+export WK_WORKSPACE=~/workspace/wukong
 ```
 
 ### Requirements
@@ -227,11 +227,11 @@ export CYBERNETIX_WORKSPACE=~/workspace/cybernetix
 
 ### Related
 
-- `cnx-design` - Discuss + Design + Plan
-- `cnx-spar` - Adversarial TDD (high-risk logic)
-- `cnx-story-build` - Story delivery
-- `cnx-fix-build` - Bug fix
-- `cnx-roll-build` - Quick delivery
+- `wk-design` - Discuss + Design + Plan
+- `wk-spar` - Adversarial TDD (high-risk logic)
+- `wk-story-build` - Story delivery
+- `wk-fix-build` - Bug fix
+- `wk-roll-build` - Quick delivery
 - `cnx-.code-review` - Code review
-- `cnx-init` - Project initialization
+- `wk-init` - Project initialization
 - `cnx-.changelog` - Changelog

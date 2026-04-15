@@ -28,19 +28,19 @@
 **Created**: 2026-04-16
 
 - As a developer
-- I want `cybernetix init [type]` to always operate on the current directory
+- I want `wukong init [type]` to always operate on the current directory
 - So that the command is simpler and I'm forced to `cd` into the project first
 
 **AC:**
-- [ ] `cmd_init` signature: `cybernetix init [type]` — no `[dir]` arg
+- [ ] `cmd_init` signature: `wukong init [type]` — no `[dir]` arg
 - [ ] Always resolves to `$(pwd)` — no mkdir, no cd logic
 - [ ] Batch refresh (scan subdirs for AGENTS.md) removed
 - [ ] Auto-refresh single project (detects existing AGENTS.md in cwd) retained
-- [ ] Help text updated: `cybernetix init [type]`
+- [ ] Help text updated: `wukong init [type]`
 - [ ] README / docs updated to reflect new signature
 
 **Files:**
-- `bin/cybernetix` — `cmd_init`, argument parsing, help block
+- `bin/wukong` — `cmd_init`, argument parsing, help block
 
 **Dependencies:**
 - Depends on: none
@@ -67,7 +67,7 @@
 - [ ] Consistent with skill Step 3 table
 
 **Files:**
-- `bin/cybernetix` — `merge_convention` function
+- `bin/wukong` — `merge_convention` function
 
 **Dependencies:**
 - Depends on: none
@@ -81,7 +81,7 @@
 **Created**: 2026-04-16
 
 - As a developer starting a new project
-- I want `cybernetix init` to scaffold the full directory structure after writing convention files
+- I want `wukong init` to scaffold the full directory structure after writing convention files
 - So that I don't need an AI agent session just to get a standard skeleton
 
 **AC:**
@@ -95,13 +95,13 @@
   - `tests/unit/`, `tests/e2e/`
   - `.env.example`, `.gitignore`
 - [ ] Each dir gets a `.gitkeep`; template files (BACKLOG.md, .env.example) get starter content
-- [ ] Scaffold output matches `cnx-init` skill Step 4A structure (single source of truth)
-- [ ] Skill `cnx-init` Step 4A updated to call `cybernetix init` rather than recreate the structure itself
+- [ ] Scaffold output matches `wk-init` skill Step 4A structure (single source of truth)
+- [ ] Skill `wk-init` Step 4A updated to call `wukong init` rather than recreate the structure itself
 
 **Files:**
-- `bin/cybernetix` — `scaffold_new_project` new function, called from `cmd_init`
+- `bin/wukong` — `scaffold_new_project` new function, called from `cmd_init`
 - `conventions/templates/*/scaffold/` — optional: per-type starter file templates
-- `skills/cnx-init/SKILL.md` — Step 4A updated to delegate to CLI
+- `skills/wk-init/SKILL.md` — Step 4A updated to delegate to CLI
 
 **Dependencies:**
 - Depends on: US-INIT-002
@@ -134,7 +134,7 @@
 - [ ] Does NOT touch existing src/, api/, or any file not in the above list
 
 **Files:**
-- `bin/cybernetix` — `scaffold_legacy_project` new function, called from `cmd_init`
+- `bin/wukong` — `scaffold_legacy_project` new function, called from `cmd_init`
 
 **Dependencies:**
 - Depends on: US-INIT-002, US-INIT-004 (shared scaffold helpers)

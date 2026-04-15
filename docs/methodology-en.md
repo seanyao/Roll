@@ -23,26 +23,26 @@ CNX decomposes the software delivery lifecycle into three loops, each independen
 ```mermaid
 graph TB
     subgraph "Loop A: Research & Design"
-        A1["$cnx-research<br/>HV Research & Analysis"] --> A2["$cnx-design<br/>Requirements → INVEST Stories"]
+        A1["$wk-research<br/>HV Research & Analysis"] --> A2["$wk-design<br/>Requirements → INVEST Stories"]
         A2 --> A3["BACKLOG.md<br/>Status Index"]
         A3 --> A4["docs/features/<br/>Acceptance Criteria & Design"]
     end
 
     subgraph "Loop B: Implementation & Iteration"
-        B1["$cnx-init<br/>Project Scaffold"] --> B2["$cnx-story-build<br/>TCR-Driven Development"]
-        B2 --> B3["$cnx-.code-review<br/>Pre-commit Review"]
+        B1["$wk-init<br/>Project Scaffold"] --> B2["$wk-story-build<br/>TCR-Driven Development"]
+        B2 --> B3["$wk-.code-review<br/>Pre-commit Review"]
         B3 --> B4["CI / Deploy"]
         B4 --> B5["Verification Gate<br/>Live Evidence Required"]
-        B5 --> B6["$cnx-.changelog<br/>Change Log"]
-        B2 -.->|High-risk path| B7["$cnx-spar<br/>Adversarial TDD"]
+        B5 --> B6["$wk-.changelog<br/>Change Log"]
+        B2 -.->|High-risk path| B7["$wk-spar<br/>Adversarial TDD"]
         B7 --> B3
     end
 
     subgraph "Loop C: Observability & Maintenance"
-        C1["$cnx-sentinel<br/>Randomized Patrol"] --> C2{"Anomaly?"}
-        C2 -->|Yes| C3["$cnx-bb-debug<br/>Live Forensics"]
-        C3 --> C4["$cnx-bb-analyzer<br/>Root Cause Analysis"]
-        C4 --> C5["$cnx-fix-build<br/>Regression Fix"]
+        C1["$wk-sentinel<br/>Randomized Patrol"] --> C2{"Anomaly?"}
+        C2 -->|Yes| C3["$wk-bb-debug<br/>Live Forensics"]
+        C3 --> C4["$wk-bb-analyzer<br/>Root Cause Analysis"]
+        C4 --> C5["$wk-fix-build<br/>Regression Fix"]
         C5 --> C1
         C2 -->|No| C1
     end
@@ -80,40 +80,40 @@ In environments where multiple AI clients coexist, each client has its own confi
 
 ### 2.2 Technical Implementation
 
-CNX uses the `cybernetix` CLI to centralize configuration management and distribute it atomically.
+CNX uses the `wukong` CLI to centralize configuration management and distribute it atomically.
 
-**2.2.1 Skill Mounting (`cybernetix setup`)**
+**2.2.1 Skill Mounting (`wukong setup`)**
 
 On first run, the CLI performs two operations:
 
-1. **Establish a Single Source of Truth**: Copies global conventions (`conventions/global/`) and skill definitions (`skills/`) from the repository into `~/.cybernetix/`, making it the sole authoritative configuration source on the machine.
-2. **Per-skill symlinks**: Creates individual symlinks for each `cnx-*` skill into each AI client's skills directory (`~/.claude/skills/cnx-*`, `~/.gemini/skills/cnx-*`, etc.). Existing user skills are untouched — CNX skills are added alongside.
+1. **Establish a Single Source of Truth**: Copies global conventions (`conventions/global/`) and skill definitions (`skills/`) from the repository into `~/.wukong/`, making it the sole authoritative configuration source on the machine.
+2. **Per-skill symlinks**: Creates individual symlinks for each `wk-*` skill into each AI client's skills directory (`~/.claude/skills/wk-*`, `~/.gemini/skills/wk-*`, etc.). Existing user skills are untouched — CNX skills are added alongside.
 
 Setup never modifies any AI tool configuration files or global git settings. It is fully non-invasive and safe to re-run.
 
-**2.2.2 Configuration Sync (`cybernetix sync [scope]`)**
+**2.2.2 Configuration Sync (`wukong sync [scope]`)**
 
-Distributes content from `~/.cybernetix/` to each AI client's configuration path based on the selected scope.
+Distributes content from `~/.wukong/` to each AI client's configuration path based on the selected scope.
 
-- `conventions` (default): uses `@include` append mode — writes CNX conventions to `{ai_dir}/cnx.md`, then appends a single `@cnx.md` line to the user's main config. Existing content is never overwritten.
+- `conventions` (default): uses `@include` append mode — writes CNX conventions to `{ai_dir}/cnx.md`, then appends a single `@wk.md` line to the user's main config. Existing content is never overwritten.
 - `skills`: refreshes skills from the repo into the local cache and creates/repairs per-skill symlinks for each client
 - `all`: runs both conventions and skills
 
 Append `--force` (or `-f`) to force-rewrite `cnx.md` or rebuild symlinks.
 
 ```
-~/.cybernetix/conventions/global/
-├── AGENTS.md        → ~/.kimi/cnx.md (+ @cnx.md appended to AGENTS.md)
-├── CLAUDE.md        → ~/.claude/cnx.md (+ @cnx.md appended to CLAUDE.md)
-├── GEMINI.md        → ~/.gemini/cnx.md (+ @cnx.md appended to GEMINI.md)
+~/.wukong/conventions/global/
+├── AGENTS.md        → ~/.kimi/cnx.md (+ @wk.md appended to AGENTS.md)
+├── CLAUDE.md        → ~/.claude/cnx.md (+ @wk.md appended to CLAUDE.md)
+├── GEMINI.md        → ~/.gemini/cnx.md (+ @wk.md appended to GEMINI.md)
 └── .cursor-rules    → (project-level distribution)
 ```
 
-**Git Hook (optional — `cybernetix hooks install`)**
+**Git Hook (optional — `wukong hooks install`)**
 
 Installs a global `prepare-commit-msg` hook that automatically detects which AI client authored the current commit and stamps it (e.g., `[claude code]`, `[gemini cli]`), enabling audit tracing in multi-agent workflows. This is an opt-in operation that modifies global git configuration — it shows the current state and requires explicit confirmation before proceeding.
 
-**2.2.3 Project-Level Configuration (`cybernetix init`)**
+**2.2.3 Project-Level Configuration (`wukong init`)**
 
 When generating convention files for a specific project, CNX applies a **Global + Template merge strategy**:
 
@@ -142,14 +142,14 @@ Project Instance         ← AGENTS.md (constraints) + .claude/CLAUDE.md (client
 
 | Classical Methodology | CNX Implementation |
 |----------------------|--------------------|
-| HCD (Human-Centered Design) | `$cnx-research`: Research before design; data-driven decision-making |
-| BDD (Behavior-Driven Development) | `$cnx-design`: Requirements expressed as Acceptance Criteria |
+| HCD (Human-Centered Design) | `$wk-research`: Research before design; data-driven decision-making |
+| BDD (Behavior-Driven Development) | `$wk-design`: Requirements expressed as Acceptance Criteria |
 | Scrum Backlog | `BACKLOG.md` + `docs/features/`: Two-tier index structure |
 | INVEST Principles | Mandatory constraints on Story decomposition |
 
-### 3.2 Research-Driven Design: `$cnx-research`
+### 3.2 Research-Driven Design: `$wk-research`
 
-Structured research precedes requirements definition, preventing design decisions made on gut instinct alone. `$cnx-research` implements **HV Analysis (Horizontal-Vertical Analysis)**:
+Structured research precedes requirements definition, preventing design decisions made on gut instinct alone. `$wk-research` implements **HV Analysis (Horizontal-Vertical Analysis)**:
 
 - **Vertical Axis**: Traces the full evolutionary arc of the subject — from its origins to the present — along a timeline. Produces a narrative analysis of 6,000–15,000 words, covering key inflection points, technology iterations, and market shifts.
 - **Horizontal Axis**: Performs systematic benchmarking against comparable products and solutions at the current point in time. Produces a comparative analysis of 3,000–10,000 words, covering feature matrices, technology approaches, and positioning differences.
@@ -159,11 +159,11 @@ Research follows a strict source priority hierarchy: **primary sources > industr
 
 The final output is a structured Markdown report that can be converted to a PDF with cover page and table of contents using the built-in `md_to_pdf.py` script (powered by WeasyPrint).
 
-> **Scenario**: TaskFlow plans to add an "organization-level permission management" module. Before writing a single line, `$cnx-research` conducts an HV analysis on "B2B SaaS permission models" — the vertical axis traces the ACL → RBAC → ABAC → ReBAC evolution, while the horizontal axis compares how Linear, Notion, and GitHub each implement permissions.
+> **Scenario**: TaskFlow plans to add an "organization-level permission management" module. Before writing a single line, `$wk-research` conducts an HV analysis on "B2B SaaS permission models" — the vertical axis traces the ACL → RBAC → ABAC → ReBAC evolution, while the horizontal axis compares how Linear, Notion, and GitHub each implement permissions.
 >
-> The cross-axis insight: after 2023, mainstream products universally layered resource-level fine-grained controls on top of RBAC — pure RBAC has become the minimum viable bar. This finding directly shaped how `$cnx-design` decomposed Stories downstream, averting a rework cycle that would have surfaced only after delivery.
+> The cross-axis insight: after 2023, mainstream products universally layered resource-level fine-grained controls on top of RBAC — pure RBAC has become the minimum viable bar. This finding directly shaped how `$wk-design` decomposed Stories downstream, averting a rework cycle that would have surfaced only after delivery.
 
-### 3.3 Requirement Atomization: `$cnx-design`
+### 3.3 Requirement Atomization: `$wk-design`
 
 Translates research findings and business requirements into instruction contracts that AI can execute. The core output is User Stories that conform to the **INVEST principles**:
 
@@ -176,7 +176,7 @@ Translates research findings and business requirements into instruction contract
 | **S**mall | A single Story can be completed within one session cycle |
 | **T**estable | Each Story includes verifiable acceptance criteria |
 
-> **Scenario**: A product manager's raw requirement is "admins should be able to see everyone's activity logs." `$cnx-design` decomposes this into three independent Stories: US-007 (write audit events), US-008 (audit list UI with filtering), and US-009 (export audit data as CSV).
+> **Scenario**: A product manager's raw requirement is "admins should be able to see everyone's activity logs." `$wk-design` decomposes this into three independent Stories: US-007 (write audit events), US-008 (audit list UI with filtering), and US-009 (export audit data as CSV).
 >
 > Each Story carries its own acceptance criteria — US-007's AC includes "create/delete/modify operations all generate audit events" and "events include actor ID, timestamp, and change diff." The export capability, which was buried implicitly in the original requirement, is surfaced as an explicit standalone Story rather than hidden in implementation details.
 
@@ -209,15 +209,15 @@ This separation keeps BACKLOG.md concise and readable as a progress dashboard, w
 | Classical Methodology | CNX Implementation |
 |----------------------|--------------------|
 | TDD (Test-Driven Development) | Tests written first; RED → GREEN → Refactor |
-| TCR (Test && Commit ∥ Revert) | `$cnx-story-build`: commit on pass, revert on failure |
+| TCR (Test && Commit ∥ Revert) | `$wk-story-build`: commit on pass, revert on failure |
 | DevOps / CI-CD | Objective arbitration layer: CI is the final authority on "deliverable"; minute-level feedback loops compress defect discovery cost |
-| Defensive Programming | `$cnx-spar`: adversarial TDD for high-risk paths |
+| Defensive Programming | `$wk-spar`: adversarial TDD for high-risk paths |
 
-### 4.2 Project Scaffolding: `$cnx-init`
+### 4.2 Project Scaffolding: `$wk-init`
 
 Standardizes project directory structure and CI configuration, eliminating the randomness of building from scratch.
 
-`$cnx-init` applies the **Global + Template merge strategy** (see 2.2.3). Differences across project types primarily manifest in the **interaction layer**: frontend projects have a component tree and routing layer; CLI projects have command registration and interactive input; pure backend services have only an API interface layer. The complete structures for each template are as follows:
+`$wk-init` applies the **Global + Template merge strategy** (see 2.2.3). Differences across project types primarily manifest in the **interaction layer**: frontend projects have a component tree and routing layer; CLI projects have command registration and interactive input; pure backend services have only an API interface layer. The complete structures for each template are as follows:
 
 **`fullstack` template:**
 
@@ -262,7 +262,7 @@ The directory structure encodes four architectural constraints:
 | **API / CLI Separation** | `app/api/` + `bin/` | Interaction entry points are independent from business logic; the same domain can serve both Web and CLI simultaneously |
 | **Stateless** | No server-side session assumptions | Designed for Edge/Serverless deployment; horizontal scaling requires no session synchronization |
 
-### 4.3 TCR-Driven Development: `$cnx-story-build`
+### 4.3 TCR-Driven Development: `$wk-story-build`
 
 This is CNX's core execution unit. Its engineering significance lies in a fundamental shift: **correctness is not determined by the AI's own assertions, but exclusively by the pass/fail status of automated tests**.
 
@@ -284,7 +284,7 @@ This is CNX's core execution unit. Its engineering significance lies in a fundam
 │            PASS                                      │
 │              │                                       │
 │              ▼                                       │
-│  4. $cnx-.code-review (self-review gate)             │
+│  4. $wk-.code-review (self-review gate)             │
 │              │                                       │
 │              ▼                                       │
 │  5. git commit (micro-commit)                        │
@@ -300,7 +300,7 @@ Each Action is constrained to **2–5 minutes** of scope. The engineering ration
 - **Errors do not compound**: Failing logic cannot be depended on by subsequent code, preventing hidden debt from accumulating in the codebase.
 - **Observable progress**: The micro-commit sequence is itself a real-time record of delivery progress.
 
-**The complete delivery pipeline** — `$cnx-story-build` does not stop at local tests passing. It requires completing the full end-to-end delivery chain:
+**The complete delivery pipeline** — `$wk-story-build` does not stop at local tests passing. It requires completing the full end-to-end delivery chain:
 
 ```
 TCR Micro-commits → git push → CI Pass → Deploy → Verification Gate
@@ -359,7 +359,7 @@ The micro-step granularity constraint (2–5 min/Action) delivers a second benef
 
 **4.4.3 Two Independent Workflow Pipelines**
 
-The CI configuration generated by `$cnx-init` contains two independent pipelines corresponding to different trigger scenarios:
+The CI configuration generated by `$wk-init` contains two independent pipelines corresponding to different trigger scenarios:
 
 ```
 .github/workflows/
@@ -368,7 +368,7 @@ The CI configuration generated by `$cnx-init` contains two independent pipelines
 │                   # GREEN → unlocks CD deployment permission
 │
 └── sentinel.yml    # Triggered by cron schedule (unattended)
-                    # Runs $cnx-sentinel patrol tasks
+                    # Runs $wk-sentinel patrol tasks
                     # Provides the observability infrastructure for Loop C
 ```
 
@@ -390,9 +390,9 @@ Without CD there is no verifiable target, rendering the Verification Gate meanin
 
 ---
 
-### 4.5 Adversarial TDD: `$cnx-spar`
+### 4.5 Adversarial TDD: `$wk-spar`
 
-For high-risk paths — authorization, payments, data integrity — standard TDD coverage is insufficient. Tests and implementation are written by the same Agent, creating cognitive blind spots. `$cnx-spar` introduces an adversarial mechanism:
+For high-risk paths — authorization, payments, data integrity — standard TDD coverage is insufficient. Tests and implementation are written by the same Agent, creating cognitive blind spots. `$wk-spar` introduces an adversarial mechanism:
 
 | Role | Responsibility | Constraint |
 |------|---------------|------------|
@@ -401,9 +401,9 @@ For high-risk paths — authorization, payments, data integrity — standard TDD
 
 The adversarial cycle continues until the Attacker cannot produce a new RED test for two consecutive rounds, or all predefined scenarios are covered (maximum 5 rounds). Each round's results are committed independently, keeping the adversarial process fully traceable.
 
-Automatic trigger signals: when a Story touches authentication/authorization, payment/billing, data integrity validation, complex state machines, or historically high-defect modules, `$cnx-story-build` automatically routes the Action to `$cnx-spar`.
+Automatic trigger signals: when a Story touches authentication/authorization, payment/billing, data integrity validation, complex state machines, or historically high-defect modules, `$wk-story-build` automatically routes the Action to `$wk-spar`.
 
-> **Scenario**: US-010 (organization member permission changes) triggers the `$cnx-spar` auto-route.
+> **Scenario**: US-010 (organization member permission changes) triggers the `$wk-spar` auto-route.
 >
 > The Attacker's first round produces 3 RED tests: a regular member escalating privileges to modify another's role, whether an admin can continue operating after demoting themselves, and concurrent requests simultaneously modifying the same user's role. After the Defender implements passing code for all three, the Attacker's second round adds: if a role change succeeds at the DB level but the notification fails, does the permission atomically roll back?
 >
@@ -413,7 +413,7 @@ Automatic trigger signals: when a Story touches authentication/authorization, pa
 
 After each successful deployment, two mechanisms ensure deliverables remain traceable:
 
-- **`$cnx-.changelog`**: Automatically extracts completed Stories from BACKLOG.md, filters out internal technical details, and generates a user-facing changelog.
+- **`$wk-.changelog`**: Automatically extracts completed Stories from BACKLOG.md, filters out internal technical details, and generates a user-facing changelog.
 - **Git Hook (AI source tagging)**: The global `prepare-commit-msg` hook auto-detects the active AI client (via environment variables `CLAUDE_CODE`, `GEMINI_CLI`, `KIMI_CODE`, etc.) and injects a source tag into the commit message (e.g., `[claude code]`, `[gemini cli]`). In multi-Agent workflows, `git log` shows the actual executor of every commit at a glance.
 
 ---
@@ -424,14 +424,14 @@ After each successful deployment, two mechanisms ensure deliverables remain trac
 
 | Classical Methodology | CNX Implementation |
 |----------------------|--------------------|
-| SRE (Site Reliability Engineering) | `$cnx-sentinel`: Sampling-based automated patrol |
+| SRE (Site Reliability Engineering) | `$wk-sentinel`: Sampling-based automated patrol |
 | Chaos Engineering | Randomized patrol strategy simulating unpredictable check patterns |
-| Digital Forensics | `$cnx-bb-debug`: Automated on-scene evidence collection |
-| Root Cause Analysis (RCA) | `$cnx-bb-analyzer`: Structured diagnostic reports |
+| Digital Forensics | `$wk-bb-debug`: Automated on-scene evidence collection |
+| Root Cause Analysis (RCA) | `$wk-bb-analyzer`: Structured diagnostic reports |
 
-### 5.2 Randomized Patrol: `$cnx-sentinel`
+### 5.2 Randomized Patrol: `$wk-sentinel`
 
-`$cnx-sentinel` provides continuous health monitoring for delivered features. Its core design philosophy is **probabilistic sampling over exhaustive regression**, striking a balance between cost and coverage.
+`$wk-sentinel` provides continuous health monitoring for delivered features. Its core design philosophy is **probabilistic sampling over exhaustive regression**, striking a balance between cost and coverage.
 
 **Patrol strategy matrix:**
 
@@ -444,15 +444,15 @@ After each successful deployment, two mechanisms ensure deliverables remain trac
 
 **Uncertainty handling** — avoiding false positives: a single failure does not trigger an alert; three consecutive failures are required to flag an anomaly.
 
-**Hot-spot detection** — adaptive weighting: Stories that fail repeatedly automatically receive increased sampling weight. Issues discovered by patrol automatically create `FIX-XXX` Backlog entries for `$cnx-fix-build` to handle.
+**Hot-spot detection** — adaptive weighting: Stories that fail repeatedly automatically receive increased sampling weight. Issues discovered by patrol automatically create `FIX-XXX` Backlog entries for `$wk-fix-build` to handle.
 
 Patrol runs via GitHub Actions `cron` scheduling, providing unattended continuous monitoring.
 
-> **Scenario**: Following the TaskFlow v1.3 release, `$cnx-sentinel` runs on the Intensive strategy. On the second sample, the patrol case for US-007 (audit write) fails — audit events exist but the `timestamp` field is empty. A single failure does not trigger an alert.
+> **Scenario**: Following the TaskFlow v1.3 release, `$wk-sentinel` runs on the Intensive strategy. On the second sample, the patrol case for US-007 (audit write) fails — audit events exist but the `timestamp` field is empty. A single failure does not trigger an alert.
 >
 > On the fourth sample, the same case fails for the third consecutive time, crossing the threshold. `FIX-012: audit event timestamp is null` is automatically created and written to the Backlog, and US-007's sampling weight is automatically promoted to the next tier.
 
-### 5.3 Automated Forensics: `$cnx-bb-debug`
+### 5.3 Automated Forensics: `$wk-bb-debug`
 
 A Playwright-based end-to-end debugger supporting two operating modes:
 
@@ -469,25 +469,25 @@ Data dimensions collected automatically:
 | Performance | Load times, resource timing, interaction latency |
 | Screenshot | Visual snapshot of the current page state |
 
-### 5.4 Root Cause Diagnosis: `$cnx-bb-analyzer`
+### 5.4 Root Cause Diagnosis: `$wk-bb-analyzer`
 
-Consumes the diagnostic JSON produced by `$cnx-bb-debug` and performs structured multi-dimensional analysis (content state, network failures, DOM rendering anomalies, performance bottlenecks), outputting diagnostic conclusions and remediation recommendations.
+Consumes the diagnostic JSON produced by `$wk-bb-debug` and performs structured multi-dimensional analysis (content state, network failures, DOM rendering anomalies, performance bottlenecks), outputting diagnostic conclusions and remediation recommendations.
 
-> **Scenario (cont.)**: `$cnx-bb-debug` runs forensics on the audit list page. The Network dimension captures `GET /api/audit` returning 200 but with `timestamp` as `null`; the Console dimension simultaneously shows `[warn] AuditEvent serializer: missing timestamp`.
+> **Scenario (cont.)**: `$wk-bb-debug` runs forensics on the audit list page. The Network dimension captures `GET /api/audit` returning 200 but with `timestamp` as `null`; the Console dimension simultaneously shows `[warn] AuditEvent serializer: missing timestamp`.
 >
-> `$cnx-bb-analyzer` consumes the diagnostic JSON and isolates the root cause: the v1.3 ORM upgrade introduced a field alias change that was not reflected in the serialization layer, breaking the `created_at` → `timestamp` mapping. The fix direction is clear; handed off to `$cnx-fix-build`.
+> `$wk-bb-analyzer` consumes the diagnostic JSON and isolates the root cause: the v1.3 ORM upgrade introduced a field alias change that was not reflected in the serialization layer, breaking the `created_at` → `timestamp` mapping. The fix direction is clear; handed off to `$wk-fix-build`.
 
-### 5.5 Regression Repair: `$cnx-fix-build`
+### 5.5 Regression Repair: `$wk-fix-build`
 
-Executes a fix for a single issue — lighter-weight than `$cnx-story-build`, but held to the same quality standards:
+Executes a fix for a single issue — lighter-weight than `$wk-story-build`, but held to the same quality standards:
 
 - **Mandatory regression tests**: Every fix patch must include a regression test case targeting the specific issue, preventing recurrence.
 - **Scope constraint**: One Fix handles one issue. If the fix reveals a scope wider than expected, it escalates to a User Story and re-enters Loop A.
 - **Same quality gates**: Verification Gate, CI Pass, and production verification all apply equally.
 
-> **Scenario (cont.)**: `$cnx-fix-build` executes FIX-012, with scope strictly limited to the serialization layer field mapping. A regression test is added (asserting `timestamp` is non-null and conforms to ISO 8601 format).
+> **Scenario (cont.)**: `$wk-fix-build` executes FIX-012, with scope strictly limited to the serialization layer field mapping. A regression test is added (asserting `timestamp` is non-null and conforms to ISO 8601 format).
 >
-> 1 commit, CI GREEN, post-deployment Verification Gate confirms the audit list timestamps have recovered, FIX-012 closed. On the next `$cnx-sentinel` sample cycle, the check passes and US-007's sampling weight returns to baseline.
+> 1 commit, CI GREEN, post-deployment Verification Gate confirms the audit list timestamps have recovered, FIX-012 closed. On the next `$wk-sentinel` sample cycle, the check passes and US-007's sampling weight returns to baseline.
 
 ---
 
@@ -514,10 +514,10 @@ Beyond the active Skills in the three loops, CNX includes a set of passively tri
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
-| `$cnx-.echo` | When user input is ambiguous or contradictory | Restates intent and resolves ambiguity before proceeding, avoiding wasted compute on a misunderstood instruction |
-| `$cnx-.code-review` | After each TCR micro-step completes | Multi-dimensional self-review (security, maintainability, performance, scope); a Critical finding blocks the commit |
-| `$cnx-.qa-cover` | During the Test Design Review phase | Defines the test pyramid (Unit > E2E > Visual > Smoke) and enforces coverage thresholds |
-| `$cnx-.changelog` | After a successful deployment | Extracts completed items from BACKLOG and generates a user-readable changelog |
+| `$wk-.echo` | When user input is ambiguous or contradictory | Restates intent and resolves ambiguity before proceeding, avoiding wasted compute on a misunderstood instruction |
+| `$wk-.code-review` | After each TCR micro-step completes | Multi-dimensional self-review (security, maintainability, performance, scope); a Critical finding blocks the commit |
+| `$wk-.qa-cover` | During the Test Design Review phase | Defines the test pyramid (Unit > E2E > Visual > Smoke) and enforces coverage thresholds |
+| `$wk-.changelog` | After a successful deployment | Extracts completed items from BACKLOG and generates a user-readable changelog |
 
 ---
 
@@ -538,12 +538,12 @@ graph LR
     end
 
     subgraph "CNX Implementation"
-        R["$cnx-research<br/>HV Analysis"]
-        D["$cnx-design<br/>INVEST Stories"]
-        SB["$cnx-story-build<br/>TCR Micro-steps"]
-        SP["$cnx-spar<br/>Adversarial TDD"]
-        SE["$cnx-sentinel<br/>Randomized Patrol"]
-        BB["$cnx-bb-debug<br/>Auto Forensics"]
+        R["$wk-research<br/>HV Analysis"]
+        D["$wk-design<br/>INVEST Stories"]
+        SB["$wk-story-build<br/>TCR Micro-steps"]
+        SP["$wk-spar<br/>Adversarial TDD"]
+        SE["$wk-sentinel<br/>Randomized Patrol"]
+        BB["$wk-bb-debug<br/>Auto Forensics"]
     end
 
     HCD -->|"Research first"| R
@@ -567,15 +567,15 @@ The key distinction lies in the shift of execution subject: these methodologies 
 
 - Feedback-driven continuous delivery loop (Design → Build → Check → Fix)
 - A standardized skill set of 14 Skills + 2 Tools
-- Cross-AI-client configuration consistency management (`cybernetix` CLI)
+- Cross-AI-client configuration consistency management (`wukong` CLI)
 - TCR micro-commits + Verification Gate quality assurance mechanism
 - Multi-Agent audit tracing via Git Hooks
 
 **Current Limitations:**
 
-- **Multi-Agent coordination overhead**: `$cnx-story-build` evaluates Action dependencies to determine whether to launch parallel sub-Agents, but cross-Agent state synchronization and conflict resolution currently depend on conventions rather than enforced protocols, incurring coordination overhead in high-concurrency scenarios.
+- **Multi-Agent coordination overhead**: `$wk-story-build` evaluates Action dependencies to determine whether to launch parallel sub-Agents, but cross-Agent state synchronization and conflict resolution currently depend on conventions rather than enforced protocols, incurring coordination overhead in high-concurrency scenarios.
 - **Framework coupling**: Skill definitions are written in Markdown and rely on AI clients' ability to interpret natural language instructions — execution precision varies across different models.
-- **Patrol coverage**: `$cnx-sentinel`'s sampling strategy effectively controls cost, but it does not provide the same coverage guarantee as exhaustive regression testing.
+- **Patrol coverage**: `$wk-sentinel`'s sampling strategy effectively controls cost, but it does not provide the same coverage guarantee as exhaustive regression testing.
 
 ---
 
@@ -583,28 +583,28 @@ The key distinction lies in the shift of execution subject: these methodologies 
 
 | Skill | Phase | Input | Output |
 |-------|-------|-------|--------|
-| `$cnx-research` | Research | Research topic | Markdown / PDF research report |
-| `$cnx-design` | Design | Requirements description | BACKLOG.md + docs/features/ |
-| `$cnx-init` | Initialization | Project name | Standardized directory structure + CI config |
-| `$cnx-story-build` | Implementation | Story ID | Deployed code + verification evidence |
-| `$cnx-roll-build` | Rapid implementation | One-sentence requirement | Auto-decompose → deliver |
-| `$cnx-spar` | Defensive implementation | Feature description | Adversarial test suite + implementation code |
-| `$cnx-fix-build` | Bug fix | Fix ID | Fix code + regression test |
-| `$cnx-sentinel` | Patrol | Patrol strategy | Health report / FIX entries |
-| `$cnx-bb-debug` | Debugging | URL | Diagnostic JSON + screenshots |
-| `$cnx-bb-analyzer` | Diagnosis | Diagnostic JSON | Root cause analysis + remediation recommendations |
-| `$cnx-fetch` | Intelligence | URL / keyword | Web fetch, search, crawl results |
-| `$cnx-probe` | Monitoring | Target address | Node discovery, health check report |
+| `$wk-research` | Research | Research topic | Markdown / PDF research report |
+| `$wk-design` | Design | Requirements description | BACKLOG.md + docs/features/ |
+| `$wk-init` | Initialization | Project name | Standardized directory structure + CI config |
+| `$wk-story-build` | Implementation | Story ID | Deployed code + verification evidence |
+| `$wk-roll-build` | Rapid implementation | One-sentence requirement | Auto-decompose → deliver |
+| `$wk-spar` | Defensive implementation | Feature description | Adversarial test suite + implementation code |
+| `$wk-fix-build` | Bug fix | Fix ID | Fix code + regression test |
+| `$wk-sentinel` | Patrol | Patrol strategy | Health report / FIX entries |
+| `$wk-bb-debug` | Debugging | URL | Diagnostic JSON + screenshots |
+| `$wk-bb-analyzer` | Diagnosis | Diagnostic JSON | Root cause analysis + remediation recommendations |
+| `$wk-fetch` | Intelligence | URL / keyword | Web fetch, search, crawl results |
+| `$wk-probe` | Monitoring | Target address | Node discovery, health check report |
 
 ## Appendix B: CLI Command Quick Reference
 
 | Command | Purpose |
 |---------|---------|
-| `cybernetix setup` | First-time initialization of `~/.cybernetix/`, mount skills (non-invasive) |
-| `cybernetix sync conventions` | Opt-in: append CNX conventions via `@include` (never overwrites existing files) |
-| `cybernetix sync skills` | Refresh skills and repair per-skill symlinks |
-| `cybernetix sync all` | Run both conventions and skills sync |
-| `cybernetix hooks install` | Opt-in: install global git hook (requires confirmation) |
-| `cybernetix init [dir] [type] [tools]` | Generate project convention files (merges Global + Template) |
-| `cybernetix reset` | Reset `~/.cybernetix/` from the repository source, then sync |
-| `cybernetix status` | Display current configuration state, sync status, and skill links |
+| `wukong setup` | First-time initialization of `~/.wukong/`, mount skills (non-invasive) |
+| `wukong sync conventions` | Opt-in: append CNX conventions via `@include` (never overwrites existing files) |
+| `wukong sync skills` | Refresh skills and repair per-skill symlinks |
+| `wukong sync all` | Run both conventions and skills sync |
+| `wukong hooks install` | Opt-in: install global git hook (requires confirmation) |
+| `wukong init [dir] [type] [tools]` | Generate project convention files (merges Global + Template) |
+| `wukong reset` | Reset `~/.wukong/` from the repository source, then sync |
+| `wukong status` | Display current configuration state, sync status, and skill links |

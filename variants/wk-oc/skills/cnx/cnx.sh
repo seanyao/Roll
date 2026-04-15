@@ -1,8 +1,8 @@
 #!/bin/bash
 # CNX unified entry - Displays workflow guidance
 
-CYBERNETIX_DIR="${CYBERNETIX_WORKSPACE:-$HOME/workspace/cybernetix}"
-SKILLS_DIR="$CYBERNETIX_DIR/skills"
+WK_DIR="${WK_WORKSPACE:-$HOME/workspace/wukong}"
+SKILLS_DIR="$WK_DIR/skills"
 
 COMMAND=$1
 shift

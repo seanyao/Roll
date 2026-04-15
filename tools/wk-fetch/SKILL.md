@@ -1,6 +1,6 @@
 ---
 hidden: true
-name: cnx-fetch
+name: wk-fetch
 description: Web page fetching and crawling for AI agents. Extract content from URLs for research, documentation, and competitive analysis.
 ---
 

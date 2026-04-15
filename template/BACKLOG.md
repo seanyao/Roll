@@ -14,11 +14,11 @@ Stories in the current iteration
 
 Ready for development, already planned
 
-<!-- $cnx-design will create new Stories here -->
+<!-- $wk-design will create new Stories here -->
 
 ## 🔄 In Progress
 
-<!-- $cnx-story-build will update here -->
+<!-- $wk-story-build will update here -->
 
 ## ✅ Completed
 

@@ -5,22 +5,22 @@
 **Completed**: 2026-04-16
 
 - As a user
-- I want the CLI command to be `wukong` instead of `cybernetix`
+- I want the CLI command to be `wukong` instead of `wukong`
 - So that the brand is consistent end-to-end
 
 **AC:**
-- [x] `bin/cybernetix` renamed to `bin/wukong`
+- [x] `bin/wukong` renamed to `bin/wukong`
 - [x] All `CNX_HOME` / `CNX_CONFIG` / `CNX_GLOBAL` / `CNX_TEMPLATES` vars → `WK_HOME` / `WK_CONFIG` / `WK_GLOBAL` / `WK_TEMPLATES`
-- [x] `~/.cybernetix/` references → `~/.wukong/`
+- [x] `~/.wukong/` references → `~/.wukong/`
 - [x] `[cnx]` log prefix → `[wk]`
-- [x] `install.sh` updated: symlink `wukong` not `cybernetix`
+- [x] `install.sh` updated: symlink `wukong` not `wukong`
 - [x] `package.json` name field updated
 - [x] Help text / version banner updated
 - [x] `_link_skills` ai_dirs list keeps same paths (unchanged: ~/.claude ~/.gemini etc.)
 - [x] Also delivered: US-INIT-001 (Kimi menu item), US-INIT-002 (cwd-only init), US-INIT-003 (O/K/M merge)
 
 **Files:**
-- `bin/cybernetix` (rename to `bin/wukong`)
+- `bin/wukong` (rename to `bin/wukong`)
 - `install.sh`
 - `package.json`
 
@@ -31,7 +31,7 @@
 ---
 
 <a id="us-wk-002"></a>
-## US-WK-002 Rename skill directories cnx-* → wk-* 📋
+## US-WK-002 Rename skill directories wk-* → wk-* 📋
 
 **Created**: 2026-04-16
 
@@ -40,30 +40,30 @@
 - So that skill invocation (`$wk-design`, `$wk-story-build`) matches the new brand
 
 **AC:**
-- [ ] All 15 skill dirs under `skills/` renamed: `cnx-*` → `wk-*`
+- [ ] All 15 skill dirs under `skills/` renamed: `wk-*` → `wk-*`
   - `cnx-.changelog` → `wk-.changelog`
   - `cnx-.code-review` → `wk-.code-review`
   - `cnx-.echo` → `wk-.echo`
   - `cnx-.qa-cover` → `wk-.qa-cover`
   - `cnx-.yeah` → `wk-.yeah`
-  - `cnx-bb-analyzer` → `wk-bb-analyzer`
-  - `cnx-bb-debug` → `wk-bb-debug`
-  - `cnx-design` → `wk-design`
-  - `cnx-fix-build` → `wk-fix-build`
-  - `cnx-init` → `wk-init`
-  - `cnx-research` → `wk-research`
-  - `cnx-roll-build` → `wk-roll-build`
-  - `cnx-sentinel` → `wk-sentinel`
-  - `cnx-spar` → `wk-spar`
-  - `cnx-story-build` → `wk-story-build`
-- [ ] Inside every SKILL.md: all `$cnx-*` references → `$wk-*`
+  - `wk-bb-analyzer` → `wk-bb-analyzer`
+  - `wk-bb-debug` → `wk-bb-debug`
+  - `wk-design` → `wk-design`
+  - `wk-fix-build` → `wk-fix-build`
+  - `wk-init` → `wk-init`
+  - `wk-research` → `wk-research`
+  - `wk-roll-build` → `wk-roll-build`
+  - `wk-sentinel` → `wk-sentinel`
+  - `wk-spar` → `wk-spar`
+  - `wk-story-build` → `wk-story-build`
+- [ ] Inside every SKILL.md: all `$wk-*` references → `$wk-*`
 - [ ] `name:` frontmatter field in each SKILL.md updated
-- [ ] `variants/cnx-oc/` → `variants/wk-oc/` (if applicable)
+- [ ] `variants/wk-oc/` → `variants/wk-oc/` (if applicable)
 
 **Files:**
-- `skills/cnx-*/` (all dirs renamed)
+- `skills/wk-*/` (all dirs renamed)
 - All `skills/wk-*/SKILL.md` (content updated)
-- `variants/cnx-oc/` (rename)
+- `variants/wk-oc/` (rename)
 
 **Dependencies:**
 - Depends on: US-WK-001
@@ -80,7 +80,7 @@
 - So that generated projects are consistent with the new brand
 
 **AC:**
-- [ ] `conventions/global/AGENTS.md`: `$cnx-*` → `$wk-*`, `cybernetix` → `wukong`
+- [ ] `conventions/global/AGENTS.md`: `$wk-*` → `$wk-*`, `wukong` → `wukong`
 - [ ] `conventions/global/CLAUDE.md`: same
 - [ ] `conventions/global/GEMINI.md`: same
 - [ ] All `conventions/templates/*/AGENTS.md`: same
@@ -106,7 +106,7 @@
 - So that there is no confusion between old and new names
 
 **AC:**
-- [ ] `README.md`: all `cybernetix` / `cnx-` occurrences replaced
+- [ ] `README.md`: all `wukong` / `cnx-` occurrences replaced
 - [ ] `docs/methodology.md`, `docs/methodology-en.md`: updated
 - [ ] `docs/skill-selection-guide.md`: updated
 - [ ] `docs/practices/engineering-common-sense.md`: updated
@@ -135,13 +135,13 @@
 **AC:**
 - [ ] Script: `scripts/migrate-to-wukong.sh`
 - [ ] Steps performed (with confirmation prompt before each destructive step):
-  1. Check `~/.cybernetix/` exists — warn and exit if not
-  2. Copy `~/.cybernetix/` → `~/.wukong/` (preserve all skills, conventions, config)
-  3. Rewrite `~/.wukong/config.yaml`: `cybernetix` paths → `wukong` paths
-  4. Remove old per-skill symlinks `~/.claude/skills/cnx-*`, `~/.gemini/skills/cnx-*`, etc.
+  1. Check `~/.wukong/` exists — warn and exit if not
+  2. Copy `~/.wukong/` → `~/.wukong/` (preserve all skills, conventions, config)
+  3. Rewrite `~/.wukong/config.yaml`: `wukong` paths → `wukong` paths
+  4. Remove old per-skill symlinks `~/.claude/skills/wk-*`, `~/.gemini/skills/wk-*`, etc.
   5. Run `wukong sync skills` to create new `wk-*` symlinks
-  6. Remove `~/.cybernetix/` (with final `[y/N]` confirmation)
-  7. Remove old `cybernetix` binary from PATH locations (`~/.local/bin/cybernetix`)
+  6. Remove `~/.wukong/` (with final `[y/N]` confirmation)
+  7. Remove old `wukong` binary from PATH locations (`~/.local/bin/wukong`)
   8. Print summary: what was migrated, what was removed, what needs manual action
 - [ ] Idempotent: safe to run twice
 - [ ] Dry-run mode: `--dry-run` prints what would happen without changing anything

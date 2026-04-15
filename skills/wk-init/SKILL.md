@@ -98,7 +98,7 @@ For each file (AGENTS.md / .claude/CLAUDE.md / GEMINI.md / .cursor-rules):
 
 **Merge** = keep the existing content as-is, append any CNX sections that are missing at the bottom.
 
-Run `cybernetix init . <type> <tools>` to generate the base convention files, then apply the above logic.
+Run `wukong init . <type> <tools>` to generate the base convention files, then apply the above logic.
 
 ---
 
@@ -162,7 +162,7 @@ my-project/
 
 Do NOT touch existing source code or directory structure.
 
-1. Run `cybernetix init . <detected-type> <detected-tools>` to generate convention files
+1. Run `wukong init . <detected-type> <detected-tools>` to generate convention files
 2. Handle each convention file with the overwrite/keep/merge logic above
 3. Scan existing directory structure (depth ≤ 3, exclude node_modules/.git/dist/build)
 4. Append a `## Project Structure` block to AGENTS.md (update if already exists, don't duplicate):

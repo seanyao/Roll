@@ -25,15 +25,15 @@ variants/wk-oc/
 
 ```bash
 # Create symlinks (recommended)
-ln -s ~/workspace/cybernetix/variants/wk-oc/skills/cnx \
+ln -s ~/workspace/wukong/variants/wk-oc/skills/cnx \
   ~/.openclaw/workspace/skills/cnx
 
 # Also link tools
-ln -s ~/workspace/cybernetix/tools/cnx-fetch \
-  ~/.openclaw/workspace/skills/cnx-fetch
+ln -s ~/workspace/wukong/tools/wk-fetch \
+  ~/.openclaw/workspace/skills/wk-fetch
 
-ln -s ~/workspace/cybernetix/tools/cnx-probe \
-  ~/.openclaw/workspace/skills/cnx-probe
+ln -s ~/workspace/wukong/tools/wk-probe \
+  ~/.openclaw/workspace/skills/wk-probe
 ```
 
 ## Usage
@@ -49,10 +49,10 @@ $cnx probe find orin                  # Node discovery
 
 ## Syncing with Upstream
 
-When cybernetix is updated, `wk-oc` automatically gets the updates:
+When wukong is updated, `wk-oc` automatically gets the updates:
 
 ```bash
-cd ~/workspace/cybernetix
+cd ~/workspace/wukong
 git pull origin main
 # Done! OpenClaw automatically uses the new version
 ```
@@ -62,7 +62,7 @@ git pull origin main
 To pin to a specific version:
 
 ```bash
-cd ~/workspace/cybernetix
+cd ~/workspace/wukong
 git checkout v1.2.3
 ```
 
@@ -71,12 +71,12 @@ git checkout v1.2.3
 | Feature | Cybernetix (Original) | CNX-OC (OpenClaw) |
 |------|-------------------|-------------------|
 | Invocation | Call individual skills directly | Unified `$cnx` entry point |
-| Tool name | `cnx-fetch` | `cnx-fetch` |
-| Tool name | `cnx-probe` | `cnx-probe` |
+| Tool name | `wk-fetch` | `wk-fetch` |
+| Tool name | `wk-probe` | `wk-probe` |
 | Integration | Standalone CLI | OpenClaw ecosystem |
 
 ## Maintenance
 
-- **Upstream**: github.com/seanyao/cybernetix
-- **Issue reporting**: Submit issues in the cybernetix repository
-- **Version**: Follows cybernetix main version
+- **Upstream**: github.com/seanyao/wukong
+- **Issue reporting**: Submit issues in the wukong repository
+- **Version**: Follows wukong main version
