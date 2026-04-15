@@ -18,7 +18,7 @@ This document describes Wukong's three-loop engineering architecture and its cor
 
 ## 1. Architecture Overview: Three Interlocking Loops
 
-CNX decomposes the software delivery lifecycle into three loops, each independently operable yet mutually reinforcing. Every loop inherits a set of classical methodologies and automates their execution through concrete Skills.
+Wukong decomposes the software delivery lifecycle into three loops, each independently operable yet mutually reinforcing. Every loop inherits a set of classical methodologies and automates their execution through concrete Skills.
 
 ```mermaid
 graph TB
@@ -80,7 +80,7 @@ In environments where multiple AI clients coexist, each client has its own confi
 
 ### 2.2 Technical Implementation
 
-CNX uses the `wukong` CLI to centralize configuration management and distribute it atomically.
+Wukong uses the `wukong` CLI to centralize configuration management and distribute it atomically.
 
 **2.2.1 Skill Mounting (`wukong setup`)**
 
@@ -264,7 +264,7 @@ The directory structure encodes four architectural constraints:
 
 ### 4.3 TCR-Driven Development: `$wk-story-build`
 
-This is CNX's core execution unit. Its engineering significance lies in a fundamental shift: **correctness is not determined by the AI's own assertions, but exclusively by the pass/fail status of automated tests**.
+This is Wukong's core execution unit. Its engineering significance lies in a fundamental shift: **correctness is not determined by the AI's own assertions, but exclusively by the pass/fail status of automated tests**.
 
 **TCR (Test && Commit || Revert) execution flow:**
 
@@ -318,7 +318,7 @@ The **Verification Gate** is the final checkpoint: it requires **live evidence**
 
 ### 4.4 Continuous Integration / Continuous Delivery: The Fast Feedback Infrastructure
 
-CI/CD is not an "add-on" to CNX — it is the **objective arbitration layer** for all of Loop B. Passing tests locally is a necessary condition, not a sufficient one. Local environments carry implicit dependencies, uncommitted state, and machine-specific configuration. CI re-executes the same code in a clean, deterministic environment, making it the final authority on whether something is truly deliverable.
+CI/CD is not an "add-on" to Wukong — it is the **objective arbitration layer** for all of Loop B. Passing tests locally is a necessary condition, not a sufficient one. Local environments carry implicit dependencies, uncommitted state, and machine-specific configuration. CI re-executes the same code in a clean, deterministic environment, making it the final authority on whether something is truly deliverable.
 
 **4.4.1 CI as Objective Arbiter**
 
@@ -345,7 +345,7 @@ If any check fails, the deployment pipeline halts automatically. There is no "de
 
 The later a defect is discovered, the more expensive it is to fix — this is not folk wisdom, it is an empirically supported engineering finding. A bug caught within 5 minutes of commit costs roughly the same as initial development to fix. Caught in a test environment, the cost multiplies by 10. Caught in production, by 100.
 
-CNX's TCR + CI combination compresses the feedback window to **minutes**:
+Wukong's TCR + CI combination compresses the feedback window to **minutes**:
 
 ```
 micro-commit (2–5 min granularity)

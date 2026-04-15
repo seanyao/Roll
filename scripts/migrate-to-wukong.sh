@@ -108,19 +108,44 @@ for ai_dir in "${AI_DIRS[@]}"; do
 done
 ok "Old cnx-* symlinks removed"
 
-# ─── Step 5: Run wukong sync skills ──────────────────────────────────────────
-step "Step 5: Install wk-* skill symlinks"
+# ─── Step 5: Install wukong binary symlink ───────────────────────────────────
+step "Step 5: Install wukong binary"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+BIN_SRC="$REPO_ROOT/bin/wukong"
+BIN_DST="$HOME/.local/bin/wukong"
+
+if [[ ! -f "$BIN_SRC" ]]; then
+  warn "bin/wukong not found at $BIN_SRC — skipping binary install"
+  warn "Run: bash $REPO_ROOT/install.sh"
+  skipped=$((skipped + 1))
+else
+  run "mkdir -p '$HOME/.local/bin'"
+  run "chmod +x '$BIN_SRC'"
+  run "ln -sf '$BIN_SRC' '$BIN_DST'"
+  ok "Linked: $BIN_DST → $BIN_SRC"
+  migrated=$((migrated + 1))
+
+  # Ensure ~/.local/bin is in PATH for this session
+  if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+    export PATH="$HOME/.local/bin:$PATH"
+    info "Added ~/.local/bin to PATH for this session"
+  fi
+fi
+
+# ─── Step 6: Run wukong sync skills ──────────────────────────────────────────
+step "Step 6: Install wk-* skill symlinks"
 if command -v wukong &>/dev/null; then
   run "wukong sync skills"
   ok "wk-* skill symlinks installed"
 else
-  warn "'wukong' not found in PATH."
-  info "Run install.sh first, then: wukong sync skills"
-  info "  bash $(dirname "$0")/../install.sh"
+  warn "'wukong' still not found in PATH."
+  info "Add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+  info "Then run: wukong sync skills"
 fi
 
-# ─── Step 6: Remove ~/.cybernetix/ ───────────────────────────────────────────
-step "Step 6: Remove ~/.cybernetix/"
+# ─── Step 7: Remove ~/.cybernetix/ ───────────────────────────────────────────
+step "Step 7: Remove ~/.cybernetix/"
 if [[ -d "$HOME/.cybernetix" ]]; then
   if confirm "Remove ~/.cybernetix/ now? (migration is complete without it)"; then
     run "rm -rf '$HOME/.cybernetix'"
@@ -132,8 +157,8 @@ if [[ -d "$HOME/.cybernetix" ]]; then
   fi
 fi
 
-# ─── Step 7: Remove old cybernetix binary ────────────────────────────────────
-step "Step 7: Remove old cybernetix binary"
+# ─── Step 8: Remove old cybernetix binary ────────────────────────────────────
+step "Step 8: Remove old cybernetix binary"
 OLD_BIN="$HOME/.local/bin/cybernetix"
 if [[ -L "$OLD_BIN" ]] || [[ -f "$OLD_BIN" ]]; then
   if confirm "Remove $OLD_BIN?"; then
@@ -164,6 +189,6 @@ else
   info "Next: verify with  wukong status"
   echo ""
   info "Manual action needed:"
-  echo "  • Rename your GitHub repo: github.com/seanyao/cybernetix → wukong"
   echo "  • Update any existing project CLAUDE.md that references @cnx.md → @wk.md"
+  echo "  • Reload your shell:  source ~/.zshrc  (or open a new terminal)"
 fi
