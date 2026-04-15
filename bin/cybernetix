@@ -840,8 +840,13 @@ check_sync_status() {
   local dst="$3"
 
   local display="${dst/#$HOME/~}"
+  local cnx_file
+  cnx_file="$(dirname "$dst")/cnx.md"
+
   if [[ ! -f "$dst" ]]; then
     echo -e "  ${RED}-${NC} $name: $display (not synced)"
+  elif [[ -f "$cnx_file" ]] && diff -q "$src" "$cnx_file" &>/dev/null 2>&1; then
+    echo -e "  ${GREEN}=${NC} $name: $display (in sync via @cnx.md)"
   elif diff -q "$src" "$dst" &>/dev/null 2>&1; then
     echo -e "  ${GREEN}=${NC} $name: $display (in sync)"
   else
