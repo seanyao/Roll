@@ -721,6 +721,16 @@ scan_project_type_from_files() {
   [[ -f "$dir/go.mod" || -f "$dir/main.go" || -f "$dir/main.py" || -f "$dir/app.py" \
     || -f "$dir/Cargo.toml" || -f "$dir/requirements.txt" || -f "$dir/pyproject.toml" ]] \
     && has_backend=true
+  # DB/ORM/server-side deps in package.json → backend signal
+  if [[ -f "$dir/package.json" ]]; then
+    grep -qiE '"prisma"|"@prisma/client"|"typeorm"|"sequelize"|"mongoose"|"drizzle-orm"|\
+"@neondatabase/serverless"|"pg"|"mysql2"|"mongodb"|"redis"|"ioredis"|\
+"express"|"fastify"|"koa"|"hapi"|"@hapi/hapi"|\
+"apollo-server"|"graphql-yoga"|"trpc"' "$dir/package.json" 2>/dev/null \
+      && has_backend=true
+  fi
+  # Prisma schema file is a definitive backend signal
+  [[ -f "$dir/prisma/schema.prisma" ]] && has_backend=true
 
   # CLI signals (bin/ with executables, or cmd/ layout common in Go CLIs)
   [[ -d "$dir/bin" || -d "$dir/cmd" ]] && has_cli=true
