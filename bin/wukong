@@ -1,0 +1,910 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wukong — AI Agent Convention Manager
+# Single source of truth for how all AI coding agents behave.
+
+VERSION="0.2.0"
+WK_HOME="${HOME}/.wukong"
+WK_CONFIG="${WK_HOME}/config.yaml"
+WK_GLOBAL="${WK_HOME}/conventions/global"
+WK_TEMPLATES="${WK_HOME}/conventions/templates"
+
+# Find repo root (resolve symlinks so it works from ~/.local/bin/wukong)
+_source="${BASH_SOURCE[0]}"
+while [[ -L "$_source" ]]; do
+  _dir="$(cd "$(dirname "$_source")" && pwd)"
+  _source="$(readlink "$_source")"
+  [[ "$_source" != /* ]] && _source="$_dir/$_source"
+done
+SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_CONVENTIONS="${REPO_ROOT}/conventions"
+
+# Colors
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+CYAN=$'\033[0;36m'
+BOLD=$'\033[1m'
+NC=$'\033[0m'
+
+# Respect NO_COLOR
+if [[ -n "${NO_COLOR:-}" ]]; then
+  RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
+fi
+
+info()  { echo -e "${CYAN}[wk]${NC} $*"; }
+ok()    { echo -e "${GREEN}[wk]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[wk]${NC} $*"; }
+err()   { echo -e "${RED}[wk]${NC} $*" >&2; }
+
+canonical_dir() {
+  local path="$1"
+  [[ -d "$path" ]] || return 1
+  (cd "$path" >/dev/null 2>&1 && pwd -P)
+}
+
+lower_name() {
+  echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# ─── Helper: read config value ───────────────────────────────────────────────
+config_get() {
+  local key="$1"
+  local default="${2:-}"
+  if [[ -f "$WK_CONFIG" ]]; then
+    local val
+    val=$(grep -E "^${key}:" "$WK_CONFIG" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    if [[ -n "$val" ]]; then
+      echo "${val/#\~/$HOME}"
+      return
+    fi
+  fi
+  echo "${default/#\~/$HOME}"
+}
+
+# ─── Helper: safe copy with overwrite prompt ─────────────────────────────────
+safe_copy() {
+  local src="$1"
+  local dst="$2"
+  local force="${3:-false}"
+
+  if [[ ! -f "$src" ]]; then
+    return
+  fi
+
+  local dst_dir
+  dst_dir="$(dirname "$dst")"
+  mkdir -p "$dst_dir"
+
+  if [[ -f "$dst" ]] && [[ "$force" != "true" ]]; then
+    if diff -q "$src" "$dst" &>/dev/null; then
+      return  # identical, skip silently
+    fi
+    echo ""
+    warn "File exists and differs: ${dst/#$HOME/~}"
+    echo -e "  ${BOLD}Overwrite?${NC} [y/N/d(iff)] "
+    read -r answer
+    case "$answer" in
+      d|D|diff)
+        diff --color=auto "$dst" "$src" || true
+        echo ""
+        echo -e "  ${BOLD}Overwrite?${NC} [y/N] "
+        read -r answer2
+        [[ "$answer2" =~ ^[Yy]$ ]] || { info "Skipped: ${dst/#$HOME/\~}"; return; }
+        ;;
+      y|Y) ;;
+      *) info "Skipped: ${dst/#$HOME/~}"; return ;;
+    esac
+  fi
+
+  cp "$src" "$dst"
+  ok "Wrote: ${dst/#$HOME/~}"
+}
+
+# ─── Internal: pull skills from repo → ~/.wukong/skills ──────────────────────
+_pull_skills() {
+  if [[ ! -d "$REPO_ROOT/skills" ]]; then
+    err "Skills source not found at: $REPO_ROOT/skills"
+    return 1
+  fi
+
+  mkdir -p "$WK_HOME/skills"
+  for skill_dir in "$REPO_ROOT"/skills/*/; do
+    if [[ -d "$skill_dir" ]]; then
+      local skill_name
+      skill_name="$(basename "$skill_dir")"
+      mkdir -p "$WK_HOME/skills/$skill_name"
+      for f in "$skill_dir"*; do
+        [[ -f "$f" ]] && cp "$f" "$WK_HOME/skills/$skill_name/$(basename "$f")"
+      done
+    fi
+  done
+}
+
+# ─── Internal: pull conventions from repo → ~/.wukong/conventions ────────────
+_pull_conventions() {
+  if [[ ! -d "$REPO_CONVENTIONS" ]]; then
+    err "Convention source not found at: $REPO_CONVENTIONS"
+    return 1
+  fi
+
+  mkdir -p "$WK_GLOBAL"
+  mkdir -p "$WK_TEMPLATES"/{fullstack,frontend-only,backend-service,cli}
+
+  info "Copying global conventions..."
+  for f in "$REPO_CONVENTIONS"/global/*; do
+    [[ -f "$f" ]] && safe_copy "$f" "$WK_GLOBAL/$(basename "$f")"
+  done
+  for f in "$REPO_CONVENTIONS"/global/.*; do
+    [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
+      safe_copy "$f" "$WK_GLOBAL/$(basename "$f")"
+  done
+
+  info "Copying project templates..."
+  for tpl_dir in "$REPO_CONVENTIONS"/templates/*/; do
+    local tpl_name
+    tpl_name="$(basename "$tpl_dir")"
+    for f in "$tpl_dir"*; do
+      [[ -f "$f" ]] && safe_copy "$f" "$WK_TEMPLATES/$tpl_name/$(basename "$f")"
+    done
+    for f in "$tpl_dir".*; do
+      [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
+        safe_copy "$f" "$WK_TEMPLATES/$tpl_name/$(basename "$f")"
+    done
+  done
+}
+
+# ─── Internal: install local cache from repo source ───────────────────────────
+_install_local() {
+  local force="${1:-false}"
+
+  if [[ ! -d "$REPO_CONVENTIONS" ]]; then
+    err "Convention source not found at: $REPO_CONVENTIONS"
+    err "Run this from the wukong repo, or symlink bin/wukong to PATH."
+    exit 1
+  fi
+
+  _pull_conventions
+  _pull_skills
+
+  # Create config if it doesn't exist
+  if [[ ! -f "$WK_CONFIG" ]]; then
+    info "Creating default config..."
+    cat > "$WK_CONFIG" << 'YAML'
+# Wukong Configuration
+# Edit this file, then run `wukong sync` to apply.
+
+# Sync targets: where global conventions are distributed to
+sync_claude: ~/.claude/CLAUDE.md
+sync_kimi: ~/.kimi/AGENTS.md
+sync_codex: ~/.codex/AGENTS.md
+sync_gemini: ~/.gemini/GEMINI.md
+
+# User preferences
+default_language: zh
+default_project_type: fullstack
+editor: ${EDITOR:-vim}
+YAML
+    ok "Created: ~/.wukong/config.yaml"
+  fi
+
+}
+
+# ─── Internal: create or repair per-skill symlinks (non-destructive) ─────────
+_link_skills() {
+  local force="${1:-false}"
+  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  local wk_skills_real repo_skills_real
+  wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
+  repo_skills_real="$(canonical_dir "$REPO_ROOT/skills" 2>/dev/null || true)"
+
+  for ai_dir in "${ai_dirs[@]}"; do
+    ai_dir=$(eval echo "$ai_dir")
+    [[ -d "$ai_dir" ]] || continue
+
+    local ai_name ai_dir_real skills_dir
+    ai_name=$(basename "$ai_dir")
+    ai_dir_real="$(canonical_dir "$ai_dir" 2>/dev/null || true)"
+    skills_dir="$ai_dir/skills"
+
+    if [[ -n "$ai_dir_real" && \
+          ( "$ai_dir_real" == "$REPO_ROOT" || "$ai_dir_real" == "$REPO_ROOT"/* ) ]]; then
+      warn "Skipped ~/${ai_name} (resolves to repo — refusing to manage skills inside wukong worktree)"
+      continue
+    fi
+
+    # Guard: resolve ALL symlink chains — block writing anywhere inside the repo
+    local skills_real
+    skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
+    if [[ -n "$skills_real" && -n "$repo_skills_real" && \
+          ( "$skills_real" == "$repo_skills_real" || "$skills_real" == "$repo_skills_real"/* ) ]]; then
+      warn "Skipped ~/${ai_name}/skills (resolves to repo — check if ~/$(lower_name "$ai_name") symlinks to wukong repo)"
+      continue
+    fi
+
+    # Handle legacy whole-dir symlink (still works; skip per-skill linking)
+    if [[ -L "$skills_dir" ]]; then
+      local skills_target
+      skills_target="$(readlink "$skills_dir")"
+      if [[ -n "$skills_real" && "$skills_real" == "$wk_skills_real" ]]; then
+        continue  # Old whole-dir symlink to WK skills — still functional
+      fi
+      warn "Skipped ~/${ai_name}/skills -> ${skills_target/#$HOME/~} (unknown symlink target)"
+      continue
+    fi
+
+    mkdir -p "$skills_dir"
+    skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
+    if [[ -n "$skills_real" && -n "$repo_skills_real" && \
+          ( "$skills_real" == "$repo_skills_real" || "$skills_real" == "$repo_skills_real"/* ) ]]; then
+      warn "Skipped ~/${ai_name}/skills (created path resolves to repo — refusing to write)"
+      continue
+    fi
+    local linked=0 repaired=0
+
+    for skill_dir in "$WK_HOME/skills"/*/; do
+      [[ -d "$skill_dir" ]] || continue
+      local skill_name
+      skill_name="$(basename "$skill_dir")"
+      local skill_link="$skills_dir/$skill_name"
+
+      if [[ -L "$skill_link" ]]; then
+        local current_target
+        current_target="$(readlink "$skill_link")"
+        if [[ "$current_target" != "$skill_dir" ]]; then
+          ln -sf "$skill_dir" "$skill_link"
+          repaired=$((repaired + 1))
+        fi
+        # correct symlink: skip silently
+      elif [[ ! -e "$skill_link" ]]; then
+        ln -s "$skill_dir" "$skill_link"
+        linked=$((linked + 1))
+      fi
+      # real file/dir at that path: skip — never touch user content
+    done
+    if [[ $((linked + repaired)) -gt 0 ]]; then
+      ok "Skills linked in ~/${ai_name}/skills (+${linked} new, ~${repaired} repaired)"
+    fi
+  done
+}
+
+# ─── Internal: sync conventions via @include — never overwrites user files ─────
+# Writes WK content to {ai_dir}/wk.md, appends @wk.md to main config.
+_sync_convention_for_tool() {
+  local src="$1"       # source: ~/.wukong/conventions/global/CLAUDE.md
+  local main_dst="$2"  # target: ~/.claude/CLAUDE.md
+  local force="$3"
+
+  [[ -f "$src" ]] || return
+  local dst_dir
+  dst_dir="$(dirname "$main_dst")"
+
+  # Only proceed if the AI tool directory already exists (except Claude, always create)
+  if [[ "$dst_dir" != "$HOME/.claude" ]] && [[ ! -d "$dst_dir" ]]; then
+    return
+  fi
+  mkdir -p "$dst_dir"
+
+  # Write/update wk.md — this is our file, always safe to overwrite
+  local wk_file="$dst_dir/wk.md"
+  if [[ "$force" == "true" ]] || ! diff -q "$src" "$wk_file" &>/dev/null 2>&1; then
+    cp "$src" "$wk_file"
+    ok "Wrote: ${wk_file/#$HOME/~}"
+  fi
+
+  # Append @wk.md include to main config — never overwrite existing content
+  if [[ ! -f "$main_dst" ]]; then
+    printf '@wk.md\n' > "$main_dst"
+    ok "Created: ${main_dst/#$HOME/~}"
+  elif ! grep -qF "@wk.md" "$main_dst" 2>/dev/null; then
+    printf '\n@wk.md\n' >> "$main_dst"
+    ok "Appended @wk.md to: ${main_dst/#$HOME/~}"
+  else
+    ok "Already included: ${main_dst/#$HOME/~}"
+  fi
+}
+
+_sync_conventions() {
+  local force="${1:-false}"
+
+  local claude_target kimi_target codex_target gemini_target
+  claude_target="$(config_get sync_claude ~/.claude/CLAUDE.md)"
+  kimi_target="$(config_get sync_kimi ~/.kimi/AGENTS.md)"
+  codex_target="$(config_get sync_codex ~/.codex/AGENTS.md)"
+  gemini_target="$(config_get sync_gemini ~/.gemini/GEMINI.md)"
+
+  _sync_convention_for_tool "$WK_GLOBAL/CLAUDE.md"  "$claude_target"  "$force"
+  _sync_convention_for_tool "$WK_GLOBAL/AGENTS.md"  "$kimi_target"    "$force"
+  _sync_convention_for_tool "$WK_GLOBAL/AGENTS.md"  "$codex_target"   "$force"
+  _sync_convention_for_tool "$WK_GLOBAL/GEMINI.md"  "$gemini_target"  "$force"
+}
+
+# ─── Internal: sync skills (pull + link) ──────────────────────────────────────
+_sync_skills() {
+  local force="${1:-false}"
+  info "Updating skills..."
+  _pull_skills
+  ok "Skills updated in ~/.wukong/skills"
+  info "Creating skill symlinks for AI tools..."
+  _link_skills "$force"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: setup
+# Initialize ~/.wukong/ on a new machine
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_setup() {
+  info "Setting up Wukong on this machine..."
+  echo ""
+
+  _install_local
+  echo ""
+  _sync_skills
+
+  echo ""
+  ok "Setup complete. Skills installed in ~/.wukong/"
+  echo ""
+  info "Next steps:"
+  echo "  Init a project:          ${BOLD}wukong init${NC}"
+  echo "  Add global conventions:  ${BOLD}wukong sync conventions${NC}"
+  echo "  Install git hook:        ${BOLD}wukong hooks install${NC}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: sync [scope] [--force]
+# Distribute global conventions and/or skills to each AI tool's config path
+# Scopes: conventions (default), skills, all
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_sync() {
+  if [[ ! -d "$WK_HOME" ]]; then
+    err "~/.wukong/ not found. Run 'wukong setup' first."
+    exit 1
+  fi
+
+  local scope="conventions"
+  local force=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=true; shift ;;
+      conventions|skills|all) scope="$1"; shift ;;
+      *) err "Unknown sync argument: $1"; exit 1 ;;
+    esac
+  done
+
+  info "Syncing ${scope}..."
+  echo ""
+
+  if [[ "$scope" == "conventions" || "$scope" == "all" ]]; then
+    _sync_conventions "$force"
+  fi
+  if [[ "$scope" == "skills" || "$scope" == "all" ]]; then
+    _sync_skills "$force"
+  fi
+
+  echo ""
+  ok "Sync complete."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: init [type] [tools]
+# Initialize a project with convention files from a template.
+# Always operates on the current directory (cwd).
+# Smart mode: if no type given and AGENTS.md already exists → auto-refresh.
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_init() {
+  if [[ ! -d "$WK_TEMPLATES" ]]; then
+    err "No templates found. Run 'wukong setup' first."
+    exit 1
+  fi
+
+  local project_type="${1:-}"
+  local tools_arg="${2:-}"
+  local project_dir
+  project_dir="$(pwd)"
+
+  # ── Auto-refresh (no explicit type, AGENTS.md exists in cwd) ─────────────
+  if [[ -z "$project_type" ]]; then
+    if [[ -f "$project_dir/AGENTS.md" ]]; then
+      info "Existing Wukong project detected. Re-merging from latest templates..."
+      echo ""
+      refresh_project "$project_dir"
+      echo ""
+      ok "Done."
+      return
+    fi
+  fi
+
+  # ── New project mode ──────────────────────────────────────────────────────
+  if [[ -z "$project_type" ]]; then
+    echo ""
+    echo -e "${BOLD}Select project type:${NC}"
+    echo ""
+    echo "  1) fullstack        React + API + CLI (default)"
+    echo "  2) frontend-only    React SPA, no backend"
+    echo "  3) backend-service  API/microservice, no frontend"
+    echo "  4) cli              Command-line tool"
+    echo ""
+    echo -n "Choice [1-4]: "
+    read -r choice
+    case "$choice" in
+      1|"") project_type="fullstack" ;;
+      2)    project_type="frontend-only" ;;
+      3)    project_type="backend-service" ;;
+      4)    project_type="cli" ;;
+      *)    err "Invalid choice: $choice"; exit 1 ;;
+    esac
+  fi
+
+  # AI tool selection
+  local use_claude=false use_gemini=false use_cursor=false
+
+  if [[ -n "$tools_arg" ]]; then
+    IFS=',' read -ra tool_list <<< "$tools_arg"
+    for t in "${tool_list[@]}"; do
+      case "$t" in
+        claude) use_claude=true ;;
+        gemini) use_gemini=true ;;
+        cursor) use_cursor=true ;;
+        all)    use_claude=true; use_gemini=true; use_cursor=true ;;
+        *) warn "Unknown tool: $t" ;;
+      esac
+    done
+  else
+    echo ""
+    echo -e "${BOLD}Which AI tools do you use?${NC} (space-separated, or 'a' for all)"
+    echo ""
+    echo "  c) Claude Code"
+    echo "  g) Gemini CLI"
+    echo "  k) Kimi        (uses AGENTS.md)"
+    echo "  r) Cursor IDE"
+    echo "  a) All of the above"
+    echo ""
+    echo -n "Choice [c/g/k/r/a] (default: c): "
+    read -r tool_choice
+    tool_choice="${tool_choice:-c}"
+    for ch in $tool_choice; do
+      case "$ch" in
+        c) use_claude=true ;;
+        g) use_gemini=true ;;
+        k) ;;  # Kimi reuses AGENTS.md — no extra file needed
+        r) use_cursor=true ;;
+        a) use_claude=true; use_gemini=true; use_cursor=true ;;
+      esac
+    done
+  fi
+
+  local tpl_dir="$WK_TEMPLATES/$project_type"
+  if [[ ! -d "$tpl_dir" ]]; then
+    err "Template not found: $project_type"
+    err "Available: fullstack, frontend-only, backend-service, cli"
+    exit 1
+  fi
+
+  info "Initializing ${BOLD}$project_type${NC} conventions in: $project_dir"
+  echo ""
+
+  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "AGENTS.md"
+
+  local created_files="AGENTS.md"
+  if [[ "$use_claude" == "true" ]]; then
+    mkdir -p "$project_dir/.claude"
+    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" ".claude/CLAUDE.md"
+    created_files+=", .claude/CLAUDE.md"
+  fi
+  if [[ "$use_gemini" == "true" ]]; then
+    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "GEMINI.md"
+    created_files+=", GEMINI.md"
+  fi
+  if [[ "$use_cursor" == "true" ]]; then
+    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" ".cursor-rules"
+    created_files+=", .cursor-rules"
+  fi
+
+  echo ""
+  ok "Convention files created for ${BOLD}$project_type${NC} project."
+  echo ""
+  info "Created: $created_files"
+  echo ""
+  info "Tip: use ${BOLD}\$wk-init${NC} in your AI coding agent to scaffold the full project structure."
+}
+
+# ─── Helper: merge global preamble + template into output ────────────────────
+merge_convention() {
+  local filename="$1"
+  local tpl_dir="$2"
+  local out_dir="$3"
+  local display="${4:-$filename}"
+  local global_file="$WK_GLOBAL/$filename"
+  local tpl_file="$tpl_dir/$filename"
+  local out_file="$out_dir/$filename"
+
+  if [[ ! -f "$tpl_file" ]]; then
+    return
+  fi
+
+  local merged
+  merged="$(cat "$global_file" 2>/dev/null || true)"
+  merged+=$'\n\n'
+  merged+="---"
+  merged+=$'\n\n'
+  merged+="$(cat "$tpl_file")"
+
+  if [[ -f "$out_file" ]]; then
+    if diff -q <(echo "$merged") "$out_file" &>/dev/null; then
+      return  # identical
+    fi
+    warn "File exists: $display"
+    echo -n "  [o] Overwrite  [k] Keep  [M] Merge (default): "
+    read -r answer
+    answer="${answer:-M}"
+    case "$answer" in
+      o|O)
+        ;;  # fall through to write
+      k|K)
+        info "Kept: $display"
+        return
+        ;;
+      m|M|"")
+        # Merge: append missing ## sections from template
+        local existing
+        existing="$(cat "$out_file")"
+        local appended=false
+        while IFS= read -r line; do
+          if [[ "$line" =~ ^##\  ]]; then
+            local heading="${line}"
+            if ! grep -qF "$heading" "$out_file" 2>/dev/null; then
+              printf '\n%s\n' "$heading" >> "$out_file"
+              appended=true
+            fi
+          elif [[ "$appended" == "true" ]]; then
+            printf '%s\n' "$line" >> "$out_file"
+          fi
+        done <<< "$(cat "$tpl_file")"
+        ok "Merged: $display"
+        return
+        ;;
+    esac
+  fi
+
+  echo "$merged" > "$out_file"
+  ok "Created: $display"
+}
+
+# ─── Helper: detect project type from existing AGENTS.md ─────────────────────
+detect_project_type() {
+  local agents_file="$1/AGENTS.md"
+  [[ -f "$agents_file" ]] || { echo "unknown"; return; }
+
+  local content
+  content="$(cat "$agents_file")"
+
+  if echo "$content" | grep -qi "Fullstack Web"; then
+    echo "fullstack"
+  elif echo "$content" | grep -qi "Backend Service"; then
+    echo "backend-service"
+  elif echo "$content" | grep -qi "Frontend Only"; then
+    echo "frontend-only"
+  elif echo "$content" | grep -qi "CLI Tool"; then
+    echo "cli"
+  else
+    echo "unknown"
+  fi
+}
+
+# ─── Helper: detect AI tools from existing convention files ──────────────────
+detect_tools() {
+  local dir="$1"
+  local tools=""
+  [[ -f "$dir/.claude/CLAUDE.md" ]] && tools+="claude,"
+  [[ -f "$dir/GEMINI.md" ]] && tools+="gemini,"
+  [[ -f "$dir/.cursor-rules" ]] && tools+="cursor,"
+  echo "${tools%,}"
+}
+
+# ─── Helper: refresh a single project ────────────────────────────────────────
+refresh_project() {
+  local project_dir="$1"
+  local project_name
+  project_name="$(basename "$project_dir")"
+
+  local ptype
+  ptype="$(detect_project_type "$project_dir")"
+
+  if [[ "$ptype" == "unknown" ]]; then
+    warn "  ${BOLD}$project_name${NC}: cannot detect project type — skipping"
+    return 1
+  fi
+
+  local tools
+  tools="$(detect_tools "$project_dir")"
+
+  local tpl_dir="$WK_TEMPLATES/$ptype"
+  if [[ ! -d "$tpl_dir" ]]; then
+    warn "  ${BOLD}$project_name${NC}: template '$ptype' not found — skipping"
+    return 1
+  fi
+
+  info "  ${BOLD}$project_name${NC} ($ptype | ${tools:-AGENTS.md only})"
+
+  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "  AGENTS.md"
+
+  if echo "$tools" | grep -q "claude"; then
+    mkdir -p "$project_dir/.claude"
+    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" "  .claude/CLAUDE.md"
+  fi
+  if echo "$tools" | grep -q "gemini"; then
+    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "  GEMINI.md"
+  fi
+  if echo "$tools" | grep -q "cursor"; then
+    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" "  .cursor-rules"
+  fi
+
+  return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: hooks <subcommand>
+# Manage the global git hook (opt-in — modifies git global config)
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_hooks() {
+  local subcmd="${1:-install}"
+
+  case "$subcmd" in
+    install)
+      local hooks_dir="$HOME/.config/git/hooks"
+      local hook_src="$REPO_ROOT/hooks/prepare-commit-msg"
+      local hook_dst="$hooks_dir/prepare-commit-msg"
+
+      if [[ ! -f "$hook_src" ]]; then
+        err "Hook source not found: $hook_src"
+        exit 1
+      fi
+
+      local current_hooks_path
+      current_hooks_path=$(git config --global core.hooksPath 2>/dev/null || echo "(not set)")
+
+      echo ""
+      warn "This will modify your global git configuration:"
+      echo "  git config --global core.hooksPath $hooks_dir"
+      echo ""
+      echo "  Current value: $current_hooks_path"
+      echo ""
+      if [[ "$current_hooks_path" != "(not set)" ]] && [[ "$current_hooks_path" != "$hooks_dir" ]]; then
+        warn "WARNING: Hooks at '$current_hooks_path' will stop running after this change."
+        echo ""
+      fi
+      echo -n "  Proceed? [y/N] "
+      read -r answer
+      [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted."; return; }
+
+      mkdir -p "$hooks_dir"
+      cp "$hook_src" "$hook_dst"
+      chmod +x "$hook_dst"
+      git config --global core.hooksPath "$hooks_dir"
+      ok "Global git hook installed (AI client auto-detected on every commit)"
+      ;;
+    remove)
+      git config --global --unset core.hooksPath 2>/dev/null && \
+        ok "Removed core.hooksPath from global git config" || \
+        info "core.hooksPath was not set"
+      ;;
+    *)
+      err "Unknown hooks subcommand: $subcmd"
+      echo "Usage: wukong hooks [install|remove]"
+      exit 1
+      ;;
+  esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: reset
+# Re-copy conventions and skills from repo source, then sync all with force
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_reset() {
+  warn "This will overwrite ~/.wukong/conventions/ and skills with repo defaults."
+  echo -n "  Continue? [y/N] "
+  read -r answer
+  [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted."; return; }
+
+  echo ""
+  info "Resetting local cache from repo..."
+  _install_local true
+
+  echo ""
+  ok "Reset complete. Force-syncing to AI tools..."
+  echo ""
+  cmd_sync all --force
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: status
+# Show current state of conventions
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_status() {
+  echo -e "${BOLD}Wukong Convention Status${NC}"
+  echo ""
+
+  if [[ -d "$WK_HOME" ]]; then
+    ok "~/.wukong/ exists"
+  else
+    err "~/.wukong/ not found — run 'wukong setup'"
+    return
+  fi
+
+  echo ""
+  echo -e "${BOLD}Global conventions:${NC}"
+  for f in AGENTS.md CLAUDE.md GEMINI.md .cursor-rules; do
+    if [[ -f "$WK_GLOBAL/$f" ]]; then
+      echo -e "  ${GREEN}+${NC} $f"
+    else
+      echo -e "  ${RED}-${NC} $f (missing)"
+    fi
+  done
+
+  echo ""
+  echo -e "${BOLD}Global skills:${NC}"
+  if [[ -d "$WK_HOME/skills" ]]; then
+    local count
+    count=$(find "$WK_HOME/skills" -maxdepth 1 -type d | wc -l | tr -d ' ')
+    count=$((count - 1))
+    echo -e "  ${GREEN}+${NC} ~/.wukong/skills ($count skills installed)"
+  else
+    echo -e "  ${RED}-${NC} ~/.wukong/skills (missing)"
+  fi
+
+  echo ""
+  echo -e "${BOLD}Sync targets:${NC}"
+
+  local claude_target kimi_target codex_target gemini_target
+  claude_target="$(config_get sync_claude ~/.claude/CLAUDE.md)"
+  kimi_target="$(config_get sync_kimi ~/.kimi/AGENTS.md)"
+  codex_target="$(config_get sync_codex ~/.codex/AGENTS.md)"
+  gemini_target="$(config_get sync_gemini ~/.gemini/GEMINI.md)"
+
+  check_sync_status "Claude Code" "$WK_GLOBAL/CLAUDE.md" "$claude_target"
+  check_sync_status "Kimi Code"   "$WK_GLOBAL/AGENTS.md"  "$kimi_target"
+  check_sync_status "Codex"       "$WK_GLOBAL/AGENTS.md"  "$codex_target"
+  check_sync_status "Gemini CLI"  "$WK_GLOBAL/GEMINI.md"  "$gemini_target"
+
+  echo ""
+  echo -e "${BOLD}Skill symlinks:${NC}"
+  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor)
+  local total_skills=0
+  local wk_skills_real
+  if [[ -d "$WK_HOME/skills" ]]; then
+    total_skills=$(find "$WK_HOME/skills" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')
+    wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
+  fi
+  for ai_dir in "${ai_dirs[@]}"; do
+    ai_dir=$(eval echo "$ai_dir")
+    [[ -d "$ai_dir" ]] || continue
+    local name
+    name=$(basename "$ai_dir" | sed 's/^\.//')
+    name=$(echo "$name" | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo "$name" | cut -c2-)
+    local name_lower
+    name_lower="$(lower_name "$name")"
+    local skills_dir="$ai_dir/skills"
+    if [[ -d "$skills_dir" ]]; then
+      if [[ -L "$skills_dir" ]]; then
+        local skills_target skills_real
+        skills_target="$(readlink "$skills_dir")"
+        skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
+        if [[ -n "$skills_real" && "$skills_real" == "$wk_skills_real" ]]; then
+          echo -e "  ${GREEN}=${NC} $name: ~/${name_lower}/skills -> ~/.wukong/skills (mounted)"
+        else
+          echo -e "  ${YELLOW}~${NC} $name: ~/${name_lower}/skills -> ${skills_target/#$HOME/~} (symlinked dir)"
+        fi
+        continue
+      fi
+
+      local linked_count
+      linked_count=$(find "$skills_dir" -maxdepth 1 -mindepth 1 -type l -name "wk-*" 2>/dev/null | wc -l | tr -d ' ')
+      if [[ "$linked_count" -eq "$total_skills" ]] && [[ "$total_skills" -gt 0 ]]; then
+        echo -e "  ${GREEN}=${NC} $name: ~/${name_lower}/skills ($linked_count/$total_skills skills linked)"
+      elif [[ "$linked_count" -gt 0 ]]; then
+        echo -e "  ${YELLOW}~${NC} $name: ~/${name_lower}/skills ($linked_count/$total_skills skills linked)"
+      else
+        echo -e "  ${RED}-${NC} $name: ~/${name_lower}/skills (0 wk skills linked)"
+      fi
+    else
+      echo -e "  ${RED}-${NC} $name: ~/${name_lower}/skills (not found)"
+    fi
+  done
+
+  echo ""
+  echo -e "${BOLD}Git hook:${NC}"
+  local hook_dst="$HOME/.config/git/hooks/prepare-commit-msg"
+  local hooks_path
+  hooks_path=$(git config --global core.hooksPath 2>/dev/null)
+  if [[ -f "$hook_dst" ]] && [[ "$hooks_path" == "$HOME/.config/git/hooks" ]]; then
+    echo -e "  ${GREEN}+${NC} prepare-commit-msg (global, AI client auto-detect)"
+  elif [[ -f "$hook_dst" ]]; then
+    echo -e "  ${YELLOW}~${NC} prepare-commit-msg exists but core.hooksPath not set"
+    echo -e "      run: wukong hooks install"
+  else
+    echo -e "  ${RED}-${NC} not installed (optional) — run 'wukong hooks install'"
+  fi
+
+  echo ""
+  echo -e "${BOLD}Templates:${NC}"
+  for tpl in fullstack frontend-only backend-service cli; do
+    if [[ -d "$WK_TEMPLATES/$tpl" ]]; then
+      local count
+      count=$(find "$WK_TEMPLATES/$tpl" -type f | wc -l | tr -d ' ')
+      echo -e "  ${GREEN}+${NC} $tpl ($count files)"
+    else
+      echo -e "  ${RED}-${NC} $tpl (missing)"
+    fi
+  done
+}
+
+check_sync_status() {
+  local name="$1"
+  local src="$2"
+  local dst="$3"
+
+  local display="${dst/#$HOME/~}"
+  if [[ ! -f "$dst" ]]; then
+    echo -e "  ${RED}-${NC} $name: $display (not synced)"
+  elif diff -q "$src" "$dst" &>/dev/null 2>&1; then
+    echo -e "  ${GREEN}=${NC} $name: $display (in sync)"
+  else
+    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync)"
+  fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+usage() {
+  echo -e "${BOLD}Wukong${NC} v${VERSION} — AI Agent Convention Manager"
+  echo ""
+  echo "Usage: wukong <command> [options]"
+  echo ""
+  echo "Commands:"
+  echo "  setup                  Initialize ~/.wukong/ + install skills"
+  echo "  sync [scope] [-f]      Distribute to AI tool config paths"
+  echo "  init [type]            Initialize or refresh project conventions (cwd)"
+  echo "  hooks [install|remove] Manage global git hook (opt-in)"
+  echo "  reset                  Reset ~/.wukong/ from repo, then force-sync"
+  echo "  status                 Show current state"
+  echo ""
+  echo "Sync scopes: conventions (default) | skills | all"
+  echo "Init types:  fullstack | frontend-only | backend-service | cli"
+  echo "Init tools:  claude,gemini,cursor,all"
+  echo ""
+  echo "Examples:"
+  echo "  wukong setup                    # First-time setup (non-invasive)"
+  echo "  wukong sync conventions         # Opt-in: add WK conventions via @include"
+  echo "  wukong sync skills -f           # Rebuild skill symlinks"
+  echo "  wukong hooks install            # Opt-in: global git hook"
+  echo "  wukong init fullstack           # New project (cwd)"
+  echo "  wukong init                     # Refresh existing project (cwd)"
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    setup)         cmd_setup "$@" ;;
+    sync)          cmd_sync "$@" ;;
+    init)          cmd_init "$@" ;;
+    hooks)         cmd_hooks "$@" ;;
+    reset)         cmd_reset "$@" ;;
+    status)        cmd_status "$@" ;;
+    version|--version|-v) echo "wukong v${VERSION}" ;;
+    help|--help|-h|"") usage ;;
+    *)
+      err "Unknown command: $cmd"
+      echo ""
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
