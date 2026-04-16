@@ -116,23 +116,24 @@ Installs a global `prepare-commit-msg` hook that automatically detects which AI 
 
 **2.2.3 Project-Level Configuration (`roll init`)**
 
-When generating convention files for a specific project, Roll applies a **Global + Template merge strategy**:
+`roll init` creates three workflow files in the current directory — instantly, with no prompts:
 
-```
-Final AGENTS.md = Global AGENTS.md (organization-level constraints)
-               + Template AGENTS.md (project-type constraints)
-```
+- `AGENTS.md` — global engineering constraints (copied from `~/.roll/conventions/global/`)
+- `BACKLOG.md` — empty task index
+- `docs/features/` — directory for story details and design documents
 
-Four project templates (`fullstack`, `frontend-only`, `backend-service`, `cli`) each predefine their own architectural constraints, technology stack choices, and testing requirements. Global constraints apply to every project; template constraints apply only to the matching type.
+For **existing projects** (AGENTS.md already present), `roll init` re-merges the global conventions section-by-section, preserving all existing project-specific content.
+
+Project-type templates (`conventions/templates/`) still exist as **reference material for skills** — `$roll-build` and `$roll-design` read them to infer conventions for a given project type. Users no longer select a type at init time.
 
 ### 2.3 Configuration Hierarchy
 
 ```
 Organization (Global)    ← Coding standards, Git discipline, TCR workflow, test standards
-  ↓ merge
-Project Type (Template)  ← Architectural patterns (DDD/Clean Arch), tech stack, directory layout
-  ↓ inject
+  ↓ roll init (direct copy, no type selection)
 Project Instance         ← AGENTS.md (constraints) + .claude/CLAUDE.md (client config)
+  (skills infer type from existing files)
+Project Type (Template)  ← Reference only — consulted by $roll-build / $roll-design at runtime
 ```
 
 ---
@@ -216,54 +217,30 @@ This separation keeps BACKLOG.md concise and readable as a progress dashboard, w
 | DevOps / CI-CD | Objective arbitration layer: CI is the final authority on "deliverable"; minute-level feedback loops compress defect discovery cost |
 | Defensive Programming | `$roll-spar`: adversarial TDD for high-risk paths |
 
-### 4.2 Project Scaffolding: `roll init`
+### 4.2 Project Initialization: `roll init`
 
-Standardizes project directory structure and CI configuration, eliminating the randomness of building from scratch.
+Creates the minimal workflow scaffold needed to start a Roll-managed project — no questions asked, no type selection, no directory scaffold.
 
-`roll init` applies the **Global + Template merge strategy** (see 2.2.3). Differences across project types primarily manifest in the **interaction layer**: frontend projects have a component tree and routing layer; CLI projects have command registration and interactive input; pure backend services have only an API interface layer. The complete structures for each template are as follows:
-
-**`fullstack` template:**
+**What `roll init` creates:**
 
 ```
 my-project/
-├── BACKLOG.md                       # Task index
-├── AGENTS.md                        # Engineering constraints
-├── docs/features/                   # Story details & design documents
-│
-├── src/
-│   ├── domains/                     # DDD domain core (entities, value objects, domain services)
-│   ├── app/                         # Application service layer (use-case orchestration)
-│   └── lib/                         # Cross-layer shared utilities
-│
-├── components/                      # UI component layer (React + shadcn/ui)
-│   ├── ui/                          # shadcn-generated — do not edit manually
-│   └── [feature]/                   # Business components (grouped by feature)
-│
-├── app/  (or pages/)                # Routing and page layer (Next.js App Router)
-│   ├── (routes)/                    # Page routes
-│   └── api/                         # API routes / BFF layer
-│
-├── tests/
-│   ├── unit/                        # Domain logic unit tests
-│   ├── integration/                 # Service layer integration tests
-│   └── e2e/                         # Critical-path end-to-end tests (Playwright)
-│
-├── .env.example                     # Environment variable template
-└── .github/workflows/
-    ├── ci.yml                       # Continuous integration
-    └── sentinel.yml                 # Automated patrol
+├── AGENTS.md            # Engineering constraints (from global conventions)
+├── BACKLOG.md           # Task index
+└── docs/features/       # Story details & design documents
 ```
 
-The remaining templates (`frontend-only`, `cli`, `backend-service`) differ only in their interaction layer — `BACKLOG.md`, `AGENTS.md`, `docs/features/`, `tests/`, and `.github/workflows/` remain consistent across all types.
+Three files. Under 5 seconds. Then `roll sync` to distribute conventions to AI tool configs.
 
-The directory structure encodes four architectural constraints:
+**Existing project (re-merge):**
 
-| Pattern | Where It Appears | Intent |
-|---------|-----------------|--------|
-| **Domain Driven** | `src/domains/` | Business logic decoupled from the framework; domain models have no dependency on the HTTP layer |
-| **EDA (Event-Driven Architecture)** | `src/domains/events/` | Cross-domain communication via events rather than direct calls, reducing coupling |
-| **API / CLI Separation** | `app/api/` + `bin/` | Interaction entry points are independent from business logic; the same domain can serve both Web and CLI simultaneously |
-| **Stateless** | No server-side session assumptions | Designed for Edge/Serverless deployment; horizontal scaling requires no session synchronization |
+When `AGENTS.md` already exists, `roll init` re-merges the global conventions section-by-section — adding any new sections from the global template while preserving all existing project-specific content.
+
+**Project structure is inferred, not declared:**
+
+Directory structure (`src/`, `api/`, `cmd/`, etc.) is created **on demand** by `$roll-build` and `$roll-design` as Stories are executed. Skills read existing project files (`package.json`, `go.mod`, directory layout) to infer conventions — the right structure emerges from evidence, not from an upfront type declaration.
+
+Project-type templates (`conventions/templates/fullstack/`, `cli/`, etc.) remain available as reference material for skills to consult.
 
 ### 4.3 TCR-Driven Development: `$roll-build`
 
@@ -362,7 +339,7 @@ The micro-step granularity constraint (2–5 min/Action) delivers a second benef
 
 **4.4.3 Two Independent Workflow Pipelines**
 
-The CI configuration generated by `roll init` contains two independent pipelines corresponding to different trigger scenarios:
+A Roll project's CI configuration typically contains two independent pipelines corresponding to different trigger scenarios:
 
 ```
 .github/workflows/
@@ -592,14 +569,11 @@ The key distinction lies in the shift of execution subject: these methodologies 
 |-------|-------|-------|--------|
 | `$roll-research` | Research | Research topic | Markdown / PDF research report |
 | `$roll-design` | Design | Requirements description | BACKLOG.md + docs/features/ |
-| `roll init` | Initialization | — | Standardized directory structure + CI config |
 | `$roll-build` | Implementation | Story ID / one-sentence requirement | Deployed code + verification evidence |
 | `$roll-spar` | Defensive implementation | Feature description | Adversarial test suite + implementation code |
 | `$roll-fix` | Bug fix | Fix ID | Fix code + regression test |
 | `$roll-sentinel` | Patrol | Patrol strategy | Health report / FIX entries |
 | `$roll-debug` | Debugging & Diagnosis | URL / Diagnostic JSON | Root cause analysis + remediation recommendations |
-| `$roll-fetch` | Intelligence | URL / keyword | Web fetch, search, crawl results |
-| `$roll-probe` | Monitoring | Target address | Node discovery, health check report |
 
 ## Appendix B: CLI Command Quick Reference
 
@@ -610,6 +584,6 @@ The key distinction lies in the shift of execution subject: these methodologies 
 | `roll sync skills` | Refresh skills and repair per-skill symlinks |
 | `roll sync all` | Run both conventions and skills sync |
 | `roll hook install` | Opt-in: install global git hook (requires confirmation) |
-| `roll init` | Generate project convention files in cwd (merges Global + Template) |
+| `roll init` | Create AGENTS.md + BACKLOG.md + docs/features/ in cwd (no prompts); re-merges if AGENTS.md exists |
 | `roll reset` | Reset `~/.roll/` from the repository source, then sync |
 | `roll status` | Display current configuration state, sync status, and skill links |
