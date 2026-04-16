@@ -1,4 +1,4 @@
-# Wukong Skill Selection Guide
+# Roll Skill Selection Guide
 
 Quickly select the right skill or tool.
 
@@ -6,48 +6,25 @@ Quickly select the right skill or tool.
 
 | User Intent | Skill | Description |
 |---------|-----------|------|
-| **"Not sure how to do it"** / **"There are several options"** | `wk-design` | Explore solutions, compare options, human decision-making |
-| **"Help me build a..."** (unclear requirements) | `wk-fly-build` | One-sentence request, AI auto-clarifies -> plans -> implements |
-| **"Implement US-001"** (with a clear story) | `wk-story-build` | Execute per BACKLOG.md, full delivery |
-| **"This logic is critical"** / **"Involves payment"** | `wk-spar` | Adversarial TDD, activate for high-risk scenarios |
-| **"Fix a bug"** / **"Change some copy"** | `wk-fix-build` | Quick fix, no full workflow |
-| **"Plan requirements"** / **"Split into stories"** | `wk-design` | Plan only, no implementation, outputs BACKLOG.md |
-| **"Run several Actions in parallel"** | `wk-story-build` | Auto-determines parallelism after splitting Actions |
-| **"Initialize project"** | `wk-init` | Create standard directory structure + BACKLOG.md |
-| **"Check production status"** | `wk-sentinel` | Production patrol, regression testing |
-| **"Debug this page"** | `wk-bb-debug` | Deep diagnosis, collect logs/network/DOM |
-
-## Tools
-
-| User Intent | Tool | Decision Logic |
-|---------|----------|---------|
-| **"Scrape a webpage"** / **"Crawl docs"** | `wk-fetch` | See fetch method selection below |
-| **"Find the Orin machine"** / **"Check nodes"** | `wk-probe` | `find` -> discover machines / `health` -> health check / `diagnose` -> full diagnosis |
-
-### wk-fetch Method Selection
-
-| Priority | Method | Condition | Description |
-|-------|------|------|------|
-| 1 | **Tavily API** | Has `TAVILY_API_KEY` | Best quality, AI-optimized extraction |
-| 2 | **LLM Native Fetch** | No Tavily | Use Kimi/Codex/Claude built-in fetch |
-| 3 | **Browser Automation** | First two failed | See browser-use selection |
-
-#### browser-use Selection
-
-| Condition | Choice | Command |
-|------|------|------|
-| Has `BROWSER_USE_API_KEY` | **Cloud** | `Agent(task=...)` |
-| `browser-use` installed | **Local** | `Browser(headless=True)` |
-| Neither available | **Skip** | Prompt user to configure |
+| **"Not sure how to do it"** / **"There are several options"** | `roll-design` | Explore solutions, compare options, human decision-making |
+| **"Help me build a..."** (unclear requirements) | `roll-build` | One-sentence request, AI auto-clarifies -> plans -> implements |
+| **"Implement US-001"** (with a clear story) | `roll-build` | Execute per BACKLOG.md, full delivery |
+| **"This logic is critical"** / **"Involves payment"** | `roll-spar` | Adversarial TDD, activate for high-risk scenarios |
+| **"Fix a bug"** / **"Change some copy"** | `roll-fix` | Quick fix, no full workflow |
+| **"Plan requirements"** / **"Split into stories"** | `roll-design` | Plan only, no implementation, outputs BACKLOG.md |
+| **"Run several Actions in parallel"** | `roll-build` | Auto-determines parallelism after splitting Actions |
+| **"Check production status"** | `roll-sentinel` | Production patrol, regression testing |
+| **"Debug this page"** | `roll-debug` | Deep diagnosis, collect logs/network/DOM |
+| **"Research this topic"** | `roll-research` | HV analysis deep research, outputs PDF report |
 
 ## Support Skills
 
 | Scenario | Skill | Trigger Timing |
 |------|-------|---------|
-| Celebrate after Build | `wk-.yeah` 🎉 | Auto-executes after successful Build |
-| Code self-review | `wk-.code-review` | Before Commit, or manually triggered |
-| Generate Changelog | `wk-.changelog` | Auto-triggered after successful Deploy |
-| QA test reference | `wk-.qa-cover` | Referenced when writing tests |
+| Code self-review | `roll-.review` | Before Commit, or manually triggered |
+| Generate Changelog | `roll-.changelog` | Auto-triggered after successful Deploy |
+| QA test reference | `roll-.qa` | Referenced when writing tests |
+| Intent clarification | `roll-.echo` | Auto-activates when user input is vague or unclear |
 
 ## Quick Decision Tree
 
@@ -56,32 +33,32 @@ User Input
     |
 +----------------------+
 | "Unsure about        |
-|  the approach?"      |--> wk-design
+|  the approach?"      |--> roll-design
 +----------------------+
     | No
 +----------------------+
 | "One-sentence        |
-|  request?"           |--> wk-fly-build
+|  request?"           |--> roll-build (fly mode)
 +----------------------+
     | No
 +----------------------+
-| "Has a US ID?"       |--> wk-story-build
+| "Has a US-XXX ID?"   |--> roll-build (story mode)
 +----------------------+
     | No
 +----------------------+
-| "Fix a bug?"         |--> wk-fix-build
+| "Has a FIX-XXX ID?"  |--> roll-fix
 +----------------------+
     | No
 +----------------------+
-| "Plan/split?"        |--> wk-design
+| "Fix a bug?"         |--> roll-fix
 +----------------------+
     | No
 +----------------------+
-| "Scrape a webpage?"  |--> wk-fetch
+| "Plan/split?"        |--> roll-design
 +----------------------+
     | No
 +----------------------+
-| "Find a machine?"    |--> wk-probe
+| "High-risk logic?"   |--> roll-spar
 +----------------------+
     | No
   Manual judgment
@@ -91,14 +68,10 @@ User Input
 
 | Skill | Trigger Keywords |
 |-------|-----------|
-| `wk-design` | "discuss", "compare options", "how to choose", "trade-offs", "not sure what to use", "design", "plan" |
-| `wk-fly-build` | "help me build", "add a feature", "change this", "refactor" |
-| `wk-story-build` | "implement US-", "do this story", "complete Action" |
-| `wk-fix-build` | "fix bug", "change copy", "adjust color", "error" |
-| `wk-design` | "plan", "split", "write stories", "requirements analysis" |
-| `wk-spar` | "adversarial", "attack-defense", "high-risk", "critical logic", "payment", "permissions", "security" |
-| `wk-story-build` | "parallel", "develop simultaneously", "dispatch", "multi-path" |
-| `wk-fetch` | "scrape", "crawl", "extract webpage", "get content" |
-| `wk-probe` | "find machine", "check node", "check Orin", "health check" |
-| `wk-sentinel` | "patrol", "check production", "regression test" |
-| `wk-bb-debug` | "debug", "diagnose", "page has issues", "black-box analysis" |
+| `roll-design` | "discuss", "compare options", "how to choose", "trade-offs", "not sure what to use", "design", "plan", "split", "write stories", "requirements analysis" |
+| `roll-build` | "help me build", "add a feature", "change this", "refactor", "implement US-", "do this story", "complete Action", "parallel", "develop simultaneously" |
+| `roll-fix` | "fix bug", "change copy", "adjust color", "error", "FIX-", "BUG-" |
+| `roll-spar` | "adversarial", "attack-defense", "high-risk", "critical logic", "payment", "permissions", "security" |
+| `roll-sentinel` | "patrol", "check production", "regression test" |
+| `roll-debug` | "debug", "diagnose", "page has issues", "black-box analysis" |
+| `roll-research` | "deep research", "research this", "competitive analysis", "HV analysis", "deep dive" |
