@@ -79,6 +79,19 @@ config_get() {
   echo "${default/#\~/$HOME}"
 }
 
+# ─── Helpers: read ai_* entries from config ──────────────────────────────────
+# Returns one "dir|config_file|convention_src" line per ai_* key in config.yaml
+_get_ai_tools() {
+  grep -E "^ai_[a-z]+:" "$WK_CONFIG" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//' | while IFS= read -r entry; do
+    echo "${entry/#\~/$HOME}"
+  done
+}
+
+# Extract fields from a "<dir>|<config>|<src>" entry
+_ai_dir()    { echo "$1" | cut -d'|' -f1; }
+_ai_config() { echo "$1" | cut -d'|' -f2; }
+_ai_src()    { echo "$1" | cut -d'|' -f3; }
+
 # ─── Helper: safe copy with overwrite prompt ─────────────────────────────────
 safe_copy() {
   local src="$1"
@@ -207,11 +220,14 @@ _install_local() {
 # Wukong Configuration
 # Edit this file, then run `wukong sync` to apply.
 
-# Sync targets: where global conventions are distributed to
-sync_claude: ~/.claude/CLAUDE.md
-sync_kimi: ~/.kimi/AGENTS.md
-sync_codex: ~/.codex/AGENTS.md
-sync_gemini: ~/.gemini/GEMINI.md
+# AI tools — each entry controls both convention sync and skill linking
+# Format: <name>: <dir>|<config_file>|<convention_src>
+ai_claude: ~/.claude|CLAUDE.md|CLAUDE.md
+ai_gemini: ~/.gemini|GEMINI.md|GEMINI.md
+ai_kimi: ~/.kimi|AGENTS.md|AGENTS.md
+ai_codex: ~/.codex|AGENTS.md|AGENTS.md
+ai_cursor: ~/.cursor|.cursor-rules|.cursor-rules
+ai_openclaw: ~/.openclaw/workspace|AGENTS.md|AGENTS.md
 
 # User preferences
 default_language: zh
@@ -226,13 +242,13 @@ YAML
 # ─── Internal: create or repair per-skill symlinks (non-destructive) ─────────
 _link_skills() {
   local force="${1:-false}"
-  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor ~/.openclaw/workspace)
   local wk_skills_real repo_skills_real
   wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
   repo_skills_real="$(canonical_dir "$REPO_ROOT/skills" 2>/dev/null || true)"
 
-  for ai_dir in "${ai_dirs[@]}"; do
-    ai_dir=$(eval echo "$ai_dir")
+  while IFS= read -r entry; do
+    local ai_dir
+    ai_dir="$(_ai_dir "$entry")"
     [[ -d "$ai_dir" ]] || continue
 
     local ai_name ai_dir_real skills_dir
@@ -316,7 +332,7 @@ _link_skills() {
     if [[ $((linked + repaired + pruned)) -gt 0 ]]; then
       ok "Skills linked in ~/${ai_name}/skills (+${linked} new, ~${repaired} repaired, -${pruned} pruned)  已在 ~/${ai_name}/skills 中创建软链接（新增 +${linked}，修复 ~${repaired}，清理 -${pruned}）"
     fi
-  done
+  done < <(_get_ai_tools)
 }
 
 # ─── Internal: sync conventions via @include — never overwrites user files ─────
@@ -458,6 +474,51 @@ _select_project_type() {
   esac
 }
 
+# ─── Helper: resolve AI tool flags from arg or interactive prompt ─────────────
+# Sets _WK_USE_CLAUDE / _WK_USE_GEMINI / _WK_USE_CURSOR in caller's scope.
+# Usage: _select_tools "<tools_arg>"   (empty string = interactive)
+_select_tools() {
+  local tools_arg="${1:-}"
+  _WK_USE_CLAUDE=false
+  _WK_USE_GEMINI=false
+  _WK_USE_CURSOR=false
+
+  if [[ -n "$tools_arg" ]]; then
+    IFS=',' read -ra tool_list <<< "$tools_arg"
+    for t in "${tool_list[@]}"; do
+      case "$t" in
+        claude) _WK_USE_CLAUDE=true ;;
+        gemini) _WK_USE_GEMINI=true ;;
+        cursor) _WK_USE_CURSOR=true ;;
+        all)    _WK_USE_CLAUDE=true; _WK_USE_GEMINI=true; _WK_USE_CURSOR=true ;;
+        *) warn "Unknown tool: $t  未知工具: $t" ;;
+      esac
+    done
+  else
+    echo ""
+    echo -e "${BOLD}Which AI tools do you use?${NC} (space-separated, or 'a' for all)"
+    echo ""
+    echo "  c) Claude Code"
+    echo "  g) Gemini CLI"
+    echo "  k) Kimi        (uses AGENTS.md)"
+    echo "  r) Cursor IDE"
+    echo "  a) All of the above"
+    echo ""
+    echo -n "Choice [c/g/k/r/a] (default: c): "
+    read -r tool_choice
+    tool_choice="${tool_choice:-c}"
+    for ch in $tool_choice; do
+      case "$ch" in
+        c) _WK_USE_CLAUDE=true ;;
+        g) _WK_USE_GEMINI=true ;;
+        k) ;;  # Kimi reuses AGENTS.md — no extra file needed
+        r) _WK_USE_CURSOR=true ;;
+        a) _WK_USE_CLAUDE=true; _WK_USE_GEMINI=true; _WK_USE_CURSOR=true ;;
+      esac
+    done
+  fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: init [type] [tools]
 # Initialize a project with convention files from a template.
@@ -532,42 +593,7 @@ cmd_init() {
   fi
 
   # AI tool selection
-  local use_claude=false use_gemini=false use_cursor=false
-
-  if [[ -n "$tools_arg" ]]; then
-    IFS=',' read -ra tool_list <<< "$tools_arg"
-    for t in "${tool_list[@]}"; do
-      case "$t" in
-        claude) use_claude=true ;;
-        gemini) use_gemini=true ;;
-        cursor) use_cursor=true ;;
-        all)    use_claude=true; use_gemini=true; use_cursor=true ;;
-        *) warn "Unknown tool: $t  未知工具: $t" ;;
-      esac
-    done
-  else
-    echo ""
-    echo -e "${BOLD}Which AI tools do you use?${NC} (space-separated, or 'a' for all)"
-    echo ""
-    echo "  c) Claude Code"
-    echo "  g) Gemini CLI"
-    echo "  k) Kimi        (uses AGENTS.md)"
-    echo "  r) Cursor IDE"
-    echo "  a) All of the above"
-    echo ""
-    echo -n "Choice [c/g/k/r/a] (default: c): "
-    read -r tool_choice
-    tool_choice="${tool_choice:-c}"
-    for ch in $tool_choice; do
-      case "$ch" in
-        c) use_claude=true ;;
-        g) use_gemini=true ;;
-        k) ;;  # Kimi reuses AGENTS.md — no extra file needed
-        r) use_cursor=true ;;
-        a) use_claude=true; use_gemini=true; use_cursor=true ;;
-      esac
-    done
-  fi
+  _select_tools "$tools_arg"
 
   local tpl_dir="$WK_TEMPLATES/$project_type"
   if [[ ! -d "$tpl_dir" ]]; then
@@ -582,14 +608,14 @@ cmd_init() {
   _WK_MERGE_SUMMARY=()
   merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "AGENTS.md"
 
-  if [[ "$use_claude" == "true" ]]; then
+  if [[ "$_WK_USE_CLAUDE" == "true" ]]; then
     mkdir -p "$project_dir/.claude"
     merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" ".claude/CLAUDE.md"
   fi
-  if [[ "$use_gemini" == "true" ]]; then
+  if [[ "$_WK_USE_GEMINI" == "true" ]]; then
     merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "GEMINI.md"
   fi
-  if [[ "$use_cursor" == "true" ]]; then
+  if [[ "$_WK_USE_CURSOR" == "true" ]]; then
     merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" ".cursor-rules"
   fi
 
