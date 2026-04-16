@@ -723,10 +723,7 @@ scan_project_type_from_files() {
     && has_backend=true
   # DB/ORM/server-side deps in package.json → backend signal
   if [[ -f "$dir/package.json" ]]; then
-    grep -qiE '"prisma"|"@prisma/client"|"typeorm"|"sequelize"|"mongoose"|"drizzle-orm"|\
-"@neondatabase/serverless"|"pg"|"mysql2"|"mongodb"|"redis"|"ioredis"|\
-"express"|"fastify"|"koa"|"hapi"|"@hapi/hapi"|\
-"apollo-server"|"graphql-yoga"|"trpc"' "$dir/package.json" 2>/dev/null \
+    grep -qiE '"prisma"|"@prisma/client"|"typeorm"|"sequelize"|"mongoose"|"drizzle-orm"|"@neondatabase/serverless"|"pg"|"mysql2"|"mongodb"|"redis"|"ioredis"|"express"|"fastify"|"koa"|"hapi"|"@hapi/hapi"|"apollo-server"|"graphql-yoga"|"trpc"' "$dir/package.json" 2>/dev/null \
       && has_backend=true
   fi
   # Prisma schema file is a definitive backend signal

@@ -66,3 +66,10 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$output" = "backend-service" ]
 }
+
+@test "scan: package.json with express (no frontend) → backend-service" {
+  echo '{"dependencies": {"express": "^4.18.0"}}' > "$TEST_TMP/package.json"
+  run scan_project_type_from_files "$TEST_TMP"
+  [ "$status" -eq 0 ]
+  [ "$output" = "backend-service" ]
+}
