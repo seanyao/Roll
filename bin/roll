@@ -304,8 +304,8 @@ _link_skills() {
     fi
     local linked=0 repaired=0 pruned=0
 
-    # Prune stale wk-* symlinks pointing to skills no longer in ~/.roll/skills/
-    for link in "$skills_dir"/wk-*; do
+    # Prune stale roll-* symlinks pointing to skills no longer in ~/.roll/skills/
+    for link in "$skills_dir"/roll-*; do
       [[ -L "$link" ]] || continue
       local link_target
       link_target="$(readlink "$link")"
@@ -1129,8 +1129,8 @@ cmd_status() {
   local total_skills=0
   local wk_skills_real
   if [[ -d "$ROLL_HOME/skills" ]]; then
-    # Count only wk-* skill dirs to match the linked_count scope below
-    total_skills=$(find "$ROLL_HOME/skills" -maxdepth 1 -mindepth 1 -type d -name "wk-*" | wc -l | tr -d ' ')
+    # Count roll-* skill dirs to match the linked_count scope below
+    total_skills=$(find "$ROLL_HOME/skills" -maxdepth 1 -mindepth 1 -type d -name "roll-*" | wc -l | tr -d ' ')
     wk_skills_real="$(canonical_dir "$ROLL_HOME/skills" 2>/dev/null || true)"
   fi
   while IFS= read -r _entry; do
@@ -1158,13 +1158,13 @@ cmd_status() {
 
       local linked_count skills_display
       skills_display="${skills_dir/#$HOME/~}"
-      linked_count=$(find "$skills_dir" -maxdepth 1 -mindepth 1 -type l -name "wk-*" 2>/dev/null | wc -l | tr -d ' ')
+      linked_count=$(find "$skills_dir" -maxdepth 1 -mindepth 1 -type l -name "roll-*" 2>/dev/null | wc -l | tr -d ' ')
       if [[ "$linked_count" -eq "$total_skills" ]] && [[ "$total_skills" -gt 0 ]]; then
         echo -e "  ${GREEN}=${NC} $name: $skills_display ($linked_count/$total_skills skills linked)"
       elif [[ "$linked_count" -gt 0 ]]; then
         echo -e "  ${YELLOW}~${NC} $name: $skills_display ($linked_count/$total_skills skills linked)"
       else
-        echo -e "  ${RED}-${NC} $name: $skills_display (0 wk skills linked / 0 个 wk 技能已链接)"
+        echo -e "  ${RED}-${NC} $name: $skills_display (no roll-* skills linked / 未链接 roll-* 技能)"
       fi
     else
       echo -e "  ${RED}-${NC} $name: ${skills_dir/#$HOME/~} (not found / 未找到)"
