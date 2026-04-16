@@ -425,10 +425,22 @@ cmd_setup() {
 
   echo ""
   ok "Setup complete.  初始化完成。"
+
+  # Offer git hook install if not already installed (interactive terminals only)
+  local hook_dst="$HOME/.config/git/hooks/prepare-commit-msg"
+  local hooks_path
+  hooks_path=$(git config --global core.hooksPath 2>/dev/null || true)
+  if [[ -t 0 ]] && { [[ ! -f "$hook_dst" ]] || [[ "$hooks_path" != "$HOME/.config/git/hooks" ]]; }; then
+    echo ""
+    echo -n "  Install global git hook (tags commits with AI client)? [y/N] "
+    read -r _hook_ans
+    if [[ "${_hook_ans:-N}" =~ ^[Yy]$ ]]; then
+      cmd_hook install
+    fi
+  fi
+
   echo ""
-  info "Next steps:  后续步骤："
-  echo "  Init a project:   ${BOLD}roll init${NC}              初始化项目"
-  echo "  Install git hook: ${BOLD}roll hook install${NC}  安装 git hook（可选）"
+  info "Next: run ${BOLD}roll init${NC} inside a project to initialize it.  下一步：在项目目录运行 roll init"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
