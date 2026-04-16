@@ -27,3 +27,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Claude Code agent worktrees (auto-created, should not be tracked)
+.claude/worktrees/
