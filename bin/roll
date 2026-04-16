@@ -286,9 +286,11 @@ _link_skills() {
       if [[ -n "$skills_real" && "$skills_real" == "$wk_skills_real" ]]; then
         continue  # Whole-dir symlink to WK skills — still functional
       fi
-      # Dangling or stale symlink (e.g. old ~/.cybernetix/skills) — remove and recreate as per-skill links
-      if [[ -z "$skills_real" ]]; then
-        info "Removing dangling symlink ~/${ai_name}/skills -> ${skills_target/#$HOME/~}  正在移除悬空软链接 ~/${ai_name}/skills -> ${skills_target/#$HOME/~}"
+      # Dangling or legacy whole-dir symlink — remove and recreate as per-skill links
+      if [[ -z "$skills_real" ]] || \
+         [[ "$skills_target" == *"cybernetix"* ]] || \
+         [[ "$skills_target" == *"wukong"* ]]; then
+        info "Removing legacy symlink ~/${ai_name}/skills -> ${skills_target/#$HOME/~}  正在移除遗留软链接 ~/${ai_name}/skills -> ${skills_target/#$HOME/~}"
         rm "$skills_dir"
       else
         warn "Skipped ~/${ai_name}/skills -> ${skills_target/#$HOME/~} (unknown symlink target)  已跳过 ~/${ai_name}/skills -> ${skills_target/#$HOME/~}（未知软链接目标）"
