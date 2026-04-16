@@ -66,9 +66,10 @@
 ---
 
 <a id="us-cli-003"></a>
-## US-CLI-003 skills 加入 Project Context Rule — 觀察再行動 📋
+## US-CLI-003 skills 加入 Project Context Rule — 觀察再行動 ✅
 
 **Created**: 2026-04-16
+**Completed**: 2026-04-16
 **Plan**: [cli-simplification-plan.md](cli-simplification-plan.md)
 
 - As a developer using `$roll-build` or `$roll-design`
@@ -76,11 +77,11 @@
 - So that they create files in the right place without me having to explain the project type
 
 **AC:**
-- [ ] `roll-build/SKILL.md` 加入 Project Context Rule 章節（位於 Hard Rules 之前）
-- [ ] `roll-design/SKILL.md` 加入同樣的 Project Context Rule
-- [ ] `roll-fix/SKILL.md` 加入同樣的 Project Context Rule
-- [ ] Rule 內容：讀 package.json、現有目錄結構、語言文件（go.mod/Cargo.toml 等），推斷慣例，不假設類型，沿用已有模式
-- [ ] `npm test` 全部通過（skills 是 .md 文件，測試不受影響）
+- [x] `roll-build/SKILL.md` 加入 Project Context Rule 章節（位於 Hard Rules 之前）
+- [x] `roll-design/SKILL.md` 加入同樣的 Project Context Rule
+- [x] `roll-fix/SKILL.md` 加入同樣的 Project Context Rule
+- [x] Rule 內容：讀 package.json、現有目錄結構、語言文件（go.mod/Cargo.toml 等），推斷慣例，不假設類型，沿用已有模式
+- [x] `npm test` 全部通過（skills 是 .md 文件，測試不受影響）
 
 **Files:**
 - `skills/roll-build/SKILL.md`
