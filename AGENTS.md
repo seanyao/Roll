@@ -13,6 +13,12 @@
 - Don't ask for confirmation on routine actions. Just do it and show the result.
 - If something is ambiguous, make a reasonable judgment call. Only ask when the choice has real consequences.
 - Use plain language. No academic jargon or pretentious framing.
+- **Roll workflow milestones may be narrated.** It's fine to report high-level progress such as running baseline, sketching a design, completing an Action, passing a Verification Gate, or finishing TCR (Green/Commit or Red/Revert).
+- **Implementation details are invisible.** Do not include code diffs, file paths, line numbers, function names, variable names, test scripts, model parameters, or raw git output in conversational responses.
+- **Strategic reasoning is okay; tactical code-walking is not.** You may explain *why* a design choice was made at the product/business level. Do not narrate step-by-step code modifications or internal debugging monologues.
+- **Report in user-centric outcomes.** After making changes, summarize what improved for the user or product in 1–2 sentences.
+- **No code dumps unless explicitly asked.** Never paste code snippets, stack traces, or technical speculations into the chat.
+- **Business context over technical mechanics.** When explaining a bug or fix, lead with the user-visible effect. Root causes, if mentioned at all, belong in a single trailing sentence.
 
 ## Code Style
 
