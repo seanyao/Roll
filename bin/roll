@@ -1488,8 +1488,14 @@ check_sync_status() {
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 usage() {
-  echo -e "${BOLD}Roll${NC} v${VERSION} — AI Agent Convention Manager"
-  echo -e "  AI 编码惯例管理器"
+  echo -e "${CYAN} ██████╗  ██████╗ ██╗     ██╗     ${NC}"
+  echo -e "${CYAN} ██╔══██╗██╔═══██╗██║     ██║     ${NC}"
+  echo -e "${CYAN} ██████╔╝██║   ██║██║     ██║     ${NC}"
+  echo -e "${CYAN} ██╔══██╗██║   ██║██║     ██║     ${NC}"
+  echo -e "${CYAN} ██║  ██║╚██████╔╝███████╗███████╗${NC}"
+  echo -e "${CYAN} ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝${NC}"
+  echo ""
+  echo -e "  ${BOLD}v${VERSION}${NC} — Roll out features with AI agents"
   echo ""
   echo "Usage: roll <command> [options]"
   echo "用法:  roll <command> [options]"
