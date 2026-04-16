@@ -5,9 +5,10 @@
 ---
 
 <a id="us-cli-001"></a>
-## US-CLI-001 精簡 cmd_init() — 移除類型選擇和 scaffold，三步極簡 init 📋
+## US-CLI-001 精簡 cmd_init() — 移除類型選擇和 scaffold，三步極簡 init ✅
 
 **Created**: 2026-04-16
+**Completed**: 2026-04-16
 **Plan**: [cli-simplification-plan.md](cli-simplification-plan.md)
 
 - As a developer starting a new project
@@ -15,19 +16,19 @@
 - So that I can start working in under 5 seconds with zero friction
 
 **AC:**
-- [ ] `roll init`（新項目）：創建 AGENTS.md + BACKLOG.md + docs/features/，無任何交互提示
-- [ ] `roll init`（已有 AGENTS.md）：re-merge 全局約定，提示 `roll sync`
-- [ ] `roll init` 不再問類型（fullstack/cli 等）
-- [ ] `roll init` 不再問工具（claude/gemini/cursor）
-- [ ] `roll init` 不再 scaffold 任何 src/api/cmd/ 目錄
-- [ ] 刪除函數：`_select_project_type`, `_select_tools`, `scaffold_new_project`, `scaffold_legacy_project`, `_init_auto`, `_init_new`, `_init_refresh`, `_detect_and_prompt_type`
-- [ ] `cmd_init()` 函數體 ≤ 35 行
-- [ ] `tests/integration/cmd_init.bats` 重寫：5 個精準測試覆蓋新行為
-- [ ] `npm test` 全部通過
+- [x] `roll init`（新項目）：創建 AGENTS.md + BACKLOG.md + docs/features/，無任何交互提示
+- [x] `roll init`（已有 AGENTS.md）：re-merge 全局約定，提示 `roll sync`
+- [x] `roll init` 不再問類型（fullstack/cli 等）
+- [x] `roll init` 不再問工具（claude/gemini/cursor）
+- [x] `roll init` 不再 scaffold 任何 src/api/cmd/ 目錄
+- [x] 刪除函數：`_select_project_type`, `_select_tools`, `scaffold_new_project`, `scaffold_legacy_project`, `_init_auto`, `_init_new`, `_init_refresh`, `_detect_and_prompt_type`
+- [x] `cmd_init()` 函數體 ≤ 35 行 (實際 24 行)
+- [x] `tests/integration/cmd_init.bats` 重寫：6 個精準測試覆蓋新行為
+- [x] `npm test` 全部通過
 
 **Files:**
-- `bin/roll` (cmd_init 及相關函數，大幅刪減)
-- `tests/integration/cmd_init.bats` (重寫)
+- `bin/roll` (cmd_init 重寫 24 行，刪除 8 函數，淨減 ~300 行)
+- `tests/integration/cmd_init.bats` (重寫，13 → 6 tests)
 
 **Dependencies:**
 - Depends on: —
