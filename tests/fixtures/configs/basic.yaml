@@ -1,0 +1,5 @@
+# Test config
+sync_claude: ~/.claude/CLAUDE.md
+sync_gemini: ~/.gemini/GEMINI.md
+editor: vim
+empty_val:
