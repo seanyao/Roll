@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Wukong — AI Agent Convention Manager
+# Roll — AI Agent Convention Manager
 # Single source of truth for how all AI coding agents behave.
 
 VERSION="0.2.0"
-WK_HOME="${WK_HOME:-${HOME}/.wukong}"
-WK_CONFIG="${WK_HOME}/config.yaml"
-WK_GLOBAL="${WK_HOME}/conventions/global"
-WK_TEMPLATES="${WK_HOME}/conventions/templates"
+ROLL_HOME="${ROLL_HOME:-${HOME}/.roll}"
+ROLL_CONFIG="${ROLL_HOME}/config.yaml"
+ROLL_GLOBAL="${ROLL_HOME}/conventions/global"
+ROLL_TEMPLATES="${ROLL_HOME}/conventions/templates"
 
-# Find repo root (resolve symlinks so it works from ~/.local/bin/wukong)
+# Find repo root (resolve symlinks so it works from ~/.local/bin/roll)
 _source="${BASH_SOURCE[0]}"
 while [[ -L "$_source" ]]; do
   _dir="$(cd "$(dirname "$_source")" && pwd)"
@@ -68,9 +68,9 @@ lower_name() {
 config_get() {
   local key="$1"
   local default="${2:-}"
-  if [[ -f "$WK_CONFIG" ]]; then
+  if [[ -f "$ROLL_CONFIG" ]]; then
     local val
-    val=$(grep -E "^${key}:" "$WK_CONFIG" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    val=$(grep -E "^${key}:" "$ROLL_CONFIG" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
     if [[ -n "$val" ]]; then
       echo "${val/#\~/$HOME}"
       return
@@ -82,7 +82,7 @@ config_get() {
 # ─── Helpers: read ai_* entries from config ──────────────────────────────────
 # Returns one "dir|config_file|convention_src" line per ai_* key in config.yaml
 _get_ai_tools() {
-  grep -E "^ai_[a-z]+:" "$WK_CONFIG" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//' | while IFS= read -r entry; do
+  grep -E "^ai_[a-z]+:" "$ROLL_CONFIG" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//' | while IFS= read -r entry; do
     echo "${entry/#\~/$HOME}"
   done
 }
@@ -131,30 +131,30 @@ safe_copy() {
   ok "Wrote: ${dst/#$HOME/~}  已写入: ${dst/#$HOME/~}"
 }
 
-# ─── Internal: pull skills from repo → ~/.wukong/skills ──────────────────────
+# ─── Internal: pull skills from repo → ~/.roll/skills ──────────────────────
 _pull_skills() {
   if [[ ! -d "$REPO_ROOT/skills" ]]; then
     err "Skills source not found at: $REPO_ROOT/skills  技能源目录未找到: $REPO_ROOT/skills"
     return 1
   fi
 
-  mkdir -p "$WK_HOME/skills"
+  mkdir -p "$ROLL_HOME/skills"
 
-  # Copy/update skills from repo → ~/.wukong/skills/
+  # Copy/update skills from repo → ~/.roll/skills/
   for skill_dir in "$REPO_ROOT"/skills/*/; do
     if [[ -d "$skill_dir" ]]; then
       local skill_name
       skill_name="$(basename "$skill_dir")"
-      mkdir -p "$WK_HOME/skills/$skill_name"
+      mkdir -p "$ROLL_HOME/skills/$skill_name"
       for f in "$skill_dir"*; do
-        [[ -f "$f" ]] && cp "$f" "$WK_HOME/skills/$skill_name/$(basename "$f")"
+        [[ -f "$f" ]] && cp "$f" "$ROLL_HOME/skills/$skill_name/$(basename "$f")"
       done
     fi
   done
 
   # Prune skills that no longer exist in repo.
-  # ~/.wukong/skills/ is wukong's controlled namespace — safe to clean up.
-  for installed_dir in "$WK_HOME/skills"/*/; do
+  # ~/.roll/skills/ is roll's controlled namespace — safe to clean up.
+  for installed_dir in "$ROLL_HOME/skills"/*/; do
     [[ -d "$installed_dir" ]] || continue
     local installed_name
     installed_name="$(basename "$installed_dir")"
@@ -167,23 +167,23 @@ _pull_skills() {
   done
 }
 
-# ─── Internal: pull conventions from repo → ~/.wukong/conventions ────────────
+# ─── Internal: pull conventions from repo → ~/.roll/conventions ────────────
 _pull_conventions() {
   if [[ ! -d "$REPO_CONVENTIONS" ]]; then
     err "Convention source not found at: $REPO_CONVENTIONS  约定源文件未找到: $REPO_CONVENTIONS"
     return 1
   fi
 
-  mkdir -p "$WK_GLOBAL"
-  mkdir -p "$WK_TEMPLATES"/{fullstack,frontend-only,backend-service,cli}
+  mkdir -p "$ROLL_GLOBAL"
+  mkdir -p "$ROLL_TEMPLATES"/{fullstack,frontend-only,backend-service,cli}
 
   info "Copying global conventions...  正在复制全局约定..."
   for f in "$REPO_CONVENTIONS"/global/*; do
-    [[ -f "$f" ]] && safe_copy "$f" "$WK_GLOBAL/$(basename "$f")"
+    [[ -f "$f" ]] && safe_copy "$f" "$ROLL_GLOBAL/$(basename "$f")"
   done
   for f in "$REPO_CONVENTIONS"/global/.*; do
     [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
-      safe_copy "$f" "$WK_GLOBAL/$(basename "$f")"
+      safe_copy "$f" "$ROLL_GLOBAL/$(basename "$f")"
   done
 
   info "Copying project templates...  正在复制项目模板..."
@@ -191,11 +191,11 @@ _pull_conventions() {
     local tpl_name
     tpl_name="$(basename "$tpl_dir")"
     for f in "$tpl_dir"*; do
-      [[ -f "$f" ]] && safe_copy "$f" "$WK_TEMPLATES/$tpl_name/$(basename "$f")"
+      [[ -f "$f" ]] && safe_copy "$f" "$ROLL_TEMPLATES/$tpl_name/$(basename "$f")"
     done
     for f in "$tpl_dir".*; do
       [[ -f "$f" ]] && [[ "$(basename "$f")" != "." ]] && [[ "$(basename "$f")" != ".." ]] && \
-        safe_copy "$f" "$WK_TEMPLATES/$tpl_name/$(basename "$f")"
+        safe_copy "$f" "$ROLL_TEMPLATES/$tpl_name/$(basename "$f")"
     done
   done
 }
@@ -206,7 +206,7 @@ _install_local() {
 
   if [[ ! -d "$REPO_CONVENTIONS" ]]; then
     err "Convention source not found at: $REPO_CONVENTIONS  约定源文件未找到: $REPO_CONVENTIONS"
-    err "Run this from the wukong repo, or symlink bin/wukong to PATH.  请在 wukong 仓库目录下运行，或将 bin/wukong 软链接到 PATH。"
+    err "Run this from the roll repo, or symlink bin/roll to PATH.  请在 roll 仓库目录下运行，或将 bin/roll 软链接到 PATH。"
     exit 1
   fi
 
@@ -214,11 +214,11 @@ _install_local() {
   _pull_skills
 
   # Create config if it doesn't exist
-  if [[ ! -f "$WK_CONFIG" ]]; then
+  if [[ ! -f "$ROLL_CONFIG" ]]; then
     info "Creating default config...  正在创建默认配置..."
-    cat > "$WK_CONFIG" << 'YAML'
-# Wukong Configuration
-# Edit this file, then run `wukong sync` to apply.
+    cat > "$ROLL_CONFIG" << 'YAML'
+# Roll Configuration
+# Edit this file, then run `roll sync` to apply.
 
 # AI tools — each entry controls both convention sync and skill linking
 # Format: <name>: <dir>|<config_file>|<convention_src>
@@ -234,7 +234,7 @@ default_language: zh
 default_project_type: fullstack
 editor: ${EDITOR:-vim}
 YAML
-    ok "Created: ~/.wukong/config.yaml  已创建: ~/.wukong/config.yaml"
+    ok "Created: ~/.roll/config.yaml  已创建: ~/.roll/config.yaml"
   fi
 
 }
@@ -243,7 +243,7 @@ YAML
 _link_skills() {
   local force="${1:-false}"
   local wk_skills_real repo_skills_real
-  wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
+  wk_skills_real="$(canonical_dir "$ROLL_HOME/skills" 2>/dev/null || true)"
   repo_skills_real="$(canonical_dir "$REPO_ROOT/skills" 2>/dev/null || true)"
 
   while IFS= read -r entry; do
@@ -258,7 +258,7 @@ _link_skills() {
 
     if [[ -n "$ai_dir_real" && \
           ( "$ai_dir_real" == "$REPO_ROOT" || "$ai_dir_real" == "$REPO_ROOT"/* ) ]]; then
-      warn "Skipped ~/${ai_name} (resolves to repo — refusing to manage skills inside wukong worktree)  已跳过 ~/${ai_name}（解析到仓库目录 — 拒绝在 wukong worktree 内管理技能）"
+      warn "Skipped ~/${ai_name} (resolves to repo — refusing to manage skills inside roll worktree)  已跳过 ~/${ai_name}（解析到仓库目录 — 拒绝在 roll worktree 内管理技能）"
       continue
     fi
 
@@ -267,7 +267,7 @@ _link_skills() {
     skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
     if [[ -n "$skills_real" && -n "$repo_skills_real" && \
           ( "$skills_real" == "$repo_skills_real" || "$skills_real" == "$repo_skills_real"/* ) ]]; then
-      warn "Skipped ~/${ai_name}/skills (resolves to repo — check if ~/$(lower_name "$ai_name") symlinks to wukong repo)  已跳过 ~/${ai_name}/skills（解析到仓库 — 检查 ~/$(lower_name "$ai_name") 是否软链接到 wukong 仓库）"
+      warn "Skipped ~/${ai_name}/skills (resolves to repo — check if ~/$(lower_name "$ai_name") symlinks to roll repo)  已跳过 ~/${ai_name}/skills（解析到仓库 — 检查 ~/$(lower_name "$ai_name") 是否软链接到 roll 仓库）"
       continue
     fi
 
@@ -297,19 +297,19 @@ _link_skills() {
     fi
     local linked=0 repaired=0 pruned=0
 
-    # Prune stale wk-* symlinks pointing to skills no longer in ~/.wukong/skills/
+    # Prune stale wk-* symlinks pointing to skills no longer in ~/.roll/skills/
     for link in "$skills_dir"/wk-*; do
       [[ -L "$link" ]] || continue
       local link_target
       link_target="$(readlink "$link")"
       # Only remove symlinks we own (pointing into our skills dir)
-      if [[ "$link_target" == "$WK_HOME/skills/"* ]] && [[ ! -d "$link" ]]; then
+      if [[ "$link_target" == "$ROLL_HOME/skills/"* ]] && [[ ! -d "$link" ]]; then
         rm "$link"
         pruned=$((pruned + 1))
       fi
     done
 
-    for skill_dir in "$WK_HOME/skills"/*/; do
+    for skill_dir in "$ROLL_HOME/skills"/*/; do
       [[ -d "$skill_dir" ]] || continue
       local skill_name
       skill_name="$(basename "$skill_dir")"
@@ -338,7 +338,7 @@ _link_skills() {
 # ─── Internal: sync conventions via @include — never overwrites user files ─────
 # Writes WK content to {ai_dir}/wk.md, appends @wk.md to main config.
 _sync_convention_for_tool() {
-  local src="$1"       # source: ~/.wukong/conventions/global/CLAUDE.md
+  local src="$1"       # source: ~/.roll/conventions/global/CLAUDE.md
   local main_dst="$2"  # target: ~/.claude/CLAUDE.md
   local force="$3"
 
@@ -379,7 +379,7 @@ _sync_conventions() {
     ai_dir="$(_ai_dir "$entry")"
     config_file="$(_ai_config "$entry")"
     src_file="$(_ai_src "$entry")"
-    _sync_convention_for_tool "$WK_GLOBAL/$src_file" "$ai_dir/$config_file" "$force"
+    _sync_convention_for_tool "$ROLL_GLOBAL/$src_file" "$ai_dir/$config_file" "$force"
   done < <(_get_ai_tools)
 }
 
@@ -388,17 +388,17 @@ _sync_skills() {
   local force="${1:-false}"
   info "Updating skills...  正在更新技能..."
   _pull_skills
-  ok "Skills updated in ~/.wukong/skills  技能已更新至 ~/.wukong/skills"
+  ok "Skills updated in ~/.roll/skills  技能已更新至 ~/.roll/skills"
   info "Creating skill symlinks for AI tools...  正在为 AI 工具创建技能软链接..."
   _link_skills "$force"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: setup
-# Initialize ~/.wukong/ on a new machine
+# Initialize ~/.roll/ on a new machine
 # ═══════════════════════════════════════════════════════════════════════════════
 cmd_setup() {
-  info "Setting up Wukong on this machine...  正在初始化 Wukong..."
+  info "Setting up Roll on this machine...  正在初始化 Roll..."
   echo ""
 
   _install_local
@@ -406,12 +406,12 @@ cmd_setup() {
   _sync_skills
 
   echo ""
-  ok "Setup complete. Skills installed in ~/.wukong/  初始化完成。技能已安装至 ~/.wukong/"
+  ok "Setup complete. Skills installed in ~/.roll/  初始化完成。技能已安装至 ~/.roll/"
   echo ""
   info "Next steps:  后续步骤："
-  echo "  Init a project:          ${BOLD}wukong init${NC}                 初始化项目"
-  echo "  Add global conventions:  ${BOLD}wukong sync conventions${NC}     添加全局约定"
-  echo "  Install git hook:        ${BOLD}wukong hooks install${NC}        安装 git hook"
+  echo "  Init a project:          ${BOLD}roll init${NC}                 初始化项目"
+  echo "  Add global conventions:  ${BOLD}roll sync conventions${NC}     添加全局约定"
+  echo "  Install git hook:        ${BOLD}roll hook install${NC}        安装 git hook"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -420,8 +420,8 @@ cmd_setup() {
 # Scopes: conventions (default), skills, all
 # ═══════════════════════════════════════════════════════════════════════════════
 cmd_sync() {
-  if [[ ! -d "$WK_HOME" ]]; then
-    err "~/.wukong/ not found. Run 'wukong setup' first.  ~/.wukong/ 不存在，请先运行 'wukong setup'。"
+  if [[ ! -d "$ROLL_HOME" ]]; then
+    err "~/.roll/ not found. Run 'roll setup' first.  ~/.roll/ 不存在，请先运行 'roll setup'。"
     exit 1
   fi
 
@@ -551,7 +551,7 @@ _init_new() {
   local project_dir="$1"
   local project_type="$2"
 
-  local tpl_dir="$WK_TEMPLATES/$project_type"
+  local tpl_dir="$ROLL_TEMPLATES/$project_type"
   if [[ ! -d "$tpl_dir" ]]; then
     err "Template not found: $project_type  模板未找到: $project_type"
     err "Available: fullstack, frontend-only, backend-service, cli, auto  可用类型: fullstack, frontend-only, backend-service, cli, auto"
@@ -642,8 +642,8 @@ _detect_and_prompt_type() {
 # Smart mode: if no type given and AGENTS.md already exists → auto-refresh.
 # ═══════════════════════════════════════════════════════════════════════════════
 cmd_init() {
-  if [[ ! -d "$WK_TEMPLATES" ]]; then
-    err "No templates found. Run 'wukong setup' first.  未找到模板，请先运行 'wukong setup'。"
+  if [[ ! -d "$ROLL_TEMPLATES" ]]; then
+    err "No templates found. Run 'roll setup' first.  未找到模板，请先运行 'roll setup'。"
     exit 1
   fi
 
@@ -678,7 +678,7 @@ merge_convention() {
   local tpl_dir="$2"
   local out_dir="$3"
   local display="${4:-$filename}"
-  local global_file="$WK_GLOBAL/$filename"
+  local global_file="$ROLL_GLOBAL/$filename"
   local tpl_file="$tpl_dir/$filename"
   local out_file="$out_dir/$filename"
 
@@ -1020,7 +1020,7 @@ scaffold_legacy_project() {
   local -a added=()
 
   echo ""
-  info "Existing project detected — add Wukong workflow files?  检测到已有项目 — 是否添加 Wukong 工作流文件？"
+  info "Existing project detected — add Roll workflow files?  检测到已有项目 — 是否添加 Roll 工作流文件？"
   echo ""
 
   _ask() {
@@ -1143,7 +1143,7 @@ refresh_project() {
   local tools
   tools="$(detect_tools "$project_dir")"
 
-  local tpl_dir="$WK_TEMPLATES/$ptype"
+  local tpl_dir="$ROLL_TEMPLATES/$ptype"
   if [[ ! -d "$tpl_dir" ]]; then
     warn "  ${BOLD}$project_name${NC}: template '$ptype' not found — skipping  模板 '$ptype' 未找到 — 已跳过"
     return 1
@@ -1171,7 +1171,7 @@ refresh_project() {
 # COMMAND: hooks <subcommand>
 # Manage the global git hook (opt-in — modifies git global config)
 # ═══════════════════════════════════════════════════════════════════════════════
-cmd_hooks() {
+cmd_hook() {
   local subcmd="${1:-install}"
 
   case "$subcmd" in
@@ -1215,7 +1215,7 @@ cmd_hooks() {
       ;;
     *)
       err "Unknown hooks subcommand: $subcmd  未知 hooks 子命令: $subcmd"
-      echo "Usage: wukong hooks [install|remove]  用法: wukong hooks [install|remove]"
+      echo "Usage: roll hook [install|remove]  用法: roll hook [install|remove]"
       exit 1
       ;;
   esac
@@ -1226,7 +1226,7 @@ cmd_hooks() {
 # Re-copy conventions and skills from repo source, then sync all with force
 # ═══════════════════════════════════════════════════════════════════════════════
 cmd_reset() {
-  warn "This will overwrite ~/.wukong/conventions/ and skills with repo defaults.  此操作将用仓库默认值覆盖 ~/.wukong/conventions/ 和技能。"
+  warn "This will overwrite ~/.roll/conventions/ and skills with repo defaults.  此操作将用仓库默认值覆盖 ~/.roll/conventions/ 和技能。"
   echo -n "  Continue? [y/N] "
   read -r answer
   [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted.  已取消。"; return; }
@@ -1246,20 +1246,20 @@ cmd_reset() {
 # Show current state of conventions
 # ═══════════════════════════════════════════════════════════════════════════════
 cmd_status() {
-  echo -e "${BOLD}Wukong Convention Status  Wukong 约定状态${NC}"
+  echo -e "${BOLD}Roll Convention Status  Roll 约定状态${NC}"
   echo ""
 
-  if [[ -d "$WK_HOME" ]]; then
-    ok "~/.wukong/ exists  ~/.wukong/ 已存在"
+  if [[ -d "$ROLL_HOME" ]]; then
+    ok "~/.roll/ exists  ~/.roll/ 已存在"
   else
-    err "~/.wukong/ not found — run 'wukong setup'  ~/.wukong/ 不存在 — 请运行 'wukong setup'"
+    err "~/.roll/ not found — run 'roll setup'  ~/.roll/ 不存在 — 请运行 'roll setup'"
     return
   fi
 
   echo ""
   echo -e "${BOLD}Global conventions:  全局约定${NC}"
   for f in AGENTS.md CLAUDE.md GEMINI.md .cursor-rules; do
-    if [[ -f "$WK_GLOBAL/$f" ]]; then
+    if [[ -f "$ROLL_GLOBAL/$f" ]]; then
       echo -e "  ${GREEN}+${NC} $f"
     else
       echo -e "  ${RED}-${NC} $f (missing / 缺失)"
@@ -1268,13 +1268,13 @@ cmd_status() {
 
   echo ""
   echo -e "${BOLD}Global skills:  全局技能${NC}"
-  if [[ -d "$WK_HOME/skills" ]]; then
+  if [[ -d "$ROLL_HOME/skills" ]]; then
     local count
-    count=$(find "$WK_HOME/skills" -maxdepth 1 -type d | wc -l | tr -d ' ')
+    count=$(find "$ROLL_HOME/skills" -maxdepth 1 -type d | wc -l | tr -d ' ')
     count=$((count - 1))
-    echo -e "  ${GREEN}+${NC} ~/.wukong/skills ($count skills installed / 已安装 $count 个技能)"
+    echo -e "  ${GREEN}+${NC} ~/.roll/skills ($count skills installed / 已安装 $count 个技能)"
   else
-    echo -e "  ${RED}-${NC} ~/.wukong/skills (missing / 缺失)"
+    echo -e "  ${RED}-${NC} ~/.roll/skills (missing / 缺失)"
   fi
 
   echo ""
@@ -1286,17 +1286,17 @@ cmd_status() {
     _cfg="$(_ai_config "$_entry")"
     _src="$(_ai_src "$_entry")"
     _tool_name="$(ai_tool_name "$_ai_d")"
-    check_sync_status "$_tool_name" "$WK_GLOBAL/$_src" "$_ai_d/$_cfg"
+    check_sync_status "$_tool_name" "$ROLL_GLOBAL/$_src" "$_ai_d/$_cfg"
   done < <(_get_ai_tools)
 
   echo ""
   echo -e "${BOLD}Skill symlinks:  技能软链接${NC}"
   local total_skills=0
   local wk_skills_real
-  if [[ -d "$WK_HOME/skills" ]]; then
+  if [[ -d "$ROLL_HOME/skills" ]]; then
     # Count only wk-* skill dirs to match the linked_count scope below
-    total_skills=$(find "$WK_HOME/skills" -maxdepth 1 -mindepth 1 -type d -name "wk-*" | wc -l | tr -d ' ')
-    wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
+    total_skills=$(find "$ROLL_HOME/skills" -maxdepth 1 -mindepth 1 -type d -name "wk-*" | wc -l | tr -d ' ')
+    wk_skills_real="$(canonical_dir "$ROLL_HOME/skills" 2>/dev/null || true)"
   fi
   while IFS= read -r _entry; do
     local ai_dir
@@ -1314,7 +1314,7 @@ cmd_status() {
         skills_real="$(canonical_dir "$skills_dir" 2>/dev/null || true)"
         local skills_display="${skills_dir/#$HOME/~}"
         if [[ -n "$skills_real" && "$skills_real" == "$wk_skills_real" ]]; then
-          echo -e "  ${GREEN}=${NC} $name: $skills_display -> ~/.wukong/skills (mounted / 已挂载)"
+          echo -e "  ${GREEN}=${NC} $name: $skills_display -> ~/.roll/skills (mounted / 已挂载)"
         else
           echo -e "  ${YELLOW}~${NC} $name: $skills_display -> ${skills_target/#$HOME/~} (symlinked dir)"
         fi
@@ -1345,17 +1345,17 @@ cmd_status() {
     echo -e "  ${GREEN}+${NC} prepare-commit-msg (global, AI client auto-detect / 全局，自动检测 AI 客户端)"
   elif [[ -f "$hook_dst" ]]; then
     echo -e "  ${YELLOW}~${NC} prepare-commit-msg exists but core.hooksPath not set  prepare-commit-msg 已存在，但 core.hooksPath 未设置"
-    echo -e "      run: wukong hooks install  运行: wukong hooks install"
+    echo -e "      run: roll hook install  运行: roll hook install"
   else
-    echo -e "  ${RED}-${NC} not installed (optional) — run 'wukong hooks install'  未安装（可选）— 运行 'wukong hooks install'"
+    echo -e "  ${RED}-${NC} not installed (optional) — run 'roll hook install'  未安装（可选）— 运行 'roll hook install'"
   fi
 
   echo ""
   echo -e "${BOLD}Templates:  模板${NC}"
   for tpl in fullstack frontend-only backend-service cli; do
-    if [[ -d "$WK_TEMPLATES/$tpl" ]]; then
+    if [[ -d "$ROLL_TEMPLATES/$tpl" ]]; then
       local count
-      count=$(find "$WK_TEMPLATES/$tpl" -type f | wc -l | tr -d ' ')
+      count=$(find "$ROLL_TEMPLATES/$tpl" -type f | wc -l | tr -d ' ')
       echo -e "  ${GREEN}+${NC} $tpl ($count files)"
     else
       echo -e "  ${RED}-${NC} $tpl (missing / 缺失)"
@@ -1392,18 +1392,18 @@ check_sync_status() {
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 usage() {
-  echo -e "${BOLD}Wukong${NC} v${VERSION} — AI Agent Convention Manager"
+  echo -e "${BOLD}Roll${NC} v${VERSION} — AI Agent Convention Manager"
   echo -e "  AI 编码惯例管理器"
   echo ""
-  echo "Usage: wukong <command> [options]"
-  echo "用法:  wukong <command> [options]"
+  echo "Usage: roll <command> [options]"
+  echo "用法:  roll <command> [options]"
   echo ""
   echo "Commands:"
-  echo "  setup                  Initialize ~/.wukong/ + install skills          初始化 ~/.wukong/ + 安装技能"
+  echo "  setup                  Initialize ~/.roll/ + install skills          初始化 ~/.roll/ + 安装技能"
   echo "  sync [scope] [-f]      Distribute to AI tool config paths              分发约定到各 AI 工具配置路径"
   echo "  init [type]            Initialize or refresh project conventions (cwd) 初始化或刷新项目约定（当前目录）"
-  echo "  hooks [install|remove] Manage global git hook (opt-in)                管理全局 git hook（可选安装）"
-  echo "  reset                  Reset ~/.wukong/ from repo, then force-sync     从仓库重置 ~/.wukong/，再强制同步"
+  echo "  hook [install|remove] Manage global git hook (opt-in)                管理全局 git hook（可选安装）"
+  echo "  reset                  Reset ~/.roll/ from repo, then force-sync     从仓库重置 ~/.roll/，再强制同步"
   echo "  status                 Show current state                              显示当前状态"
   echo ""
   echo "Sync scopes: conventions (default) | skills | all"
@@ -1416,12 +1416,12 @@ usage() {
   echo "初始化工具:  claude,gemini,cursor,all"
   echo ""
   echo "Examples / 示例:"
-  echo "  wukong setup                    # First-time setup (non-invasive)         首次安装（非破坏性）"
-  echo "  wukong sync conventions         # Opt-in: add WK conventions via @include  可选：通过 @include 添加约定"
-  echo "  wukong sync skills -f           # Rebuild skill symlinks                   重建技能软链接"
-  echo "  wukong hooks install            # Opt-in: global git hook                  可选：全局 git hook"
-  echo "  wukong init fullstack           # New project (cwd)                        新项目（当前目录）"
-  echo "  wukong init                     # Refresh existing project (cwd)           刷新已有项目（当前目录）"
+  echo "  roll setup                    # First-time setup (non-invasive)         首次安装（非破坏性）"
+  echo "  roll sync conventions         # Opt-in: add WK conventions via @include  可选：通过 @include 添加约定"
+  echo "  roll sync skills -f           # Rebuild skill symlinks                   重建技能软链接"
+  echo "  roll hook install            # Opt-in: global git hook                  可选：全局 git hook"
+  echo "  roll init fullstack           # New project (cwd)                        新项目（当前目录）"
+  echo "  roll init                     # Refresh existing project (cwd)           刷新已有项目（当前目录）"
 }
 
 main() {
@@ -1432,10 +1432,10 @@ main() {
     setup)         cmd_setup "$@" ;;
     sync)          cmd_sync "$@" ;;
     init)          cmd_init "$@" ;;
-    hooks)         cmd_hooks "$@" ;;
+    hook)         cmd_hook "$@" ;;
     reset)         cmd_reset "$@" ;;
     status)        cmd_status "$@" ;;
-    version|--version|-v) echo "wukong v${VERSION}" ;;
+    version|--version|-v) echo "roll v${VERSION}" ;;
     help|--help|-h|"") usage ;;
     *)
       err "Unknown command: $cmd  未知命令: $cmd"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Integration tests for: wukong sync [scope]
+# Integration tests for: roll sync [scope]
 # Tests convention file syncing, skill symlink creation, idempotency,
 # and conditional directory handling.
 
@@ -26,7 +26,7 @@ teardown() {
 @test "sync conventions: wk.md content matches WK_HOME/conventions/global/CLAUDE.md" {
   run_wk sync conventions
   [ "$status" -eq 0 ]
-  diff "${WK_HOME}/conventions/global/CLAUDE.md" "${TEST_TMP}/.claude/wk.md"
+  diff "${ROLL_HOME}/conventions/global/CLAUDE.md" "${TEST_TMP}/.claude/wk.md"
 }
 
 # ─── sync conventions: @wk.md appended to CLAUDE.md ─────────────────────────

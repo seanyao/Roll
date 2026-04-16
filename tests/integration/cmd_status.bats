@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
-# Integration tests for: wukong status
+# Integration tests for: roll status
 # Tests output content for all major status sections:
-#   ~/.wukong/ existence, global conventions, global skills,
+#   ~/.roll/ existence, global conventions, global skills,
 #   sync targets, skill symlinks, git hook, and templates.
 #
-# Note: `wukong status` may exit non-zero in sandbox environments where
+# Note: `roll status` may exit non-zero in sandbox environments where
 # `git config --global` has no config file — that is a known binary quirk.
 # Tests here assert output content, not exit codes for the status command.
 
@@ -20,13 +20,13 @@ teardown() {
 
 # ─── Scenario 1: without setup — error path ───────────────────────────────────
 
-@test "status: reports not found when ~/.wukong/ does not exist" {
+@test "status: reports not found when ~/.roll/ does not exist" {
   run_wk status
   # Command returns early with an error message before hitting git config
   echo "$output" | grep -qiE "not found|setup"
 }
 
-# ─── Scenario 2: after setup — ~/.wukong/ exists ─────────────────────────────
+# ─── Scenario 2: after setup — ~/.roll/ exists ─────────────────────────────
 
 @test "status: reports exists after setup" {
   run_wk setup

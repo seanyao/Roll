@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Integration tests for: wukong init
+# Integration tests for: roll init
 # Covers three paths:
 #   1. Fresh project  — empty dir + type arg → create AGENTS.md + scaffold
 #   2. Refresh        — existing AGENTS.md   → re-merge, no scaffold re-run
@@ -24,7 +24,7 @@ teardown() {
   integration_teardown
 }
 
-# ─── Helper: run wukong init inside PROJECT_DIR with piped stdin ───────────────
+# ─── Helper: run roll init inside PROJECT_DIR with piped stdin ───────────────
 # The pipe must wrap the entire inner bash -c so stdin flows into wukong.
 # Usage: wk_init <stdin> <type_arg>
 #   stdin    — string piped to wukong (handles interactive prompts)
@@ -35,7 +35,7 @@ wk_init() {
   # printf feeds stdin into the inner bash which cd's then runs wukong.
   # We must NOT use `run` here — callers do that around wk_init.
   printf '%s' "$stdin_str" | \
-    bash -c "cd '${PROJECT_DIR}' && HOME='${TEST_TMP}' WK_HOME='${WK_HOME}' '${WUKONG}' init ${type_arg}"
+    bash -c "cd '${PROJECT_DIR}' && HOME='${TEST_TMP}' ROLL_HOME='${ROLL_HOME}' '${ROLL_BIN}' init ${type_arg}"
 }
 
 # ─── Scenario 1: Fresh project (empty dir + type arg) ─────────────────────────
@@ -54,7 +54,7 @@ wk_init() {
 }
 
 # US-REF-006 regression — this test is intentionally RED until the bug is fixed.
-# scaffold_new_project currently calls _mkscaffold "$dir/docs/plans" (line ~819 in bin/wukong)
+# scaffold_new_project currently calls _mkscaffold "$dir/docs/plans" (line ~819 in bin/roll)
 # which must be removed as part of US-REF-006.
 @test "init fullstack scaffold: does NOT create docs/plans/ (US-REF-006)" {
   run wk_init $'c\n\n' "fullstack"
@@ -147,6 +147,6 @@ wk_init() {
 @test "init: exits non-zero when WK_TEMPLATES not found (setup not run)" {
   local empty_wk="${TEST_TMP}/empty_wk"
   mkdir -p "$empty_wk"
-  run bash -c "cd '${PROJECT_DIR}' && HOME='${TEST_TMP}' WK_HOME='${empty_wk}' '${WUKONG}' init fullstack"
+  run bash -c "cd '${PROJECT_DIR}' && HOME='${TEST_TMP}' ROLL_HOME='${empty_wk}' '${ROLL_BIN}' init fullstack"
   [ "$status" -ne 0 ]
 }

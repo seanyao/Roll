@@ -1,7 +1,7 @@
 {
-  "name": "wukong",
-  "version": "0.2.0",
-  "description": "Wukong — AI Agent Convention Manager",
+  "name": "roll",
+  "version": "0.3.0",
+  "description": "Roll — Roll out features with AI agents",
   "scripts": {
     "test": "find tests/unit tests/integration -name '*.bats' | sort | xargs ./tests/helpers/bats-core/bin/bats"
   },
@@ -12,13 +12,13 @@
     "skills",
     "agent-first"
   ],
-  "homepage": "https://github.com/seanyao/wukong",
+  "homepage": "https://github.com/seanyao/roll",
   "repository": {
     "type": "git",
-    "url": "https://github.com/seanyao/wukong.git"
+    "url": "https://github.com/seanyao/roll.git"
   },
   "bin": {
-    "wukong": "./bin/wukong"
+    "roll": "./bin/roll"
   },
   "license": "MIT",
   "author": "Sean Yao <seanyao@gmail.com>",
