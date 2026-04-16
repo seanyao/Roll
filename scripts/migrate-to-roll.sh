@@ -174,7 +174,7 @@ BIN_DST="$HOME/.local/bin/roll"
 
 if [[ ! -f "$BIN_SRC" ]]; then
   warn "bin/roll not found at $BIN_SRC — skipping binary install"
-  warn "Run: bash $REPO_ROOT/install.sh"
+  warn "Run: $REPO_ROOT/install.sh"
   skipped=$((skipped + 1))
 else
   run "mkdir -p '$HOME/.local/bin'"
@@ -213,11 +213,11 @@ fi
 # ─── Step 7: Install roll-* skill symlinks ────────────────────────────────────
 step "Step 7: Install roll-* skill symlinks"
 if command -v roll &>/dev/null; then
-  run "roll sync skills"
+  run "roll sync"
   ok "roll-* skill symlinks installed"
 else
   warn "'roll' not found in PATH."
-  info "Run: source ~/${RC_FILE/#$HOME\//} && roll sync skills"
+  info "Run: source ~/${RC_FILE/#$HOME\//} && roll sync"
   skipped=$((skipped + 1))
 fi
 
