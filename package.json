@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Wukong — AI Agent Convention Manager",
   "scripts": {
-    "test": "./tests/helpers/bats-core/bin/bats tests/unit/ tests/integration/ --recursive"
+    "test": "find tests/unit tests/integration -name '*.bats' | sort | xargs ./tests/helpers/bats-core/bin/bats"
   },
   "keywords": [
     "ai",
