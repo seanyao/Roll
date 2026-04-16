@@ -31,7 +31,7 @@ graph TB
     end
 
     subgraph "Loop B: Implementation & Iteration"
-        B1["$roll-init<br/>Project Scaffold"] --> B2["$roll-story-build<br/>TCR-Driven Development"]
+        B1["roll init<br/>CLI Command"] --> B2["$roll-build<br/>TCR-Driven Development"]
         B2 --> B3["$roll-.code-review<br/>Pre-commit Review"]
         B3 --> B4["CI / Deploy"]
         B4 --> B5["Verification Gate<br/>Live Evidence Required"]
@@ -42,9 +42,8 @@ graph TB
 
     subgraph "Loop C: Observability & Maintenance"
         C1["$roll-sentinel<br/>Randomized Patrol"] --> C2{"Anomaly?"}
-        C2 -->|Yes| C3["$roll-bb-debug<br/>Live Forensics"]
-        C3 --> C4["$roll-bb-analyzer<br/>Root Cause Analysis"]
-        C4 --> C5["$roll-fix-build<br/>Regression Fix"]
+        C2 -->|Yes| C3["$roll-debug<br/>Live Forensics + Root Cause Analysis"]
+        C3 --> C5["$roll-fix<br/>Regression Fix"]
         C5 --> C1
         C2 -->|No| C1
     end
@@ -52,7 +51,6 @@ graph TB
     A4 -->|"Story handoff"| B2
     B6 -->|"Delivery complete"| C1
     C5 -->|"Issue escalation"| A2
-    C4 -->|"New requirement"| A2
 
     style A1 fill:#e8f4fd,stroke:#2196F3
     style A2 fill:#e8f4fd,stroke:#2196F3
@@ -60,6 +58,7 @@ graph TB
     style B7 fill:#fff3e0,stroke:#FF9800
     style C1 fill:#fce4ec,stroke:#F44336
     style C3 fill:#fce4ec,stroke:#F44336
+    style C5 fill:#fce4ec,stroke:#F44336
 ```
 
 How the three loops interact:
@@ -89,7 +88,7 @@ Roll uses the `roll` CLI to centralize configuration management and distribute i
 On first run, the CLI performs two operations:
 
 1. **Establish a Single Source of Truth**: Copies global conventions (`conventions/global/`) and skill definitions (`skills/`) from the repository into `~/.roll/`, making it the sole authoritative configuration source on the machine.
-2. **Per-skill symlinks**: Creates individual symlinks for each `wk-*` skill into each AI client's skills directory (`~/.claude/skills/wk-*`, `~/.gemini/skills/wk-*`, etc.). Existing user skills are untouched — Roll skills are added alongside.
+2. **Per-skill symlinks**: Creates individual symlinks for each `roll-*` skill into each AI client's skills directory (`~/.claude/skills/roll-*`, `~/.gemini/skills/roll-*`, etc.). Existing user skills are untouched — Roll skills are added alongside.
 
 Setup never modifies any AI tool configuration files or global git settings. It is fully non-invasive and safe to re-run.
 
@@ -111,7 +110,7 @@ Append `--force` (or `-f`) to force-rewrite `wk.md` or rebuild symlinks.
 └── .cursor-rules    → (project-level distribution)
 ```
 
-**Git Hook (optional — `roll hooks install`)**
+**Git Hook (optional — `roll hook install`)**
 
 Installs a global `prepare-commit-msg` hook that automatically detects which AI client authored the current commit and stamps it (e.g., `[claude code]`, `[gemini cli]`), enabling audit tracing in multi-agent workflows. This is an opt-in operation that modifies global git configuration — it shows the current state and requires explicit confirmation before proceeding.
 
@@ -213,15 +212,15 @@ This separation keeps BACKLOG.md concise and readable as a progress dashboard, w
 | Classical Methodology | Roll Implementation |
 |----------------------|--------------------|
 | TDD (Test-Driven Development) | Tests written first; RED → GREEN → Refactor |
-| TCR (Test && Commit ∥ Revert) | `$roll-story-build`: commit on pass, revert on failure |
+| TCR (Test && Commit ∥ Revert) | `$roll-build`: commit on pass, revert on failure |
 | DevOps / CI-CD | Objective arbitration layer: CI is the final authority on "deliverable"; minute-level feedback loops compress defect discovery cost |
 | Defensive Programming | `$roll-spar`: adversarial TDD for high-risk paths |
 
-### 4.2 Project Scaffolding: `$roll-init`
+### 4.2 Project Scaffolding: `roll init`
 
 Standardizes project directory structure and CI configuration, eliminating the randomness of building from scratch.
 
-`$roll-init` applies the **Global + Template merge strategy** (see 2.2.3). Differences across project types primarily manifest in the **interaction layer**: frontend projects have a component tree and routing layer; CLI projects have command registration and interactive input; pure backend services have only an API interface layer. The complete structures for each template are as follows:
+`roll init` applies the **Global + Template merge strategy** (see 2.2.3). Differences across project types primarily manifest in the **interaction layer**: frontend projects have a component tree and routing layer; CLI projects have command registration and interactive input; pure backend services have only an API interface layer. The complete structures for each template are as follows:
 
 **`fullstack` template:**
 
@@ -266,7 +265,7 @@ The directory structure encodes four architectural constraints:
 | **API / CLI Separation** | `app/api/` + `bin/` | Interaction entry points are independent from business logic; the same domain can serve both Web and CLI simultaneously |
 | **Stateless** | No server-side session assumptions | Designed for Edge/Serverless deployment; horizontal scaling requires no session synchronization |
 
-### 4.3 TCR-Driven Development: `$roll-story-build`
+### 4.3 TCR-Driven Development: `$roll-build`
 
 This is Roll's core execution unit. Its engineering significance lies in a fundamental shift: **correctness is not determined by the AI's own assertions, but exclusively by the pass/fail status of automated tests**.
 
@@ -304,7 +303,7 @@ Each Action is constrained to **2–5 minutes** of scope. The engineering ration
 - **Errors do not compound**: Failing logic cannot be depended on by subsequent code, preventing hidden debt from accumulating in the codebase.
 - **Observable progress**: The micro-commit sequence is itself a real-time record of delivery progress.
 
-**The complete delivery pipeline** — `$roll-story-build` does not stop at local tests passing. It requires completing the full end-to-end delivery chain:
+**The complete delivery pipeline** — `$roll-build` does not stop at local tests passing. It requires completing the full end-to-end delivery chain:
 
 ```
 TCR Micro-commits → git push → CI Pass → Deploy → Verification Gate
@@ -363,7 +362,7 @@ The micro-step granularity constraint (2–5 min/Action) delivers a second benef
 
 **4.4.3 Two Independent Workflow Pipelines**
 
-The CI configuration generated by `$roll-init` contains two independent pipelines corresponding to different trigger scenarios:
+The CI configuration generated by `roll init` contains two independent pipelines corresponding to different trigger scenarios:
 
 ```
 .github/workflows/
@@ -405,7 +404,7 @@ For high-risk paths — authorization, payments, data integrity — standard TDD
 
 The adversarial cycle continues until the Attacker cannot produce a new RED test for two consecutive rounds, or all predefined scenarios are covered (maximum 5 rounds). Each round's results are committed independently, keeping the adversarial process fully traceable.
 
-Automatic trigger signals: when a Story touches authentication/authorization, payment/billing, data integrity validation, complex state machines, or historically high-defect modules, `$roll-story-build` automatically routes the Action to `$roll-spar`.
+Automatic trigger signals: when a Story touches authentication/authorization, payment/billing, data integrity validation, complex state machines, or historically high-defect modules, `$roll-build` automatically routes the Action to `$roll-spar`.
 
 > **Scenario**: US-010 (organization member permission changes) triggers the `$roll-spar` auto-route.
 >
@@ -430,8 +429,7 @@ After each successful deployment, two mechanisms ensure deliverables remain trac
 |----------------------|--------------------|
 | SRE (Site Reliability Engineering) | `$roll-sentinel`: Sampling-based automated patrol |
 | Chaos Engineering | Randomized patrol strategy simulating unpredictable check patterns |
-| Digital Forensics | `$roll-bb-debug`: Automated on-scene evidence collection |
-| Root Cause Analysis (RCA) | `$roll-bb-analyzer`: Structured diagnostic reports |
+| Digital Forensics + RCA | `$roll-debug`: Automated on-scene evidence collection and root cause analysis |
 
 ### 5.2 Randomized Patrol: `$roll-sentinel`
 
@@ -448,7 +446,7 @@ After each successful deployment, two mechanisms ensure deliverables remain trac
 
 **Uncertainty handling** — avoiding false positives: a single failure does not trigger an alert; three consecutive failures are required to flag an anomaly.
 
-**Hot-spot detection** — adaptive weighting: Stories that fail repeatedly automatically receive increased sampling weight. Issues discovered by patrol automatically create `FIX-XXX` Backlog entries for `$roll-fix-build` to handle.
+**Hot-spot detection** — adaptive weighting: Stories that fail repeatedly automatically receive increased sampling weight. Issues discovered by patrol automatically create `FIX-XXX` Backlog entries for `$roll-fix` to handle.
 
 Patrol runs via GitHub Actions `cron` scheduling, providing unattended continuous monitoring.
 
@@ -456,7 +454,7 @@ Patrol runs via GitHub Actions `cron` scheduling, providing unattended continuou
 >
 > On the fourth sample, the same case fails for the third consecutive time, crossing the threshold. `FIX-012: audit event timestamp is null` is automatically created and written to the Backlog, and US-007's sampling weight is automatically promoted to the next tier.
 
-### 5.3 Automated Forensics: `$roll-bb-debug`
+### 5.3 Automated Forensics and Root Cause Diagnosis: `$roll-debug`
 
 A Playwright-based end-to-end debugger supporting two operating modes:
 
@@ -473,23 +471,21 @@ Data dimensions collected automatically:
 | Performance | Load times, resource timing, interaction latency |
 | Screenshot | Visual snapshot of the current page state |
 
-### 5.4 Root Cause Diagnosis: `$roll-bb-analyzer`
+After collection, `$roll-debug` performs structured multi-dimensional analysis (content state, network failures, DOM rendering anomalies, performance bottlenecks), outputting diagnostic conclusions and remediation recommendations.
 
-Consumes the diagnostic JSON produced by `$roll-bb-debug` and performs structured multi-dimensional analysis (content state, network failures, DOM rendering anomalies, performance bottlenecks), outputting diagnostic conclusions and remediation recommendations.
-
-> **Scenario (cont.)**: `$roll-bb-debug` runs forensics on the audit list page. The Network dimension captures `GET /api/audit` returning 200 but with `timestamp` as `null`; the Console dimension simultaneously shows `[warn] AuditEvent serializer: missing timestamp`.
+> **Scenario (cont.)**: `$roll-debug` runs forensics on the audit list page. The Network dimension captures `GET /api/audit` returning 200 but with `timestamp` as `null`; the Console dimension simultaneously shows `[warn] AuditEvent serializer: missing timestamp`.
 >
-> `$roll-bb-analyzer` consumes the diagnostic JSON and isolates the root cause: the v1.3 ORM upgrade introduced a field alias change that was not reflected in the serialization layer, breaking the `created_at` → `timestamp` mapping. The fix direction is clear; handed off to `$roll-fix-build`.
+> `$roll-debug` consumes the diagnostic JSON and isolates the root cause: the v1.3 ORM upgrade introduced a field alias change that was not reflected in the serialization layer, breaking the `created_at` → `timestamp` mapping. The fix direction is clear; handed off to `$roll-fix`.
 
-### 5.5 Regression Repair: `$roll-fix-build`
+### 5.4 Regression Repair: `$roll-fix`
 
-Executes a fix for a single issue — lighter-weight than `$roll-story-build`, but held to the same quality standards:
+Executes a fix for a single issue — lighter-weight than `$roll-build`, but held to the same quality standards:
 
 - **Mandatory regression tests**: Every fix patch must include a regression test case targeting the specific issue, preventing recurrence.
 - **Scope constraint**: One Fix handles one issue. If the fix reveals a scope wider than expected, it escalates to a User Story and re-enters Loop A.
 - **Same quality gates**: Verification Gate, CI Pass, and production verification all apply equally.
 
-> **Scenario (cont.)**: `$roll-fix-build` executes FIX-012, with scope strictly limited to the serialization layer field mapping. A regression test is added (asserting `timestamp` is non-null and conforms to ISO 8601 format).
+> **Scenario (cont.)**: `$roll-fix` executes FIX-012, with scope strictly limited to the serialization layer field mapping. A regression test is added (asserting `timestamp` is non-null and conforms to ISO 8601 format).
 >
 > 1 commit, CI GREEN, post-deployment Verification Gate confirms the audit list timestamps have recovered, FIX-012 closed. On the next `$roll-sentinel` sample cycle, the check passes and US-007's sampling weight returns to baseline.
 
@@ -551,10 +547,10 @@ graph LR
     subgraph "Roll Implementation"
         R["$roll-research<br/>HV Analysis"]
         D["$roll-design<br/>INVEST Stories"]
-        SB["$roll-story-build<br/>TCR Micro-steps"]
+        SB["$roll-build<br/>TCR Micro-steps"]
         SP["$roll-spar<br/>Adversarial TDD"]
         SE["$roll-sentinel<br/>Randomized Patrol"]
-        BB["$roll-bb-debug<br/>Auto Forensics"]
+        BB["$roll-debug<br/>Auto Forensics"]
     end
 
     HCD -->|"Research first"| R
@@ -584,7 +580,7 @@ The key distinction lies in the shift of execution subject: these methodologies 
 
 **Current Limitations:**
 
-- **Multi-Agent coordination overhead**: `$roll-story-build` evaluates Action dependencies to determine whether to launch parallel sub-Agents, but cross-Agent state synchronization and conflict resolution currently depend on conventions rather than enforced protocols, incurring coordination overhead in high-concurrency scenarios.
+- **Multi-Agent coordination overhead**: `$roll-build` evaluates Action dependencies to determine whether to launch parallel sub-Agents, but cross-Agent state synchronization and conflict resolution currently depend on conventions rather than enforced protocols, incurring coordination overhead in high-concurrency scenarios.
 - **Framework coupling**: Skill definitions are written in Markdown and rely on AI clients' ability to interpret natural language instructions — execution precision varies across different models.
 - **Patrol coverage**: `$roll-sentinel`'s sampling strategy effectively controls cost, but it does not provide the same coverage guarantee as exhaustive regression testing.
 
@@ -596,14 +592,12 @@ The key distinction lies in the shift of execution subject: these methodologies 
 |-------|-------|-------|--------|
 | `$roll-research` | Research | Research topic | Markdown / PDF research report |
 | `$roll-design` | Design | Requirements description | BACKLOG.md + docs/features/ |
-| `$roll-init` | Initialization | Project name | Standardized directory structure + CI config |
-| `$roll-story-build` | Implementation | Story ID | Deployed code + verification evidence |
-| `$roll-fly-build` | Rapid implementation | One-sentence requirement | Auto-decompose → deliver |
+| `roll init` | Initialization | — | Standardized directory structure + CI config |
+| `$roll-build` | Implementation | Story ID / one-sentence requirement | Deployed code + verification evidence |
 | `$roll-spar` | Defensive implementation | Feature description | Adversarial test suite + implementation code |
-| `$roll-fix-build` | Bug fix | Fix ID | Fix code + regression test |
+| `$roll-fix` | Bug fix | Fix ID | Fix code + regression test |
 | `$roll-sentinel` | Patrol | Patrol strategy | Health report / FIX entries |
-| `$roll-bb-debug` | Debugging | URL | Diagnostic JSON + screenshots |
-| `$roll-bb-analyzer` | Diagnosis | Diagnostic JSON | Root cause analysis + remediation recommendations |
+| `$roll-debug` | Debugging & Diagnosis | URL / Diagnostic JSON | Root cause analysis + remediation recommendations |
 | `$roll-fetch` | Intelligence | URL / keyword | Web fetch, search, crawl results |
 | `$roll-probe` | Monitoring | Target address | Node discovery, health check report |
 
@@ -615,7 +609,7 @@ The key distinction lies in the shift of execution subject: these methodologies 
 | `roll sync conventions` | Opt-in: append WK conventions via `@include` (never overwrites existing files) |
 | `roll sync skills` | Refresh skills and repair per-skill symlinks |
 | `roll sync all` | Run both conventions and skills sync |
-| `roll hooks install` | Opt-in: install global git hook (requires confirmation) |
-| `roll init [type]` | Generate project convention files in cwd (merges Global + Template) |
+| `roll hook install` | Opt-in: install global git hook (requires confirmation) |
+| `roll init` | Generate project convention files in cwd (merges Global + Template) |
 | `roll reset` | Reset `~/.roll/` from the repository source, then sync |
 | `roll status` | Display current configuration state, sync status, and skill links |
