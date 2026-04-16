@@ -3,7 +3,6 @@
 # New behavior: no type prompt, no tool prompt, no scaffold — 3-step init only.
 #   1. Fresh project  → creates AGENTS.md + BACKLOG.md + docs/features/
 #   2. Existing AGENTS.md → re-merges global conventions (idempotent)
-#   3. Always hints "roll sync"
 
 load helpers
 
@@ -56,12 +55,12 @@ wk_init() {
   [ -f "${PROJECT_DIR}/AGENTS.md" ]
 }
 
-# ─── UX: roll sync hint ────────────────────────────────────────────────────────
+# ─── UX: clean completion message ────────────────────────────────────────────
 
-@test "init: output includes 'roll sync' hint" {
+@test "init: output includes 'Initialized' on success" {
   run wk_init
   [ "$status" -eq 0 ]
-  [[ "$output" == *"roll sync"* ]]
+  [[ "$output" == *"Initialized"* ]]
 }
 
 # ─── Error path ────────────────────────────────────────────────────────────────

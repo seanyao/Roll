@@ -545,14 +545,14 @@ cmd_init() {
     _merge_global_to_project "$project_dir"
     print_merge_summary
     echo ""
-    ok "Done. Run 'roll sync' to update AI tool configs.  完成。运行 'roll sync' 以更新 AI 工具配置。"
+    ok "Done.  完成。"
   else
     _merge_global_to_project "$project_dir"
     _write_backlog "$project_dir/BACKLOG.md"
     mkdir -p "$project_dir/docs/features"
     print_merge_summary
     echo ""
-    ok "Initialized. Next: roll sync  已初始化。下一步：roll sync"
+    ok "Initialized.  已初始化。"
   fi
 }
 
