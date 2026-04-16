@@ -109,17 +109,32 @@ teardown() {
   [ "$count" -gt 0 ]
 }
 
-# ─── Scenario 4: config.yaml is not overwritten if it already exists ──────────
+# ─── Scenario 4: config.yaml handling ────────────────────────────────────────
 
-@test "setup: does not overwrite existing config.yaml" {
+@test "setup: does not overwrite config.yaml that already has ai_* entries" {
   mkdir -p "$ROLL_HOME"
-  echo "custom: value" > "${ROLL_HOME}/config.yaml"
+  # Realistic user config: has ai_* entries plus custom values
+  printf 'ai_claude: ~/.claude|CLAUDE.md|CLAUDE.md\ncustom: value\n' > "${ROLL_HOME}/config.yaml"
 
   run_wk setup
   [ "$status" -eq 0 ]
 
-  # The custom content must still be present
+  # Custom content must still be present
   grep -q "custom: value" "${ROLL_HOME}/config.yaml"
+}
+
+@test "setup: recreates config.yaml when it has no ai_* entries (broken/migrated)" {
+  mkdir -p "$ROLL_HOME"
+  # Simulate a broken migrated config with no ai_* entries
+  echo "sync_claude: ~/.claude" > "${ROLL_HOME}/config.yaml"
+
+  run_wk setup
+  [ "$status" -eq 0 ]
+
+  # Fresh config with ai_* entries must now exist
+  grep -qE "^ai_claude:" "${ROLL_HOME}/config.yaml"
+  # Backup must have been saved
+  [ -f "${ROLL_HOME}/config.yaml.bak" ]
 }
 
 # ─── Scenario 5: setup syncs conventions to AI tool configs ──────────────────
@@ -137,9 +152,9 @@ teardown() {
   grep -qF "@roll.md" "${TEST_TMP}/.claude/CLAUDE.md"
 }
 
-@test "setup: preserves entire content of pre-existing config.yaml" {
+@test "setup: preserves content of config.yaml that has ai_* entries" {
   mkdir -p "$ROLL_HOME"
-  local original_content="# My custom config
+  local original_content="ai_claude: ~/.claude|CLAUDE.md|CLAUDE.md
 custom_key: custom_value
 another_key: 42"
   echo "$original_content" > "${ROLL_HOME}/config.yaml"

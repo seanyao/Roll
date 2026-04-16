@@ -213,10 +213,9 @@ _install_local() {
   _pull_conventions "$force"
   _pull_skills
 
-  # Migrate legacy sync_* format to ai_* format
-  if [[ -f "$ROLL_CONFIG" ]] && grep -qE "^sync_[a-z]+:" "$ROLL_CONFIG" 2>/dev/null && \
-     ! grep -qE "^ai_[a-z]+:" "$ROLL_CONFIG" 2>/dev/null; then
-    warn "Migrating config from legacy sync_* format to ai_* format...  正在将配置从旧版 sync_* 格式迁移到 ai_* 格式..."
+  # Recreate config if it has no ai_* entries (covers legacy sync_* format and blank/broken configs)
+  if [[ -f "$ROLL_CONFIG" ]] && ! grep -qE "^ai_[a-z]+:" "$ROLL_CONFIG" 2>/dev/null; then
+    warn "Config has no ai_* entries — recreating with defaults (backup saved)  配置无 ai_* 条目，将重建（已备份）"
     cp "$ROLL_CONFIG" "${ROLL_CONFIG}.bak"
     info "Backup saved: ~/.roll/config.yaml.bak  备份已保存: ~/.roll/config.yaml.bak"
     rm "$ROLL_CONFIG"
