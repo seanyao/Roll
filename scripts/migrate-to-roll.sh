@@ -21,6 +21,9 @@ warn()  { echo -e "${YELLOW}[migrate]${NC} $*"; }
 err()   { echo -e "${RED}[migrate]${NC} $*" >&2; }
 step()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 
+# Cross-platform in-place sed (macOS requires '' arg, Linux/GNU does not)
+_sedi() { sed -i '' "$@" 2>/dev/null || sed -i "$@"; }
+
 run() {
   if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[dry-run]${NC} $*"
@@ -99,8 +102,12 @@ fi
 step "Step 3: Update ~/.roll/config.yaml"
 ROLL_CONFIG="$HOME/.roll/config.yaml"
 if [[ -f "$ROLL_CONFIG" ]] || [[ "$DRY_RUN" == "true" ]]; then
-  run "sed -i '' 's|\.cybernetix/|.roll/|g; s|\.wukong/|.roll/|g' '$ROLL_CONFIG' 2>/dev/null || true"
-  run "sed -i '' 's|cybernetix|roll|g; s|wukong|roll|g' '$ROLL_CONFIG' 2>/dev/null || true"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}[dry-run]${NC} sed: update paths in $ROLL_CONFIG"
+  else
+    _sedi 's|\.cybernetix/|.roll/|g; s|\.wukong/|.roll/|g' "$ROLL_CONFIG" || true
+    _sedi 's|cybernetix|roll|g; s|wukong|roll|g' "$ROLL_CONFIG" || true
+  fi
   ok "Updated paths in ~/.roll/config.yaml"
   migrated=$((migrated + 1))
 else
@@ -114,7 +121,11 @@ CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 if [[ -f "$CLAUDE_MD" ]]; then
   changed=false
   if grep -q "@cnx\.md\|@wk\.md" "$CLAUDE_MD" 2>/dev/null; then
-    run "sed -i '' 's|@cnx\.md|@roll.md|g; s|@wk\.md|@roll.md|g' '$CLAUDE_MD'"
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo -e "  ${YELLOW}[dry-run]${NC} sed: update @include refs in $CLAUDE_MD"
+    else
+      _sedi 's|@cnx\.md|@roll.md|g; s|@wk\.md|@roll.md|g' "$CLAUDE_MD"
+    fi
     ok "Updated @cnx.md / @wk.md → @roll.md in ~/.claude/CLAUDE.md"
     migrated=$((migrated + 1))
     changed=true
