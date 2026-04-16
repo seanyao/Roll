@@ -14,4 +14,4 @@
 - Routes are thin — delegate to services for business logic.
 - Validate all inputs at route level (zod/joi).
 - Environment config via .env. Never hardcode secrets.
-- Follow AGENTS.md for architecture constraints and CNX workflow.
+- Follow AGENTS.md for architecture constraints and Roll workflow.

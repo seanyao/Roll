@@ -64,9 +64,9 @@ Non-negotiable requirements for all code changes. Violating these is a bug:
 - **Observability**: User must see progress, state, and errors.
 - **Concurrency safety**: Shared resources under multi-thread/multi-process access must be safe.
 
-## CNX Workflow (When Project Has It)
+## Roll Workflow (When Project Has It)
 
-When a project has Cybernetix (CNX) workflow configured:
+When a project has Roll workflow configured:
 
 ### Workspace Structure
 

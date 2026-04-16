@@ -13,4 +13,4 @@
 - src/components/ui/ is shadcn-generated. Never edit manually.
 - Organize code by domain: src/domains/{domain}/
 - All business logic in hooks or services, not in components.
-- Follow AGENTS.md for architecture constraints and CNX workflow.
+- Follow AGENTS.md for architecture constraints and Roll workflow.

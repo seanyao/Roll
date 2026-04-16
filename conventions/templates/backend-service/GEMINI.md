@@ -13,4 +13,4 @@
 - No frontend in this project. API-only service.
 - Write integration tests that hit real endpoints, not mocked handlers.
 - Run `npm run build && npm run test` before pushing.
-- Follow the project AGENTS.md for architecture constraints and WK workflow.
+- Follow the project AGENTS.md for architecture constraints and Roll workflow.

@@ -11,4 +11,4 @@
 
 - No backend in this project. All data via external API consumption.
 - Run `npm run build` to verify production bundle compiles before pushing.
-- Follow the project AGENTS.md for architecture constraints and WK workflow.
+- Follow the project AGENTS.md for architecture constraints and Roll workflow.

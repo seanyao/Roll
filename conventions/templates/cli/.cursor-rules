@@ -14,4 +14,4 @@
 - Exit codes: 0 = success, 1 = user error, 2 = system error.
 - Errors to stderr, results to stdout.
 - Support --help and --version on every command.
-- Follow AGENTS.md for architecture constraints and CNX workflow.
+- Follow AGENTS.md for architecture constraints and Roll workflow.

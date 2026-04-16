@@ -14,4 +14,4 @@
 - Organize code by domain: src/domains/{domain}/
 - API contracts live in api/types.ts and src/shared/types/ — keep in sync.
 - All business logic in hooks or services, not in components.
-- Follow AGENTS.md for architecture constraints and CNX workflow.
+- Follow AGENTS.md for architecture constraints and Roll workflow.
