@@ -79,6 +79,19 @@ config_get() {
   echo "${default/#\~/$HOME}"
 }
 
+# ─── Helpers: read ai_* entries from config ──────────────────────────────────
+# Returns one "dir|config_file|convention_src" line per ai_* key in config.yaml
+_get_ai_tools() {
+  grep -E "^ai_[a-z]+:" "$WK_CONFIG" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//' | while IFS= read -r entry; do
+    echo "${entry/#\~/$HOME}"
+  done
+}
+
+# Extract fields from a "<dir>|<config>|<src>" entry
+_ai_dir()    { echo "$1" | cut -d'|' -f1; }
+_ai_config() { echo "$1" | cut -d'|' -f2; }
+_ai_src()    { echo "$1" | cut -d'|' -f3; }
+
 # ─── Helper: safe copy with overwrite prompt ─────────────────────────────────
 safe_copy() {
   local src="$1"
@@ -207,11 +220,14 @@ _install_local() {
 # Wukong Configuration
 # Edit this file, then run `wukong sync` to apply.
 
-# Sync targets: where global conventions are distributed to
-sync_claude: ~/.claude/CLAUDE.md
-sync_kimi: ~/.kimi/AGENTS.md
-sync_codex: ~/.codex/AGENTS.md
-sync_gemini: ~/.gemini/GEMINI.md
+# AI tools — each entry controls both convention sync and skill linking
+# Format: <name>: <dir>|<config_file>|<convention_src>
+ai_claude: ~/.claude|CLAUDE.md|CLAUDE.md
+ai_gemini: ~/.gemini|GEMINI.md|GEMINI.md
+ai_kimi: ~/.kimi|AGENTS.md|AGENTS.md
+ai_codex: ~/.codex|AGENTS.md|AGENTS.md
+ai_cursor: ~/.cursor|.cursor-rules|.cursor-rules
+ai_openclaw: ~/.openclaw/workspace|AGENTS.md|AGENTS.md
 
 # User preferences
 default_language: zh
@@ -226,13 +242,13 @@ YAML
 # ─── Internal: create or repair per-skill symlinks (non-destructive) ─────────
 _link_skills() {
   local force="${1:-false}"
-  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor ~/.openclaw/workspace)
   local wk_skills_real repo_skills_real
   wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
   repo_skills_real="$(canonical_dir "$REPO_ROOT/skills" 2>/dev/null || true)"
 
-  for ai_dir in "${ai_dirs[@]}"; do
-    ai_dir=$(eval echo "$ai_dir")
+  while IFS= read -r entry; do
+    local ai_dir
+    ai_dir="$(_ai_dir "$entry")"
     [[ -d "$ai_dir" ]] || continue
 
     local ai_name ai_dir_real skills_dir
@@ -316,7 +332,7 @@ _link_skills() {
     if [[ $((linked + repaired + pruned)) -gt 0 ]]; then
       ok "Skills linked in ~/${ai_name}/skills (+${linked} new, ~${repaired} repaired, -${pruned} pruned)  已在 ~/${ai_name}/skills 中创建软链接（新增 +${linked}，修复 ~${repaired}，清理 -${pruned}）"
     fi
-  done
+  done < <(_get_ai_tools)
 }
 
 # ─── Internal: sync conventions via @include — never overwrites user files ─────
@@ -358,16 +374,13 @@ _sync_convention_for_tool() {
 _sync_conventions() {
   local force="${1:-false}"
 
-  local claude_target kimi_target codex_target gemini_target
-  claude_target="$(config_get sync_claude ~/.claude/CLAUDE.md)"
-  kimi_target="$(config_get sync_kimi ~/.kimi/AGENTS.md)"
-  codex_target="$(config_get sync_codex ~/.codex/AGENTS.md)"
-  gemini_target="$(config_get sync_gemini ~/.gemini/GEMINI.md)"
-
-  _sync_convention_for_tool "$WK_GLOBAL/CLAUDE.md"  "$claude_target"  "$force"
-  _sync_convention_for_tool "$WK_GLOBAL/AGENTS.md"  "$kimi_target"    "$force"
-  _sync_convention_for_tool "$WK_GLOBAL/AGENTS.md"  "$codex_target"   "$force"
-  _sync_convention_for_tool "$WK_GLOBAL/GEMINI.md"  "$gemini_target"  "$force"
+  while IFS= read -r entry; do
+    local ai_dir config_file src_file
+    ai_dir="$(_ai_dir "$entry")"
+    config_file="$(_ai_config "$entry")"
+    src_file="$(_ai_src "$entry")"
+    _sync_convention_for_tool "$WK_GLOBAL/$src_file" "$ai_dir/$config_file" "$force"
+  done < <(_get_ai_tools)
 }
 
 # ─── Internal: sync skills (pull + link) ──────────────────────────────────────
@@ -1128,20 +1141,17 @@ cmd_status() {
   echo ""
   echo -e "${BOLD}Sync targets:  同步目标${NC}"
 
-  local claude_target kimi_target codex_target gemini_target
-  claude_target="$(config_get sync_claude ~/.claude/CLAUDE.md)"
-  kimi_target="$(config_get sync_kimi ~/.kimi/AGENTS.md)"
-  codex_target="$(config_get sync_codex ~/.codex/AGENTS.md)"
-  gemini_target="$(config_get sync_gemini ~/.gemini/GEMINI.md)"
-
-  check_sync_status "Claude Code" "$WK_GLOBAL/CLAUDE.md" "$claude_target"
-  check_sync_status "Kimi Code"   "$WK_GLOBAL/AGENTS.md"  "$kimi_target"
-  check_sync_status "Codex"       "$WK_GLOBAL/AGENTS.md"  "$codex_target"
-  check_sync_status "Gemini CLI"  "$WK_GLOBAL/GEMINI.md"  "$gemini_target"
+  while IFS= read -r _entry; do
+    local _ai_d _cfg _src _tool_name
+    _ai_d="$(_ai_dir "$_entry")"
+    _cfg="$(_ai_config "$_entry")"
+    _src="$(_ai_src "$_entry")"
+    _tool_name="$(ai_tool_name "$_ai_d")"
+    check_sync_status "$_tool_name" "$WK_GLOBAL/$_src" "$_ai_d/$_cfg"
+  done < <(_get_ai_tools)
 
   echo ""
   echo -e "${BOLD}Skill symlinks:  技能软链接${NC}"
-  local ai_dirs=(~/.claude ~/.gemini ~/.kimi ~/.codex ~/.cursor ~/.openclaw/workspace)
   local total_skills=0
   local wk_skills_real
   if [[ -d "$WK_HOME/skills" ]]; then
@@ -1149,8 +1159,9 @@ cmd_status() {
     total_skills=$(find "$WK_HOME/skills" -maxdepth 1 -mindepth 1 -type d -name "wk-*" | wc -l | tr -d ' ')
     wk_skills_real="$(canonical_dir "$WK_HOME/skills" 2>/dev/null || true)"
   fi
-  for ai_dir in "${ai_dirs[@]}"; do
-    ai_dir=$(eval echo "$ai_dir")
+  while IFS= read -r _entry; do
+    local ai_dir
+    ai_dir="$(_ai_dir "$_entry")"
     [[ -d "$ai_dir" ]] || continue
     local name name_lower
     name="$(ai_tool_name "$ai_dir")"
@@ -1184,7 +1195,7 @@ cmd_status() {
     else
       echo -e "  ${RED}-${NC} $name: ${skills_dir/#$HOME/~} (not found / 未找到)"
     fi
-  done
+  done < <(_get_ai_tools)
 
   echo ""
   echo -e "${BOLD}Git hook:  Git Hook${NC}"
