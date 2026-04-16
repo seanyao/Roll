@@ -53,7 +53,7 @@ Unified management of behavioral conventions for Claude Code / Kimi Code / Gemin
 | `roll sync conventions` | Opt-in: add Roll conventions via `@include` (never overwrites existing files) |
 | `roll sync skills` | Refresh skills and repair per-skill symlinks |
 | `roll sync all` | Sync both conventions and skills |
-| `roll hooks install` | Opt-in: install global git hook for AI client auto-detection |
+| `roll hook install` | Opt-in: install global git hook for AI client auto-detection |
 | `roll init` | New project: create AGENTS.md + BACKLOG.md + docs/features/ (cwd); existing: re-merge global conventions |
 | `roll reset` | Reset local cache from repo source, then force-sync |
 | `roll status` | View current state, sync status, and skill links |
@@ -76,7 +76,7 @@ roll init              # Re-merges global conventions into existing AGENTS.md
 roll sync conventions
 
 # 5. Optional: install global git hook for AI client tagging
-roll hooks install
+roll hook install
 
 # 6. Broke something? Reset
 roll reset
@@ -125,13 +125,13 @@ Design → Build → Check → Fix → Loop
 | Scenario | Command |
 |----------|---------|
 | Uncertain approach, need discussion | `$roll-design "topic"` |
-| One-sentence request | `$roll-fly-build "add a ..."` |
-| Execute an existing Story | `$roll-story-build US-001` |
-| Bug fix / small change | `$roll-fix-build FIX-001` |
+| One-sentence request | `$roll-build "add a ..."` |
+| Execute an existing Story | `$roll-build US-001` |
+| Bug fix / small change | `$roll-fix FIX-001` |
 | High-risk logic (payments/auth) | `$roll-spar "feature description"` |
 | Deep research (product/company/tech) | `$roll-research "subject"` |
 | Patrol production | `$roll-sentinel patrol` |
-| Debug a page | `$roll-bb-debug <URL>` |
+| Debug a page | `$roll-debug <URL>` |
 
 ### Steps
 
@@ -141,28 +141,26 @@ roll init                                    # CLI: instant, no questions asked
 
 # Day-to-day development
 $roll-design "user login feature"         # Plan → produce BACKLOG Stories
-$roll-story-build US-001                  # Develop → TCR → CI → Deploy
-$roll-fix-build FIX-001                   # Fix
-$roll-fly-build "add search to admin"    # One-sentence → auto-split → deliver
+$roll-build US-001                        # Develop → TCR → CI → Deploy
+$roll-fix FIX-001                         # Fix
+$roll-build "add search to admin"         # One-sentence → auto-split → deliver
 ```
 
 ### Full Skill List
 
 | Skill | Phase | Function |
 |-------|-------|----------|
-| `$roll-design` | DESIGN | Discuss approaches + design architecture + plan Stories |
-| `$roll-story-build` | BUILD | Execute Story (with parallel dispatch) |
-| `$roll-spar` | BUILD | Adversarial TDD |
-| `$roll-fix-build` | BUILD/FIX | Bug fix |
-| `$roll-fly-build` | DESIGN+BUILD | One-sentence quick implementation |
-| `$roll-sentinel` | CHECK | Scheduled patrol |
-| `$roll-bb-debug` | CHECK | Deep page diagnostics |
-| `$roll-bb-analyzer` | CHECK | Diagnostic report analysis |
-| `$roll-.code-review` | Support | Pre-commit code self-review |
-| `$roll-.qa-cover` | Support | Testing standards reference |
-| `$roll-.changelog` | Support | Auto-generate CHANGELOG |
-| `$roll-.echo` | Support | Passive intent clarification — restate and confirm before acting |
-| `$roll-research` | RESEARCH | Deep research with HV Analysis, PDF report output |
+| `$roll-build`      | DESIGN+BUILD | Universal entry: US-XXX story, FIX-XXX fix, or free-text fly mode |
+| `$roll-design`     | DESIGN       | Discuss approaches + design architecture + plan Stories |
+| `$roll-spar`       | BUILD        | Adversarial TDD |
+| `$roll-fix`        | FIX          | Bug fix / hotfix |
+| `$roll-sentinel`   | CHECK        | Scheduled patrol |
+| `$roll-debug`      | CHECK        | Deep page diagnostics + root cause analysis |
+| `$roll-.review`    | Support      | Pre-commit code self-review |
+| `$roll-.qa`        | Support      | Testing standards reference |
+| `$roll-.changelog` | Support      | Auto-generate CHANGELOG |
+| `$roll-.echo`      | Support      | Passive intent clarification |
+| `$roll-research`   | RESEARCH     | Deep research with HV Analysis, PDF report output |
 
 ---
 
