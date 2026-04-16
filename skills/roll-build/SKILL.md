@@ -422,6 +422,18 @@ git push
 
 ---
 
+## Project Context Rule
+
+Before creating any file or directory:
+
+1. **Read existing project structure** — check for `package.json`, `go.mod`, `Cargo.toml`, `pyproject.toml`, existing `src/`, `api/`, `cmd/` directories
+2. **Infer conventions from evidence** — don't assume a project type; observe what already exists
+3. **Follow what already exists** — introduce new patterns only when the current structure has no precedent
+
+> `roll init` no longer asks for project type. Skills are responsible for reading context and acting accordingly.
+
+---
+
 ## Hard Rules
 
 1. **No local-only "done"**
