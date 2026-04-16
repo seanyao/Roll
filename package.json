@@ -2,6 +2,9 @@
   "name": "wukong",
   "version": "0.2.0",
   "description": "Wukong — AI Agent Convention Manager",
+  "scripts": {
+    "test": "./tests/helpers/bats-core/bin/bats tests/unit/ tests/integration/ --recursive"
+  },
   "keywords": [
     "ai",
     "agent",
