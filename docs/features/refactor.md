@@ -5,9 +5,10 @@
 ---
 
 <a id="us-ref-001"></a>
-## US-REF-001 搭建 bats 测试框架 + helper 函数单测 📋
+## US-REF-001 搭建 bats 测试框架 + helper 函数单测 ✅
 
 **Created**: 2026-04-16  
+**Completed**: 2026-04-16  
 **Plan**: [refactor-plan.md](refactor-plan.md)
 
 - As a contributor to Wukong
@@ -15,27 +16,34 @@
 - So that I can refactor with confidence, knowing regressions are caught immediately
 
 **AC:**
-- [ ] bats-core 安装到 devDependency，`npm test` 可运行所有测试
-- [ ] `config_get` 单测：正常 key、缺失 key、`~` 展开、默认值返回
-- [ ] `ai_tool_name` 单测：普通路径、`.openclaw/workspace` 嵌套路径
-- [ ] `scan_project_type_from_files` 单测：8 种 frontend/backend/cli 组合
-- [ ] `detect_project_type` 单测：4 种 AGENTS.md 标记 + fallback 到文件扫描
-- [ ] `is_fresh_project` 单测：新目录 vs 有 package.json/go.mod 的目录
-- [ ] 所有测试在 CI 中运行并通过（GitHub Actions）
+- [x] bats-core 安装到 devDependency，`npm test` 可运行所有测试
+- [x] `config_get` 单测：正常 key、缺失 key、`~` 展开、默认值返回
+- [x] `ai_tool_name` 单测：普通路径、`.openclaw/workspace` 嵌套路径
+- [x] `scan_project_type_from_files` 单测：8 种 frontend/backend/cli 组合（含 express）
+- [x] `detect_project_type` 单测：4 种 AGENTS.md 标记 + fallback 到文件扫描
+- [x] `is_fresh_project` 单测：新目录 vs 有 package.json/go.mod 的目录
+- [x] 所有测试在 CI 中运行并通过（GitHub Actions）
 
 **Files:**
-- `tests/unit/config_get.bats` (新建)
-- `tests/unit/ai_tool_name.bats` (新建)
-- `tests/unit/scan_project_type.bats` (新建)
-- `tests/unit/detect_project_type.bats` (新建)
-- `tests/unit/is_fresh_project.bats` (新建)
-- `tests/fixtures/` (新建：测试用项目目录和配置文件)
-- `package.json` (添加 bats-core devDependency + test script)
-- `.github/workflows/ci.yml` (添加 test job)
+- `tests/helpers/bats-core/` (git submodule)
+- `tests/unit/sanity.bats`
+- `tests/unit/config_get.bats`
+- `tests/unit/ai_tool_name.bats`
+- `tests/unit/is_fresh_project.bats`
+- `tests/unit/scan_project_type.bats`
+- `tests/unit/detect_project_type.bats`
+- `tests/fixtures/configs/basic.yaml`
+- `tests/integration/.gitkeep`
+- `package.json` (添加 test script)
+- `.github/workflows/ci.yml` (新建)
+- `bin/wukong` (BASH_SOURCE guard + 修复 multiline grep bug)
 
 **Dependencies:**
 - Depends on: —
 - Depended on by: US-REF-002, US-REF-003, US-REF-004, US-REF-005, US-REF-006
+
+**TCR Stats**: 8 micro-commits, 0 reverts  
+**Bonus**: 顺手修复了 `scan_project_type_from_files` 多行 grep 在 source 时失效的潜在 Bug
 
 ---
 

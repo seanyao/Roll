@@ -24,7 +24,7 @@
 ### Feature: refactor
 | Story | Description | Status |
 |-------|-------------|--------|
-| [US-REF-001](docs/features/refactor.md#us-ref-001) | 搭建 bats 测试框架 + helper 函数单测（6 个核心 helpers） | 📋 Todo |
+| [US-REF-001](docs/features/refactor.md#us-ref-001) | 搭建 bats 测试框架 + helper 函数单测（6 个核心 helpers） | ✅ Done |
 | [US-REF-002](docs/features/refactor.md#us-ref-002) | command 级集成测试（setup/sync/init/status 全覆盖） | 📋 Todo |
 | [US-REF-003](docs/features/refactor.md#us-ref-003) | 拆解 cmd_init() 165 行 → 单职责函数 | 📋 Todo |
 | [US-REF-004](docs/features/refactor.md#us-ref-004) | 统一 AI 工具数据源 — config.yaml 单一来源，消除硬编码 | 📋 Todo |
