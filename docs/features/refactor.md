@@ -85,9 +85,10 @@
 ---
 
 <a id="us-ref-003"></a>
-## US-REF-003 拆解 cmd_init() — 单职责函数 📋
+## US-REF-003 拆解 cmd_init() — 单职责函数 ✅
 
 **Created**: 2026-04-16  
+**Completed**: 2026-04-16  
 **Plan**: [refactor-plan.md](refactor-plan.md)
 
 - As a contributor to Wukong
@@ -95,15 +96,15 @@
 - So that each execution path is independently readable and testable
 
 **AC:**
-- [ ] `cmd_init()` 入口函数 ≤30 行，只做参数解析和分发
-- [ ] `_init_auto()` 独立函数：无交互扫描模式
-- [ ] `_init_refresh()` 独立函数：已有项目重新合并模式
-- [ ] `_init_new()` 独立函数：新初始化（选类型 + 选工具 + merge + scaffold）
-- [ ] `_select_project_type()` 独立函数：交互式类型选择
-- [ ] `_select_tools()` 独立函数：交互式工具选择
-- [ ] `_pick_override` 内嵌函数定义被消除，逻辑合入 `_select_project_type()`
-- [ ] 原有 US-REF-002 集成测试全部通过（行为不变）
-- [ ] `wukong init --help` 输出不变
+- [x] `cmd_init()` 入口函数 ≤30 行，只做参数解析和分发
+- [x] `_init_auto()` 独立函数：无交互扫描模式
+- [x] `_init_refresh()` 独立函数：已有项目重新合并模式
+- [x] `_init_new()` 独立函数：新初始化（选类型 + 选工具 + merge + scaffold）
+- [x] `_select_project_type()` 独立函数：交互式类型选择
+- [x] `_select_tools()` 独立函数：交互式工具选择
+- [x] `_pick_override` 内嵌函数定义被消除，逻辑合入 `_select_project_type()`
+- [x] 原有集成测试全部通过（行为不变）
+- [x] `wukong init --help` 输出不变
 
 **Files:**
 - `bin/wukong` (重构 `cmd_init` 及相关函数，约 `line 446–611`)
@@ -115,9 +116,10 @@
 ---
 
 <a id="us-ref-004"></a>
-## US-REF-004 统一 AI 工具数据源 — 消除两处硬编码 📋
+## US-REF-004 统一 AI 工具数据源 — 消除两处硬编码 ✅
 
 **Created**: 2026-04-16  
+**Completed**: 2026-04-16  
 **Plan**: [refactor-plan.md](refactor-plan.md)
 
 - As a user of Wukong
@@ -125,12 +127,12 @@
 - So that I don't need to modify the script code when new AI clients appear
 
 **AC:**
-- [ ] `config.yaml` 新增 `ai_tools:` 结构（6 个工具：claude/gemini/kimi/codex/cursor/openclaw）
-- [ ] `_link_skills()` 从 config 读取工具列表，删除硬编码的 `ai_dirs` 数组
-- [ ] `_sync_conventions()` 从 config 读取工具列表，删除硬编码的 4 个 target 变量
-- [ ] `_install_local()` 生成的默认 `config.yaml` 包含 `ai_tools:` 结构
-- [ ] 向 config.yaml 添加新工具条目后，`wukong sync all` 自动处理该工具（不改代码）
-- [ ] 原有 US-REF-002 集成测试全部通过
+- [x] `config.yaml` 新增 `ai_tools:` 结构（6 个工具：claude/gemini/kimi/codex/cursor/openclaw）
+- [x] `_link_skills()` 从 config 读取工具列表，删除硬编码的 `ai_dirs` 数组
+- [x] `_sync_conventions()` 从 config 读取工具列表，删除硬编码的 4 个 target 变量
+- [x] `_install_local()` 生成的默认 `config.yaml` 包含 `ai_tools:` 结构
+- [x] 向 config.yaml 添加新工具条目后，`wukong sync all` 自动处理该工具（不改代码）
+- [x] 原有集成测试全部通过
 
 **Files:**
 - `bin/wukong` (重构 `_link_skills`, `_sync_conventions`, `_install_local`)
@@ -143,9 +145,10 @@
 ---
 
 <a id="us-ref-005"></a>
-## US-REF-005 修复 merge_convention() 内容更新静默跳过 📋
+## US-REF-005 修复 merge_convention() 内容更新静默跳过 ✅
 
 **Created**: 2026-04-16  
+**Completed**: 2026-04-16  
 **Plan**: [refactor-plan.md](refactor-plan.md)
 
 - As a user of Wukong
@@ -153,13 +156,13 @@
 - So that I don't silently miss convention improvements after `wukong init`
 
 **AC:**
-- [ ] Merge 模式下，已存在且内容相同的节：静默跳过（原行为保持）
-- [ ] Merge 模式下，已存在且内容不同的节：显示 diff，提示 `[u] update  [k] keep`
+- [x] Merge 模式下，已存在且内容相同的节：静默跳过（原行为保持）
+- [x] Merge 模式下，已存在且内容不同的节：显示 diff，提示 `[u] update  [k] keep`
   - 选 `u`：用模板内容替换该节
   - 选 `k`：保留用户版本，不改动
-- [ ] `merge_convention.bats` 新增测试用例覆盖"内容不同"分支
-- [ ] 原有 Overwrite / Keep 模式行为不变
-- [ ] 原有"不存在节则追加"行为不变
+- [x] `merge_convention.bats` 新增测试用例覆盖"内容不同"分支（2 tests）
+- [x] 原有 Overwrite / Keep 模式行为不变
+- [x] 原有"不存在节则追加"行为不变
 
 **Files:**
 - `bin/wukong` (修改 `merge_convention()` 的 Merge 分支，约 `line 655–675`)
