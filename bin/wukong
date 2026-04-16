@@ -5,7 +5,7 @@ set -euo pipefail
 # Single source of truth for how all AI coding agents behave.
 
 VERSION="0.2.0"
-WK_HOME="${HOME}/.wukong"
+WK_HOME="${WK_HOME:-${HOME}/.wukong}"
 WK_CONFIG="${WK_HOME}/config.yaml"
 WK_GLOBAL="${WK_HOME}/conventions/global"
 WK_TEMPLATES="${WK_HOME}/conventions/templates"
