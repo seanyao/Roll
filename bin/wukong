@@ -545,6 +545,54 @@ _init_refresh() {
   ok "Done.  完成。"
 }
 
+# ─── Helper: full new/switch init — tool selection + merge conventions + scaffold
+# Expects tools_arg resolved; sets _WK_USE_* via _select_tools then merges.
+_init_new() {
+  local project_dir="$1"
+  local project_type="$2"
+
+  local tpl_dir="$WK_TEMPLATES/$project_type"
+  if [[ ! -d "$tpl_dir" ]]; then
+    err "Template not found: $project_type  模板未找到: $project_type"
+    err "Available: fullstack, frontend-only, backend-service, cli, auto  可用类型: fullstack, frontend-only, backend-service, cli, auto"
+    exit 1
+  fi
+
+  info "Initializing ${BOLD}$project_type${NC} conventions in: $project_dir  正在初始化 ${BOLD}$project_type${NC} 约定，目录: $project_dir"
+  echo ""
+
+  _WK_MERGE_SUMMARY=()
+  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "AGENTS.md"
+
+  if [[ "$_WK_USE_CLAUDE" == "true" ]]; then
+    mkdir -p "$project_dir/.claude"
+    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" ".claude/CLAUDE.md"
+  fi
+  if [[ "$_WK_USE_GEMINI" == "true" ]]; then
+    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "GEMINI.md"
+  fi
+  if [[ "$_WK_USE_CURSOR" == "true" ]]; then
+    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" ".cursor-rules"
+  fi
+
+  ok "Convention files initialized for ${BOLD}$project_type${NC} project.  已为 ${BOLD}$project_type${NC} 项目初始化约定文件。"
+  print_merge_summary
+
+  # ── Scaffold phase ───────────────────────────────────────────────────────
+  if is_fresh_project "$project_dir"; then
+    echo ""
+    echo -n "  Scaffold ${BOLD}$project_type${NC} project structure? [Y/n]: "
+    read -r _scaffold_ans
+    if [[ "${_scaffold_ans:-Y}" =~ ^[Yy]$ ]]; then
+      echo ""
+      scaffold_new_project "$project_dir" "$project_type"
+    fi
+  else
+    scaffold_legacy_project "$project_dir"
+  fi
+  echo ""
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: init [type] [tools]
 # Initialize a project with convention files from a template.
@@ -605,49 +653,9 @@ cmd_init() {
     fi
   fi
 
-  # AI tool selection
+  # AI tool selection + full init
   _select_tools "$tools_arg"
-
-  local tpl_dir="$WK_TEMPLATES/$project_type"
-  if [[ ! -d "$tpl_dir" ]]; then
-    err "Template not found: $project_type  模板未找到: $project_type"
-    err "Available: fullstack, frontend-only, backend-service, cli, auto  可用类型: fullstack, frontend-only, backend-service, cli, auto"
-    exit 1
-  fi
-
-  info "Initializing ${BOLD}$project_type${NC} conventions in: $project_dir  正在初始化 ${BOLD}$project_type${NC} 约定，目录: $project_dir"
-  echo ""
-
-  _WK_MERGE_SUMMARY=()
-  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "AGENTS.md"
-
-  if [[ "$_WK_USE_CLAUDE" == "true" ]]; then
-    mkdir -p "$project_dir/.claude"
-    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" ".claude/CLAUDE.md"
-  fi
-  if [[ "$_WK_USE_GEMINI" == "true" ]]; then
-    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "GEMINI.md"
-  fi
-  if [[ "$_WK_USE_CURSOR" == "true" ]]; then
-    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" ".cursor-rules"
-  fi
-
-  ok "Convention files initialized for ${BOLD}$project_type${NC} project.  已为 ${BOLD}$project_type${NC} 项目初始化约定文件。"
-  print_merge_summary
-
-  # ── Scaffold phase ──────────────────────────────────────────────────────────
-  if is_fresh_project "$project_dir"; then
-    echo ""
-    echo -n "  Scaffold ${BOLD}$project_type${NC} project structure? [Y/n]: "
-    read -r _scaffold_ans
-    if [[ "${_scaffold_ans:-Y}" =~ ^[Yy]$ ]]; then
-      echo ""
-      scaffold_new_project "$project_dir" "$project_type"
-    fi
-  else
-    scaffold_legacy_project "$project_dir"
-  fi
-  echo ""
+  _init_new "$project_dir" "$project_type"
 }
 
 # ─── Helper: merge global preamble + template into output ────────────────────
