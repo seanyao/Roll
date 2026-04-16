@@ -1,6 +1,7 @@
 # Project Conventions — Backend Service
 
-> Project-type-specific conventions. Merged with global conventions at init time.
+> Project-type-specific conventions — reference material for skills.
+> **Note: Reference Template** — used by skills to infer project conventions. Not selected by users.
 
 ## API Design
 

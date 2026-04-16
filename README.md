@@ -54,7 +54,7 @@ Unified management of behavioral conventions for Claude Code / Kimi Code / Gemin
 | `roll sync skills` | Refresh skills and repair per-skill symlinks |
 | `roll sync all` | Sync both conventions and skills |
 | `roll hooks install` | Opt-in: install global git hook for AI client auto-detection |
-| `roll init [type]` | New project: generate convention files (cwd); existing: auto-refresh |
+| `roll init` | New project: create AGENTS.md + BACKLOG.md + docs/features/ (cwd); existing: re-merge global conventions |
 | `roll reset` | Reset local cache from repo source, then force-sync |
 | `roll status` | View current state, sync status, and skill links |
 
@@ -65,14 +65,12 @@ Unified management of behavioral conventions for Claude Code / Kimi Code / Gemin
 bash install.sh
 # → CLI linked to PATH, roll-* skills linked into ~/.claude/skills/ etc.
 
-# 2. New project — generate convention files (run from project root)
+# 2. New project — create workflow files instantly (run from project root)
 cd my-app
-roll init fullstack    # Fullstack project, select tools interactively
-roll init cli          # CLI project
-roll init              # Interactive selection
+roll init              # Creates AGENTS.md + BACKLOG.md + docs/features/
 
 # 3. Refresh existing project (re-merge from latest templates)
-roll init              # Auto-detects type, no args needed
+roll init              # Re-merges global conventions into existing AGENTS.md
 
 # 4. Optional: add Roll global conventions (appends @roll.md, never overwrites)
 roll sync conventions
@@ -132,18 +130,14 @@ Design → Build → Check → Fix → Loop
 | Bug fix / small change | `$roll-fix-build FIX-001` |
 | High-risk logic (payments/auth) | `$roll-spar "feature description"` |
 | Deep research (product/company/tech) | `$roll-research "subject"` |
-| Initialize new project | `$roll-init` |
 | Patrol production | `$roll-sentinel patrol` |
 | Debug a page | `$roll-bb-debug <URL>` |
 
 ### Steps
 
 ```bash
-# New project (conventions + full scaffold in one step)
-$roll-init
-
-# Legacy project (detects existing structure, asks: merge / keep / overwrite)
-$roll-init
+# New project
+roll init                                    # CLI: instant, no questions asked
 
 # Day-to-day development
 $roll-design "user login feature"         # Plan → produce BACKLOG Stories
@@ -169,22 +163,17 @@ $roll-fly-build "add search to admin"    # One-sentence → auto-split → deliv
 | `$roll-.changelog` | Support | Auto-generate CHANGELOG |
 | `$roll-.echo` | Support | Passive intent clarification — restate and confirm before acting |
 | `$roll-research` | RESEARCH | Deep research with HV Analysis, PDF report output |
-| `$roll-init` | - | Project scaffold initialization |
 
 ---
 
-## Project Structure ($roll-init generated)
+## Project Structure (roll init)
 
 ```
 my-project/
-├── BACKLOG.md           # Task index
-├── AGENTS.md            # Project constraints & skill routing
-├── .claude/CLAUDE.md    # Claude Code config
-├── docs/features/       # Story details
-├── src/domains/         # DDD domain code
-├── api/                 # API layer
-├── tests/               # Tests
-└── .github/workflows/   # CI/CD + Sentinel
+├── AGENTS.md            # Project constraints & skill routing (created by roll init)
+├── BACKLOG.md           # Task index (created by roll init)
+├── docs/features/       # Story details (created by roll init)
+└── ... your project files
 ```
 
 ---
