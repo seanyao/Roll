@@ -437,6 +437,27 @@ cmd_sync() {
   ok "Sync complete.  同步完成。"
 }
 
+# ─── Helper: show full type menu and return chosen type ──────────────────────
+_select_project_type() {
+  echo ""
+  echo -e "${BOLD}Select project type:${NC}"
+  echo ""
+  echo "  1) fullstack        React + API + CLI"
+  echo "  2) frontend-only    React SPA, no backend"
+  echo "  3) backend-service  API/microservice, no frontend"
+  echo "  4) cli              Command-line tool"
+  echo ""
+  echo -n "Choice [1-4]: "
+  read -r choice
+  case "$choice" in
+    1) echo "fullstack" ;;
+    2) echo "frontend-only" ;;
+    3) echo "backend-service" ;;
+    4) echo "cli" ;;
+    *) err "Invalid choice: $choice  无效选择: $choice"; exit 1 ;;
+  esac
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: init [type] [tools]
 # Initialize a project with convention files from a template.
@@ -478,26 +499,6 @@ cmd_init() {
       detected="$(scan_project_type_from_files "$project_dir")"
     fi
 
-    _pick_override() {
-      echo ""
-      echo -e "${BOLD}Select project type:${NC}"
-      echo ""
-      echo "  1) fullstack        React + API + CLI"
-      echo "  2) frontend-only    React SPA, no backend"
-      echo "  3) backend-service  API/microservice, no frontend"
-      echo "  4) cli              Command-line tool"
-      echo ""
-      echo -n "Choice [1-4]: "
-      read -r choice
-      case "$choice" in
-        1) echo "fullstack" ;;
-        2) echo "frontend-only" ;;
-        3) echo "backend-service" ;;
-        4) echo "cli" ;;
-        *) err "Invalid choice: $choice  无效选择: $choice"; exit 1 ;;
-      esac
-    }
-
     if [[ -n "$detected" && "$detected" != "unknown" ]]; then
       echo ""
       echo -e "  Detected: ${BOLD}$detected${NC}"
@@ -509,12 +510,12 @@ cmd_init() {
         2) project_type="frontend-only" ;;
         3) project_type="backend-service" ;;
         4) project_type="cli" ;;
-        n|N) project_type="$(_pick_override)" ;;
+        n|N) project_type="$(_select_project_type)" ;;
         *) err "Invalid choice: $answer  无效选择: $answer"; exit 1 ;;
       esac
     else
       # Truly unknown: show full menu
-      project_type="$(_pick_override)"
+      project_type="$(_select_project_type)"
     fi
 
     # If AGENTS.md already exists and user kept the same type, just re-merge
