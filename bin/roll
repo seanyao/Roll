@@ -4,7 +4,7 @@ set -euo pipefail
 # Roll — AI Agent Convention Manager
 # Single source of truth for how all AI coding agents behave.
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 ROLL_HOME="${ROLL_HOME:-${HOME}/.roll}"
 ROLL_CONFIG="${ROLL_HOME}/config.yaml"
 ROLL_GLOBAL="${ROLL_HOME}/conventions/global"
