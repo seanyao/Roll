@@ -85,10 +85,10 @@ When a project has Wukong (WK) workflow configured:
 ### Skill Selection
 
 ```
-Uncertain approach?        → $wk-design
-One-sentence vague request → $wk-fly-build
-Have a US-XXX ID?          → $wk-story-build
-Single bug fix?            → $wk-fix-build
-High-risk logic?           → $wk-spar
-Page/production issue?     → $wk-bb-debug
+Uncertain approach?        → $roll-design
+Want to ship something?    → $roll-build  (handles US-XXX, FIX-XXX, or vague ideas)
+Single bug fix?            → $roll-fix
+High-risk logic?           → $roll-spar
+Page/production issue?     → $roll-debug
+Initialize new project?    → roll init  (CLI command, not a skill)
 ```
