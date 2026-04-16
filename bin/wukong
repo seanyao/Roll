@@ -763,7 +763,7 @@ merge_convention() {
               diff <(printf '%s' "$existing") <(printf '%s' "$body") || true
               echo -n "  [u] update with template  [k] keep mine (default): "
               local sec_ans
-              read -r sec_ans </dev/stdin
+              read -r sec_ans
               sec_ans="${sec_ans:-k}"
               if [[ "$sec_ans" == "u" || "$sec_ans" == "U" ]]; then
                 # Replace existing section with template section
