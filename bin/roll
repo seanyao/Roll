@@ -343,7 +343,7 @@ _link_skills() {
 }
 
 # ─── Internal: sync conventions via @include — never overwrites user files ─────
-# Writes WK content to {ai_dir}/wk.md, appends @wk.md to main config.
+# Writes WK content to {ai_dir}/roll.md, appends @roll.md to main config.
 _sync_convention_for_tool() {
   local src="$1"       # source: ~/.roll/conventions/global/CLAUDE.md
   local main_dst="$2"  # target: ~/.claude/CLAUDE.md
@@ -359,20 +359,20 @@ _sync_convention_for_tool() {
   fi
   mkdir -p "$dst_dir"
 
-  # Write/update wk.md — this is our file, always safe to overwrite
-  local wk_file="$dst_dir/wk.md"
+  # Write/update roll.md — this is our file, always safe to overwrite
+  local wk_file="$dst_dir/roll.md"
   if [[ "$force" == "true" ]] || ! diff -q "$src" "$wk_file" &>/dev/null 2>&1; then
     cp "$src" "$wk_file"
     ok "Wrote: ${wk_file/#$HOME/~}  已写入: ${wk_file/#$HOME/~}"
   fi
 
-  # Append @wk.md include to main config — never overwrite existing content
+  # Append @roll.md include to main config — never overwrite existing content
   if [[ ! -f "$main_dst" ]]; then
-    printf '@wk.md\n' > "$main_dst"
+    printf '@roll.md\n' > "$main_dst"
     ok "Created: ${main_dst/#$HOME/~}  已创建: ${main_dst/#$HOME/~}"
-  elif ! grep -qF "@wk.md" "$main_dst" 2>/dev/null; then
-    printf '\n@wk.md\n' >> "$main_dst"
-    ok "Appended @wk.md to: ${main_dst/#$HOME/~}  已将 @wk.md 追加至: ${main_dst/#$HOME/~}"
+  elif ! grep -qF "@roll.md" "$main_dst" 2>/dev/null; then
+    printf '\n@roll.md\n' >> "$main_dst"
+    ok "Appended @roll.md to: ${main_dst/#$HOME/~}  已将 @roll.md 追加至: ${main_dst/#$HOME/~}"
   else
     ok "Already included: ${main_dst/#$HOME/~}  已包含: ${main_dst/#$HOME/~}"
   fi
@@ -1194,18 +1194,18 @@ check_sync_status() {
   local display="${dst/#$HOME/~}"
   local dst_dir
   dst_dir="$(dirname "$dst")"
-  local wk_file="$dst_dir/wk.md"
+  local wk_file="$dst_dir/roll.md"
 
-  # Sync writes content to {dir}/wk.md and appends @wk.md to the main config.
-  # So "in sync" means: wk.md exists + matches source + main config contains @wk.md.
+  # Sync writes content to {dir}/roll.md and appends @roll.md to the main config.
+  # So "in sync" means: roll.md exists + matches source + main config contains @roll.md.
   if [[ ! -f "$dst" ]]; then
     echo -e "  ${RED}-${NC} $name: $display (not synced / 未同步)"
   elif [[ ! -f "$wk_file" ]]; then
-    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync — wk.md missing / wk.md 缺失)"
+    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync — roll.md missing / roll.md 缺失)"
   elif ! diff -q "$src" "$wk_file" &>/dev/null 2>&1; then
-    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync — wk.md outdated / wk.md 已过期)"
-  elif ! grep -qF "@wk.md" "$dst" 2>/dev/null; then
-    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync — @wk.md not in config / 未包含 @wk.md)"
+    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync — roll.md outdated / roll.md 已过期)"
+  elif ! grep -qF "@roll.md" "$dst" 2>/dev/null; then
+    echo -e "  ${YELLOW}~${NC} $name: $display (out of sync — @roll.md not in config / 未包含 @roll.md)"
   else
     echo -e "  ${GREEN}=${NC} $name: $display (in sync / 已同步)"
   fi

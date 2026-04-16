@@ -96,16 +96,16 @@ Setup never modifies any AI tool configuration files or global git settings. It 
 
 Distributes content from `~/.roll/` to each AI client's configuration path — conventions and skills in one step.
 
-- **Conventions**: uses `@include` append mode — writes Roll conventions to `{ai_dir}/wk.md`, then appends a single `@wk.md` line to the user's main config. Existing content is never overwritten.
+- **Conventions**: uses `@include` append mode — writes Roll conventions to `{ai_dir}/roll.md`, then appends a single `@roll.md` line to the user's main config. Existing content is never overwritten.
 - **Skills**: refreshes skills from the repo into the local cache and creates/repairs per-skill symlinks for each client.
 
-Append `--force` (or `-f`) to force-rewrite `wk.md` or rebuild symlinks.
+Append `--force` (or `-f`) to force-rewrite `roll.md` or rebuild symlinks.
 
 ```
 ~/.roll/conventions/global/
-├── AGENTS.md        → ~/.kimi/wk.md (+ @wk.md appended to AGENTS.md)
-├── CLAUDE.md        → ~/.claude/wk.md (+ @wk.md appended to CLAUDE.md)
-├── GEMINI.md        → ~/.gemini/wk.md (+ @wk.md appended to GEMINI.md)
+├── AGENTS.md        → ~/.kimi/roll.md (+ @roll.md appended to AGENTS.md)
+├── CLAUDE.md        → ~/.claude/roll.md (+ @roll.md appended to CLAUDE.md)
+├── GEMINI.md        → ~/.gemini/roll.md (+ @roll.md appended to GEMINI.md)
 └── .cursor-rules    → (project-level distribution)
 ```
 

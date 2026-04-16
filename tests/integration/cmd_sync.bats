@@ -17,36 +17,36 @@ teardown() {
 
 # ─── sync: conventions written ────────────────────────────────────────────────
 
-@test "sync: wk.md is written to ~/.claude/" {
+@test "sync: roll.md is written to ~/.claude/" {
   run_wk sync
   [ "$status" -eq 0 ]
-  [ -f "${TEST_TMP}/.claude/wk.md" ]
+  [ -f "${TEST_TMP}/.claude/roll.md" ]
 }
 
-@test "sync: wk.md content matches ROLL_HOME/conventions/global/CLAUDE.md" {
+@test "sync: roll.md content matches ROLL_HOME/conventions/global/CLAUDE.md" {
   run_wk sync
   [ "$status" -eq 0 ]
-  diff "${ROLL_HOME}/conventions/global/CLAUDE.md" "${TEST_TMP}/.claude/wk.md"
+  diff "${ROLL_HOME}/conventions/global/CLAUDE.md" "${TEST_TMP}/.claude/roll.md"
 }
 
-# ─── sync: @wk.md appended to CLAUDE.md ──────────────────────────────────────
+# ─── sync: @roll.md appended to CLAUDE.md ──────────────────────────────────────
 
-@test "sync: @wk.md is present in ~/.claude/CLAUDE.md" {
+@test "sync: @roll.md is present in ~/.claude/CLAUDE.md" {
   run_wk sync
   [ "$status" -eq 0 ]
   [ -f "${TEST_TMP}/.claude/CLAUDE.md" ]
-  grep -qF "@wk.md" "${TEST_TMP}/.claude/CLAUDE.md"
+  grep -qF "@roll.md" "${TEST_TMP}/.claude/CLAUDE.md"
 }
 
-# ─── sync: idempotent (@wk.md not duplicated) ────────────────────────────────
+# ─── sync: idempotent (@roll.md not duplicated) ────────────────────────────────
 
-@test "sync: @wk.md is not duplicated when synced twice" {
+@test "sync: @roll.md is not duplicated when synced twice" {
   run_wk sync
   [ "$status" -eq 0 ]
   run_wk sync
   [ "$status" -eq 0 ]
   local count
-  count=$(grep -cF "@wk.md" "${TEST_TMP}/.claude/CLAUDE.md")
+  count=$(grep -cF "@roll.md" "${TEST_TMP}/.claude/CLAUDE.md")
   [ "$count" -eq 1 ]
 }
 
@@ -71,10 +71,10 @@ teardown() {
 
 # ─── sync: both conventions and skills applied in one call ───────────────────
 
-@test "sync: wk.md and roll-* symlinks both exist after single sync" {
+@test "sync: roll.md and roll-* symlinks both exist after single sync" {
   run_wk sync
   [ "$status" -eq 0 ]
-  [ -f "${TEST_TMP}/.claude/wk.md" ]
+  [ -f "${TEST_TMP}/.claude/roll.md" ]
   local count
   count=$(find "${TEST_TMP}/.claude/skills" -maxdepth 1 -mindepth 1 -type l -name "roll-*" | wc -l | tr -d ' ')
   [ "$count" -gt 0 ]

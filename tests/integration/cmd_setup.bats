@@ -124,17 +124,17 @@ teardown() {
 
 # ─── Scenario 5: setup syncs conventions to AI tool configs ──────────────────
 
-@test "setup: syncs conventions — wk.md written to ~/.claude/" {
+@test "setup: syncs conventions — roll.md written to ~/.claude/" {
   run_wk setup
   [ "$status" -eq 0 ]
-  [ -f "${TEST_TMP}/.claude/wk.md" ]
+  [ -f "${TEST_TMP}/.claude/roll.md" ]
 }
 
-@test "setup: syncs conventions — @wk.md appended to ~/.claude/CLAUDE.md" {
+@test "setup: syncs conventions — @roll.md appended to ~/.claude/CLAUDE.md" {
   run_wk setup
   [ "$status" -eq 0 ]
   [ -f "${TEST_TMP}/.claude/CLAUDE.md" ]
-  grep -qF "@wk.md" "${TEST_TMP}/.claude/CLAUDE.md"
+  grep -qF "@roll.md" "${TEST_TMP}/.claude/CLAUDE.md"
 }
 
 @test "setup: preserves entire content of pre-existing config.yaml" {
