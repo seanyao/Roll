@@ -17,6 +17,7 @@ One entry point. Any input. Full delivery.
 Input received
   ├── matches "US-[A-Z]+-[0-9]+"  → Story mode: read BACKLOG → TCR workflow
   ├── matches "FIX-[A-Z]+-[0-9]+" → redirect to $roll-fix
+  ├── matches "IDEA-[0-9]+"       → redirect to $roll-jot (lookup and expand)
   └── anything else               → Fly mode: clarify → design → execute
 ```
 
@@ -118,13 +119,18 @@ Activate when input does not match any `US-XXX` / `FIX-XXX` pattern, or when no 
 
 ### Phase 1: Clarify & Assess
 
-Before any code, output:
+Before any code, assess clarity:
 
 ```
 🎯 Clarified Goal: {1-2 sentences capturing user intent}
 📏 Complexity Assessment: {small|medium|large}
 🔍 Uncertainty Areas: {list what needs investigation/decision}
 ```
+
+**If uncertainty areas are non-empty or the request is vague, auto-trigger `$roll-.clarify`:**
+- Output the clarification block above
+- Follow with 3–5 targeted questions
+- Stop and wait for user answers before proceeding
 
 **Complexity Rules (AI coding time):**
 
@@ -529,9 +535,11 @@ When complex state management is error-prone → consider full reset + re-initia
 ## When to Use What
 
 ```
-roll-build  → ship anything (new idea, US-ID, free-text request)
-roll-fix    → fix a specific known bug (FIX-XXX / BUG-XXX)
-roll-design → plan and design before building (no code output)
+roll-build   → ship anything (new idea, US-ID, free-text request)
+roll-fix     → fix a specific known bug (FIX-XXX / BUG-XXX)
+roll-design  → plan and design before building (no code output)
+roll-jot     → fast capture a bug or idea into BACKLOG.md
+roll-.clarify → passive scope clarification for vague build requests
 ```
 
 ---

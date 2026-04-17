@@ -130,6 +130,7 @@ Research → Design → Build → Check → Fix → (loop)
 | Execute a planned Story | `$roll-build US-001` |
 | Free-form feature request | `$roll-build "add search to admin"` |
 | Bug fix | `$roll-fix FIX-001` |
+| Fast backlog capture (bug / idea) | `$roll-jot "description"` |
 | High-risk logic (payments, auth, state machines) | `$roll-spar "feature"` |
 | Deep research (product / company / tech) | `$roll-research "subject"` |
 | Patrol production for regressions | `$roll-sentinel patrol` |
@@ -142,6 +143,7 @@ Research → Design → Build → Check → Fix → (loop)
 | `$roll-build` | DESIGN+BUILD | Universal entry: Story ID, fix ID, or free-text fly mode |
 | `$roll-design` | DESIGN | Explore approaches → design solution → write Stories to BACKLOG |
 | `$roll-fix` | FIX | Bug fix / hotfix from BACKLOG |
+| `$roll-jot` | Support | Fast capture a bug or idea into BACKLOG.md |
 | `$roll-spar` | BUILD | Adversarial TDD — Attacker writes tests, Defender writes code |
 | `$roll-sentinel` | CHECK | Scheduled production patrol |
 | `$roll-debug` | CHECK | Deep page diagnostics + root cause analysis |
@@ -150,6 +152,7 @@ Research → Design → Build → Check → Fix → (loop)
 | `$roll-.qa` | Support | Test pyramid and coverage standards reference |
 | `$roll-.changelog` | Support | Auto-generate CHANGELOG from BACKLOG |
 | `$roll-.echo` | Support | Passive intent clarification |
+| `$roll-.clarify` | Support | Passive scope clarification for vague build requests |
 
 ---
 
