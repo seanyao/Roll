@@ -861,53 +861,6 @@ _write_env_example() {
 EOF
 }
 
-# ─── Worktree helpers ────────────────────────────────────────────────────────
-_wt_dir()    { echo ".worktrees/$(echo "$1" | tr '[:upper:]' '[:lower:]')"; }
-_wt_branch() { echo "wt/$(echo "$1" | tr '[:upper:]' '[:lower:]')"; }
-
-_validate_story_id() {
-  [[ "$1" =~ ^[A-Z]+-[A-Z]+-[0-9]+$ ]] || {
-    err "Invalid story ID: $1  故事 ID 格式错误"
-    err "Expected: US-FEAT-001  预期格式: US-FEAT-001"
-    return 1
-  }
-}
-
-_require_git_repo() {
-  git rev-parse --git-dir >/dev/null 2>&1 || {
-    err "Not inside a git repository  不在 git 仓库内"
-    exit 1
-  }
-}
-
-_require_backlog() {
-  [[ -f "BACKLOG.md" ]] || {
-    err "BACKLOG.md not found — run 'roll init' first  未找到 BACKLOG.md"
-    exit 1
-  }
-}
-
-# Update the status column of a BACKLOG.md table row matching <story-id>.
-# Uses awk + mktemp for portability (avoids sed -i macOS/Linux incompatibility).
-_backlog_set_status() {
-  local story_id="$1" new_status="$2" tmp
-  grep -q "$story_id" BACKLOG.md 2>/dev/null || {
-    err "Story $story_id not found in BACKLOG.md"
-    return 1
-  }
-  tmp="$(mktemp)"
-  awk -v id="$story_id" -v status="$new_status" '
-    $0 ~ id {
-      n = split($0, cols, "|")
-      cols[4] = " " status " "
-      result = ""
-      for (i = 1; i <= n; i++) result = result "|" cols[i]
-      print result; next
-    }
-    { print }
-  ' BACKLOG.md > "$tmp" && mv "$tmp" BACKLOG.md
-}
-
 # ─── Helper: detect project type from existing AGENTS.md ─────────────────────
 detect_project_type() {
   local agents_file="$1/AGENTS.md"
@@ -1149,188 +1102,6 @@ cmd_clean() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COMMAND: worktree
-# Manage parallel story worktrees for multi-terminal development
-# ═══════════════════════════════════════════════════════════════════════════════
-_wt_add() {
-  local story_id="${1:-}"
-  [[ -n "$story_id" ]] || { err "Usage: roll worktree add <US-XXX>"; exit 1; }
-  _validate_story_id "$story_id" || exit 1
-  _require_git_repo
-  _require_backlog
-
-  local wt_dir branch
-  wt_dir="$(_wt_dir "$story_id")"
-  branch="$(_wt_branch "$story_id")"
-
-  if [[ -d "$wt_dir" ]]; then
-    err "Worktree already exists: $wt_dir  工作树已存在"
-    exit 1
-  fi
-
-  if git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    err "Branch already exists: $branch  分支已存在"
-    err "Run 'roll worktree remove $story_id' to clean up first"
-    exit 1
-  fi
-
-  if ! grep -qF ".worktrees/" .gitignore 2>/dev/null; then
-    warn ".worktrees/ is not in .gitignore — consider adding it  建议将 .worktrees/ 加入 .gitignore"
-  fi
-
-  info "Creating worktree for $story_id...  正在创建工作树..."
-  git worktree add "$wt_dir" -b "$branch"
-  ok "Worktree created: $wt_dir (branch: $branch)"
-
-  _backlog_set_status "$story_id" "🔄 Active" && \
-    ok "BACKLOG.md: $story_id → 🔄 Active"
-  git add BACKLOG.md
-  git commit -m "chore: mark $story_id as active in backlog"
-
-  local abs_path
-  abs_path="$(pwd)/$wt_dir"
-  echo ""
-  echo -e "  ${BOLD}To start working:${NC}"
-  echo -e "  cd $abs_path"
-  echo ""
-  echo -e "  ${CYAN}# Or add to ~/.zshrc for quick navigation:${NC}"
-  echo -e "  cdwt() { cd \"\$(git rev-parse --show-toplevel)/.worktrees/\$(echo \"\$1\" | tr '[:upper:]' '[:lower:]')\"; }"
-  echo -e "  cdwt $story_id"
-}
-
-_wt_list() {
-  _require_git_repo
-
-  echo -e "${BOLD}Active Worktrees  活跃工作树${NC}"
-  echo ""
-
-  local found=0
-  local cur_path="" cur_branch=""
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ ^worktree\ (.+)$ ]]; then
-      cur_path="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^branch\ refs/heads/(.+)$ ]]; then
-      cur_branch="${BASH_REMATCH[1]}"
-    elif [[ -z "$line" ]] && [[ "$cur_path" == *"/.worktrees/"* || "$cur_path" == *"/.worktrees" ]]; then
-      local slug story_id status_col
-      slug="${cur_path##*/.worktrees/}"
-      story_id="$(echo "$slug" | tr '[:lower:]' '[:upper:]')"
-      status_col=$(grep "$story_id" BACKLOG.md 2>/dev/null | \
-        awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4); print $4}' | head -1)
-
-      echo -e "  ${GREEN}+${NC} ${BOLD}${story_id}${NC}"
-      echo -e "      path:    ${cur_path/#$(pwd)\//}"
-      echo -e "      branch:  ${cur_branch}"
-      [[ -n "$status_col" ]] && echo -e "      backlog: ${status_col}"
-      echo ""
-      found=$((found + 1))
-      cur_path="" cur_branch=""
-    elif [[ -z "$line" ]]; then
-      cur_path="" cur_branch=""
-    fi
-  done < <(git worktree list --porcelain 2>/dev/null; echo "")
-
-  if [[ "$found" -eq 0 ]]; then
-    info "No active worktrees.  没有活跃工作树。"
-    info "Start one with: roll worktree add <US-XXX>"
-  fi
-}
-
-_wt_remove() {
-  local story_id="${1:-}"
-  [[ -n "$story_id" ]] || { err "Usage: roll worktree remove <US-XXX>"; exit 1; }
-  _validate_story_id "$story_id" || exit 1
-  _require_git_repo
-  _require_backlog
-
-  local wt_dir branch
-  wt_dir="$(_wt_dir "$story_id")"
-  branch="$(_wt_branch "$story_id")"
-
-  if [[ ! -d "$wt_dir" ]]; then
-    err "Worktree not found: $wt_dir  工作树不存在"
-    exit 1
-  fi
-
-  warn "This will remove worktree '$wt_dir' and delete branch '$branch'."
-  warn "Uncommitted changes will be lost.  未提交的更改将丢失。"
-  echo -n "  Continue? [y/N] "
-  read -r answer
-  [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted.  已取消。"; return; }
-
-  git worktree remove "$wt_dir" --force
-  git branch -D "$branch" 2>/dev/null || true
-
-  _backlog_set_status "$story_id" "📋 Todo" && \
-    ok "BACKLOG.md: $story_id → 📋 Todo"
-  git add BACKLOG.md
-  git commit -m "chore: revert $story_id to todo in backlog"
-  ok "Worktree removed: $wt_dir"
-}
-
-_wt_finish() {
-  local story_id="${1:-}"
-  [[ -n "$story_id" ]] || { err "Usage: roll worktree finish <US-XXX>"; exit 1; }
-  _validate_story_id "$story_id" || exit 1
-  _require_git_repo
-  _require_backlog
-
-  local wt_dir branch
-  wt_dir="$(_wt_dir "$story_id")"
-  branch="$(_wt_branch "$story_id")"
-
-  if [[ ! -d "$wt_dir" ]]; then
-    err "Worktree not found: $wt_dir  工作树不存在"
-    exit 1
-  fi
-
-  if ! git -C "$wt_dir" diff --quiet 2>/dev/null || \
-     ! git -C "$wt_dir" diff --cached --quiet 2>/dev/null; then
-    err "Worktree has uncommitted changes. Commit or stash first.  工作树有未提交的更改"
-    exit 1
-  fi
-
-  local default_branch
-  default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | \
-    sed 's|refs/remotes/origin/||') || default_branch="main"
-
-  info "Merging $branch → $default_branch..."
-  git merge "$branch" --no-ff -m "merge: $story_id from $branch"
-
-  git worktree remove "$wt_dir"
-  git branch -D "$branch" 2>/dev/null || true
-
-  ok "Finished: $story_id merged to $default_branch"
-  info "Mark $story_id as ✅ Done in BACKLOG.md after Verification Gate passes."
-}
-
-cmd_worktree() {
-  local subcmd="${1:-}"
-  shift || true
-
-  case "$subcmd" in
-    add)    _wt_add "$@" ;;
-    list)   _wt_list ;;
-    remove) _wt_remove "$@" ;;
-    finish) _wt_finish "$@" ;;
-    ""|-h|--help|help)
-      echo "Usage: roll worktree <subcommand>  用法: roll worktree <子命令>"
-      echo ""
-      echo "  add <US-XXX>     Create worktree + branch, mark BACKLOG 🔄 Active   创建工作树，标记为进行中"
-      echo "  list             Show all active worktrees with story info           列出所有活跃工作树"
-      echo "  remove <US-XXX>  Remove worktree + branch, revert BACKLOG 📋 Todo   删除工作树，还原状态"
-      echo "  finish <US-XXX>  Merge to main and cleanup                           合并至主分支并清理"
-      ;;
-    *)
-      err "Unknown worktree subcommand: $subcmd  未知子命令: $subcmd"
-      cmd_worktree help
-      exit 1
-      ;;
-  esac
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: status
 # Show current state of conventions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1451,32 +1222,6 @@ cmd_status() {
   fi
 
   echo ""
-  echo -e "${BOLD}Active worktrees:  活跃工作树${NC}"
-  if git rev-parse --git-dir >/dev/null 2>&1; then
-    local _wt_found=0
-    local _wt_cur_path=""
-    while IFS= read -r _wt_line || [[ -n "$_wt_line" ]]; do
-      if [[ "$_wt_line" =~ ^worktree\ (.+)$ ]]; then
-        _wt_cur_path="${BASH_REMATCH[1]}"
-      elif [[ -z "$_wt_line" ]] && [[ "$_wt_cur_path" == *"/.worktrees/"* ]]; then
-        local _wt_slug _wt_sid
-        _wt_slug="${_wt_cur_path##*/.worktrees/}"
-        _wt_sid="$(echo "$_wt_slug" | tr '[:lower:]' '[:upper:]')"
-        echo -e "  ${GREEN}+${NC} ${_wt_sid}  ${_wt_cur_path/#$(pwd)\//}"
-        _wt_found=$((_wt_found + 1))
-        _wt_cur_path=""
-      elif [[ -z "$_wt_line" ]]; then
-        _wt_cur_path=""
-      fi
-    done < <(git worktree list --porcelain 2>/dev/null; echo "")
-    if [[ "$_wt_found" -eq 0 ]]; then
-      echo -e "  (none)  — run 'roll worktree add <US-XXX>' to start"
-    fi
-  else
-    echo -e "  (not a git repo — worktrees unavailable)"
-  fi
-
-  echo ""
   echo -e "${BOLD}Templates:  模板${NC}"
   for tpl in fullstack frontend-only backend-service cli; do
     if [[ -d "$ROLL_TEMPLATES/$tpl" ]]; then
@@ -1535,19 +1280,15 @@ usage() {
   echo "  sync [-f]              [Everyday] repo → ~/.roll/ → AI tools               日常更新：从仓库拉取并同步到所有工具"
   echo "  init                   [Project] Create AGENTS.md + BACKLOG.md + docs/     初始化项目工作流文件"
   echo "  hook [install|remove]  [Optional] Manage global git hook                  管理全局 git hook"
-  echo "  worktree <sub>         [Project] Manage parallel story worktrees          管理并行故事工作树"
   echo "  status                 [Diagnostic] Show current state                    显示当前状态"
   echo "  reset                  [Recovery] Force-rebuild from repo source           强制从仓库源重建"
   echo "  clean                  [Legacy] Remove ~/.wukong/ ~/.cybernetix/ remnants  清理遗留文件"
   echo ""
   echo "Examples / 示例:"
-  echo "  roll setup                          # New machine: first-time install             新机器：首次安装"
-  echo "  roll sync                           # Pull latest from repo + sync to AI tools   拉取最新并同步到 AI 工具"
-  echo "  roll init                           # New or re-merge project (run in project)   新建或重新合并（项目目录）"
-  echo "  roll hook install                   # Optional: tag commits with AI client       可选：提交时标记 AI 工具"
-  echo "  roll worktree add US-FEAT-001       # Start parallel story in isolated worktree  开始并行开发故事"
-  echo "  roll worktree list                  # Show active worktrees                      显示活跃工作树"
-  echo "  roll worktree finish US-FEAT-001    # Merge and cleanup                          合并并清理"
+  echo "  roll setup                    # New machine: first-time install             新机器：首次安装"
+  echo "  roll sync                     # Pull latest from repo + sync to AI tools   拉取最新并同步到 AI 工具"
+  echo "  roll init                     # New or re-merge project (run in project)   新建或重新合并（项目目录）"
+  echo "  roll hook install             # Optional: tag commits with AI client       可选：提交时标记 AI 工具"
 }
 
 main() {
@@ -1558,8 +1299,7 @@ main() {
     setup)         cmd_setup "$@" ;;
     sync)          cmd_sync "$@" ;;
     init)          cmd_init "$@" ;;
-    hook)          cmd_hook "$@" ;;
-    worktree)      cmd_worktree "$@" ;;
+    hook)         cmd_hook "$@" ;;
     reset)         cmd_reset "$@" ;;
     clean)         cmd_clean "$@" ;;
     status)        cmd_status "$@" ;;

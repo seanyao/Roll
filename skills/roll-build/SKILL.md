@@ -75,32 +75,15 @@ Conflict detection:
   └── Different directories → safe to parallelize
 ```
 
-**If 2+ Actions can run in parallel, two usage patterns apply — do not mix them:**
-
-#### AI-Internal Parallel Dispatch (sub-agent sessions within a single roll-build run)
+**If 2+ Actions can run in parallel, automatically enable Worktree isolation:**
 
 ```bash
 git worktree add .worktrees/{action-id} -b dispatch/{action-id}
 ```
 
-Branch prefix: `dispatch/`. Used only by AI sub-agents automatically spawned within this session.
-
 - Each sub-agent executes TCR in its own worktree
 - Sub-agent briefs must be **self-contained** (include: what to do, where, how to verify, what not to do)
 - After all complete: review each → merge to main → run integration tests → clean up worktrees
-
-#### Human-Driven Parallel Development (multiple terminal sessions)
-
-When the operator wants to run multiple stories in parallel across terminals, use the CLI — do NOT create worktrees manually:
-
-```bash
-roll worktree add US-FEAT-001   # Terminal 1
-roll worktree add US-FEAT-002   # Terminal 2
-roll worktree list              # See all active worktrees
-roll worktree finish US-FEAT-001  # Merge and cleanup when done
-```
-
-Branch prefix: `wt/`. The CLI manages BACKLOG.md status updates (📋 Todo → 🔄 Active) automatically. If you see a `wt/*` branch in the repo, a human operator owns it — do not delete or clobber it.
 
 **Status notifications (required):**
 
