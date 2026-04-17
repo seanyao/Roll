@@ -14,11 +14,11 @@ Stories in the current iteration
 
 Ready for development, already planned
 
-<!-- $wk-design will create new Stories here -->
+<!-- $roll-design will create new Stories here -->
 
 ## 🔄 In Progress
 
-<!-- $wk-story-build will update here -->
+<!-- $roll-build will update here -->
 
 ## ✅ Completed
 

@@ -32,16 +32,16 @@ plans:
 - Split into Stories
 - Write to BACKLOG.md
 
-### Build → $roll-story-build / $roll-fix-build / $roll-fly-build
+### Build → $roll-build / $roll-fix
 - Read BACKLOG and execute
 - TCR development (independent Actions auto-parallelized + Worktree isolation)
 - CI/CD deployment
 
-### Check → $roll-sentinel / $roll-bb-debug
+### Check → $roll-sentinel / $roll-debug
 - Sentinel: Scheduled patrol
-- $roll-bb-debug: Deep diagnosis
+- $roll-debug: Deep diagnosis
 
-### Fix → $roll-fix-build / $roll-design
+### Fix → $roll-fix / $roll-design
 - Fix issues
 - Or re-plan
 

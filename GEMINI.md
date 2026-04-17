@@ -18,7 +18,7 @@
 
 - When running shell commands, prefer the most specific tool available.
 - For file operations, verify the file exists before modifying.
-- When a project has CNX workflow, follow the AGENTS.md conventions and use CNX skills.
+- When a project has Roll workflow, follow the AGENTS.md conventions and use Roll skills.
 - Prefer targeted edits over full file rewrites.
 
 ## Frontend Default Stack
@@ -44,4 +44,4 @@
 - No server, no frontend. CLI tool only.
 - Test commands by running them, not just unit tests.
 - Run `npm run build && node dist/index.js --help` before pushing.
-- Follow the project AGENTS.md for architecture constraints and CNX workflow.
+- Follow the project AGENTS.md for architecture constraints and Roll workflow.

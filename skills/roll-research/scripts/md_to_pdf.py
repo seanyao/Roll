@@ -202,7 +202,7 @@ a {
 
 
 def md_to_html(md_text, title="Deep Research Report", subtitle="Let's roll",
-               meta_line="", author="wukong"):
+               meta_line="", author="roll"):
     """Convert Markdown to HTML with cover page"""
 
     # Convert body with markdown library
@@ -254,7 +254,7 @@ def main():
     parser.add_argument("input", help="Input Markdown file path")
     parser.add_argument("output", help="Output PDF file path")
     parser.add_argument("--title", default=None, help="Report title")
-    parser.add_argument("--author", default="wukong", help="Author name")
+    parser.add_argument("--author", default="roll", help="Author name")
     parser.add_argument("--subtitle", default="Let's roll", help="Report subtitle")
     args = parser.parse_args()
 

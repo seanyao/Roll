@@ -3,7 +3,7 @@ hidden: true
 name: roll-.echo
 description: |
   Passive intent clarification skill. Automatically activates when user input is vague, rambling, contradictory, or unclear. Restates the user's intent in structured, concise form and confirms before proceeding. Does NOT activate when intent is already clear — in that case, just execute directly.
-  This is a passive skill. Never announce "I'm using wk-.echo." Just do it naturally: restate, confirm, proceed.
+  This is a passive skill. Never announce "I'm using roll-.echo." Just do it naturally: restate, confirm, proceed.
 ---
 
 # Echo
@@ -110,4 +110,4 @@ End with a natural confirmation prompt, then act on the response:
 
 **User**: "$roll-design search improvements"
 
-*→ Route to wk-design. No echo needed.*
+*→ Route to roll-design. No echo needed.*

@@ -1,6 +1,6 @@
 # Global Rules — Cursor
 
-# Extends AGENTS.md in ~/.wukong/conventions/global/ — read that first.
+# Extends AGENTS.md in ~/.roll/conventions/global/ — read that first.
 # This file adds Cursor-specific rules only.
 
 ## Identity
@@ -20,7 +20,7 @@
 - Prefer inline edits over full file rewrites.
 - Use @-references to relevant files when context is needed.
 - Tab completion suggestions should follow the code style in AGENTS.md.
-- When a project has CNX workflow, follow the AGENTS.md conventions.
+- When a project has Roll workflow, follow the AGENTS.md conventions.
 
 ## Frontend Default Stack
 
@@ -48,4 +48,4 @@
 - Exit codes: 0 = success, 1 = user error, 2 = system error.
 - Errors to stderr, results to stdout.
 - Support --help and --version on every command.
-- Follow AGENTS.md for architecture constraints and CNX workflow.
+- Follow AGENTS.md for architecture constraints and Roll workflow.
