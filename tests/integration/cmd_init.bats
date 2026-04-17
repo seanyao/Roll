@@ -55,6 +55,28 @@ wk_init() {
   [ -f "${PROJECT_DIR}/AGENTS.md" ]
 }
 
+@test "init: backfills BACKLOG.md when AGENTS.md exists but backlog is missing" {
+  run wk_init
+  [ "$status" -eq 0 ]
+  rm -f "${PROJECT_DIR}/BACKLOG.md"
+
+  run wk_init
+  [ "$status" -eq 0 ]
+  [ -f "${PROJECT_DIR}/AGENTS.md" ]
+  [ -f "${PROJECT_DIR}/BACKLOG.md" ]
+}
+
+@test "init: backfills docs/features when AGENTS.md exists but features dir is missing" {
+  run wk_init
+  [ "$status" -eq 0 ]
+  rm -rf "${PROJECT_DIR}/docs"
+
+  run wk_init
+  [ "$status" -eq 0 ]
+  [ -f "${PROJECT_DIR}/AGENTS.md" ]
+  [ -d "${PROJECT_DIR}/docs/features" ]
+}
+
 # ─── UX: clean completion message ────────────────────────────────────────────
 
 @test "init: output includes 'Initialized' on success" {

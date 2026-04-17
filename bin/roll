@@ -538,20 +538,23 @@ cmd_init() {
 
   local project_dir
   project_dir="$(pwd)"
+  local has_agents=false
   _WK_MERGE_SUMMARY=()
 
   if [[ -f "$project_dir/AGENTS.md" ]]; then
+    has_agents=true
     info "Re-merging global conventions...  正在重新合并全局约定..."
-    _merge_global_to_project "$project_dir"
-    print_merge_summary
-    echo ""
+  fi
+
+  _merge_global_to_project "$project_dir"
+  _write_backlog "$project_dir/BACKLOG.md"
+  _ensure_features_dir "$project_dir/docs/features"
+  print_merge_summary
+  echo ""
+
+  if [[ "$has_agents" == "true" ]]; then
     ok "Done.  完成。"
   else
-    _merge_global_to_project "$project_dir"
-    _write_backlog "$project_dir/BACKLOG.md"
-    mkdir -p "$project_dir/docs/features"
-    print_merge_summary
-    echo ""
     ok "Initialized.  已初始化。"
   fi
 }
@@ -796,7 +799,10 @@ _mkscaffold() { mkdir -p "$1"; touch "$1/.gitkeep"; }
 
 # ─── Helper: write starter BACKLOG.md (no-op if exists) ──────────────────────
 _write_backlog() {
-  [[ -f "$1" ]] && return
+  if [[ -f "$1" ]]; then
+    _WK_MERGE_SUMMARY+=("unchanged|BACKLOG.md")
+    return
+  fi
   cat > "$1" << 'EOF'
 # Project Backlog
 
@@ -808,6 +814,19 @@ _write_backlog() {
 | ID | Problem | Status |
 |----|---------|--------|
 EOF
+  ok "Created: BACKLOG.md"
+  _WK_MERGE_SUMMARY+=("created|BACKLOG.md")
+}
+
+_ensure_features_dir() {
+  if [[ -d "$1" ]]; then
+    _WK_MERGE_SUMMARY+=("unchanged|docs/features/")
+    return
+  fi
+
+  mkdir -p "$1"
+  ok "Created: docs/features/"
+  _WK_MERGE_SUMMARY+=("created|docs/features/")
 }
 
 # ─── Helper: write starter .gitignore (no-op if exists) ──────────────────────
