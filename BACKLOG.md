@@ -61,6 +61,12 @@
 | [US-DIST-003](docs/features/npm-distribution.md#us-dist-003) | Background version check + update nudge (24h cache) | ✅ Done |
 | [US-DIST-004](docs/features/npm-distribution.md#us-dist-004) | npm publish infrastructure (.npmignore, GH Actions, README) | ✅ Done |
 
+## Epic: Release Management
+### Feature: roll-release
+| Story | Description | Status |
+|-------|-------------|--------|
+| [US-REL-001](docs/features/roll-release.md#us-rel-001) | Add roll-release skill — one-command publish flow | 📋 Todo |
+
 ## Epic: Engineering Discipline Refactor
 ### Feature: refactor
 | Story | Description | Status |

@@ -154,6 +154,7 @@ Research → Design → Build → Check → Fix → (loop)
 | `$roll-sentinel` | CHECK | Scheduled production patrol |
 | `$roll-debug` | CHECK | Deep page diagnostics + root cause analysis |
 | `$roll-research` | RESEARCH | HV Analysis framework, outputs PDF report |
+| `$roll-release` | RELEASE | One-command publish: auto version (YYYY.MMDD.N) → tag → npm publish |
 | `$roll-.review` | Support | Pre-commit self code review |
 | `$roll-.qa` | Support | Test pyramid and coverage standards reference |
 | `$roll-.changelog` | Support | Auto-generate CHANGELOG from BACKLOG |
