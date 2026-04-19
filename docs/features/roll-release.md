@@ -1,7 +1,7 @@
 # Feature: roll-release
 
 <a id="us-rel-001"></a>
-## US-REL-001 Add roll-release skill — one-command publish flow 📋
+## US-REL-001 Add roll-release skill — one-command publish flow ✅
 
 **Created**: 2026-04-19
 
