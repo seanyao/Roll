@@ -70,15 +70,21 @@ git tag "v${version}"
 git push && git push --tags
 ```
 
-GitHub Actions `publish.yml` picks up the `v*` tag and auto-runs `npm publish`.
+### Step 5: Publish to npm
 
-### Step 5: Confirm
+```bash
+npm publish --access public
+```
 
-After push, show:
+This will open a browser for 2FA verification. Wait for it to complete before continuing.
+
+### Step 6: Confirm
+
+After publish, show:
 ```
 ✅ Released v{version}
 🏷  Tag: v{version} pushed to origin
-📦 npm publish triggered via GitHub Actions
+📦 npm published: @seanyao/roll@{version}
 🔗 https://www.npmjs.com/package/@seanyao/roll
 ```
 
