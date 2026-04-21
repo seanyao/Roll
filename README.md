@@ -141,6 +141,7 @@ Research → Design → Build → Check → Fix → (loop)
 | Deep research (product / company / tech) | `$roll-research "subject"` |
 | Patrol production for regressions | `$roll-sentinel patrol` |
 | Debug a broken page | `$roll-debug <URL>` |
+| Record a dev moment / diary entry | `$roll-notes "just fixed that nasty bug"` |
 
 ### Full Skill List
 
@@ -160,6 +161,7 @@ Research → Design → Build → Check → Fix → (loop)
 | `$roll-.changelog` | Support | Auto-generate CHANGELOG from BACKLOG |
 | `$roll-.echo` | Support | Passive intent clarification |
 | `$roll-.clarify` | Support | Passive scope clarification for vague build requests |
+| `$roll-notes` | Support | Project diary — append dev moments to `notes/YYYY-MM-DD.md` |
 
 ---
 
