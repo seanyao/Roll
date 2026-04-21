@@ -1008,7 +1008,7 @@ cmd_reset() {
 # Update roll to latest version (npm update or git pull), then re-sync
 # ═══════════════════════════════════════════════════════════════════════════════
 _is_git_install() {
-  git -C "$ROLL_PKG_DIR" rev-parse --git-dir &>/dev/null 2>&1
+  [[ -d "$ROLL_PKG_DIR/.git" ]]
 }
 
 cmd_update() {
