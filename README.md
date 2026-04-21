@@ -70,7 +70,6 @@ Unified behavioral conventions for Claude Code / Gemini CLI / Cursor / Codex —
 | `roll hook install` | Optional: global git hook for AI client auto-detection |
 | `roll reset` | Force-rebuild local cache from repo source, then re-sync |
 | `roll status` | Show sync state, skill links, and detected AI tools |
-| `roll clean` | Remove legacy `~/.wukong/` or `~/.cybernetix/` remnants |
 
 ### Typical Flow
 

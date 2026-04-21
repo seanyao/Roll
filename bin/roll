@@ -1029,104 +1029,6 @@ cmd_update() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COMMAND: clean
-# Remove legacy ~/.cybernetix/ and ~/.wukong/ remnants after migration
-# ═══════════════════════════════════════════════════════════════════════════════
-cmd_clean() {
-  local found=false
-
-  echo -e "${BOLD}Roll Legacy Cleanup  清理旧版遗留文件${NC}"
-  echo ""
-
-  # Detect what exists
-  for legacy_dir in "$HOME/.cybernetix" "$HOME/.wukong"; do
-    [[ -d "$legacy_dir" ]] && found=true
-  done
-  for legacy_bin in "$HOME/.local/bin/cybernetix" "$HOME/.local/bin/wukong"; do
-    { [[ -L "$legacy_bin" ]] || [[ -f "$legacy_bin" ]]; } && found=true
-  done
-  # Old skill symlinks
-  local ai_dirs=("$HOME/.claude" "$HOME/.gemini" "$HOME/.kimi" "$HOME/.codex" "$HOME/.cursor")
-  for ai_dir in "${ai_dirs[@]}"; do
-    local skills_dir="$ai_dir/skills"
-    [[ -d "$skills_dir" ]] || continue
-    if find "$skills_dir" -maxdepth 1 -type l \( -name "wk-*" -o -name "cnx-*" \) 2>/dev/null | grep -q .; then
-      found=true
-    fi
-  done
-
-  if [[ "$found" == "false" ]]; then
-    ok "Nothing to clean — no legacy files found.  未发现遗留文件。"
-    return
-  fi
-
-  # Show what will be removed
-  info "Found legacy items to remove:  发现以下遗留文件："
-  echo ""
-  for d in "$HOME/.cybernetix" "$HOME/.wukong"; do
-    [[ -d "$d" ]] && echo -e "  ${RED}✕${NC} ${d/#$HOME/~}/"
-  done
-  for b in "$HOME/.local/bin/cybernetix" "$HOME/.local/bin/wukong"; do
-    { [[ -L "$b" ]] || [[ -f "$b" ]]; } && echo -e "  ${RED}✕${NC} ${b/#$HOME/~}"
-  done
-  for ai_dir in "${ai_dirs[@]}"; do
-    local skills_dir="$ai_dir/skills"
-    [[ -d "$skills_dir" ]] || continue
-    local old_links
-    old_links=$(find "$skills_dir" -maxdepth 1 -type l \( -name "wk-*" -o -name "cnx-*" \) 2>/dev/null || true)
-    if [[ -n "$old_links" ]]; then
-      local count
-      count=$(echo "$old_links" | wc -l | tr -d ' ')
-      echo -e "  ${RED}✕${NC} ${skills_dir/#$HOME/~}/ ($count legacy symlinks)"
-    fi
-  done
-
-  echo ""
-  echo -n "  Remove all of the above? [y/N] "
-  read -r answer
-  [[ "$answer" =~ ^[Yy]$ ]] || { info "Aborted.  已取消。"; return; }
-
-  echo ""
-  local removed=0
-
-  # Remove legacy home dirs
-  for d in "$HOME/.cybernetix" "$HOME/.wukong"; do
-    if [[ -d "$d" ]]; then
-      rm -rf "$d"
-      ok "Removed: ${d/#$HOME/~}  已删除: ${d/#$HOME/~}"
-      removed=$((removed + 1))
-    fi
-  done
-
-  # Remove legacy binaries
-  for b in "$HOME/.local/bin/cybernetix" "$HOME/.local/bin/wukong"; do
-    if [[ -L "$b" ]] || [[ -f "$b" ]]; then
-      rm -f "$b"
-      ok "Removed: ${b/#$HOME/~}  已删除: ${b/#$HOME/~}"
-      removed=$((removed + 1))
-    fi
-  done
-
-  # Remove legacy skill symlinks
-  for ai_dir in "${ai_dirs[@]}"; do
-    local skills_dir="$ai_dir/skills"
-    [[ -d "$skills_dir" ]] || continue
-    local old_links
-    old_links=$(find "$skills_dir" -maxdepth 1 -type l \( -name "wk-*" -o -name "cnx-*" \) 2>/dev/null || true)
-    if [[ -n "$old_links" ]]; then
-      while IFS= read -r link; do rm -f "$link"; done <<< "$old_links"
-      local count
-      count=$(echo "$old_links" | wc -l | tr -d ' ')
-      ok "Removed $count legacy symlinks from ${skills_dir/#$HOME/~}  已删除 $count 个遗留软链接"
-      removed=$((removed + count))
-    fi
-  done
-
-  echo ""
-  ok "Cleaned $removed legacy items.  已清理 $removed 个遗留文件。"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: status
 # Show current state of conventions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1308,7 +1210,6 @@ usage() {
   echo "  hook [install|remove]  [Optional] Manage global git hook                  管理全局 git hook"
   echo "  status                 [Diagnostic] Show current state                    显示当前状态"
   echo "  reset                  [Recovery] Force-rebuild from package source        强制从包源重建"
-  echo "  clean                  [Legacy] Remove ~/.wukong/ ~/.cybernetix/ remnants  清理遗留文件"
   echo ""
   echo "Examples / 示例:"
   echo "  roll setup                    # New machine: first-time install             新机器：首次安装"
@@ -1328,7 +1229,6 @@ main() {
     hook)         cmd_hook "$@" ;;
     update)        cmd_update "$@" ;;
     reset)         cmd_reset "$@" ;;
-    clean)         cmd_clean "$@" ;;
     status)        cmd_status "$@" ;;
     version|--version|-v) echo "roll v${VERSION}" ;;
     help|--help|-h|"") usage ;;
