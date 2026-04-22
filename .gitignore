@@ -30,3 +30,6 @@ npm-debug.log*
 
 # Claude Code agent worktrees (auto-created, should not be tracked)
 .claude/worktrees/
+
+# Skill-creator local workspace (baselines and trigger-eval fixtures)
+.skill-creator-workspace/
