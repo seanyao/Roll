@@ -1,6 +1,6 @@
 ---
 name: roll-jot
-description: "Fast backlog capture. Analyzes a short description, classifies it as bug or idea, and appends it to BACKLOG.md with an auto-incremented ID."
+description: 'Use when capturing a thought to BACKLOG without starting work. Triggers: "记一下", "先存 backlog", "加到待办", "先不做", "临时想到", "quick jot", "capture this idea", "log a bug for later". Typical: "$roll-jot 评价页面要支持星星", "记一下 HOD 加批量导出", "先存 backlog 别做". Flow: classify one-liner as FIX-NNN (bug) or IDEA-NNN (idea) → assign next ID → append single row to BACKLOG.md without touching existing entries. Do NOT trigger: fix named FIX-XXX (use roll-fix), implement feature (use roll-build), discuss approach (use roll-design), diagnose page (use roll-debug).'
 ---
 
 # roll-jot

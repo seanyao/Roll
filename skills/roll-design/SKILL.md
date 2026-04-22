@@ -1,6 +1,6 @@
 ---
 name: roll-design
-description: Unified entry for discussion, design and planning. Explores options when uncertain, designs solutions, splits into INVEST-compliant user stories, and writes to BACKLOG.md. Use when user wants to discuss approaches, design solutions, plan features, or create stories.
+description: 'Use when discussing approaches, designing architecture, or splitting requirements into INVEST Stories. Triggers: "怎么选", "方案", "设计", "how should we", "approach for X", "plan this feature", "split into stories". Typical: "$roll-design user system", "FTS 还是 Meilisearch 怎么选", "帮我设计登录", "把这个需求拆成 Story". Flow: clarify if vague → discuss options if uncertain → design solution → write docs/features/<feature>-plan.md → split INVEST Stories → append index row to BACKLOG. Do NOT trigger: capture without deciding (use roll-jot), execute known US-XXX (use roll-build), fix known bug (use roll-fix), diagnose live page (use roll-debug).'
 ---
 
 # Design

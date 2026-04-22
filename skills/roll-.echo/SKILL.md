@@ -1,9 +1,7 @@
 ---
 hidden: true
 name: roll-.echo
-description: |
-  Passive intent clarification skill. Automatically activates when user input is vague, rambling, contradictory, or unclear. Restates the user's intent in structured, concise form and confirms before proceeding. Does NOT activate when intent is already clear — in that case, just execute directly.
-  This is a passive skill. Never announce "I'm using roll-.echo." Just do it naturally: restate, confirm, proceed.
+description: 'Passive intent clarification. Auto-activates when user input is vague, rambling, contradictory, or unclear — restates intent in structured form, confirms, then proceeds. Activation signals: long rambling (>3 sentences no clear ask), multiple ideas tangled with no priority, contradictions ("X but also not-X"). Typical: user pastes 5 paragraphs with no verb, user says "随便搞搞那个东西", user message flips mid-sentence. Do NOT activate: intent already clear and actionable ("add login button to header"), user typed a specific skill command ("$roll-build US-001"), user is answering a question you asked, misinterpretation risk is negligible. Never announce "I''m using roll-.echo" — just do it naturally: restate, confirm, proceed.'
 ---
 
 # Echo

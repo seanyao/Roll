@@ -1,7 +1,7 @@
 ---
 hidden: true
 name: roll-.review
-description: Self code review step in the TCR workflow. Runs after each micro-step is completed and before commit, checking code quality, security, and design issues.
+description: 'Self code review gate in the TCR loop. Auto-invoked by roll-build and roll-fix after each green micro-step and before commit. Triggers: automatic after TCR green, or manual "review current changes", "审一下这个 diff", "帮我自审". Checks: security (secrets, injection, auth), maintainability (naming, duplication, complexity), performance (obvious hot paths), scope (no orthogonal changes). Flow: scan diff → classify findings as 🔴 Critical / 🟡 Improvement / 🟢 OK → Critical blocks commit and routes back to fix → Improvement is advisory. Do NOT use for: full-repo audit (use separate code-review agent), security-focused pentest, formal PR review on external contributions.'
 ---
 
 # WK Self Code Review

@@ -1,9 +1,6 @@
 ---
 name: roll-research
-description: |
-  HV (Horizontal-Vertical) Analysis deep research skill for products, companies, concepts, technologies, or people. Dual-axis: vertical traces full lifecycle narrative from origin to present; horizontal compares against competitors at current time; cross-axis produces new insights. Output: professionally formatted PDF report.
-  Trigger: "deep research", "research this", "competitive analysis", "help me understand", "what's the deal with", "deep dive", "HV analysis", or any request implying systematic research (not a simple lookup).
-  Do not use for: simple definitions, short-form content writing, or pure title/summary generation.
+description: 'Use when doing systematic HV (Horizontal-Vertical) deep research on a product, company, concept, tech, or person. Triggers: "deep research", "调研", "对比", "选型", "competitive analysis", "help me understand X", "what''s the deal with", "deep dive", "HV analysis". Typical: "$roll-research 消息队列选型", "Postgres FTS vs Meilisearch 横纵对比", "调研 B2B 权限模型", "help me understand ReBAC". Flow: vertical axis traces lifecycle from origin → present; horizontal axis compares competitors at current time; cross-axis produces insights → professionally formatted PDF report. Do NOT trigger: simple definition lookup (use WebSearch), feature design (use roll-design), title/summary generation, short-form content writing.'
 ---
 
 # Deep Research (HV Analysis)

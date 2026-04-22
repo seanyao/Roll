@@ -1,6 +1,6 @@
 ---
 name: roll-debug
-description: Universal web debugger. Collects diagnostics (console/network/DOM) via Playwright, analyzes root causes, and suggests fixes. Works with or without Black Box (BB) integration.
+description: 'Use when diagnosing a broken web page — collect diagnostics, analyze root cause, suggest fix. Triggers: "页面白屏", "debug the page", "see what''s wrong", "功能不生效", "page shows blank", user uploads diagnostics-*.json or bb-report.json. Typical: "$roll-debug https://...", "页面挂了看看", "帮我分析这份 bb-report", "search 为啥没结果". Flow: pick mode (native Black Box click or Playwright universal collector) → gather console/network/DOM/screenshot → analyze → propose fix. Do NOT trigger: known FIX-XXX ready to fix (use roll-fix), backlog tracking only (use roll-jot), scheduled production patrol (use roll-sentinel).'
 ---
 
 # Roll Debug

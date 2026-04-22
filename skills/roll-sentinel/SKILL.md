@@ -1,6 +1,6 @@
 ---
 name: roll-sentinel
-description: Smart patrol inspector for production systems. Scheduled randomized sampling checks based on BACKLOG requirements. Cost-controlled AI validation with intelligent spot-checking logic.
+description: 'Use when running smart patrol on production — scheduled randomized sampling against BACKLOG acceptance criteria, cost-controlled. Triggers: "patrol", "巡检", "线上回归检查", "sentinel start", "抽查", "daily check", cron trigger. Typical: "$roll-sentinel daily", "帮我跑一轮巡检", "check production 随机抽一批", "重要功能抽查一下". Flow: pick sample from BACKLOG by weighted randomization (priority + risk + time-since-last-check) → run cost-controlled AI validation → report anomalies with reproduction steps. Do NOT trigger: single page diagnosis (use roll-debug), hotfix (use roll-fix), release (use roll-release), exhaustive full-coverage QA (sentinel samples by design).'
 ---
 
 # Sentinel

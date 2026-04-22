@@ -1,7 +1,7 @@
 ---
 hidden: true
 name: roll-.qa
-description: QA coverage reference for build skills. Defines test pyramid (unit/E2E/visual/smoke), coverage requirements, and CI gates. Ensures quality assurance across all testing layers.
+description: 'QA test pyramid reference for build skills. Used by roll-build and roll-fix during Test Design Review to decide required coverage per layer. Triggers: automatic during roll-build/roll-fix planning, or manual "check test coverage plan", "测试分层怎么定". Defines: unit (Vitest/Jest, business logic, >80% coverage), E2E (Playwright, critical user flows), visual regression (screenshot diff for UI), smoke (minimal post-deploy check). Also specifies CI gates: tests MUST pass before commit, coverage threshold enforced at PR, new architecture introductions require data-flow integration test. Do NOT use for: ad-hoc test writing (just write the test), test strategy debate (use roll-design), test failure triage (use roll-debug with test output).'
 ---
 
 # QA Cover

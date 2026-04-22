@@ -1,6 +1,6 @@
 ---
 name: roll-fix
-description: Execute bugfix/hotfix from backlog. Reads FIX/BUG from BACKLOG.md, delivers via TCR workflow. Lighter than story-build, focused on single-issue fixes.
+description: 'Use when executing a single bugfix or hotfix through guarded TCR. Triggers: FIX-XXX / BUG-XXX ID, "hotfix", "线上挂了", "生产 bug", "修这个 bug", "hotfix production". Typical: "$roll-fix FIX-AUTH-003", "hotfix 登录 500", "修一下这个 bug", "生产挂了赶紧修". Flow: write regression test → minimal fix → commit on green / revert on red → local CI → self-review → push → wait for CI → deploy → verify online → update BACKLOG status. Do NOT trigger: new feature or US-XXX (use roll-build), capture bug only (use roll-jot), discuss repair strategy (use roll-design), diagnose live page without FIX ID (use roll-debug first).'
 ---
 
 # Fix Ship (TCR Edition)

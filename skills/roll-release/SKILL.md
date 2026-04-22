@@ -1,6 +1,6 @@
 ---
 name: roll-release
-description: Release skill for roll maintainers. Calculates next version (YYYY.MMDD.N format, auto-increments N from today's git tags), updates VERSION in bin/roll and package.json, commits, tags, and pushes to trigger npm auto-publish via GitHub Actions. Trigger: "release", "publish", "发版", "发布新版本".
+description: 'Use when publishing a new roll version (maintainer-only, not for end-user projects). Triggers: "release", "publish", "发版", "发布新版本", "bump version", "tag a release". Typical: "$roll-release", "发个新版", "publish a release", "打个 tag 发一下". Flow: compute next version (YYYY.MMDD.N, N auto-increments from today''s git tags) → update VERSION in bin/roll and package.json → commit → tag → push → GitHub Actions auto-publishes to npm. Do NOT trigger: user project deployment (Roll has no generic deploy skill — delegate to project CI), dependency bump (edit package.json directly), generate changelog (auto-invoked by roll-.changelog after release).'
 ---
 
 # Release (roll-release)

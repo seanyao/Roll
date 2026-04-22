@@ -1,7 +1,7 @@
 ---
 hidden: true
 name: roll-.changelog
-description: After build completion, extracts completed Stories from BACKLOG.md to generate CHANGELOG.md. Auto-triggered after successful deploy, keeping the external changelog in sync with the internal backlog.
+description: 'Auto-triggered after successful deploy of roll-build or roll-fix to regenerate user-facing CHANGELOG.md from BACKLOG completed Stories. Triggers: automatic post-deploy, or manual "update changelog", "生成 release notes", "refresh CHANGELOG". Flow: read most recent git tag (YYYY.MMDD.N via git describe) → scan BACKLOG for ✅ Done since last release → group by Added / Fixed / Improved → prepend new version section (reverse chronological) → commit "docs: update changelog for <version>" → push. Do NOT use for: internal engineering notes (they stay in BACKLOG), unreleased items (wait for next deploy), marketing copy, version bump (use roll-release).'
 ---
 
 # WK Generate Changelog

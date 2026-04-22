@@ -1,6 +1,6 @@
 ---
 name: roll-spar
-description: Adversarial TDD mode with Attacker/Defender agents. Attacker writes tests to break the system, Defender writes minimal code to pass. Use for high-risk logic like auth, payments, data integrity, or complex state machines.
+description: 'Use when building high-risk logic with adversarial TDD — Attacker writes breaking tests, Defender writes minimal passing code. Triggers: "$roll-spar", "adversarial TDD", "对抗测试", "spar mode", or auto-route from roll-build when Story involves auth / payment / data integrity / concurrency / complex state machine. Typical: "$roll-spar US-AUTH-010", "这个支付逻辑用 spar 模式", "状态机跑对抗测试", "权限变更用 spar". Flow: Attacker agent drafts edge-case + failure tests → Defender agent writes minimal code → iterate until Defender survives all Attacker tests → commit. Do NOT trigger: routine CRUD (use roll-build normal TCR), UI-only stories, pure research (use roll-research), capture only (use roll-jot).'
 ---
 
 # Spar

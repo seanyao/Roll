@@ -1,6 +1,6 @@
 ---
 name: roll-build
-description: "Universal delivery skill. Handles any input: a US-XXX ID executes from BACKLOG via TCR; a FIX-XXX redirects to roll-fix; any other text auto-clarifies, designs, and ships as a new Story."
+description: 'Use when shipping a User Story end-to-end from backlog to production. Triggers: US-XXX ID, "ship it", "一条龙", "从设计到上线", "做这个功能", "把 xxx 做了", "实现 xxx Story". Typical: "$roll-build US-AUTH-001", "把登录 Story 做了", "ship this feature end-to-end", free-text feature request with no US yet. Flow: read US (or clarify → design if free-text) → split 2–6 micro-Actions → TCR loop → self-review → push → CI → deploy → verification gate → mark ✅ Done in BACKLOG + docs/features. Do NOT trigger: single bug with FIX-XXX (use roll-fix), capture only no code (use roll-jot), pure approach discussion (use roll-design), competitive research (use roll-research).'
 ---
 
 # Roll Build (Universal Delivery)

@@ -1,9 +1,7 @@
 ---
 hidden: true
 name: roll-.clarify
-description: |
-  Passive scope-clarification skill. Auto-triggers when roll-build receives vague or under-specified input in Fly mode. Summarizes intent and asks 3–5 targeted questions to establish boundaries before planning or coding.
-  This is a passive skill. Never announce "I'm using roll-.clarify." Just do it naturally: summarize, ask, wait.
+description: 'Passive scope clarification. Auto-invoked by roll-build and roll-design when user input is a single vague sentence, missing what/who/when/where boundaries, or contains ambiguous terms like "优化一下", "改一下", "加个东西", "做个设计". Typical triggering inputs: "改一下那个页面", "优化下搜索", "加个功能". Flow: summarize clarified intent in 1-2 sentences → assess complexity (small/medium/large) → ask 3–5 targeted questions → wait for answers before planning or coding. Do NOT activate: intent already clear and actionable, input is a specific skill command with concrete args, user is answering a prior question. Never announce "I''m using roll-.clarify" — just do it naturally: summarize, ask, wait.'
 ---
 
 # roll-.clarify
