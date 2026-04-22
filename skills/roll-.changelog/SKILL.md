@@ -39,33 +39,36 @@ Extract Stories with status ✅ Completed / Done.
 
 ### 3. Version Number Format
 
+Must match `roll-release` format — read the most recent git tag to determine the version this CHANGELOG entry belongs to:
+
+```bash
+git describe --tags --abbrev=0   # e.g. v2026.420.7
 ```
-YYYY.MM.DD
-YYYY.MM.DD-1  (multiple releases on the same day)
-YYYY.MM.DD-2
-```
+
+Strip the leading `v` and use as the heading. Format: `YYYY.MMDD.N` (month has no leading zero, N auto-increments per day).
 
 ### 4. Generate CHANGELOG.md
 
 ```markdown
 # Changelog
 
-## 2026.04.03
+## 2026.420.7
 - **Added**: <completed feature extracted from BACKLOG>
 - **Fixed**: <resolved bug>
 - **Improved**: <UX/performance optimization>
 
-## 2026.04.01
+## 2026.419.1
 - ...
 ```
 
-**Ordering**: Most recent version first (reverse chronological)
+**Ordering**: Most recent version first (reverse chronological). Versions must match published git tags — this is how users cross-reference CHANGELOG entries to `npm install @seanyao/roll@<version>`.
 
 ### 5. Commit Update
 
 ```bash
+version=$(git describe --tags --abbrev=0 | sed 's/^v//')
 git add CHANGELOG.md
-git commit -m "docs: update changelog for release $(date +%Y.%m.%d)"
+git commit -m "docs: update changelog for ${version}"
 git push
 ```
 

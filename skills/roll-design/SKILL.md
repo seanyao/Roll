@@ -129,32 +129,7 @@ User: "Help me design the user system" / "What approach should we use for search
     └── No  ──→ Wait for user confirmation
 ```
 
-**Clarify phase trigger conditions** — automatically enters if any of these are met:
-- Input is a single vague sentence without clear scope
-- Missing clear boundaries (what / who / when / where)
-- Contains ambiguous terms like "优化一下", "改一下", "加个东西", "做个设计"
-- Could be interpreted in multiple ways
-
-**Clarify phase output format:**
-
-```
-🎯 Clarified Intent: {1-2 sentences}
-
-📏 Complexity: {small|medium|large}
-
-❓ Open Questions:
-1. {question 1}
-2. {question 2}
-3. {question 3}
-...
-
-➡️  Please answer the questions above and I'll proceed to design.
-```
-
-**Clarify phase rules:**
-- Do **not** start designing until the user replies.
-- Never announce "I'm using clarify." Just do it naturally.
-- If the input is already clear enough, skip silently and proceed to Discuss or Analyze.
+**Clarify phase** — auto-delegate to `$roll-.clarify` when the request is a vague single sentence ("优化一下", "改一下", "加个东西", "做个设计"), lacks what/who/when/where boundaries, or admits multiple interpretations. That skill owns the output format and rules; do not restart designing until it returns the user's answers. Skip silently when intent is already clear and proceed to Discuss or Analyze.
 
 **Discuss phase trigger conditions** — automatically enters if any of these are met:
 - User is explicitly asking "how to choose" or "what approach to use"

@@ -127,10 +127,7 @@ Before any code, assess clarity:
 🔍 Uncertainty Areas: {list what needs investigation/decision}
 ```
 
-**If uncertainty areas are non-empty or the request is vague, auto-trigger `$roll-.clarify`:**
-- Output the clarification block above
-- Follow with 3–5 targeted questions
-- Stop and wait for user answers before proceeding
+If any of these are vague, auto-delegate to `$roll-.clarify` — that skill owns the question format and loop. Resume Phase 1 only after the user's answers come back.
 
 **Approach Confirmation (required for UX / format / automation decisions):**
 
