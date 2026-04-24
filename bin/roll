@@ -235,6 +235,7 @@ ai_gemini: ~/.gemini|GEMINI.md|GEMINI.md
 ai_kimi: ~/.kimi|AGENTS.md|AGENTS.md
 ai_codex: ~/.codex|AGENTS.md|AGENTS.md
 ai_cursor: ~/.cursor|.cursor-rules|.cursor-rules
+ai_trae: ~/.trae|user_rules.md|project_rules.md
 ai_openclaw: ~/.openclaw/workspace|AGENTS.md|AGENTS.md
 
 # User preferences
