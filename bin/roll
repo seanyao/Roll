@@ -351,7 +351,7 @@ _sync_convention_for_tool() {
   local main_dst="$2"  # target: ~/.claude/CLAUDE.md
   local force="$3"
 
-  [[ -f "$src" ]] || return
+  [[ -f "$src" ]] || return 0
   local dst_dir
   dst_dir="$(dirname "$main_dst")"
 
