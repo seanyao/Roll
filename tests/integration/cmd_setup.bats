@@ -152,7 +152,7 @@ teardown() {
   grep -qF "@roll.md" "${TEST_TMP}/.claude/CLAUDE.md"
 }
 
-@test "setup: preserves content of config.yaml that has ai_* entries" {
+@test "setup: preserves custom content when config.yaml already has ai_* entries" {
   mkdir -p "$ROLL_HOME"
   local original_content="ai_claude: ~/.claude|CLAUDE.md|CLAUDE.md
 custom_key: custom_value
@@ -162,7 +162,56 @@ another_key: 42"
   run_roll setup
   [ "$status" -eq 0 ]
 
-  local current_content
-  current_content="$(cat "${ROLL_HOME}/config.yaml")"
-  [ "$current_content" = "$original_content" ]
+  # Custom content must still be present (new ai_* entries may be added by migration)
+  grep -q "custom_key: custom_value" "${ROLL_HOME}/config.yaml"
+  grep -q "another_key: 42" "${ROLL_HOME}/config.yaml"
+  grep -qE "^ai_claude:" "${ROLL_HOME}/config.yaml"
+}
+
+# ─── Scenario 6: config migration — adds missing ai_* entries ─────────────────
+
+@test "setup: adds missing ai_trae to config that already has some ai_* entries" {
+  mkdir -p "$ROLL_HOME"
+  # Simulate upgrading from old version — has ai_claude but no ai_trae
+  printf 'ai_claude: ~/.claude|CLAUDE.md|CLAUDE.md\n# User preferences\ndefault_language: zh\n' \
+    > "${ROLL_HOME}/config.yaml"
+
+  run_roll setup
+  [ "$status" -eq 0 ]
+
+  grep -qE "^ai_trae:" "${ROLL_HOME}/config.yaml"
+  grep -qE "^ai_claude:" "${ROLL_HOME}/config.yaml"
+  # No backup: config was patched in place, not rebuilt from scratch
+  [ ! -f "${ROLL_HOME}/config.yaml.bak" ]
+}
+
+# ─── Scenario 7: Trae installation detection via Library path ─────────────────
+
+@test "setup: creates ~/.trae/ and syncs conventions when Library/Application Support/Trae exists" {
+  mkdir -p "${TEST_TMP}/Library/Application Support/Trae"
+
+  run_roll setup
+  [ "$status" -eq 0 ]
+
+  [ -d "${TEST_TMP}/.trae" ]
+  [ -f "${TEST_TMP}/.trae/roll.md" ]
+}
+
+@test "setup: creates ~/.trae/skills/ symlinks when Library/Application Support/Trae exists" {
+  mkdir -p "${TEST_TMP}/Library/Application Support/Trae"
+
+  run_roll setup
+  [ "$status" -eq 0 ]
+
+  local count
+  count=$(find "${TEST_TMP}/.trae/skills" -maxdepth 1 -mindepth 1 -type l -name "roll-*" \
+    | wc -l | tr -d ' ')
+  [ "$count" -gt 0 ]
+}
+
+@test "setup: does not create ~/.trae/ when neither ~/.trae nor Library/Application Support/Trae exist" {
+  # No Trae installed — neither path present
+  run_roll setup
+  [ "$status" -eq 0 ]
+  [ ! -d "${TEST_TMP}/.trae" ]
 }

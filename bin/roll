@@ -64,6 +64,24 @@ lower_name() {
   echo "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+# Check if an AI tool is actually installed.
+# Most tools create their own config dir; Trae on macOS uses Library/Application Support
+# and expects roll to manage ~/.trae/ — so we detect via the app directory instead.
+_is_ai_installed() {
+  local ai_dir="$1"
+  [[ -d "$ai_dir" ]] && return 0
+  local bn
+  bn="$(basename "$ai_dir" | sed 's/^\.//')"
+  case "$bn" in
+    trae)
+      [[ -d "$HOME/Library/Application Support/Trae" ]] ||
+      [[ -d "$HOME/.config/Trae" ]]
+      return
+      ;;
+  esac
+  return 1
+}
+
 # ─── Helper: read config value ───────────────────────────────────────────────
 config_get() {
   local key="$1"
@@ -85,6 +103,53 @@ _get_ai_tools() {
   grep -E "^ai_[a-z]+:" "$ROLL_CONFIG" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//' | while IFS= read -r entry; do
     echo "${entry/#\~/$HOME}"
   done
+}
+
+# Add any ai_* keys from the default set that are missing from the user's config.
+# Non-destructive: never removes or modifies existing entries.
+_ensure_config_entries() {
+  [[ -f "$ROLL_CONFIG" ]] || return
+
+  local -a default_keys=(
+    "ai_claude:~/.claude|CLAUDE.md|CLAUDE.md"
+    "ai_gemini:~/.gemini|GEMINI.md|GEMINI.md"
+    "ai_kimi:~/.kimi|AGENTS.md|AGENTS.md"
+    "ai_codex:~/.codex|AGENTS.md|AGENTS.md"
+    "ai_cursor:~/.cursor|.cursor-rules|.cursor-rules"
+    "ai_trae:~/.trae|user_rules.md|project_rules.md"
+    "ai_openclaw:~/.openclaw/workspace|AGENTS.md|AGENTS.md"
+  )
+
+  local added=0
+  local tmp
+  tmp="$(mktemp)"
+  cp "$ROLL_CONFIG" "$tmp"
+
+  for entry in "${default_keys[@]}"; do
+    local key="${entry%%:*}"
+    local val="${entry#*:}"
+    if ! grep -qE "^${key}:" "$ROLL_CONFIG" 2>/dev/null; then
+      if grep -q "^# User preferences" "$tmp" 2>/dev/null; then
+        local new_tmp
+        new_tmp="$(mktemp)"
+        while IFS= read -r line; do
+          [[ "$line" == "# User preferences" ]] && echo "${key}: ${val}" >> "$new_tmp"
+          echo "$line" >> "$new_tmp"
+        done < "$tmp"
+        mv "$new_tmp" "$tmp"
+      else
+        echo "${key}: ${val}" >> "$tmp"
+      fi
+      added=$((added + 1))
+      warn "Added missing config entry: ${key}  已添加缺失配置项: ${key}"
+    fi
+  done
+
+  if [[ $added -gt 0 ]]; then
+    cp "$tmp" "$ROLL_CONFIG"
+    ok "Config updated with $added new entries  配置已更新，新增 $added 条目"
+  fi
+  rm -f "$tmp"
 }
 
 # Extract fields from a "<dir>|<config>|<src>" entry
@@ -246,6 +311,9 @@ YAML
     ok "Created: ~/.roll/config.yaml  已创建: ~/.roll/config.yaml"
   fi
 
+  # Ensure all expected ai_* keys exist (handles upgrades where new tools were added)
+  _ensure_config_entries
+
 }
 
 # ─── Internal: create or repair per-skill symlinks (non-destructive) ─────────
@@ -258,7 +326,8 @@ _link_skills() {
   while IFS= read -r entry; do
     local ai_dir
     ai_dir="$(_ai_dir "$entry")"
-    [[ -d "$ai_dir" ]] || continue
+    _is_ai_installed "$ai_dir" || continue
+    mkdir -p "$ai_dir"
 
     local ai_name ai_dir_real skills_dir
     ai_name="$(ai_tool_name "$ai_dir")"
@@ -355,8 +424,8 @@ _sync_convention_for_tool() {
   local dst_dir
   dst_dir="$(dirname "$main_dst")"
 
-  # Only proceed if the AI tool directory already exists (except Claude, always create)
-  if [[ "$dst_dir" != "$HOME/.claude" ]] && [[ ! -d "$dst_dir" ]]; then
+  # Only proceed if Claude (always) or the tool is installed
+  if [[ "$dst_dir" != "$HOME/.claude" ]] && ! _is_ai_installed "$dst_dir"; then
     return
   fi
   mkdir -p "$dst_dir"
@@ -467,6 +536,7 @@ cmd_sync() {
   info "Syncing from repo to AI tools...  正在从仓库同步到 AI 工具..."
   echo ""
   _pull_conventions "$force"
+  _ensure_config_entries
   echo ""
   _sync_conventions "$force"
   echo ""
