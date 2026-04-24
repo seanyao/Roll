@@ -235,6 +235,7 @@ ai_gemini: ~/.gemini|GEMINI.md|GEMINI.md
 ai_kimi: ~/.kimi|AGENTS.md|AGENTS.md
 ai_codex: ~/.codex|AGENTS.md|AGENTS.md
 ai_cursor: ~/.cursor|.cursor-rules|.cursor-rules
+ai_trae: ~/.trae|user_rules.md|project_rules.md
 ai_openclaw: ~/.openclaw/workspace|AGENTS.md|AGENTS.md
 
 # User preferences
@@ -881,56 +882,6 @@ detect_project_type() {
   fi
 }
 
-# ─── Helper: detect AI tools from existing convention files ──────────────────
-detect_tools() {
-  local dir="$1"
-  local tools=""
-  [[ -f "$dir/.claude/CLAUDE.md" ]] && tools+="claude,"
-  [[ -f "$dir/GEMINI.md" ]] && tools+="gemini,"
-  [[ -f "$dir/.cursor-rules" ]] && tools+="cursor,"
-  echo "${tools%,}"
-}
-
-# ─── Helper: refresh a single project ────────────────────────────────────────
-refresh_project() {
-  local project_dir="$1"
-  local project_name
-  project_name="$(basename "$project_dir")"
-
-  local ptype
-  ptype="$(detect_project_type "$project_dir")"
-
-  if [[ "$ptype" == "unknown" ]]; then
-    warn "  ${BOLD}$project_name${NC}: cannot detect project type — skipping  无法检测项目类型 — 已跳过"
-    return 1
-  fi
-
-  local tools
-  tools="$(detect_tools "$project_dir")"
-
-  local tpl_dir="$ROLL_TEMPLATES/$ptype"
-  if [[ ! -d "$tpl_dir" ]]; then
-    warn "  ${BOLD}$project_name${NC}: template '$ptype' not found — skipping  模板 '$ptype' 未找到 — 已跳过"
-    return 1
-  fi
-
-  info "  ${BOLD}$project_name${NC} ($ptype | ${tools:-AGENTS.md only})  正在处理: ${BOLD}$project_name${NC}"
-
-  merge_convention "AGENTS.md" "$tpl_dir" "$project_dir" "  AGENTS.md"
-
-  if echo "$tools" | grep -q "claude"; then
-    mkdir -p "$project_dir/.claude"
-    merge_convention "CLAUDE.md" "$tpl_dir" "$project_dir/.claude" "  .claude/CLAUDE.md"
-  fi
-  if echo "$tools" | grep -q "gemini"; then
-    merge_convention "GEMINI.md" "$tpl_dir" "$project_dir" "  GEMINI.md"
-  fi
-  if echo "$tools" | grep -q "cursor"; then
-    merge_convention ".cursor-rules" "$tpl_dir" "$project_dir" "  .cursor-rules"
-  fi
-
-  return 0
-}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: hooks <subcommand>
@@ -1043,7 +994,7 @@ cmd_status() {
 
   echo ""
   echo -e "${BOLD}Global conventions:  全局约定${NC}"
-  for f in AGENTS.md CLAUDE.md GEMINI.md .cursor-rules; do
+  for f in AGENTS.md CLAUDE.md GEMINI.md .cursor-rules project_rules.md; do
     if [[ -f "$ROLL_GLOBAL/$f" ]]; then
       echo -e "  ${GREEN}+${NC} $f"
     else

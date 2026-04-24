@@ -30,6 +30,13 @@
 | [US-DIST-003](docs/features/npm-distribution.md#us-dist-003) | Background version check + update nudge (24h cache) | ✅ Done |
 | [US-DIST-004](docs/features/npm-distribution.md#us-dist-004) | npm publish infrastructure (.npmignore, GH Actions, README) | ✅ Done |
 
+## Epic: IDE Integration
+### Feature: trae-support
+| Story | Description | Status |
+|-------|-------------|--------|
+| [US-TRAE-001](docs/features/trae-support.md#us-trae-001) | Add project_rules.md convention files (global + 4 templates) | ✅ Done |
+| [US-TRAE-002](docs/features/trae-support.md#us-trae-002) | bin/roll integration — detect Trae, refresh project, config template | ✅ Done |
+
 ## Epic: Release Management
 ### Feature: roll-release
 | Story | Description | Status |
