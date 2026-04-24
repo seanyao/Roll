@@ -1,188 +1,23 @@
-# Global Agent Conventions — Sean Yao
+# Agent Conventions
 
-> Master conventions file. All AI coding agents follow these principles.
-> Tool-specific files (CLAUDE.md, GEMINI.md, .cursor-rules) extend this document.
+> Global conventions for AI agents. Focus on outcomes.
 
-## Communication
+## 1. Communication
+- Respond in user's language. Code/Git/Comments: English. UI: Chinese.
+- Concise. No summaries/code-walking. Implementation invisible.
+- Strategy (Why) OK; Tactics (How) NO. Outcomes only.
 
-- Respond in the language I write in. Chinese message → Chinese response. English → English.
-- Code, commit messages, variable names, comments: always English.
-- Error messages in API responses: English.
-- UI-facing text: Chinese (internal tool for Chinese-speaking team).
-- Be concise. Don't summarize what you just did — I can read the diff.
-- Don't ask for confirmation on routine actions. Just do it and show the result.
-- If something is ambiguous, make a reasonable judgment call. Only ask when the choice has real consequences.
-- Use plain language. No academic jargon or pretentious framing.
-- **Roll workflow milestones may be narrated.** It's fine to report high-level progress such as running baseline, sketching a design, completing an Action, passing a Verification Gate, or finishing TCR (Green/Commit or Red/Revert).
-- **Implementation details are invisible.** Do not include code diffs, file paths, line numbers, function names, variable names, test scripts, model parameters, or raw git output in conversational responses.
-- **Strategic reasoning is okay; tactical code-walking is not.** You may explain *why* a design choice was made at the product/business level. Do not narrate step-by-step code modifications or internal debugging monologues.
-- **Report in user-centric outcomes.** After making changes, summarize what improved for the user or product in 1–2 sentences.
-- **No code dumps unless explicitly asked.** Never paste code snippets, stack traces, or technical speculations into the chat.
-- **Business context over technical mechanics.** When explaining a bug or fix, lead with the user-visible effect. Root causes, if mentioned at all, belong in a single trailing sentence.
+## 2. Standards
+- **TS**: Strict, no `any`. Functional hooks.
+- **Rules**: [engineering-common-sense.md](file:///Users/seanclaw/Workspace/roll/docs/practices/engineering-common-sense.md).
+- **Test**: Unit >80%, E2E for flows. Test before push.
 
-## Code Style
+## 3. Workflow
+- **TCR**: Test -> Green = Commit / Red = Revert. No WIP.
+- **Backlog**: Work stems from `BACKLOG.md`.
+- **Docs**: [skill-selection-guide.md](file:///Users/seanclaw/Workspace/roll/docs/skill-selection-guide.md), [methodology.md](file:///Users/seanclaw/Workspace/roll/docs/methodology.md).
 
-- TypeScript strict mode. No `any` unless absolutely unavoidable.
-- Functional components with hooks. No class components.
-- Prefer `const` over `let`. Never `var`.
-- Early returns over nested conditionals.
-- Name things clearly — no abbreviations except well-known ones (e.g., `id`, `url`, `api`).
-- Keep functions short and single-purpose. If it needs a comment to explain, it's too complex.
-- Don't add comments unless the logic is genuinely non-obvious.
-- Don't add docstrings, JSDoc, or type annotations to code you didn't change.
-
-## Git
-
-- Conventional commit format: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
-- Write in English, concise, imperative mood.
-- Never force push to main.
-- Never skip hooks (`--no-verify`).
-- Never commit `.env`, credentials, or secrets.
-
-## Behavior
-
-- Do not refactor files unrelated to the current task.
-- Do not add features, refactoring, or "improvements" not requested.
-- Always ask before making structural changes (directory reorganization, architecture changes).
-- Don't wrap simple things in abstractions. Three similar lines > a premature helper.
-- Don't add error handling for impossible scenarios. Trust the framework.
-- Delete unused things completely — no `// removed` comments, no backward-compat shims.
-- Don't create README.md or documentation files unless asked.
-
-## Testing
-
-- All business logic must have unit tests (coverage >80%).
-- All API endpoints must have integration tests — no DB mocks.
-- Critical user flows must have E2E tests (Playwright).
-- New architecture introductions (State/Cache/EventBus) must have data flow integration tests.
-- Run existing tests before pushing to verify no regressions.
-
-## Engineering Common Sense
-
-Non-negotiable requirements for all code changes. Violating these is a bug:
-
-- **Idempotency**: Same operation N times = same result. Test by running 3 times.
-- **Cross-module contract**: Shared IDs, formats, algorithms must be identical across modules.
-- **Data flow integrity**: Producer → Storage → Consumer chain must be complete and tested.
-- **Atomicity**: Operations complete fully or not at all. Partial failure → rollback.
-- **Input validation**: All external input (API, user, file) must be validated.
-- **Graceful degradation**: Dependency fails → limited functionality, not crash.
-- **Observability**: User must see progress, state, and errors.
-- **Concurrency safety**: Shared resources under multi-thread/multi-process access must be safe.
-
-## Roll Workflow (When Project Has It)
-
-When a project has Roll workflow configured:
-
-### Workspace Structure
-
-- `BACKLOG.md` = index table, one-line summary per story only.
-- `docs/features/<feature>.md` = US details (AC, Files, Dependencies).
-- `docs/features/<feature>-plan.md` = architecture design doc (optional).
-- Never write project docs to `~/.kimi/` or any global config directory.
-
-### Development Discipline
-
-- **TCR mandatory**: All code changes follow Test → Green = Commit / Red = Revert. No WIP commits.
-- **Action granularity**: Each Action independently deployable, completable in 2–5 min. No placeholders (no TBD/TODO/pending).
-- **Verification Gate**: Before marking done, provide fresh evidence (test output, screenshot, curl). "I confirmed it works" is not evidence.
-- **Complete delivery**: push to GitHub + CI passes + deployed online. Local-only done is not done.
-
-### Skill Selection
-
-```
-Uncertain approach?        → $roll-design
-One-sentence vague request → $roll-build
-Have a US-XXX ID?          → $roll-build
-Single bug fix?            → $roll-fix
-High-risk logic?           → $roll-spar
-Page/production issue?     → $roll-debug
-```
-
----
-
-# Project Conventions — CLI Tool
-
-> Project-type-specific conventions. Merged with global conventions at init time.
-
-## Design Principles
-
-- Lightweight. No server, no frontend, no heavy frameworks.
-- Clear command structure: `tool <command> [options] [args]`.
-- Helpful error messages with actionable suggestions.
-- Consistent exit codes: 0 = success, 1 = user error, 2 = system error.
-- Support `--help` and `--version` on every command.
-- Respect `NO_COLOR` env var for output formatting.
-
-## Architecture
-
-- Single entry point dispatching to command handlers.
-- Each command in its own file — easy to find, easy to test.
-- Config loading: CLI flags > environment variables > config file > defaults.
-- Use a CLI framework (commander, yargs, or citty) for argument parsing.
-
-## Output
-
-- Default to human-readable output. Support `--json` for machine-readable.
-- Progress indicators for long operations (ora, cli-progress).
-- Errors to stderr, results to stdout.
-- Quiet mode (`--quiet` or `-q`) suppresses non-essential output.
-
-## Project Structure
-
-```
-src/
-├── index.ts              # entry point, CLI bootstrap
-├── commands/             # one file per command
-│   ├── init.ts
-│   ├── build.ts
-│   └── ...
-├── utils/                # shared utilities
-├── types/                # type definitions
-└── config.ts             # config loading logic
-
-tests/
-├── unit/                 # command logic tests
-└── integration/          # full CLI invocation tests (execa)
-```
-
-## Distribution
-
-- Compile to single executable or publish to npm.
-- Include `bin` field in `package.json`.
-- Test installation flow: `npm install -g` should work cleanly.
-- Include a man page or `--help` output that covers all commands.
-
-## Development Discipline
-
-- **TCR mandatory**: All code changes follow Test → Green = Commit / Red = Revert. No WIP commits.
-- **Action granularity**: Each Action independently deployable, completable in 2–5 min. No placeholders (no TBD/TODO/pending).
-- **Verification Gate**: Before marking done, run the actual command and paste the output. "I confirmed it works" is not evidence.
-- **Complete delivery**: push to GitHub + CI passes + published/deployed. Local-only done is not done.
-
-## Workspace Structure
-
-- `BACKLOG.md` = index table, one-line summary per story only.
-- `docs/features/<feature>.md` = US details (AC, Files, Dependencies).
-- `docs/features/<feature>-plan.md` = architecture design doc (optional).
-- Never write project docs to `~/.kimi/` or any global config directory.
-
-## Roll Workflow
-
-### Development Discipline
-
-- **TCR mandatory**: All code changes follow Test → Green = Commit / Red = Revert. No WIP commits.
-- **Action granularity**: Each Action independently deployable, completable in 2–5 min. No placeholders (no TBD/TODO/pending).
-- **Verification Gate**: Before marking done, provide fresh evidence (test output, screenshot, curl). "I confirmed it works" is not evidence.
-- **Complete delivery**: push to GitHub + CI passes + deployed online. Local-only done is not done.
-
-### Skill Selection
-
-```
-Uncertain approach?        → $roll-design
-Want to ship something?    → $roll-build  (handles US-XXX, FIX-XXX, or vague ideas)
-Single bug fix?            → $roll-fix
-High-risk logic?           → $roll-spar
-Page/production issue?     → $roll-debug
-Initialize new project?    → roll init  (CLI command, not a skill)
-```
+## 4. CLI
+- **Entry**: `src/index.ts`, `commands/` per file.
+- **UI**: Human default, `--json` support.
+- **Config**: Flags > Env > File > Defaults.
