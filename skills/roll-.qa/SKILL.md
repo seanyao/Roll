@@ -208,4 +208,4 @@ If project lacks Playwright setup:
 
 - [Playwright Docs](https://playwright.dev/)
 - [Visual Regression Guide](https://playwright.dev/docs/test-snapshots)
-- Example implementation: `seanyao/kids-game/e2e/`
+- Example implementation: `<owner>/<repo>/e2e/`

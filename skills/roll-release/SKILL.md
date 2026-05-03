@@ -10,7 +10,7 @@ One-command publish flow for roll maintainers.
 
 ## When Not to Use
 
-- Non-maintainer users (this skill publishes `@seanyao/roll` to npm under seanyao)
+- Non-maintainer users (this skill publishes the package defined in `package.json` — confirm scope before running)
 - Internal project releases — only for the `roll` CLI package itself
 - Hotfixing code without a version bump (use `$roll-fix`)
 - Generating user-facing release notes (use `$roll-.changelog`)
@@ -92,8 +92,8 @@ After publish, show:
 ```
 ✅ Released v{version}
 🏷  Tag: v{version} pushed to origin
-📦 npm published: @seanyao/roll@{version}
-🔗 https://www.npmjs.com/package/@seanyao/roll
+📦 npm published: {package_name}@{version}   # package name read from package.json
+🔗 https://www.npmjs.com/package/{package_name}
 ```
 
 ## Abort Conditions
