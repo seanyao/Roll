@@ -37,10 +37,11 @@ git commit -m "[release] ${TAG}"
 git tag "${TAG}"
 git push && git push --tags
 
-# Publish to npm
+# Publish to npm (unset proxy vars — npm can reach registry.npmjs.org directly)
 echo ""
 echo "Publishing to npm..."
-npm publish --access public
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
+  npm publish --access public
 
 echo ""
 echo "✅ Released ${TAG}"
