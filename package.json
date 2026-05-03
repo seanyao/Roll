@@ -1,6 +1,6 @@
 {
   "name": "@seanyao/roll",
-  "version": "2026.503.5",
+  "version": "2026.503.6",
   "description": "Roll — Roll out features with AI agents",
   "scripts": {
     "test": "find tests/unit tests/integration -name '*.bats' | sort | xargs ./tests/helpers/bats-core/bin/bats"
