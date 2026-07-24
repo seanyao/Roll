@@ -172,6 +172,22 @@ describe("US-WS-039 Workspace context static audit", () => {
     ]);
   });
 
+  it("does not trust local name collisions, unrelated receiver methods, or called child helpers", () => {
+    const policy = { ...input("unused").policies[0], contextConsumer: "workspace" as const };
+    for (const source of [
+      "function parseWorkspaceSelectorArgs() {}\nparseWorkspaceSelectorArgs();\nargs.includes('--workspace');\n",
+      "helper.resolveTarget();\nargs.includes('--workspace');\n",
+      "function child(args) { return args.includes('--workspace'); }\nfunction contextCommand(args) { child(args); }\ncontextCommand(args);\n",
+    ]) {
+      const rootDir = fixture({
+        "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,
+        "config/workspace-context-audit-allowlist.json": "[]\n",
+        "packages/cli/src/commands/backlog.ts": source,
+      });
+      expect(auditRegisteredWorkspaceContextTree(rootDir, "2026-07-25").findings.map((finding) => finding.code)).toContain("CLI_SELECTOR_PARSER_BYPASS");
+    }
+  });
+
   it("audits repository-required split cwd authority while allowing explicit execution config", () => {
     const repositoryPolicy = { ...input("unused").policies[1], surface: "cli" as const, id: "test", operation: "run", contextConsumer: "repository" as const };
     const rootDir = fixture({
@@ -186,6 +202,20 @@ describe("US-WS-039 Workspace context static audit", () => {
       surfaces: [{ policyKey: "cli:test:run", file: "packages/cli/src/commands/test.ts" }],
     }));
     expect(report.findings.map((finding) => finding.code)).toEqual([
+      "MANUAL_CWD_ROLL_AUTHORITY",
+      "WORKSPACE_AUTHORITY_FROM_CWD",
+    ]);
+  });
+
+  it("does not let a nested evidence path borrow the exact local.yaml execution-config exception", () => {
+    const repositoryPolicy = { ...input("unused").policies[1], surface: "cli" as const, id: "test", operation: "run", contextConsumer: "repository" as const };
+    const rootDir = fixture({
+      "packages/cli/src/commands/test.ts": "const cwd = process.cwd();\njoin(cwd, '.roll', 'evidence', 'local.yaml');\n",
+    });
+    expect(auditWorkspaceContextTree(input(rootDir, {
+      policies: [repositoryPolicy],
+      surfaces: [{ policyKey: "cli:test:run", file: "packages/cli/src/commands/test.ts" }],
+    })).findings.map((finding) => finding.code)).toEqual([
       "MANUAL_CWD_ROLL_AUTHORITY",
       "WORKSPACE_AUTHORITY_FROM_CWD",
     ]);
