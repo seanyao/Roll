@@ -28,6 +28,7 @@ import { guideExternalToolSetup, silentPreinstallChromium } from "../lib/externa
 import { loopControlRunnerReadout, rollBin, staleLoopRunnerMessage } from "./loop-runner-readout.js";
 import { screenLockedCycleIds } from "../runner/screen-lock-events.js";
 import { emitBacklogTargetError, resolveBacklogCommandTarget, type BacklogTargetResolver } from "./backlog-target.js";
+import { canonicalWorkspaceSelectorIndex, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 /**
  * FIX-906: node fs-backed {@link FreshnessPort} for `ensureDeliveriesFresh`.
@@ -480,7 +481,7 @@ function parseOptions(args: string[]): GoOptions {
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!;
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       i += 1;
       continue;
     }
@@ -1943,7 +1944,7 @@ export async function loopGoCommand(args: string[], deps: LoopGoDeps = realDeps(
   let workspace: { workspaceId: string; runtimeRoot: string; backlogPath: string } | undefined;
   if (deps.resolveTarget !== undefined) {
     const selectorArgs: string[] = [];
-    const workspaceIndex = args.indexOf("--workspace");
+    const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
     if (workspaceIndex >= 0) selectorArgs.push("--workspace", args[workspaceIndex + 1] ?? "");
     const decision = deps.resolveTarget(selectorArgs, "mutation");
     if (!decision.ok) return emitBacklogTargetError(decision);

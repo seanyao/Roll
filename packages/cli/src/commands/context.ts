@@ -22,6 +22,7 @@ import {
   writeContextSnapshot,
   type GitLlmWikiReadAuditEventV1,
 } from "@roll/infra";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import {
   CONTEXT_PROVIDER_REGISTRY_V1,
   CONTEXT_READ_REQUEST_V1,
@@ -299,12 +300,12 @@ function parseArgs(args: readonly string[]): ParsedContextArgs | undefined {
   const seen = new Set<string>();
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--workspace" || arg === "--story" || arg === "--stage" || arg === "--environment" || arg === "--ref") {
+    if (isCanonicalWorkspaceSelectorToken(arg) || arg === "--story" || arg === "--stage" || arg === "--environment" || arg === "--ref") {
       const value = flagValue(args, index);
       if (value === undefined) return undefined;
       if (arg !== "--environment" && arg !== "--ref" && seen.has(arg)) return undefined;
       seen.add(arg);
-      if (arg === "--workspace") workspace = value;
+      if (isCanonicalWorkspaceSelectorToken(arg)) workspace = value;
       else if (arg === "--story") story = value;
       else if (arg === "--stage") {
         if (!CONTEXT_STAGES.has(value as ContextStage)) return undefined;

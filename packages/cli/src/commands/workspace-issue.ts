@@ -20,6 +20,7 @@ import {
 import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const CHECK_RESULT_V1 = "roll.workspace-issue-check/v1" as const;
 const APPLY_RESULT_V1 = "roll.workspace-issue-apply/v1" as const;
@@ -84,7 +85,7 @@ function parseArgs(args: readonly string[]): IssueInitArgs | undefined {
       json = true;
       continue;
     }
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) return undefined;
       if (scalar.has(arg)) return undefined;

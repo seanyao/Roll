@@ -40,6 +40,7 @@ import {
   type WorkspaceInteractionModeDecision,
   type WorkspaceInteractionHost,
 } from "../lib/workspace-interaction.js";
+import { containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import { configLang } from "./lang.js";
 import {
   resolveBacklogCommandTarget,
@@ -509,7 +510,7 @@ function positionalArgs(args: readonly string[], allowedFlags: ReadonlySet<strin
   const seenFlags = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       const value = args[index + 1];
       if (
         !allowedFlags.has(arg) || seenFlags.has(arg) ||
@@ -716,7 +717,7 @@ function listCommand(args: readonly string[], resolver: BacklogTargetResolver, i
   const parsedInteraction = parseWorkspaceInteractionArgs(args, interaction.capabilities);
   if (!parsedInteraction.ok) return emitError(parsedInteraction.code, json);
   const positional = positionalArgs(parsedInteraction.args, new Set(["--workspace", "--all", "--json"]));
-  if (positional === undefined || positional.length > 0 || (parsedInteraction.args.includes("--all") && parsedInteraction.args.includes("--workspace"))) {
+  if (positional === undefined || positional.length > 0 || (parsedInteraction.args.includes("--all") && containsCanonicalWorkspaceSelector(parsedInteraction.args))) {
     return emitError("invalid_arguments", json);
   }
   const target = resolveInteractiveTargets(args, "read", resolver, interaction, json, parsedInteraction);

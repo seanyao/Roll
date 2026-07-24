@@ -13,6 +13,7 @@ import {
   type WorkspaceClarificationHandoffV1,
   type WorkspaceIntentV1,
 } from "@roll/spec";
+import { isCanonicalWorkspaceSelectorToken } from "./workspace-selector.js";
 
 export interface WorkspaceInteractionCapabilities {
   readonly stdinTTY: boolean;
@@ -297,7 +298,7 @@ function replaceCanonicalWorkspaceSelector(
       replaced.push(...args.slice(index));
       return replaced;
     }
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       if (!inserted) {
         replaced.push("--workspace", workspaceId);
         inserted = true;

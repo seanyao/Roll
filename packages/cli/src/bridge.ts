@@ -21,6 +21,10 @@ import {
   type CliCommandOperationRegistration,
 } from "./lib/command-surface.js";
 import { renderFrontDoor } from "./lib/front-door.js";
+import {
+  hasCanonicalWorkspaceSelectorBeforeSentinel,
+  isCanonicalWorkspaceSelectorToken,
+} from "./lib/workspace-selector.js";
 import { isSnapshotStale, loadTruthSnapshot, renderNowMs } from "./lib/truth-read.js";
 import { renderState } from "./render.js";
 import { treeVersion } from "./commands/version.js";
@@ -141,7 +145,7 @@ export function parseCanonicalWorkspaceSelectorArgs(args: readonly string[]): Pa
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--") break;
-    if (arg === "--workspace") selectorIndices.push(index);
+    if (isCanonicalWorkspaceSelectorToken(arg)) selectorIndices.push(index);
   }
   if (selectorIndices.length > 1) return { ok: false, code: "duplicate_workspace_selector" };
   const index = selectorIndices[0];
@@ -161,14 +165,6 @@ function jsonFlag(args: readonly string[]): boolean {
   for (const arg of args) {
     if (arg === "--") return false;
     if (arg === "--json") return true;
-  }
-  return false;
-}
-
-function hasCanonicalWorkspaceSelector(args: readonly string[]): boolean {
-  for (const arg of args) {
-    if (arg === "--") return false;
-    if (arg === "--workspace") return true;
   }
   return false;
 }
@@ -296,7 +292,7 @@ export async function dispatch(
         process.stderr.write(`roll ${command}: unknown or unregistered route '${route}'\n`);
         return { status: 1 };
       }
-      const hasWorkspaceSelector = hasCanonicalWorkspaceSelector(rest);
+      const hasWorkspaceSelector = hasCanonicalWorkspaceSelectorBeforeSentinel(rest);
       if (hasWorkspaceSelector && operation !== undefined && !operation.supportsWorkspaceSelector) {
         process.stderr.write(`roll ${command}: operation '${operation.operation}' does not accept --workspace\n`);
         return { status: 1 };

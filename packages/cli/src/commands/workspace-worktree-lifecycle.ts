@@ -38,6 +38,7 @@ import {
   type BacklogTargetDecision,
 } from "./backlog-target.js";
 import { workspaceRollHome } from "./workspace-target.js";
+import { canonicalWorkspaceSelectorIndex } from "../lib/workspace-selector.js";
 import {
   applyWorktreeCleanup,
   buildStandaloneBranchDeps,
@@ -562,7 +563,7 @@ export function workspaceWorktreeAuditCommand(
     process.stderr.write("roll worktree audit: --repo and --workspace are mutually exclusive.\n");
     return 2;
   }
-  const workspaceIndex = args.indexOf("--workspace");
+  const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
   if (workspaceIndex >= 0 && (args[workspaceIndex + 1] ?? "") === "") {
     process.stderr.write("roll worktree audit: --workspace requires <id|path>.\n");
     return 2;
@@ -609,7 +610,7 @@ export async function workspaceWorktreeCleanupCommand(
     process.stderr.write("roll worktree cleanup: --repo and --workspace are mutually exclusive.\n");
     return 2;
   }
-  const workspaceIndex = args.indexOf("--workspace");
+  const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
   if (workspaceIndex >= 0 && (args[workspaceIndex + 1] ?? "") === "") {
     process.stderr.write("roll worktree cleanup: --workspace requires <id|path>.\n");
     return 2;

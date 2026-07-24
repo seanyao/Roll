@@ -20,6 +20,7 @@ import { WorkspaceRegistry } from "@roll/infra";
 import { agentListCommand, currentLang, realAgentEnv } from "./agent-list.js";
 import { AGY_AUTH_CONTEXT_ENV, agyAuthContext } from "../runner/agent-spawn.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 export type AgentWorkspaceResolution =
   | { readonly ok: true; readonly workspaceId: string; readonly workspaceRoot: string }
@@ -191,7 +192,7 @@ function localizedSkipReason(reason: string, zh: boolean): string {
 }
 
 function workspaceViewCommand(args: string[], deps: AgentCommandDeps): number {
-  if (args.length !== 2 || args[0] !== "--workspace" || (args[1] ?? "").trim() === "") {
+  if (args.length !== 2 || !isCanonicalWorkspaceSelectorToken(args[0]) || (args[1] ?? "").trim() === "") {
     process.stdout.write("Usage: roll agent --workspace <id|path>\n");
     return 1;
   }
@@ -626,7 +627,7 @@ function enableCommand(args: string[], deps: AgentCommandDeps): number {
 }
 
 export function agentCommand(args: string[], deps: AgentCommandDeps = {}): number {
-  if (args[0] === "--workspace") return workspaceViewCommand(args, deps);
+  if (isCanonicalWorkspaceSelectorToken(args[0])) return workspaceViewCommand(args, deps);
   const [sub, ...rest] = args;
   if (sub === "list") return (deps.listCommand ?? agentListCommand)(rest);
   if (sub === "readiness") return readinessCommand(rest, deps);

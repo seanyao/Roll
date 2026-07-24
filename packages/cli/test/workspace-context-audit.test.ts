@@ -76,7 +76,7 @@ describe("US-WS-039 Workspace context static audit", () => {
   it("passes the registered product, skill, and tool tree after governed exceptions", () => {
     const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
     const report = auditRegisteredWorkspaceContextTree(repoRoot, "2026-07-25");
-    expect(report.summary).toEqual({ violations: 0, scannedSurfaces: 252, allowlisted: 1 });
+    expect(report.summary).toEqual({ violations: 0, scannedSurfaces: 253, allowlisted: 1 });
   });
 
   it("rejects ambient authority, manual cwd/.roll paths, skill authority, parser bypass, and tool fallback", () => {
@@ -212,6 +212,10 @@ describe("US-WS-039 Workspace context static audit", () => {
       ].join("\n"),
       [
         "function positionalArgs(args) { return args.includes('--workspace'); }",
+        "positionalArgs(args);",
+      ].join("\n"),
+      [
+        "function positionalArgs(args: readonly string[]): boolean { return args.includes('--workspace'); }",
         "positionalArgs(args);",
       ].join("\n"),
     ]) {

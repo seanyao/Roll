@@ -15,6 +15,7 @@ import {
   resolveWorkspaceTargetInteraction,
   type WorkspaceInteractionHost,
 } from "../lib/workspace-interaction.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import {
   emitBacklogTargetError,
   resolveBacklogCommandTarget,
@@ -129,7 +130,7 @@ function positionalArgs(args: readonly string[]): string[] | undefined {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--all" || arg === "--no-color") continue;
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       if (args[index + 1] === undefined) return undefined;
       index += 1;
       continue;

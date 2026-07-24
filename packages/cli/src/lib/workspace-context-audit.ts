@@ -71,24 +71,10 @@ const AUTHORITY_WORDS = /(?:\.roll|workspace|issue|evidence|policy|tool[-_ ]?dum
 const SKILL_AMBIENT = /(?:\$PWD|\bproject root\b|\brepo(?:sitory)? root\b)/iu;
 const SKILL_AUTHORITY = /(?:authority|\.roll\/|backlog|features?|design|evidence|policy|dump)/iu;
 const SKILL_PROHIBITION = /(?:\bnever\b|\bdo not\b|\bmust not\b|\bnot (?:the |an? )?authority\b|禁止|不得|不可|不是.*(?:权威|依据))/iu;
-const TRUSTED_LOCAL_SELECTOR_SCOPES: Readonly<Record<string, ReadonlySet<string>>> = {
-  "packages/cli/src/commands/agent.ts": new Set(["agentCommand", "workspaceViewCommand"]),
-  "packages/cli/src/commands/backlog-target.ts": new Set(["resolveBacklogCommandTarget", "stripBacklogScopeArgs"]),
-  "packages/cli/src/commands/backlog.ts": new Set(["positionalArgs"]),
-  "packages/cli/src/commands/context.ts": new Set(["parseArgs"]),
-  "packages/cli/src/commands/delivery.ts": new Set(["listCommand", "positionalArgs"]),
-  "packages/cli/src/commands/idea.ts": new Set(["ideaCommand"]),
-  "packages/cli/src/commands/index.ts": new Set(["explicitWorkspaceSelector", "hasWorkspaceSelectorArg", "registerAll", "removeWorkspaceSelector", "workspaceProjectRoot"]),
-  "packages/cli/src/commands/loop-go.ts": new Set(["loopGoCommand", "parseOptions"]),
-  "packages/cli/src/commands/loop-run-once.ts": new Set(["loopRunOnceCommand"]),
-  "packages/cli/src/commands/workspace-issue.ts": new Set(["parseArgs"]),
-  "packages/cli/src/commands/workspace-migrate.ts": new Set(["parseWorkspaceMigrateArgs"]),
-  "packages/cli/src/commands/workspace-worktree-lifecycle.ts": new Set(["workspaceWorktreeAuditCommand", "workspaceWorktreeCleanupCommand"]),
-  "packages/cli/src/commands/workspace.ts": new Set(["listCommand", "parseTarget", "positionalArgs", "registerCommand"]),
-  "packages/cli/src/bridge.ts": new Set(["hasCanonicalWorkspaceSelector", "parseCanonicalWorkspaceSelectorArgs"]),
-  "packages/cli/src/lib/workspace-context-audit.ts": new Set(["isSelectorLiteral", "isSelectorParserBypass"]),
-  "packages/cli/src/lib/workspace-interaction.ts": new Set(["replaceCanonicalWorkspaceSelector"]),
-};
+const TRUSTED_SELECTOR_IMPLEMENTATION_FILES = new Set([
+  "packages/cli/src/lib/workspace-context-audit.ts",
+  "packages/cli/src/lib/workspace-selector.ts",
+]);
 
 const CLI_SURFACE_FILES: Readonly<Record<string, string>> = {
   agent: "packages/cli/src/commands/agent.ts",
@@ -184,15 +170,6 @@ function isSelectorParserBypass(node: ts.Node): boolean {
   return false;
 }
 
-function isTrustedLocalSelectorScope(source: ts.SourceFile, file: string, node: ts.Node): boolean {
-  if (!ts.isFunctionDeclaration(node) || node.parent !== source || node.name === undefined) return false;
-  if (TRUSTED_LOCAL_SELECTOR_SCOPES[file]?.has(node.name.text) !== true) return false;
-  // Registered parser boundaries are concrete top-level TypeScript declarations.
-  // Requiring the production signature prevents a same-name local function or
-  // object method from borrowing the boundary merely by spelling its name.
-  return node.parameters.every((parameter) => parameter.type !== undefined);
-}
-
 function exactExecutionConfigPath(call: ts.CallExpression, cwdArgument: (argument: ts.Expression) => boolean): boolean {
   if (!ts.isIdentifier(call.expression) || (call.expression.text !== "join" && call.expression.text !== "resolve")) return false;
   const cwdIndex = call.arguments.findIndex(cwdArgument);
@@ -247,13 +224,7 @@ function scanSource(
     return current;
   };
   const cwdAliases = new Map<ts.Node, Set<string>>();
-  const functionScopes = new Set<ts.Node>();
-  const trustedSelectorScopes = new Set<ts.Node>();
   const collectAliases = (node: ts.Node): void => {
-    if (ts.isFunctionLike(node)) {
-      functionScopes.add(node);
-      if (isTrustedLocalSelectorScope(source, file, node)) trustedSelectorScopes.add(node);
-    }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isProcessCwdCall(node.initializer)) {
       const scope = scopeFor(node);
       const aliases = cwdAliases.get(scope) ?? new Set<string>();
@@ -263,14 +234,7 @@ function scanSource(
     ts.forEachChild(node, collectAliases);
   };
   collectAliases(source);
-  const hasTrustedSelectorBoundary = (node: ts.Node): boolean => {
-    let current: ts.Node | undefined = node;
-    while (current !== undefined) {
-      if (functionScopes.has(current)) return trustedSelectorScopes.has(current);
-      current = current.parent;
-    }
-    return false;
-  };
+  const hasTrustedSelectorBoundary = (): boolean => TRUSTED_SELECTOR_IMPLEMENTATION_FILES.has(file);
   const visit = (node: ts.Node): void => {
     if (
       ts.isCallExpression(node)
@@ -331,7 +295,7 @@ function scanSource(
         }
       }
     }
-    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary(node) && isSelectorParserBypass(node)) {
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node)) {
       addFinding(
         findings,
         seen,

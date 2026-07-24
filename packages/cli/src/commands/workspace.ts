@@ -18,6 +18,7 @@ import { workspaceDoctorCommand } from "./workspace-doctor.js";
 import { workspaceMigrateCommand } from "./workspace-migrate.js";
 import { workspaceEditCommand } from "./workspace-edit.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const WORKSPACE_LIST_V1 = "roll.workspace-list/v1" as const;
 const WORKSPACE_VIEW_V1 = "roll.workspace-view/v1" as const;
@@ -85,7 +86,7 @@ function positionalArgs(args: readonly string[]): string[] {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json" || arg === "--all") continue;
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       index += 1;
       continue;
     }
@@ -185,7 +186,7 @@ function resolveOne(
 function parseTarget(args: readonly string[]): { readonly ok: true; readonly target?: string } | { readonly ok: false } {
   if (unknownFlags(args).length > 0) return { ok: false };
   const optionTarget = flagValue(args, "--workspace");
-  if (args.includes("--workspace") && optionTarget === undefined) return { ok: false };
+  if (containsCanonicalWorkspaceSelector(args) && optionTarget === undefined) return { ok: false };
   const positional = positionalArgs(args);
   if (positional.length > 1 || (optionTarget !== undefined && positional.length > 0)) return { ok: false };
   const target = optionTarget ?? positional[0];
@@ -203,7 +204,7 @@ function mutationSuccess(operation: WorkspaceOperation, workspace: WorkspaceView
 
 function listCommand(args: readonly string[], store: WorkspaceRegistry): number {
   const json = args.includes("--json");
-  if (unknownFlags(args).length > 0 || positionalArgs(args).length > 0 || args.includes("--workspace")) {
+  if (unknownFlags(args).length > 0 || positionalArgs(args).length > 0 || containsCanonicalWorkspaceSelector(args)) {
     return emitError("invalid_arguments", json);
   }
   try {
@@ -243,7 +244,7 @@ function showCommand(args: readonly string[], store: WorkspaceRegistry): number 
 
 function registerCommand(args: readonly string[], store: WorkspaceRegistry): number {
   const json = args.includes("--json");
-  if (unknownFlags(args).length > 0 || args.includes("--all") || args.includes("--workspace")) {
+  if (unknownFlags(args).length > 0 || args.includes("--all") || containsCanonicalWorkspaceSelector(args)) {
     return emitError("invalid_arguments", json);
   }
   const positional = positionalArgs(args);

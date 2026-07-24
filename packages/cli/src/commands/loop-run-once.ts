@@ -50,6 +50,7 @@ import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { emitBacklogTargetError, resolveBacklogCommandTarget, stripBacklogScopeArgs, type ResolvedBacklogTarget } from "./backlog-target.js";
+import { canonicalWorkspaceSelectorIndex, containsCanonicalWorkspaceSelector } from "../lib/workspace-selector.js";
 import { resolveLang, t, v3Catalog, type WorkspaceExecutionContextV1 } from "@roll/spec";
 import { resolveStoryLeasePath } from "../runner/story-lease-path.js";
 import {
@@ -971,14 +972,14 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   let requirementDiscovery: ReturnType<typeof loadWorkspaceDiscovery> | undefined;
   let requirementFailureCode: string | undefined;
   let workspaceResolutionSource: "explicit" | "environment" | "cwd_manifest" | "requirement_discovery" =
-    args.includes("--workspace") ? "explicit" : (process.env["ROLL_WORKSPACE"] ?? "").trim() !== ""
+    containsCanonicalWorkspaceSelector(args) ? "explicit" : (process.env["ROLL_WORKSPACE"] ?? "").trim() !== ""
       ? "environment"
       : "cwd_manifest";
   {
     const scoped = stripBacklogScopeArgs(args);
     if (!scoped.ok) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
     const selectorArgs: string[] = [];
-    const workspaceIndex = args.indexOf("--workspace");
+    const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
     if (workspaceIndex >= 0) selectorArgs.push("--workspace", args[workspaceIndex + 1] ?? "");
     let decision = resolveBacklogCommandTarget(selectorArgs, "mutation");
     if (!decision.ok && decision.code === "target_missing" && allowedCards !== undefined && allowedCards.size > 0) {

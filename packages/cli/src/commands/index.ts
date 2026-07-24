@@ -6,6 +6,11 @@ import { registerPorted, usage } from "../bridge.js";
 import { renderState } from "../render.js";
 import { renderLoopHelp } from "../lib/loop-help.js";
 import {
+  canonicalWorkspaceSelectorIndex,
+  containsCanonicalWorkspaceSelector,
+  isCanonicalWorkspaceSelectorToken,
+} from "../lib/workspace-selector.js";
+import {
   cliMatchedOperation,
   cliMatchedSelectorOperation,
   cliOperation,
@@ -178,7 +183,7 @@ function workspaceProjectRoot(args: readonly string[], operation: "read" | "muta
 function removeWorkspaceSelector(args: readonly string[]): string[] {
   const remaining: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(args[index])) {
       index += 1;
       continue;
     }
@@ -189,12 +194,12 @@ function removeWorkspaceSelector(args: readonly string[]): string[] {
 }
 
 function explicitWorkspaceSelector(args: readonly string[]): string | undefined {
-  const index = args.indexOf("--workspace");
+  const index = canonicalWorkspaceSelectorIndex(args);
   return index < 0 ? undefined : args[index + 1];
 }
 
 function hasWorkspaceSelectorArg(args: readonly string[]): boolean {
-  return args.includes("--workspace");
+  return containsCanonicalWorkspaceSelector(args);
 }
 
 function isHelp(arg: string | undefined): boolean {

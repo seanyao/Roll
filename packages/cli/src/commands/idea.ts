@@ -33,6 +33,7 @@ import { BacklogStore, ConflictError, IDEA_SECTIONS, appendIdea, inferEpic, pars
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { generateIndex, projectDataPath } from "../lib/archive.js";
 import { UNCATEGORIZED } from "../lib/archive.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import { writeStoryCardFiles } from "../lib/story-mint.js";
 import { requireWorkspaceAuthorities, requireWorkspaceMutationPath } from "../lib/workspace-project-authority.js";
 import { c, renderState } from "../render.js";
@@ -152,7 +153,7 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
   const textParts: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       index += 1;
       continue;
     }
