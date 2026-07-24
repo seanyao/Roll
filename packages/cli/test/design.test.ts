@@ -123,6 +123,21 @@ describe("roll design", () => {
     writeConfig(home, "lang: en\nai_claude: ~/.claude\n");
     const d = makeDeps(proj, bin);
     Object.assign(d.env, {
+      ROLL_ADVERSARIAL_MARKER: "/stale/adversarial.json",
+      ROLL_CONTEXT_DATA_V1: '{"stale":true}',
+      ROLL_EVIDENCE_DIR: "/stale/evidence",
+      ROLL_FEATURES_DIR: "/stale/features",
+      ROLL_INTEGRATION_INPUTS: "/stale/integration-inputs.json",
+      ROLL_LOOP_ALERT: "/stale/ALERT.md",
+      ROLL_LOOP_DIR: "/stale/loop",
+      ROLL_LOOP_GO_ALLOWED_CARDS: "US-STALE-001",
+      ROLL_LOOP_GO_CHILD: "1",
+      ROLL_LOOP_GO_GUIDED: "1",
+      ROLL_LOOP_GO_WORKER: "1",
+      ROLL_MAIN_PROJECT: "/stale/project",
+      ROLL_MAIN_SLUG: "stale-project",
+      ROLL_NOTES_DIR: "/stale/notes",
+      ROLL_OWNED_GIT_PATHS: "/stale/owned-git-paths.json",
       ROLL_WORKSPACE_EXECUTION_CONTEXT: '{"schema":"roll.workspace-execution-context/v1"}',
       ROLL_WORKSPACE: "stale-workspace",
       ROLL_STORY_ID: "US-STALE-001",
@@ -130,8 +145,12 @@ describe("roll design", () => {
       ROLL_PROJECT_RUNTIME_DIR: "/stale/runtime",
       ROLL_REPOSITORY_ID: "repo-stale",
       ROLL_REPOSITORY_ALIAS: "stale",
+      ROLL_RUN_DIR: "/stale/run",
+      ROLL_SCREENSHOTS_DIR: "/stale/screenshots",
+      ROLL_SHARED_ROOT: "/stale/shared",
       ROLL_WORKSPACE_CONTEXT_SCOPE: "issue_required",
       ROLL_WORKSPACE_LEGACY_HANDOFF: '{"stale":true}',
+      ROLL_TEST_KEEP: "keep-me",
     });
 
     const code = designCommand(["--agent", "claude"], d);
@@ -143,6 +162,21 @@ describe("roll design", () => {
     expect(prompt).toContain("scope: legacy_migration_only");
     expect(call?.opts.env?.["ROLL_WORKSPACE_CONTEXT_SCOPE"]).toBe("legacy_migration_only");
     for (const key of [
+      "ROLL_ADVERSARIAL_MARKER",
+      "ROLL_CONTEXT_DATA_V1",
+      "ROLL_EVIDENCE_DIR",
+      "ROLL_FEATURES_DIR",
+      "ROLL_INTEGRATION_INPUTS",
+      "ROLL_LOOP_ALERT",
+      "ROLL_LOOP_DIR",
+      "ROLL_LOOP_GO_ALLOWED_CARDS",
+      "ROLL_LOOP_GO_CHILD",
+      "ROLL_LOOP_GO_GUIDED",
+      "ROLL_LOOP_GO_WORKER",
+      "ROLL_MAIN_PROJECT",
+      "ROLL_MAIN_SLUG",
+      "ROLL_NOTES_DIR",
+      "ROLL_OWNED_GIT_PATHS",
       "ROLL_WORKSPACE_EXECUTION_CONTEXT",
       "ROLL_WORKSPACE",
       "ROLL_STORY_ID",
@@ -150,9 +184,14 @@ describe("roll design", () => {
       "ROLL_PROJECT_RUNTIME_DIR",
       "ROLL_REPOSITORY_ID",
       "ROLL_REPOSITORY_ALIAS",
+      "ROLL_RUN_DIR",
+      "ROLL_SCREENSHOTS_DIR",
+      "ROLL_SHARED_ROOT",
     ]) {
       expect(call?.opts.env?.[key]).toBeUndefined();
     }
+    expect(call?.opts.env?.["ROLL_TEST_KEEP"]).toBe("keep-me");
+    expect(call?.opts.env?.["PATH"]).toBe(d.env["PATH"]);
     const envHandoff = call?.opts.env?.["ROLL_WORKSPACE_LEGACY_HANDOFF"];
     expect(envHandoff).toBeTruthy();
     expect(prompt).toContain(`handoff-json: ${envHandoff}`);
