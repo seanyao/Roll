@@ -122,6 +122,17 @@ describe("roll design", () => {
     makeAgent(bin, "claude");
     writeConfig(home, "lang: en\nai_claude: ~/.claude\n");
     const d = makeDeps(proj, bin);
+    Object.assign(d.env, {
+      ROLL_WORKSPACE_EXECUTION_CONTEXT: '{"schema":"roll.workspace-execution-context/v1"}',
+      ROLL_WORKSPACE: "stale-workspace",
+      ROLL_STORY_ID: "US-STALE-001",
+      ROLL_WORKSPACE_BACKLOG_PATH: "/stale/backlog/index.md",
+      ROLL_PROJECT_RUNTIME_DIR: "/stale/runtime",
+      ROLL_REPOSITORY_ID: "repo-stale",
+      ROLL_REPOSITORY_ALIAS: "stale",
+      ROLL_WORKSPACE_CONTEXT_SCOPE: "issue_required",
+      ROLL_WORKSPACE_LEGACY_HANDOFF: '{"stale":true}',
+    });
 
     const code = designCommand(["--agent", "claude"], d);
 
@@ -131,6 +142,17 @@ describe("roll design", () => {
     const prompt = call?.args.join("\n") ?? "";
     expect(prompt).toContain("scope: legacy_migration_only");
     expect(call?.opts.env?.["ROLL_WORKSPACE_CONTEXT_SCOPE"]).toBe("legacy_migration_only");
+    for (const key of [
+      "ROLL_WORKSPACE_EXECUTION_CONTEXT",
+      "ROLL_WORKSPACE",
+      "ROLL_STORY_ID",
+      "ROLL_WORKSPACE_BACKLOG_PATH",
+      "ROLL_PROJECT_RUNTIME_DIR",
+      "ROLL_REPOSITORY_ID",
+      "ROLL_REPOSITORY_ALIAS",
+    ]) {
+      expect(call?.opts.env?.[key]).toBeUndefined();
+    }
     const envHandoff = call?.opts.env?.["ROLL_WORKSPACE_LEGACY_HANDOFF"];
     expect(envHandoff).toBeTruthy();
     expect(prompt).toContain(`handoff-json: ${envHandoff}`);

@@ -248,6 +248,31 @@ function prepareLegacyWorkspaceSkillHandoff(input: {
   return { skillBody: `${block}\n\n${input.skillBody}`, handoffJson };
 }
 
+const INHERITED_WORKSPACE_AUTHORITY_ENV = [
+  "ROLL_WORKSPACE_EXECUTION_CONTEXT",
+  "ROLL_WORKSPACE",
+  "ROLL_STORY_ID",
+  "ROLL_WORKSPACE_BACKLOG_PATH",
+  "ROLL_PROJECT_RUNTIME_DIR",
+  "ROLL_REPOSITORY_ID",
+  "ROLL_REPOSITORY_ALIAS",
+  "ROLL_WORKSPACE_CONTEXT_SCOPE",
+  "ROLL_WORKSPACE_LEGACY_HANDOFF",
+] as const;
+
+function legacyWorkspaceHandoffEnvironment(
+  inherited: NodeJS.ProcessEnv,
+  handoffJson: string,
+): NodeJS.ProcessEnv {
+  const env = { ...inherited };
+  for (const key of INHERITED_WORKSPACE_AUTHORITY_ENV) delete env[key];
+  return {
+    ...env,
+    ROLL_WORKSPACE_CONTEXT_SCOPE: "legacy_migration_only",
+    ROLL_WORKSPACE_LEGACY_HANDOFF: handoffJson,
+  };
+}
+
 function formatRunFolder(ts: number, target: string | null): string {
   const d = new Date(ts);
   const iso = d.toISOString();
@@ -961,14 +986,9 @@ function runDesignCommand(
     cmd.args,
     {
       cwd: d.cwd,
-      env: {
-        ...d.env,
-        ...workspaceExecutionEnvironment(d.workspaceExecution),
-        ...(legacyHandoff === undefined ? {} : {
-          ROLL_WORKSPACE_CONTEXT_SCOPE: "legacy_migration_only",
-          ROLL_WORKSPACE_LEGACY_HANDOFF: legacyHandoff.handoffJson,
-        }),
-      },
+      env: legacyHandoff === undefined
+        ? { ...d.env, ...workspaceExecutionEnvironment(d.workspaceExecution) }
+        : legacyWorkspaceHandoffEnvironment(d.env, legacyHandoff.handoffJson),
     },
     { onStdout: live.ingestStdout, onStderr: live.ingestStderr },
   );
