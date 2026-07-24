@@ -158,15 +158,53 @@ function isSelectorLiteral(node: ts.Node): boolean {
     && (node.text === "--workspace" || node.text === "--ws");
 }
 
-function isSelectorParserBypass(node: ts.Node): boolean {
+function staticStringValue(node: ts.Node): string | undefined {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+    return staticStringValue(node.expression);
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = staticStringValue(node.left);
+    const right = staticStringValue(node.right);
+    return left === undefined || right === undefined ? undefined : `${left}${right}`;
+  }
+  return undefined;
+}
+
+function isSelectorValue(node: ts.Node, aliases: ReadonlySet<string>): boolean {
+  const staticValue = staticStringValue(node);
+  if (staticValue === "--workspace" || staticValue === "--ws") return true;
+  if (ts.isIdentifier(node)) return aliases.has(node.text) || node.text === "CANONICAL_WORKSPACE_SELECTOR";
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+    return isSelectorValue(node.expression, aliases);
+  }
+  if (ts.isArrayLiteralExpression(node)) return node.elements.some((element) => isSelectorValue(element, aliases));
+  if (ts.isNewExpression(node)) return node.arguments?.some((argument) => isSelectorValue(argument, aliases)) === true;
+  if (ts.isObjectLiteralExpression(node)) {
+    return node.properties.some((property) => {
+      if (ts.isShorthandPropertyAssignment(property)) return isSelectorValue(property.name, aliases);
+      if (ts.isPropertyAssignment(property)) return isSelectorValue(property.name, aliases) || isSelectorValue(property.initializer, aliases);
+      return false;
+    });
+  }
+  return false;
+}
+
+function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>): boolean {
   if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
     const method = node.expression.name.text;
-    return ["includes", "indexOf", "findIndex", "some"].includes(method)
-      && node.arguments.some(isSelectorLiteral);
+    return ["includes", "indexOf", "findIndex", "some", "has", "startsWith", "endsWith", "match", "search", "test"].includes(method)
+      && (isSelectorValue(node.expression.expression, aliases) || node.arguments.some((argument) => isSelectorValue(argument, aliases)));
+  }
+  if (ts.isElementAccessExpression(node)) {
+    return isSelectorValue(node.expression, aliases)
+      || (node.argumentExpression !== undefined && isSelectorValue(node.argumentExpression, aliases));
   }
   if (ts.isBinaryExpression(node)) {
-    return isSelectorLiteral(node.left) || isSelectorLiteral(node.right);
+    return isSelectorValue(node.left, aliases) || isSelectorValue(node.right, aliases);
   }
+  if (ts.isCaseClause(node)) return isSelectorValue(node.expression, aliases);
+  if (ts.isRegularExpressionLiteral(node)) return /--workspace|--ws/u.test(node.text);
   return false;
 }
 
@@ -224,7 +262,14 @@ function scanSource(
     return current;
   };
   const cwdAliases = new Map<ts.Node, Set<string>>();
+  const selectorAliases = new Set<string>();
   const collectAliases = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer !== undefined
+      && isSelectorValue(node.initializer, selectorAliases)
+    ) selectorAliases.add(node.name.text);
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isProcessCwdCall(node.initializer)) {
       const scope = scopeFor(node);
       const aliases = cwdAliases.get(scope) ?? new Set<string>();
@@ -295,7 +340,7 @@ function scanSource(
         }
       }
     }
-    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node)) {
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node, selectorAliases)) {
       addFinding(
         findings,
         seen,

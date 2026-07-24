@@ -96,8 +96,8 @@ function positionalArgs(args: readonly string[]): string[] {
 }
 
 function unknownFlags(args: readonly string[]): string[] {
-  const allowed = new Set(["--json", "--all", "--workspace"]);
-  return args.filter((arg) => arg.startsWith("-") && !allowed.has(arg));
+  const allowed = new Set(["--json", "--all"]);
+  return args.filter((arg) => arg.startsWith("-") && !isCanonicalWorkspaceSelectorToken(arg) && !allowed.has(arg));
 }
 
 function errorMessage(code: WorkspaceTargetFailureCode | WorkspaceRegistryErrorCode | "invalid_arguments"): string {

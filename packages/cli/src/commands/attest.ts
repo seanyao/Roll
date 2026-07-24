@@ -136,6 +136,7 @@ import { collectRollCaptureReadiness, type RollCaptureReadiness } from "../lib/r
 import { designContractDeliveredEvidence } from "../runner/attest-gate.js";
 import { readReviewScoreTrend, readStoryReviewScores } from "../lib/review-score.js";
 import { collectToolEvidenceFromEventsPath, formatToolCostSummary } from "../lib/tool-display.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import { attestAuditCommand } from "./attest-audit.js";
 import { runOutwardSmoke, smokeResultsFromReport } from "../attest/outward-smoke-runner.js";
 import { parseEvaluationContract } from "../lib/evaluation-contract.js";
@@ -1357,12 +1358,12 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
     );
     return 1;
   }
-  const flagsWithValue = new Set(["--workspace", "--deploy-url", "--run-dir", "--capture-tmux", "--capture-command", "--capture-command-skip", "--capture-region", "--capture-web", "--capture-web-skip", "--capture-browser"]);
+  const flagsWithValue = new Set(["--deploy-url", "--run-dir", "--capture-tmux", "--capture-command", "--capture-command-skip", "--capture-region", "--capture-web", "--capture-web-skip", "--capture-browser"]);
   let storyId: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) continue;
-    if (flagsWithValue.has(arg)) {
+    if (isCanonicalWorkspaceSelectorToken(arg) || flagsWithValue.has(arg)) {
       i += 1;
       continue;
     }

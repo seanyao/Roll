@@ -228,6 +228,33 @@ describe("US-WS-039 Workspace context static audit", () => {
     }
   });
 
+  it("detects selector literal aliases, receiver collections, and switch cases", () => {
+    const policy = { ...input("unused").policies[0], contextConsumer: "workspace" as const };
+    for (const source of [
+      [
+        "const selector = '--workspace' as const;",
+        "export function run(args: readonly string[]): boolean { return args.includes(selector); }",
+      ].join("\n"),
+      "export function run(arg: string): boolean { return ['--workspace'].includes(arg); }\n",
+      [
+        "export function run(arg: string): boolean {",
+        "  switch (arg) { case '--workspace': return true; default: return false; }",
+        "}",
+      ].join("\n"),
+      "const selectors = new Set(['--workspace']);\nexport function run(arg: string): boolean { return selectors.has(arg); }\n",
+      "const selectors = { '--workspace': true };\nexport function run(arg: string): boolean { return selectors[arg] === true; }\n",
+      "const selector = '--' + 'workspace';\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "export function run(arg: string): boolean { return /--workspace/u.test(arg); }\n",
+    ]) {
+      const rootDir = fixture({
+        "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,
+        "config/workspace-context-audit-allowlist.json": "[]\n",
+        "packages/cli/src/commands/backlog.ts": source,
+      });
+      expect(auditRegisteredWorkspaceContextTree(rootDir, "2026-07-25").findings.map((finding) => finding.code)).toContain("CLI_SELECTOR_PARSER_BYPASS");
+    }
+  });
+
   it("audits repository-required split cwd authority while allowing explicit execution config", () => {
     const repositoryPolicy = { ...input("unused").policies[1], surface: "cli" as const, id: "test", operation: "run", contextConsumer: "repository" as const };
     const rootDir = fixture({

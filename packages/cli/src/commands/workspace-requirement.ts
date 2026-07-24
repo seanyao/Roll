@@ -10,6 +10,7 @@ import {
 import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const RESULT_V1 = "roll.workspace-requirement-result/v1" as const;
 const ERROR_V1 = "roll.workspace-requirement-error/v1" as const;
@@ -69,7 +70,7 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
   const contextPaths: string[] = [];
   const storyIds: string[] = [];
   let json = false;
-  const scalarFlags = new Set(["--workspace", "--provider", "--ref", "--revision", "--body-file", "--context-root"]);
+  const scalarFlags = new Set(["--provider", "--ref", "--revision", "--body-file", "--context-root"]);
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
@@ -77,7 +78,7 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
       json = true;
       continue;
     }
-    if (arg === "--context" || arg === "--story" || (arg !== undefined && scalarFlags.has(arg))) {
+    if (arg === "--context" || arg === "--story" || isCanonicalWorkspaceSelectorToken(arg) || (arg !== undefined && scalarFlags.has(arg))) {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) return undefined;
       index += 1;
