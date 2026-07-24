@@ -263,8 +263,10 @@ context。
 
 生成的 [Workspace context compatibility matrix](../../docs/generated/workspace-context-compatibility-matrix.json)
 是稳定的 operation-level 清单。它为每个 CLI leaf、skill family 和 tool adapter 记录 scope、
-selector 行为、legacy boundary、authority、context consumer 与可执行 validation case 链接。
-Registry、生成矩阵、validation case 或 source audit 漂移时，release consistency 会失败。
+selector 行为、legacy boundary、authority 与 context consumer。独立的
+[Workspace context validation-case map](../../docs/generated/workspace-context-validation-cases.json)
+把每个 operation 链接到可执行证据。Registry、生成矩阵、validation case 或 source audit
+漂移时，release consistency 会失败。
 
 更多细节见[配置](configuration.md)、[Workspace Doctor](workspace-doctor.md)、
 [Loop](loop.md)和[历史迁移](legacy-onboarding.md)。

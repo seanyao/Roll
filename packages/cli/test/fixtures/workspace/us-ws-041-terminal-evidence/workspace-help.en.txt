@@ -1,6 +1,6 @@
 Usage: roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
   `create <id> --config <file> [--authorization <file>] [--check] [--json]`
-  `edit <id|path> --config <file> --check [--json]`
+  `edit <id|path> --config <file> [--check] [--json]`
   `issue init <story-id> --workspace <id> [--check] [--json]`
   `requirement add --provider <provider> --ref <ref> --revision <revision> --body-file <file> --story <id> [options]`
   `doctor <id> [--json] [--repair <typed-action>] [--path <absolute-path>]`

@@ -1,6 +1,6 @@
 用法：roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
   `create <ID> --config <文件> [--authorization <文件>] [--check] [--json]`
-  `edit <ID|路径> --config <文件> --check [--json]`
+  `edit <ID|路径> --config <文件> [--check] [--json]`
   `issue init <Story ID> --workspace <ID> [--check] [--json]`
   `requirement add --provider <来源> --ref <引用> --revision <修订> --body-file <文件> --story <ID> [选项]`
   `doctor <ID> [--json] [--repair <类型化动作>] [--path <绝对路径>]`

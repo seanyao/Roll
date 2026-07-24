@@ -307,8 +307,9 @@ must receive the selected, validated execution context before running.
 The generated [Workspace context compatibility matrix](../../docs/generated/workspace-context-compatibility-matrix.json)
 is the stable operation-level inventory. For each CLI leaf, skill family and tool
 adapter it records the scope, selector behavior, legacy boundary, authority and
-context consumer, with executable validation-case links. Release consistency
-fails when the registry, generated matrix, validation cases or source audit drift.
+context consumer. The separate [Workspace context validation-case map](../../docs/generated/workspace-context-validation-cases.json)
+links every operation to its executable evidence. Release consistency fails when
+the registry, generated matrix, validation cases or source audit drift.
 
 See [configuration](configuration.md), [Workspace doctor](workspace-doctor.md),
 [the loop](loop.md), and [historical migration](legacy-onboarding.md) for the

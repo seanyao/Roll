@@ -46,6 +46,7 @@ describe("US-WS-041 Workspace context documentation closure", () => {
     expect(readme).toContain("guide/en/workspaces.md");
     expect(readme).toContain("guide/zh/workspaces.md");
     expect(readme).toContain("docs/generated/workspace-context-compatibility-matrix.json");
+    expect(readme).toContain("docs/generated/workspace-context-validation-cases.json");
   });
 
   it("keeps alias help discoverable while canonical usage stays primary in both locales", async () => {
