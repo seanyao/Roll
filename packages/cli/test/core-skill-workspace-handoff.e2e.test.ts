@@ -22,6 +22,7 @@ import {
   freezeWorkspaceCycleContext,
   resolveWorkspaceCycleRepository,
 } from "../src/runner/scoped-route.js";
+import { prepareWorkspaceBuilderSkillBody } from "../src/runner/spawn-agent-handler.js";
 
 const REPO = resolve(__dirname, "../../..");
 const roots: string[] = [];
@@ -261,6 +262,23 @@ describe("US-WS-037 core skill Workspace handoff", () => {
     expect(first.skillBody).toContain("Workspace: roll");
     expect(first.skillBody).toContain(`Story: ${storyId}`);
     expect(first.skillBody.startsWith("[Roll Workspace skill handoff]\n")).toBe(true);
+
+    const spawned = prepareWorkspaceBuilderSkillBody({
+      cycleId: "cycle-ws-037",
+      branch: "loop/cycle-ws-037",
+      loop: "ci",
+      storyId,
+      workspaceExecution: frozen.context,
+      repositoryExecution: execution,
+    }, "# Roll Build");
+    expect(spawned.ok).toBe(true);
+    if (!spawned.ok) return;
+    expect(spawned.skillBody.startsWith("[Roll Workspace skill handoff]\n")).toBe(true);
+    expect(spawned.skillBody.indexOf("[Workspace repository execution context]")).toBeGreaterThan(0);
+    expect(spawned.skillBody.indexOf("# Roll Build")).toBeGreaterThan(
+      spawned.skillBody.indexOf("[Workspace repository execution context]"),
+    );
+    expect(spawned.contextJson).toBe(first.contextJson);
   });
 
   it("does not select the first repository in a multi-repo Issue without an explicit selector", () => {

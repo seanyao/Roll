@@ -21,6 +21,7 @@ import { recordSpawnRound } from "./round-journal-emit.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { invalidContextHandoff, type ContextStageHandoffV1 } from "./context-handoff.js";
 import type { ContextStageHostReadInputV1 } from "./context-stage-host.js";
+import { prepareWorkspaceSkillHandoff } from "./workspace-skill-handoff.js";
 import {
   RepositoryObservationError,
   observeWritableRepositoryCommitCount,
@@ -86,12 +87,40 @@ export function applyRepositoryBuilderContext(
   options: AgentSpawnOptions,
 ): AgentSpawnOptions {
   const execution = ctx.repositoryExecution;
-  if (execution === undefined) return options;
+  const prepared = prepareWorkspaceBuilderSkillBody(ctx, options.skillBody);
+  if (!prepared.ok) throw new Error(prepared.code);
+  if (execution === undefined) return { ...options, skillBody: prepared.skillBody };
   return {
     ...options,
     cwd: execution.issueRoot,
-    skillBody: injectRepositoryContext(options.skillBody, execution),
+    skillBody: prepared.skillBody,
   };
+}
+
+export type WorkspaceBuilderSkillBodyResult =
+  | { readonly ok: true; readonly skillBody: string; readonly contextJson?: string }
+  | { readonly ok: false; readonly code: string };
+
+/** Compose repository details under the canonical Workspace handoff block. */
+export function prepareWorkspaceBuilderSkillBody(
+  ctx: CycleContext,
+  skillBody: string,
+): WorkspaceBuilderSkillBodyResult {
+  const repositoryBody = ctx.repositoryExecution === undefined
+    ? skillBody
+    : injectRepositoryContext(skillBody, ctx.repositoryExecution);
+  if (ctx.workspaceExecution === undefined) return { ok: true, skillBody: repositoryBody };
+  const prepared = prepareWorkspaceSkillHandoff({
+    skillName: ctx.storyId?.startsWith("FIX-") || ctx.storyId?.startsWith("BUG-")
+      ? "roll-fix"
+      : "roll-build",
+    scope: "issue_required",
+    context: ctx.workspaceExecution,
+    skillBody: repositoryBody,
+  });
+  return prepared.ok
+    ? { ok: true, skillBody: prepared.skillBody, contextJson: prepared.contextJson }
+    : prepared;
 }
 
 export async function executeSpawnAgentCommand(
@@ -208,7 +237,21 @@ export async function executeSpawnAgentCommand(
           },
         };
       }
-      const finalSkillBody = contextSkillBody.skillBody;
+      const workspaceSkillBody = prepareWorkspaceBuilderSkillBody(ctx, contextSkillBody.skillBody);
+      if (!workspaceSkillBody.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace skill handoff blocked for ${ctx.storyId ?? "?"}: ${workspaceSkillBody.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return {
+          event: { type: "agent_exited", exit: 1, timedOut: false },
+          ctxPatch: {
+            builderSessionId,
+            ...(contextStage === undefined ? {} : { contextStage }),
+          },
+        };
+      }
+      const finalSkillBody = workspaceSkillBody.skillBody;
       const nextContextStage: ContextCycleStageStateV1 | undefined = contextSkillBody.handoff === undefined
         ? contextStage
         : advanceContextCycleStageState(
@@ -371,12 +414,12 @@ export async function executeSpawnAgentCommand(
           mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
         }
         res = await Promise.race([
-          ports.agentSpawn(cmd.agent, applyRepositoryBuilderContext(ctx, {
+          ports.agentSpawn(cmd.agent, {
           purpose: "builder",
           // E4: the builder runs in the submodule cycle worktree for a submodule
           // story (execCwd); its git env + writable roots target the submodule's
           // own repo/object store so its commits actually land there.
-          cwd: execCwd,
+          cwd: ctx.repositoryExecution?.issueRoot ?? execCwd,
           skillBody: finalSkillBody,
           ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
           ...(ctx.repositoryExecution !== undefined
@@ -416,7 +459,7 @@ export async function executeSpawnAgentCommand(
           onSpawn: (child) => {
             spawnedPid = child.pid;
           },
-          })),
+          }),
           lostRace,
         ]);
       } finally {

@@ -39,6 +39,7 @@ import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection } 
 import { appendWriteProtectionEvent, quarantineMainCheckoutForCycle, startMainCheckoutLeakWatchdog } from "./sandbox-boundary.js";
 import { readCycleTimeoutThresholds } from "./spawn-observers.js";
 import { eventTs, guardRuntimeDir } from "./runner-time.js";
+import { prepareWorkspaceBuilderSkillBody } from "./spawn-agent-handler.js";
 import { repositoryAgentWritableRoots, submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
 import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktree.js";
 import type { ExecuteResult, Ports } from "./ports.js";
@@ -87,6 +88,22 @@ export async function executeSpawnRoleCommand(
 
   const startSec = ports.clock();
   const rolePrompt = adversarialRolePrompt(cmd.role);
+  const skillHandoff = prepareWorkspaceBuilderSkillBody(ctx, `${rolePrompt}\n\n${ports.skillBody}`);
+  if (!skillHandoff.ok) {
+    ports.events.appendAlert(
+      ports.paths.alertsPath,
+      `Workspace skill handoff blocked for ${ctx.storyId ?? "?"}: ${skillHandoff.code} (cycle ${ctx.cycleId ?? "?"})`,
+    );
+    return {
+      event: {
+        type: "role_exited",
+        role: cmd.role,
+        exit: 1,
+        timedOut: false,
+        elapsedSec: 0,
+      },
+    };
+  }
   // Spawn-local hard-kill belt: the whole cycle wall budget bounds a single
   // role, so a lone hung role can never block the driver (which cannot check
   // its between-step watchdog while awaiting one spawn). The real cycle timeout
@@ -126,7 +143,7 @@ export async function executeSpawnRoleCommand(
     res = await ports.agentSpawn(cmd.agent, {
       purpose: cmd.role,
       cwd: execCwd,
-      skillBody: `${rolePrompt}\n\n${ports.skillBody}`,
+      skillBody: skillHandoff.skillBody,
       writableRoots,
       timeoutMs: wallSec * 1000,
       ...(ctx.model !== undefined && ctx.model !== "" ? { model: ctx.model } : {}),

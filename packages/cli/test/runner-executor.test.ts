@@ -13,7 +13,7 @@ import type { CycleCommand, CycleContext, CycleEvent, RollEvent, WarmSessionEntr
 import { AGENTS } from "../../core/src/agent/specs.js";
 import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { classifyComplexity, cycleStep, initialCycleState, mapV2Status, readLeases } from "@roll/core";
-import { AWAITING_REVIEW_STATUS_MARKER, STATUS_MARKER } from "@roll/spec";
+import { AWAITING_REVIEW_STATUS_MARKER, REPOSITORY_BINDING_V1, STATUS_MARKER, repositoryIdFromRemote } from "@roll/spec";
 import { agentWritableRoots, checkMainDirty, planAdversarial, recordExecutionProfile, writeEvaluatorArtifact, runDesignerStage } from "../src/runner/executor.js";
 import { submoduleAgentWritableRoots } from "../src/runner/worktree-bootstrap.js";
 import { evaluateReviewScoreGate, readLatestStoryPeerScore, writeReviewScoreNote } from "../src/lib/review-score.js";
@@ -7509,14 +7509,18 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
     execDirs.push(workspaceRoot);
     const issueRoot = join(workspaceRoot, "issues", "US-WS-033");
     const productWorktree = join(issueRoot, "product");
+    const productRemote = "git@github.com:acme/product.git";
+    const productIdentity = repositoryIdFromRemote(productRemote);
+    if (!productIdentity.ok) throw new Error("fixture remote must be canonical");
+    const productRepoId = productIdentity.value;
     mkdirSync(productWorktree, { recursive: true });
     execFileSync("git", ["init", "-q"], { cwd: productWorktree });
     const repositoryExecution = {
       workspaceId: "roll",
       issueRoot,
       repositories: {
-        "repo-product": {
-          repoId: "repo-product",
+        [productRepoId]: {
+          repoId: productRepoId,
           alias: "product",
           access: "write" as const,
           requiredDelivery: true,
@@ -7537,7 +7541,15 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
         lifecycle: "active" as const,
       },
       resolution: { source: "requirement_discovery" as const, evidence: [] },
-      bindings: [],
+      bindings: [{
+        schema: REPOSITORY_BINDING_V1,
+        repoId: productRepoId,
+        alias: "product",
+        remote: productRemote,
+        integrationBranch: "main",
+        provider: "github" as const,
+        workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+      }],
       issue: {
         storyId: "US-WS-033",
         manifestPath: `${issueRoot}/manifest.json`,
