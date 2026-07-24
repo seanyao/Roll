@@ -156,6 +156,41 @@ describe("US-WS-039 Workspace context static audit", () => {
     ]);
   });
 
+  it("does not let comments or unused boundary-shaped variables hide selector parser bypass", () => {
+    const policy = { ...input("unused").policies[0], contextConsumer: "workspace" as const };
+    const rootDir = fixture({
+      "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,
+      "config/workspace-context-audit-allowlist.json": "[]\n",
+      "packages/cli/src/commands/backlog.ts": [
+        "// parseWorkspaceSelectorArgs is not actually called",
+        "const parseWorkspaceSelectorArgs = undefined;",
+        "const selected = args.includes('--workspace');",
+      ].join("\n"),
+    });
+    expect(auditRegisteredWorkspaceContextTree(rootDir, "2026-07-25").findings.map((finding) => finding.code)).toEqual([
+      "CLI_SELECTOR_PARSER_BYPASS",
+    ]);
+  });
+
+  it("audits repository-required split cwd authority while allowing explicit execution config", () => {
+    const repositoryPolicy = { ...input("unused").policies[1], surface: "cli" as const, id: "test", operation: "run", contextConsumer: "repository" as const };
+    const rootDir = fixture({
+      "packages/cli/src/commands/test.ts": [
+        "const cwd = process.cwd();",
+        "const evidence = join(cwd, '.roll', 'evidence');",
+        "const executionConfig = join(cwd, '.roll', 'local.yaml');",
+      ].join("\n"),
+    });
+    const report = auditWorkspaceContextTree(input(rootDir, {
+      policies: [repositoryPolicy],
+      surfaces: [{ policyKey: "cli:test:run", file: "packages/cli/src/commands/test.ts" }],
+    }));
+    expect(report.findings.map((finding) => finding.code)).toEqual([
+      "MANUAL_CWD_ROLL_AUTHORITY",
+      "WORKSPACE_AUTHORITY_FROM_CWD",
+    ]);
+  });
+
   it("fails closed for unknown, expired, and unused allowlist entries", () => {
     const rootDir = fixture({
       "packages/cli/src/commands/backlog.ts": "const root = join(process.cwd(), '.roll');\n",

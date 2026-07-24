@@ -71,6 +71,24 @@ const AUTHORITY_WORDS = /(?:\.roll|workspace|issue|evidence|policy|tool[-_ ]?dum
 const SKILL_AMBIENT = /(?:\$PWD|\bproject root\b|\brepo(?:sitory)? root\b)/iu;
 const SKILL_AUTHORITY = /(?:authority|\.roll\/|backlog|features?|design|evidence|policy|dump)/iu;
 const SKILL_PROHIBITION = /(?:\bnever\b|\bdo not\b|\bmust not\b|\bnot (?:the |an? )?authority\b|禁止|不得|不可|不是.*(?:权威|依据))/iu;
+const SHARED_SELECTOR_BOUNDARY_NAMES = new Set([
+  "parseWorkspaceSelectorArgs",
+  "canonicalizeWorkspaceAliasTokens",
+  "parseWorkspaceInteractionArgs",
+  "resolveBacklogCommandTarget",
+  "resolveTarget",
+  "stripBacklogScopeArgs",
+  "workspaceProjectRoot",
+  "parseTarget",
+  "resolveInteractiveTargets",
+  "workspaceViewCommand",
+  "contextCommand",
+  "workspaceIssueCommand",
+  "parseWorkspaceMigrateArgs",
+  "ideaCommand",
+  "registerAll",
+  "isSelectorParserBypass",
+]);
 
 const CLI_SURFACE_FILES: Readonly<Record<string, string>> = {
   agent: "packages/cli/src/commands/agent.ts",
@@ -166,6 +184,21 @@ function isSelectorParserBypass(node: ts.Node): boolean {
   return false;
 }
 
+function functionName(node: ts.Node): string | undefined {
+  if (!ts.isFunctionLike(node)) return undefined;
+  if ("name" in node && node.name !== undefined && ts.isIdentifier(node.name)) return node.name.text;
+  const parent = node.parent;
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+  if (ts.isPropertyAssignment(parent) && (ts.isIdentifier(parent.name) || ts.isStringLiteral(parent.name))) return parent.name.text;
+  return undefined;
+}
+
+function calledIdentifier(node: ts.CallExpression): string | undefined {
+  if (ts.isIdentifier(node.expression)) return node.expression.text;
+  if (ts.isPropertyAccessExpression(node.expression)) return node.expression.name.text;
+  return undefined;
+}
+
 function addFinding(
   target: WorkspaceContextAuditFinding[],
   seen: Set<string>,
@@ -204,16 +237,69 @@ function scanSource(
     return current;
   };
   const cwdAliases = new Map<ts.Node, Set<string>>();
+  const functionScopes = new Set<ts.Node>();
+  const namedFunctions = new Map<string, Set<ts.Node>>();
+  const functionCalls = new Map<ts.Node, Set<string>>();
+  const trustedSelectorScopes = new Set<ts.Node>();
   const collectAliases = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node)) {
+      functionScopes.add(node);
+      const name = functionName(node);
+      if (name !== undefined) {
+        const scopes = namedFunctions.get(name) ?? new Set<ts.Node>();
+        scopes.add(node);
+        namedFunctions.set(name, scopes);
+        if (SHARED_SELECTOR_BOUNDARY_NAMES.has(name)) trustedSelectorScopes.add(node);
+      }
+    }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isProcessCwdCall(node.initializer)) {
       const scope = scopeFor(node);
       const aliases = cwdAliases.get(scope) ?? new Set<string>();
       aliases.add(node.name.text);
       cwdAliases.set(scope, aliases);
     }
+    if (ts.isCallExpression(node)) {
+      const called = calledIdentifier(node);
+      if (called !== undefined) {
+        const scope = scopeFor(node);
+        const calls = functionCalls.get(scope) ?? new Set<string>();
+        calls.add(called);
+        functionCalls.set(scope, calls);
+        if (SHARED_SELECTOR_BOUNDARY_NAMES.has(called)) trustedSelectorScopes.add(scope);
+      }
+    }
     ts.forEachChild(node, collectAliases);
   };
   collectAliases(source);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const scope of functionScopes) {
+      let parent = scope.parent;
+      while (parent !== undefined && !ts.isFunctionLike(parent)) parent = parent.parent;
+      if (parent !== undefined && trustedSelectorScopes.has(parent) && !trustedSelectorScopes.has(scope)) {
+        trustedSelectorScopes.add(scope);
+        changed = true;
+      }
+    }
+    for (const scope of [...trustedSelectorScopes]) {
+      for (const called of functionCalls.get(scope) ?? []) {
+        for (const target of namedFunctions.get(called) ?? []) {
+          if (trustedSelectorScopes.has(target)) continue;
+          trustedSelectorScopes.add(target);
+          changed = true;
+        }
+      }
+    }
+  }
+  const hasTrustedSelectorBoundary = (node: ts.Node): boolean => {
+    let current: ts.Node | undefined = node;
+    while (current !== undefined) {
+      if (functionScopes.has(current) && trustedSelectorScopes.has(current)) return true;
+      current = current.parent;
+    }
+    return false;
+  };
   const visit = (node: ts.Node): void => {
     if (
       ts.isCallExpression(node)
@@ -221,11 +307,15 @@ function scanSource(
       && (node.expression.text === "join" || node.expression.text === "resolve")
       && node.arguments.some((argument) => (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) && argument.text === ".roll")
       && node.arguments.some((argument) => ts.isIdentifier(argument) && cwdAliases.get(scopeFor(node))?.has(argument.text) === true)
-      && policy?.scope !== "repository_required"
     ) {
-      const line = lineAt(source, node);
-      addFinding(findings, seen, identity, file, line, "MANUAL_CWD_ROLL_AUTHORITY", "a process.cwd() alias is manually joined to a .roll authority path");
-      addFinding(findings, seen, identity, file, line, "WORKSPACE_AUTHORITY_FROM_CWD", "a process.cwd() alias participates in Workspace authority derivation");
+      const explicitExecutionConfig = node.arguments.some((argument) =>
+        (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))
+        && (argument.text === "local.yaml" || argument.text === ".gitignore"));
+      if (!explicitExecutionConfig) {
+        const line = lineAt(source, node);
+        addFinding(findings, seen, identity, file, line, "MANUAL_CWD_ROLL_AUTHORITY", "a process.cwd() alias is manually joined to a .roll authority path");
+        addFinding(findings, seen, identity, file, line, "WORKSPACE_AUTHORITY_FROM_CWD", "a process.cwd() alias participates in Workspace authority derivation");
+      }
     }
     if (isProcessCwdCall(node)) {
       const statement = statementFor(node);
@@ -270,8 +360,7 @@ function scanSource(
         }
       }
     }
-    const sharedSelectorBoundary = /(?:parseWorkspaceSelectorArgs|canonicalizeWorkspaceAliasTokens|parseWorkspaceInteractionArgs|resolveBacklogCommandTarget|workspaceProjectRoot|parseTarget|resolveInteractiveTargets|workspaceViewCommand|contextCommand|workspaceIssueCommand|parseWorkspaceMigrateArgs|ideaCommand)/u.test(sourceText);
-    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !sharedSelectorBoundary && isSelectorParserBypass(node)) {
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary(node) && isSelectorParserBypass(node)) {
       addFinding(
         findings,
         seen,

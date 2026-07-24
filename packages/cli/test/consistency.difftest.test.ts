@@ -625,7 +625,7 @@ describe("frozen: roll consistency", () => {
 
         roll release --gate-check check                # verdict-first seven-dimension table
         roll release --gate-check check --json         # machine-readable JSON (same computation)
-        roll release --gate-check audit [--json]       # US-TRUTH-002 shadow drift audit (read-only, exit 0)
+        roll release --gate-check audit --project-dir DIR [--json]  # US-TRUTH-002 shadow drift audit (read-only, exit 0)
       ",
       }
     `);

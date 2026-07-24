@@ -1103,7 +1103,7 @@ function checkHelp(command: string): string {
 
   ${command} check                # verdict-first seven-dimension table
   ${command} check --json         # machine-readable JSON (same computation)
-  ${command} audit [--json]       # US-TRUTH-002 shadow drift audit (read-only, exit 0)
+  ${command} audit --project-dir DIR [--json]  # US-TRUTH-002 shadow drift audit (read-only, exit 0)
 `;
 }
 

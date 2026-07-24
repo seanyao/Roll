@@ -49,6 +49,8 @@ export interface AuditGatherDeps {
   /** Local main ahead count override (tests). */
   localMainAhead?: () => Promise<number>;
   nowSec?: number;
+  /** Explicit repository execution root supplied by the command host. */
+  projectDir?: string;
 }
 
 function readJsonl(path: string): Array<Record<string, unknown>> {
@@ -291,7 +293,12 @@ function renderMarkdown(report: AuditReport, skipped: string[], dateTag: string)
 /** `roll release consistency audit [--json]` — always exits 0 on a completed scan. */
 export async function consistencyAuditCommand(args: string[], deps: AuditGatherDeps = {}): Promise<number> {
   const json = args.includes("--json");
-  const projectPath = process.cwd();
+  const projectDirIndex = args.indexOf("--project-dir");
+  const projectPath = deps.projectDir ?? (projectDirIndex >= 0 ? args[projectDirIndex + 1] : undefined);
+  if (projectPath === undefined || projectPath === "") {
+    process.stderr.write("Usage: roll release consistency audit --project-dir <repository-root> [--json]\n");
+    return 2;
+  }
   const rtEnv = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim();
   const runtimeDir = rtEnv !== "" ? rtEnv : join(projectPath, ".roll", "loop");
 
