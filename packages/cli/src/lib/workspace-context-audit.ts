@@ -214,6 +214,15 @@ function staticStringValue(node: ts.Node, constants: ReadonlyMap<string, string>
       const values = node.arguments.map((argument) => staticStringValue(argument, constants));
       if (values.every((value): value is string => value !== undefined)) return receiverValue.concat(...values);
     }
+    if (receiverValue !== undefined && method === "toLowerCase" && node.arguments.length === 0) return receiverValue.toLowerCase();
+    if (receiverValue !== undefined && method === "toUpperCase" && node.arguments.length === 0) return receiverValue.toUpperCase();
+    if (receiverValue !== undefined && (method === "replace" || method === "replaceAll")) {
+      const search = node.arguments[0] === undefined ? undefined : staticStringValue(node.arguments[0], constants);
+      const replacement = node.arguments[1] === undefined ? undefined : staticStringValue(node.arguments[1], constants);
+      if (search !== undefined && replacement !== undefined) {
+        return method === "replace" ? receiverValue.replace(search, replacement) : receiverValue.replaceAll(search, replacement);
+      }
+    }
     if (ts.isIdentifier(receiver) && receiver.text === "String" && (method === "fromCharCode" || method === "fromCodePoint")) {
       const values = node.arguments.map(staticNumberValue);
       if (values.every((value): value is number => value !== undefined)) {
@@ -249,6 +258,19 @@ function isSelectorValue(node: ts.Node, aliases: ReadonlySet<string>, factories:
   if (staticValue === "--workspace" || staticValue === "--ws") return true;
   if (ts.isIdentifier(node)) return aliases.has(node.text) || node.text === "CANONICAL_WORKSPACE_SELECTOR";
   if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && factories.has(node.expression.text)) return true;
+  if (
+    ts.isCallExpression(node)
+    && (ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression))
+  ) {
+    const receiver = node.expression.expression;
+    const method = ts.isPropertyAccessExpression(node.expression)
+      ? node.expression.name.text
+      : node.expression.argumentExpression === undefined
+        ? undefined
+        : staticStringValue(node.expression.argumentExpression, constants);
+    if (method === "at" && isSelectorValue(receiver, aliases, factories, constants)) return true;
+  }
+  if (ts.isElementAccessExpression(node) && isSelectorValue(node.expression, aliases, factories, constants)) return true;
   if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
     return isSelectorValue(node.expression, aliases, factories, constants);
   }
@@ -293,6 +315,12 @@ function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>, fac
   if (ts.isReturnStatement(node) && node.expression !== undefined) return isSelectorValue(node.expression, aliases, factories, constants);
   if (ts.isRegularExpressionLiteral(node)) return /--workspace|--ws/u.test(node.text);
   return false;
+}
+
+function bindingPropertyNameText(name: ts.PropertyName, constants: ReadonlyMap<string, string>): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
+  if (ts.isComputedPropertyName(name)) return staticStringValue(name.expression, constants);
+  return undefined;
 }
 
 function exactExecutionConfigPath(call: ts.CallExpression, cwdArgument: (argument: ts.Expression) => boolean): boolean {
@@ -358,13 +386,7 @@ function scanSource(
       if (imported === "CANONICAL_WORKSPACE_SELECTOR") selectorAliases.add(node.name.text);
       if (imported === "workspaceSelectorArgs" || imported === "withWorkspaceSelector") selectorFactories.add(node.name.text);
     }
-    if (
-      ts.isBindingElement(node)
-      && node.propertyName !== undefined
-      && ts.isIdentifier(node.propertyName)
-      && node.propertyName.text === "CANONICAL_WORKSPACE_SELECTOR"
-      && ts.isIdentifier(node.name)
-    ) {
+    if (ts.isBindingElement(node) && node.propertyName !== undefined && bindingPropertyNameText(node.propertyName, stringConstants) === "CANONICAL_WORKSPACE_SELECTOR" && ts.isIdentifier(node.name)) {
       selectorAliases.add(node.name.text);
     }
     if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isSelectorValue(node.initializer, selectorAliases, selectorFactories, stringConstants)) {
@@ -376,6 +398,16 @@ function scanSource(
       && node.initializer !== undefined
       && isSelectorValue(node.initializer, selectorAliases, selectorFactories, stringConstants)
     ) selectorAliases.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isArrayBindingPattern(node.name)
+      && node.initializer !== undefined
+      && isSelectorValue(node.initializer, selectorAliases, selectorFactories, stringConstants)
+    ) {
+      for (const element of node.name.elements) {
+        if (ts.isBindingElement(element) && ts.isIdentifier(element.name)) selectorAliases.add(element.name.text);
+      }
+    }
     if (
       (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isMethodDeclaration(node))
       && node.name !== undefined
@@ -424,7 +456,7 @@ function scanSource(
         && (node.propertyName?.text ?? node.name.text) === "CANONICAL_WORKSPACE_SELECTOR";
       const selectorProperty = (ts.isPropertyAccessExpression(node) && node.name.text === "CANONICAL_WORKSPACE_SELECTOR")
         || (ts.isElementAccessExpression(node) && node.argumentExpression !== undefined && staticStringValue(node.argumentExpression, stringConstants) === "CANONICAL_WORKSPACE_SELECTOR")
-        || (ts.isBindingElement(node) && node.propertyName !== undefined && ts.isIdentifier(node.propertyName) && node.propertyName.text === "CANONICAL_WORKSPACE_SELECTOR");
+        || (ts.isBindingElement(node) && node.propertyName !== undefined && bindingPropertyNameText(node.propertyName, stringConstants) === "CANONICAL_WORKSPACE_SELECTOR");
       if ((selectorSpelling && parentText !== selectorText) || importedSelector || selectorProperty) {
         addFinding(
           findings,

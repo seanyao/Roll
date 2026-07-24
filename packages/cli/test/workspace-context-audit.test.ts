@@ -257,6 +257,12 @@ describe("US-WS-039 Workspace context static audit", () => {
       "const selector = 'x--workspace'.slice(1);\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
       "const selector = String.fromCharCode(45, 45, 119, 111, 114, 107, 115, 112, 97, 99, 101);\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
       "import { workspaceSelectorArgs } from '../lib/workspace-selector.js';\nconst selector = workspaceSelectorArgs('x')[0];\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "import { workspaceSelectorArgs } from '../lib/workspace-selector.js';\nconst [selector] = workspaceSelectorArgs('x');\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "import { workspaceSelectorArgs } from '../lib/workspace-selector.js';\nconst selector = workspaceSelectorArgs('x').at(0);\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "import { workspaceSelectorArgs } from '../lib/workspace-selector.js';\nfunction selector(): string { const [value] = workspaceSelectorArgs('x'); return value; }\nexport function run(args: readonly string[]): boolean { return args.includes(selector()); }\n",
+      "import * as workspaceSelectors from '../lib/workspace-selector.js';\nconst { ['CANONICAL_WORKSPACE_SELECTOR']: selector } = workspaceSelectors;\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "const selector = '--WORKSPACE'.toLowerCase();\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "const selector = '--work space'.replace(' ', '');\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
     ]) {
       const rootDir = fixture({
         "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,
