@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildLoopRunnerScript,
@@ -589,6 +589,8 @@ describe("US-WS-016 Workspace scheduler contract", () => {
   it("runs one production Workspace Story without invoking any root repository preflight", async () => {
     const root = workspaceRoot("run-once-production");
     const rollHome = workspaceRoot("run-once-production-home");
+    const invocationCwd = workspaceRoot("run-once-production-cwd");
+    const decoyRoll = join(invocationCwd, ".roll");
     const storyId = "US-WS-016";
     workspaceManifest(root, "ws-alpha");
     const issue = workspaceIssue(root, "ws-alpha", storyId);
@@ -605,6 +607,15 @@ describe("US-WS-016 Workspace scheduler contract", () => {
       "| Story | Description | Status |\n|---|---|---|\n| LEGACY-1 | Legacy decoy | 📋 Todo |\n",
     );
     writeFileSync(join(root, ".roll", "policy.yaml"), "loop_safety:\n  skip_network_check: true\n");
+    mkdirSync(join(decoyRoll, "features"), { recursive: true });
+    mkdirSync(join(decoyRoll, "runtime"), { recursive: true });
+    writeFileSync(join(decoyRoll, "backlog.md"), "decoy backlog\n");
+    writeFileSync(join(decoyRoll, "features", "sentinel.txt"), "decoy features\n");
+    writeFileSync(join(decoyRoll, "runtime", "sentinel.txt"), "decoy runtime\n");
+    const decoyFilesBefore = readdirSync(decoyRoll, { recursive: true }).map(String).sort();
+    const decoyContentBefore = decoyFilesBefore
+      .filter((relative) => !relative.endsWith("features") && !relative.endsWith("runtime"))
+      .map((relative) => [relative, readFileSync(join(decoyRoll, relative), "utf8")] as const);
     const registry = new WorkspaceRegistry({ rollHome, now: () => 1 });
     registry.register({ workspaceId: "ws-alpha", root });
     registry.activate("ws-alpha");
@@ -615,12 +626,28 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     const agentSpawn: AgentSpawn = vi.fn(async (_agent, options) => {
       if (options.purpose === "builder") {
         builderSpawned = true;
+        const context = JSON.parse(
+          options.env?.["ROLL_WORKSPACE_EXECUTION_CONTEXT"] ?? "null",
+        ) as { authorities: { backlog: string; design: string; evidence: string; runtime: string } };
+        const promptContext = JSON.parse(
+          /context-json: (\{.*\})/u.exec(options.skillBody)?.[1] ?? "null",
+        );
+        expect(context).toEqual(promptContext);
         expect(options.cwd).toBe(realpathSync(issue.worktreePath));
         expect(options.env).toMatchObject({
           ROLL_REPOSITORY_ID: issue.repoId,
           ROLL_REPOSITORY_ALIAS: "primary",
         });
         expect(options.skillBody).toContain(`Selected repository: ${issue.repoId} (primary)`);
+        for (const marker of [
+          join(dirname(context.authorities.backlog), "agent-authority.marker"),
+          join(context.authorities.design, "agent-authority.marker"),
+          join(context.authorities.evidence, "agent-authority.marker"),
+          join(context.authorities.runtime, "agent-authority.marker"),
+        ]) {
+          mkdirSync(dirname(marker), { recursive: true });
+          writeFileSync(marker, `${storyId}\n`);
+        }
         expect(readFileSync(backlogPath, "utf8")).toContain(
           `${storyId} | Workspace production story | 🔨 In Progress`,
         );
@@ -637,6 +664,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     const reconcile = vi.fn(async () => undefined);
     const backfill = vi.fn(async () => []);
     const saved = new Map<string, string | undefined>();
+    const savedCwd = process.cwd();
     const envKeys = [
       "ROLL_HOME",
       "ROLL_WORKSPACE",
@@ -652,6 +680,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     delete process.env["ROLL_MAIN_PROJECT"];
     delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
     delete process.env["ROLL_WORKSPACE_BACKLOG_PATH"];
+    process.chdir(invocationCwd);
     try {
       expect(await loopRunOnceCommand(["--workspace", "ws-alpha"], {
         requireNetwork: async () => ({ ok: true, recovered: false }),
@@ -666,6 +695,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
         backfillMergedRuns: backfill,
       })).toBe(1);
     } finally {
+      process.chdir(savedCwd);
       for (const key of envKeys) {
         const value = saved.get(key);
         if (value === undefined) delete process.env[key];
@@ -675,6 +705,18 @@ describe("US-WS-016 Workspace scheduler contract", () => {
 
     expect(builderSpawned).toBe(true);
     expect(leaseObserved).toBe(true);
+    for (const marker of [
+      join(root, "backlog", "agent-authority.marker"),
+      join(root, "design", "agent-authority.marker"),
+      join(root, "evidence", "agent-authority.marker"),
+      join(root, "runtime", "agent-authority.marker"),
+    ]) {
+      expect(readFileSync(marker, "utf8")).toBe(`${storyId}\n`);
+    }
+    expect(readdirSync(decoyRoll, { recursive: true }).map(String).sort()).toEqual(decoyFilesBefore);
+    for (const [relative, content] of decoyContentBefore) {
+      expect(readFileSync(join(decoyRoll, relative), "utf8")).toBe(content);
+    }
     expect(existsSync(join(issue.issueRoot, "evidence"))).toBe(true);
     expect(existsSync(join(root, ".roll", "features", "workspace-orchestration", storyId))).toBe(false);
     expect(readLeases(join(root, "runtime", "locks", "leases"))[storyId]).toEqual({

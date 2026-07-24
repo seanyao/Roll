@@ -2722,6 +2722,66 @@ describe("executeCommand — command → executor mapping", () => {
     },
   );
 
+  it.each([
+    ["spawn_agent", { kind: "spawn_agent", agent: "claude", attempt: 1 } as const],
+    ["spawn_role", { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const],
+  ])("US-WS-037: %s passes one semantic Workspace/repository identity in actual AgentSpawnOptions", async (_kind, command) => {
+    const fixture = workspaceSpawnContext();
+    const repositoryMap = fixture.ctx.repositoryExecution?.repositories ?? {};
+    const repositoryPorts = {
+      prepare: vi.fn(),
+      resolve: vi.fn(),
+      bind: () => ({
+        context: (repoId: string) => repositoryMap[repoId],
+        git: {
+          commitsAhead: vi.fn(async () => 0),
+          tcrCount: vi.fn(async () => 0),
+          recentCommits: vi.fn(async () => []),
+          dirty: vi.fn(async () => false),
+          headSha: vi.fn(async (repoId: string) => repositoryMap[repoId]?.headSha ?? ""),
+          push: vi.fn(async () => ({ code: 0 })),
+        },
+        verification: {
+          runRepository: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+          runIntegration: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+        },
+        provider: {
+          repoSlug: vi.fn(async () => "acme/product"),
+          prState: vi.fn(async () => "OPEN"),
+          prMergeInfo: vi.fn(async () => ({ state: "OPEN" })),
+        },
+        events: {
+          append: vi.fn(() => ({})),
+          appendIssue: vi.fn(() => ({})),
+        },
+      }),
+    } as unknown as NonNullable<Ports["repositories"]>;
+    const { ports } = fakePorts(command.kind === "spawn_agent" ? { repositories: repositoryPorts } : {});
+    await executeCommand(
+      command,
+      ports,
+      { ...fixture.ctx, repositorySelector: "product" } as CycleContext,
+    );
+
+    expect(ports.agentSpawn).toHaveBeenCalledOnce();
+    const options = vi.mocked(ports.agentSpawn).mock.calls[0]?.[1];
+    expect(options).toBeDefined();
+    if (options === undefined) return;
+    const environmentContext = JSON.parse(
+      options.env?.["ROLL_WORKSPACE_EXECUTION_CONTEXT"] ?? "null",
+    );
+    const promptContext = JSON.parse(
+      /context-json: (\{.*\})/u.exec(options.skillBody)?.[1] ?? "null",
+    );
+    expect(environmentContext).toEqual(promptContext);
+    expect(environmentContext).toEqual(fixture.ctx.workspaceExecution);
+    expect(options.cwd).toBe(fixture.productWorktree);
+    expect(options.env).toMatchObject({
+      ROLL_REPOSITORY_ID: fixture.productRepoId,
+      ROLL_REPOSITORY_ALIAS: "product",
+    });
+  });
+
   it.each(["story", "execution"] as const)(
     "US-WS-037: spawn_role rejects %s identity drift before agentSpawn",
     async (mismatch) => {
