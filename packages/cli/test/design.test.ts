@@ -45,6 +45,11 @@ function makeDeps(proj: string, bin: string): DesignCommandDeps & { calls: Spawn
   return {
     cwd: proj,
     workspaceContextScope: "legacy_migration_only",
+    workspaceContextOperationProvenance: {
+      surface: "cli",
+      id: "init",
+      operation: "onboard",
+    },
     env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
     readLine: () => null,
     spawn: (binName, args, opts) => {

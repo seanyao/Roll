@@ -108,7 +108,7 @@ function fixture(): {
 }
 
 describe("US-WS-033 — Workspace cycle context handoff", () => {
-  it("US-WS-037: starts from /tmp by exact Story requirement and prints stable Workspace/Story/repository correlation", async () => {
+  it("US-WS-037: inherited legacy env cannot bypass exact Story Workspace resolution from /tmp", async () => {
     const rollHome = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-home-")));
     const arbitraryCwd = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-cwd-")));
     const target = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-target-")));
@@ -152,8 +152,8 @@ describe("US-WS-033 — Workspace cycle context handoff", () => {
     process.chdir(arbitraryCwd);
     process.env["ROLL_HOME"] = rollHome;
     delete process.env["ROLL_WORKSPACE"];
-    delete process.env["ROLL_MAIN_PROJECT"];
-    delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    process.env["ROLL_MAIN_PROJECT"] = arbitraryCwd;
+    process.env["ROLL_PROJECT_RUNTIME_DIR"] = join(arbitraryCwd, "legacy-runtime");
     process.env[GOAL_ALLOWED_CARDS_ENV] = "US-WS-033";
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);

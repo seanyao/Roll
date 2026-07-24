@@ -193,6 +193,11 @@ async function runFixtureCycle(
       branch: `loop/cycle-${cycleId}`,
       loop: "ci" as never,
       workspaceContextScope: "legacy_migration_only",
+      workspaceContextOperationProvenance: {
+        surface: "cli",
+        id: "workspace",
+        operation: "migrate",
+      },
     },
   });
   return { repo, result, paths: p, runtimeDir: rt };
@@ -265,6 +270,11 @@ describe("US-QA-016 fault injection matrix", () => {
         branch: `loop/cycle-${cycleId}`,
         loop: "ci" as never,
         workspaceContextScope: "legacy_migration_only",
+        workspaceContextOperationProvenance: {
+          surface: "cli",
+          id: "workspace",
+          operation: "migrate",
+        },
       },
     });
 
@@ -390,6 +400,11 @@ describe("US-QA-016 fault injection matrix", () => {
         branch: `loop/cycle-${cycleId}`,
         loop: "ci" as never,
         workspaceContextScope: "legacy_migration_only",
+        workspaceContextOperationProvenance: {
+          surface: "cli",
+          id: "workspace",
+          operation: "migrate",
+        },
       },
     });
 

@@ -223,6 +223,11 @@ describe("FIX-1475 — the supervised path never moves the shared main ref", () 
         branch: `loop/cycle-${cycleId}`,
         loop: "ci" as never,
         workspaceContextScope: "legacy_migration_only",
+        workspaceContextOperationProvenance: {
+          surface: "cli",
+          id: "workspace",
+          operation: "migrate",
+        },
       },
     });
 
@@ -302,6 +307,11 @@ describe("FIX-1475 — the supervised path never moves the shared main ref", () 
         branch: `loop/cycle-${cycleId}`,
         loop: "ci" as never,
         workspaceContextScope: "legacy_migration_only",
+        workspaceContextOperationProvenance: {
+          surface: "cli",
+          id: "workspace",
+          operation: "migrate",
+        },
       },
     });
 

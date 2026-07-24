@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  authorizesLegacyWorkspaceContextOperation,
   auditWorkspaceContextPolicies,
   buildWorkspaceContextCompatibilityMatrix,
   type WorkspaceContextSurfaceInventoryItem,
@@ -37,6 +38,21 @@ const policies: readonly WorkspaceContextPolicy[] = [
 ];
 
 describe("US-WS-032 Workspace context policy", () => {
+  it("authorizes legacy context only for exact lifecycle operation provenance", () => {
+    expect(authorizesLegacyWorkspaceContextOperation({ surface: "cli", id: "workspace", operation: "migrate" })).toBe(true);
+    expect(authorizesLegacyWorkspaceContextOperation({ surface: "cli", id: "init", operation: "onboard" })).toBe(true);
+    expect(authorizesLegacyWorkspaceContextOperation({ surface: "cli", id: "setup", operation: "offboard" })).toBe(true);
+    expect(authorizesLegacyWorkspaceContextOperation(undefined)).toBe(false);
+    expect(authorizesLegacyWorkspaceContextOperation(null as never)).toBe(false);
+    expect(authorizesLegacyWorkspaceContextOperation({ surface: "cli", id: "loop", operation: "run-once" })).toBe(false);
+    expect(authorizesLegacyWorkspaceContextOperation({
+      surface: "cli",
+      id: "workspace",
+      operation: "migrate",
+      forged: true,
+    } as never)).toBe(false);
+  });
+
   it("closes the registry over every actual surface operation", () => {
     expect(auditWorkspaceContextPolicies({ inventory, policies })).toEqual([]);
   });

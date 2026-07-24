@@ -426,6 +426,11 @@ describe("US-WS-010 repository Builder context", () => {
       loop: "ci",
       repositoryExecution: execution,
       workspaceContextScope: "legacy_migration_only",
+      workspaceContextOperationProvenance: {
+        surface: "cli",
+        id: "workspace",
+        operation: "migrate",
+      },
     }, {
       purpose: "builder",
       cwd: paths.worktreePath,
@@ -944,6 +949,11 @@ describe("US-WS-010 repository Builder context", () => {
       branch: "cycle-legacy",
       loop: "ci",
       workspaceContextScope: "legacy_migration_only",
+      workspaceContextOperationProvenance: {
+        surface: "cli",
+        id: "workspace",
+        operation: "migrate",
+      },
     }, input);
 
     await spawn("claude", spawnOptions);

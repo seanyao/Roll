@@ -348,6 +348,14 @@ export type WorkspaceContextScope =
 
 export type WorkspaceContextPolicySurface = "cli" | "skill" | "tool";
 
+/** Closed identity of the public operation that was allowed to enter a
+ * Workspace context fallback scope. The scope alone is never authorization. */
+export interface WorkspaceContextOperationProvenance {
+  readonly surface: WorkspaceContextPolicySurface;
+  readonly id: string;
+  readonly operation: string;
+}
+
 export type WorkspaceContextConsumer = "workspace" | "issue" | "repository";
 
 export const WORKSPACE_CONTEXT_POLICY_SURFACES = ["cli", "skill", "tool"] as const;

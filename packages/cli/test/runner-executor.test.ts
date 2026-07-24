@@ -86,6 +86,11 @@ const CTX: CycleContext = {
   agent: "claude",
   model: "",
   workspaceContextScope: "legacy_migration_only",
+  workspaceContextOperationProvenance: {
+    surface: "cli",
+    id: "workspace",
+    operation: "migrate",
+  },
 };
 
 function workspaceSpawnContext(): {
@@ -2676,11 +2681,31 @@ describe("executeCommand — command → executor mapping", () => {
   it.each([
     { kind: "spawn_agent", agent: "claude", attempt: 1 } as const,
     { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
-  ])("US-WS-037: $kind retains explicitly classified legacy migration execution", async (command) => {
+  ])("US-WS-037: $kind rejects a caller-forged legacy scope without operation provenance", async (command) => {
+    const { ports } = fakePorts();
+    const result = await executeCommand(command, ports, {
+      ...CTX,
+      workspaceContextScope: "legacy_migration_only",
+      workspaceContextOperationProvenance: undefined,
+    } as CycleContext);
+
+    expect(ports.agentSpawn).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({ exit: 1, timedOut: false });
+  });
+
+  it.each([
+    { kind: "spawn_agent", agent: "claude", attempt: 1 } as const,
+    { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
+  ])("US-WS-037: $kind retains legacy migration with explicit operation provenance", async (command) => {
     const { ports } = fakePorts();
     await executeCommand(command, ports, {
       ...CTX,
       workspaceContextScope: "legacy_migration_only",
+      workspaceContextOperationProvenance: {
+        surface: "cli",
+        id: "workspace",
+        operation: "migrate",
+      },
     } as CycleContext);
 
     expect(ports.agentSpawn).toHaveBeenCalledOnce();

@@ -11,8 +11,8 @@
 import { spawn as spawnChild, type SpawnOptions } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { REQUIREMENT_HINT_V1, classifyStatus, t, v2Catalog, v3Catalog, type Lang, type RequirementHintV1, type WorkspaceContextScope, type WorkspaceExecutionContextV1 } from "@roll/spec";
-import { normalizerFor, newNormalizerState, parseBacklog, type ActivitySignal } from "@roll/core";
+import { REQUIREMENT_HINT_V1, classifyStatus, t, v2Catalog, v3Catalog, type Lang, type RequirementHintV1, type WorkspaceContextOperationProvenance, type WorkspaceContextScope, type WorkspaceExecutionContextV1 } from "@roll/spec";
+import { authorizesLegacyWorkspaceContextOperation, normalizerFor, newNormalizerState, parseBacklog, type ActivitySignal } from "@roll/core";
 import { currentLang } from "./agent-list.js";
 import { loopGoCommand } from "./loop-go.js";
 import {
@@ -200,6 +200,8 @@ export interface DesignCommandDeps {
   workspaceExecution?: WorkspaceExecutionContextV1;
   /** Missing context is allowed only for an explicitly classified legacy migration. */
   workspaceContextScope: WorkspaceContextScope;
+  /** Operation-level proof for the legacy migration exception. */
+  workspaceContextOperationProvenance?: WorkspaceContextOperationProvenance;
   /** Environment variables (used for `ROLL_DESIGN_AGENT`). */
   env: NodeJS.ProcessEnv;
   /** Read one interactive selection line. */
@@ -794,7 +796,13 @@ export function designCommand(args: string[], deps: Partial<DesignCommandDeps> =
     return 1;
   }
 
-  if (d.workspaceExecution === undefined && d.workspaceContextScope !== "legacy_migration_only") {
+  if (
+    d.workspaceExecution === undefined &&
+    (
+      d.workspaceContextScope !== "legacy_migration_only" ||
+      !authorizesLegacyWorkspaceContextOperation(d.workspaceContextOperationProvenance)
+    )
+  ) {
     emit("roll design: missing_execution_context");
     return 1;
   }

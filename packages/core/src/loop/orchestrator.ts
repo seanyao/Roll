@@ -116,6 +116,7 @@ import type {
   RepositoryExecutionContext,
   TerminalOutcome,
   WorkspaceExecutionContextV1,
+  WorkspaceContextOperationProvenance,
   WorkspaceContextScope,
 } from "@roll/spec";
 import { cycleCurrency } from "../cost/tracker.js";
@@ -1007,6 +1008,8 @@ export interface CycleContext {
   workspaceExecution?: WorkspaceExecutionContextV1;
   /** Explicit policy classification for missing Workspace authority. */
   workspaceContextScope?: WorkspaceContextScope;
+  /** Public operation that explicitly authorized a fallback scope. */
+  workspaceContextOperationProvenance?: WorkspaceContextOperationProvenance;
   /** Explicit repository selector; canonicalized to repoId before spawn. */
   repositorySelector?: string;
 }

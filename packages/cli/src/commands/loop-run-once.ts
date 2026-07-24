@@ -14,7 +14,7 @@
  */
 import { EventBus, assessBacklog, branchCanaryVerdict, buildWorkspaceExecutionContext, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, deriveWorkspaceExecutionAuthorities, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason, type WorkspaceMatchEvidence } from "@roll/spec";
-import { createScheduler, isOwnerHeld, launchdLabel, loadExplicitWorkspaceDiscovery, loadWorkspaceDiscovery, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
+import { createScheduler, isOwnerHeld, launchdLabel, loadExplicitWorkspaceDiscovery, loadWorkspaceDiscovery, readLockOwner, releaseLock } from "@roll/infra";
 import { dormantMarkerPath, resolveLoopRunState, writeDormantMarker } from "./loop-sched.js";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -188,7 +188,7 @@ export function cycleSignalTeardown(
       loop: "ci" as never,
       storyId: restored.ok ? restored.context.issue?.storyId : attr.storyId,
       agent: attr.agent,
-      workspaceContextScope: restored.ok ? "issue_required" : "legacy_migration_only",
+      workspaceContextScope: "issue_required",
       ...(restored.ok ? { workspaceExecution: restored.context } : {}),
       ...(restoredRepository?.ok ? { repositorySelector: restoredRepository.repoId } : {}),
     };
@@ -964,16 +964,8 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   if (args.includes("--race")) process.env["ROLL_LOOP_RACE"] = "1";
   const allowedCards = parseAllowedCardsEnv();
 
-  // FIX-1209: preflight — detect and heal core.worktree contamination BEFORE
-  // resolving project identity. The harness systematically writes core.worktree
-  // into the shared main checkout's git config every cycle (FIX-914 family),
-  // causing `rev-parse --show-toplevel` to return a cycle worktree path — making
-  // projectIdentity() resolve to the wrong checkout. Detect and unset before
-  // any identity-dependent code runs. Also stores the healing detail so an ALERT
-  // can be written once `alertsPath` is available.
-  const workspaceRequested = args.includes("--workspace") || (process.env["ROLL_WORKSPACE"] ?? "").trim() !== "";
-  const legacyRunnerBound = (process.env["ROLL_MAIN_PROJECT"] ?? "").trim() !== "" ||
-    (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() !== "";
+  // Resolve the required mutation Workspace before consulting any project/runtime
+  // compatibility environment. Ambient runner paths are locations, not authority.
   let workspaceTarget: ResolvedBacklogTarget | undefined;
   let workspaceResolutionEvidence: readonly WorkspaceMatchEvidence[] = [];
   let requirementDiscovery: ReturnType<typeof loadWorkspaceDiscovery> | undefined;
@@ -982,7 +974,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     args.includes("--workspace") ? "explicit" : (process.env["ROLL_WORKSPACE"] ?? "").trim() !== ""
       ? "environment"
       : "cwd_manifest";
-  if (workspaceRequested || !legacyRunnerBound) {
+  {
     const scoped = stripBacklogScopeArgs(args);
     if (!scoped.ok) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
     const selectorArgs: string[] = [];
@@ -1015,7 +1007,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
         process.stderr.write(`loop run-once: ${requirementFailureCode}\n`);
         return 1;
       }
-      if (workspaceRequested || decision.code === "migration_required" || allowedCards !== undefined) return emitBacklogTargetError(decision);
+      return emitBacklogTargetError(decision);
     } else {
       if ("aggregate" in decision) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
       workspaceTarget = decision;
@@ -1025,16 +1017,15 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   let id: { path: string; slug: string };
   let workspaceBinding: { workspaceId: string; runtimeRoot: string; backlogPath: string } | undefined;
   if (workspaceTarget === undefined) {
-    const identityRoot = (process.env["ROLL_MAIN_PROJECT"] ?? "").trim() || process.cwd();
-    coreWorktreeHeal = checkCoreWorktreeContamination(identityRoot);
-    id = await projectIdentity(identityRoot);
+    process.stderr.write("loop run-once: missing_execution_context\n");
+    return 1;
   } else {
     workspaceBinding = {
       workspaceId: workspaceTarget.workspaceId,
       runtimeRoot: workspaceTarget.runtimeRoot,
       backlogPath: workspaceTarget.backlogPath,
     };
-    coreWorktreeHeal = { healed: false, detail: "" };
+    coreWorktreeHeal = checkCoreWorktreeContamination(workspaceTarget.workspaceRoot);
     id = { path: workspaceTarget.workspaceRoot, slug: workspaceTarget.workspaceId };
   }
   const cycleId = makeCycleId();
@@ -1121,7 +1112,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     cycleId,
     branch,
     loop: "ci" as never,
-    workspaceContextScope: workspaceExecution === undefined ? "legacy_migration_only" : "issue_required",
+    workspaceContextScope: "issue_required",
     ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
     ...(selectedRepository.repoId === undefined ? {} : { repositorySelector: selectedRepository.repoId }),
   };

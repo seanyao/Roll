@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { advanceContextCycleStageState, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
+import { advanceContextCycleStageState, authorizesLegacyWorkspaceContextOperation, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
 import type { CycleCost, RepositoryExecutionContext } from "@roll/spec";
 import { agentSpawnEnvironment, workspaceExecutionEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
@@ -115,9 +115,15 @@ export type WorkspaceSpawnIdentityResult =
 /** Validate the frozen Workspace/Issue/repository identity before any spawn side effect. */
 export function resolveWorkspaceSpawnIdentity(ctx: CycleContext): WorkspaceSpawnIdentityResult {
   if (ctx.workspaceExecution === undefined) {
-    return ctx.workspaceContextScope === "legacy_migration_only"
+    return ctx.workspaceContextScope === "legacy_migration_only" &&
+      authorizesLegacyWorkspaceContextOperation(ctx.workspaceContextOperationProvenance)
       ? { ok: true }
-      : { ok: false, code: "missing_execution_context" };
+      : {
+          ok: false,
+          code: ctx.workspaceContextScope === "legacy_migration_only"
+            ? "legacy_operation_provenance_required"
+            : "missing_execution_context",
+        };
   }
   const scoped = resolveWorkspaceExecutionContextScope({
     scope: "issue_required",

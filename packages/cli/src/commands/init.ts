@@ -1756,6 +1756,11 @@ export function runDesignSync(
     cwd,
     invocationCwd: cwd,
     workspaceContextScope: "legacy_migration_only",
+    workspaceContextOperationProvenance: {
+      surface: "cli",
+      id: "init",
+      operation: "onboard",
+    },
   });
   if (typeof result === "number") return result;
   process.stderr.write("roll design failed during init handoff: async design continuation is unsupported in init\n");
