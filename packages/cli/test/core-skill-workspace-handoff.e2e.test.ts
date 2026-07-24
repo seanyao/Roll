@@ -11,7 +11,7 @@ import {
   type WorkspaceExecutionContextV1,
 } from "@roll/spec";
 import { WorkspaceRegistry } from "@roll/infra";
-import { designCommand, type DesignCommandDeps } from "../src/commands/design.js";
+import { designCommand, designRequirementHint, type DesignCommandDeps } from "../src/commands/design.js";
 import { loadWorkspaceExecutionContext } from "../src/commands/workspace-execution-context.js";
 import { workspaceExecutionEnvironment } from "../src/runner/agent-spawn.js";
 import {
@@ -184,7 +184,10 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       operation: "mutation",
       scope: "workspace_required_mutation",
       requirement: jiraRequirement("APE-234"),
-    })).toMatchObject({ ok: false, code: "target_missing" });
+    })).toMatchObject({
+      ok: true,
+      context: { workspace: { workspaceId: "roll" }, resolution: { source: "requirement_discovery" } },
+    });
     expect(loadWorkspaceExecutionContext({
       rollHome: f.rollHome,
       cwd: f.arbitraryCwd,
@@ -193,6 +196,16 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       scope: "workspace_required_mutation",
       requirement: jiraRequirement("APE-999"),
     })).toMatchObject({ ok: false, code: "requirement_workspace_conflict" });
+  });
+
+  it("extracts path and deterministic identities from --from-file content", () => {
+    const f = fixture();
+    const hint = designRequirementHint(["--from-file", f.inputFile]);
+    expect(hint.paths).toEqual([{ path: f.inputFile, provenance: "cli_argument" }]);
+    expect(hint.sources).toEqual([{
+      key: { provider: "jira", ref: "APE-234" },
+      provenance: "deterministic_extraction",
+    }]);
   });
 
   it("uses the same canonical renderer for build/fix and preserves identity across cwd changes and retry", () => {
@@ -279,6 +292,14 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       spawned.skillBody.indexOf("[Workspace repository execution context]"),
     );
     expect(spawned.contextJson).toBe(first.contextJson);
+
+    expect(prepareWorkspaceBuilderSkillBody({
+      cycleId: "cycle-ws-037-missing",
+      branch: "loop/cycle-ws-037-missing",
+      loop: "ci",
+      storyId,
+      repositoryExecution: execution,
+    }, "# Roll Build")).toEqual({ ok: false, code: "missing_execution_context" });
   });
 
   it("does not select the first repository in a multi-repo Issue without an explicit selector", () => {
@@ -328,6 +349,10 @@ describe("US-WS-037 core skill Workspace handoff", () => {
     } as WorkspaceExecutionContextV1;
     expect(resolveWorkspaceCycleRepository(context)).toEqual({ ok: false, code: "missing_execution_context" });
     expect(resolveWorkspaceCycleRepository(context, f.skillsRepoId)).toMatchObject({
+      ok: true,
+      repository: { repoId: f.skillsRepoId, alias: "skills" },
+    });
+    expect(resolveWorkspaceCycleRepository(context, "skills")).toMatchObject({
       ok: true,
       repository: { repoId: f.skillsRepoId, alias: "skills" },
     });
