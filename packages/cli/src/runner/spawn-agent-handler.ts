@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { advanceContextCycleStageState, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
 import type { CycleCost, RepositoryExecutionContext } from "@roll/spec";
-import { agentSpawnEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
+import { agentSpawnEnvironment, workspaceExecutionEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
 import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination } from "./main-checkout-guard.js";
 import { recoverKimiUsage, recoverPiUsage } from "./usage-recovery.js";
@@ -504,6 +504,7 @@ export async function executeSpawnAgentCommand(
           env: {
             ...process.env,
             ROLL_LOOP_ALERT: ports.paths.alertsPath,
+            ...workspaceExecutionEnvironment(ctx.workspaceExecution),
             ...(workspaceSkillBody.selectedRepository === undefined ? {} : {
               ROLL_REPOSITORY_ID: workspaceSkillBody.selectedRepository.repoId,
               ROLL_REPOSITORY_ALIAS: workspaceSkillBody.selectedRepository.alias,
