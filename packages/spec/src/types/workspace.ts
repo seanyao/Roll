@@ -357,6 +357,9 @@ export interface WorkspaceContextOperationProvenance {
 }
 
 export type WorkspaceContextConsumer = "workspace" | "issue" | "repository";
+export type WorkspaceContextAccess = "none" | "read" | "mutation";
+export type WorkspaceRepositorySelectorPolicy = "not_applicable" | "required" | "forbidden";
+export type WorkspaceContextEffectTarget = "none" | "workspace" | "issue" | "repository" | "machine" | "legacy_project";
 
 export const WORKSPACE_CONTEXT_POLICY_SURFACES = ["cli", "skill", "tool"] as const;
 export const WORKSPACE_CONTEXT_POLICY_SCOPES = [
@@ -369,6 +372,9 @@ export const WORKSPACE_CONTEXT_POLICY_SCOPES = [
   "legacy_migration_only",
 ] as const;
 export const WORKSPACE_CONTEXT_POLICY_CONSUMERS = ["workspace", "issue", "repository"] as const;
+export const WORKSPACE_CONTEXT_POLICY_ACCESS = ["none", "read", "mutation"] as const;
+export const WORKSPACE_REPOSITORY_SELECTOR_POLICIES = ["not_applicable", "required", "forbidden"] as const;
+export const WORKSPACE_CONTEXT_EFFECT_TARGETS = ["none", "workspace", "issue", "repository", "machine", "legacy_project"] as const;
 
 const WORKSPACE_CONTEXT_POLICY_KEYS = new Set([
   "surface",
@@ -379,6 +385,9 @@ const WORKSPACE_CONTEXT_POLICY_KEYS = new Set([
   "allowsLegacyRollPath",
   "acceptsWorkspaceSelector",
   "contextConsumer",
+  "effectTarget",
+  "access",
+  "repositorySelector",
   "rationale",
 ]);
 
@@ -425,6 +434,9 @@ export interface WorkspaceContextPolicy {
   readonly allowsLegacyRollPath: boolean;
   readonly acceptsWorkspaceSelector?: boolean;
   readonly contextConsumer?: WorkspaceContextConsumer;
+  readonly effectTarget?: WorkspaceContextEffectTarget;
+  readonly access?: WorkspaceContextAccess;
+  readonly repositorySelector?: WorkspaceRepositorySelectorPolicy;
   readonly rationale?: string;
 }
 
@@ -482,6 +494,30 @@ export function validateWorkspaceContextPolicy(value: unknown): WorkspaceContext
     issues.push({ code: "invalid_type", path: "contextConsumer", message: "contextConsumer must be a string" });
   } else if (hasConsumer && !validConsumer) {
     issues.push({ code: "invalid_consumer", path: "contextConsumer", message: `unknown context consumer '${String(consumer)}'` });
+  }
+  if (Object.hasOwn(item, "access")) {
+    const access = item["access"];
+    if (typeof access !== "string") {
+      issues.push({ code: "invalid_type", path: "access", message: "access must be a string" });
+    } else if (!(WORKSPACE_CONTEXT_POLICY_ACCESS as readonly string[]).includes(access)) {
+      issues.push({ code: "invalid_value", path: "access", message: `unknown policy access '${access}'` });
+    }
+  }
+  if (Object.hasOwn(item, "effectTarget")) {
+    const target = item["effectTarget"];
+    if (typeof target !== "string") {
+      issues.push({ code: "invalid_type", path: "effectTarget", message: "effectTarget must be a string" });
+    } else if (!(WORKSPACE_CONTEXT_EFFECT_TARGETS as readonly string[]).includes(target)) {
+      issues.push({ code: "invalid_value", path: "effectTarget", message: `unknown effect target '${target}'` });
+    }
+  }
+  if (Object.hasOwn(item, "repositorySelector")) {
+    const selector = item["repositorySelector"];
+    if (typeof selector !== "string") {
+      issues.push({ code: "invalid_type", path: "repositorySelector", message: "repositorySelector must be a string" });
+    } else if (!(WORKSPACE_REPOSITORY_SELECTOR_POLICIES as readonly string[]).includes(selector)) {
+      issues.push({ code: "invalid_value", path: "repositorySelector", message: `unknown repository selector policy '${selector}'` });
+    }
   }
   if (Object.hasOwn(item, "rationale") && typeof item["rationale"] !== "string") {
     issues.push({ code: "invalid_type", path: "rationale", message: "rationale must be a string" });

@@ -96,6 +96,8 @@ describe("US-WS-032 Workspace context policy", () => {
   it.each([
     ["unknown scope", { ...policies[0]!, scope: "future_scope" }, "invalid_scope"],
     ["wrong selector type", { ...policies[0]!, acceptsWorkspaceSelector: "yes" }, "invalid_type"],
+    ["unknown access", { ...policies[1]!, access: "admin" }, "invalid_value"],
+    ["unknown repository selector policy", { ...policies[1]!, repositorySelector: "optional" }, "invalid_value"],
     ["extra field", { ...policies[0]!, undocumented: true }, "unknown_key"],
     ["empty id", { ...policies[0]!, id: "" }, "invalid_value"],
     ["unknown consumer", { ...policies[0]!, contextConsumer: "project" }, "invalid_consumer"],
@@ -105,6 +107,14 @@ describe("US-WS-032 Workspace context policy", () => {
       inventory: inventory.slice(0, 1),
       policies: [policy as unknown as WorkspaceContextPolicy],
     }).map((finding) => finding.code)).toContain("invalid_policy_schema");
+  });
+
+  it("accepts the supporting-skill access and repository-selector execution contract", () => {
+    expect(validateWorkspaceContextPolicy({
+      ...policies[1]!,
+      access: "read",
+      repositorySelector: "required",
+    })).toEqual([]);
   });
 
   it("rejects fallback permissions outside machine or migration scopes", () => {

@@ -179,6 +179,14 @@ export function createCapturePeerHelpers(params: {
           // execution worktree (submodule cycle worktree for a submodule story).
           cwd: params.reviewCwd ?? resolveExecutionCwd(ports, ctx),
           skillBody: prompt,
+          workspaceExecution: ctx.workspaceExecution,
+          workspaceSkillInvocation: {
+            skillName: "roll-peer",
+            operation: "review",
+            expectedWorkspaceId: ctx.workspaceExecution?.workspace.workspaceId,
+            expectedStoryId: ctx.storyId,
+            repositorySelector: ctx.repositorySelector,
+          },
           timeoutMs,
           bare: true, // FIX-319: review-only framing, no worker autorun directive
           ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
