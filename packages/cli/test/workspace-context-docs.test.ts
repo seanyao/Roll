@@ -52,12 +52,21 @@ describe("US-WS-041 Workspace context documentation closure", () => {
     for (const lang of ["en", "zh"] as const) {
       const canonical = await captureHelp(["workspace", "--help"], lang);
       const alias = await captureHelp(["ws", "--help"], lang);
+      const transcript = read(`packages/cli/test/fixtures/workspace/us-ws-041-terminal-evidence/workspace-help.${lang}.txt`);
       expect(canonical.status).toBe(0);
       expect(alias.status).toBe(0);
+      expect(alias).toEqual(canonical);
+      expect(canonical.stdout).toBe(transcript);
       expect(alias.stdout).toContain("roll workspace");
       expect(alias.stdout).toContain("roll ws");
       expect(alias.stdout).toContain("--ws");
       expect(alias.stdout).not.toContain("Usage: roll ws create");
     }
+  });
+
+  it("keeps adjacent backlog docs free of the retired single-active shortcut", () => {
+    expect(read("guide/en/backlog-github-sync.md")).not.toContain("or the single active Workspace");
+    expect(read("guide/zh/backlog-github-sync.md")).not.toContain("唯一 active\n工作区解析目标");
+    expect(read("README.md")).not.toContain("roll workspace <init");
   });
 });

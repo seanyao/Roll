@@ -42,7 +42,7 @@ roll workspace create ws-payments --config /absolute/path/workspace-create.yaml 
 roll workspace activate ws-payments
 ```
 
-初始化只创建 Workspace 权威文件与 repository binding，不创建常驻 product checkout。
+创建只写入 Workspace 权威文件与 repository binding，不创建常驻 product checkout。
 它也不会把 Workspace 设成全局当前目标：activate 控制 scheduler eligibility，每次命令
 仍独立解析自己的目标。
 
@@ -53,10 +53,43 @@ roll workspace list --all --json
 roll workspace show ws-payments --json
 ```
 
+## 命令与 selector alias
+
+`roll workspace` 是 canonical 命令族；`roll ws` 是完整子命令树的固定 alias，因此
+`roll ws create`、`roll ws edit`、`roll ws issue init` 与其他公开 Workspace leaf
+都会执行同一个 operation。所有公开 `--workspace <ID|路径>` selector 同时接受
+`--ws <ID|路径>`；例如 `roll backlog --ws ws-payments` 与 canonical 写法完全一致。
+
+Alias 只改变 CLI 拼写，不创建第二套命令树，不改变 `workspaceId`，不增加 config key，
+也不建立 global current Workspace。Help 与机器可读 next action 始终使用
+`roll workspace` 和 `--workspace` 作为 canonical 写法。Workspace 生命周期只有一个
+创建入口：`roll workspace create`；已移除的 `init` 子命令会被拒绝并提示迁移到 create。
+
+## 预览并应用 metadata edit
+
+使用版本化 edit config 添加、删除或修改 Workspace metadata。先预览，再应用同一份已审阅
+意图：
+
+```bash
+roll workspace edit ws-payments --config /absolute/path/workspace-edit.yaml --check --json
+roll workspace edit ws-payments --config /absolute/path/workspace-edit.yaml --json
+```
+
+Preview 包含 manifest、结果和 reference digest。Apply 获取 Workspace authority lock，
+重新读取事实并在锁内重建 plan。Manifest 变化返回 `manifest_changed`；新增 durable reference
+使修改不安全时返回 `metadata_referenced`；结果变化返回 `edit_plan_changed`。事务 journal
+记录 before/after 状态并支持幂等 retry。只有能证明安全 before 或 after 状态时才自动恢复；
+否则停止并给出 doctor action，不猜测。
+
+Edit 只原子替换 `workspace.yaml`。既有 Issue manifest、worktree、requirement revision 与
+delivery facts 保持 byte-stable；metadata 修改只影响未来 Issue，绝不追溯改写已创建 Issue。
+
 ## 目标解析与 fail-loud
 
-Workspace-aware 命令接受 `--workspace <ID|路径>`。解析会综合显式参数、
-`ROLL_WORKSPACE`、当前目录与 active registry 条目；这些信号必须收敛到同一个 Workspace。
+Workspace-aware 命令接受 `--workspace <ID|路径>`（或 `--ws`）。解析先遵循显式参数、
+环境、可达 Workspace 与 Issue 事实；这些事实未选出目标时，受限 discovery 才会把当前
+requirement 与 registry 中 canonical Workspace manifest、Issue facts 比较。唯一 active
+Workspace 只是 lifecycle 事实；当它与当前 requirement 不匹配时，绝不能单独作为选择依据。
 
 例如：
 
@@ -70,6 +103,24 @@ roll delivery list --workspace ws-payments
 如果两个 Workspace 都处于 active 且没有更强 selector，Roll 会列出候选并以非零退出。
 显式参数、环境变量与 cwd 指向不同目标时也会 fail loud。`pause`、`archive`、scheduler
 控制和 delivery reconcile 等变更拒绝 `--all`。
+
+精确 Issue identity 或唯一的精确 requirement source 可以自动选择目标。Repository/path
+containment 与 semantic similarity 只能参与排序，不能授权 mutation。已选 Workspace 与当前
+requirement 冲突时 mutation 会被拒绝；discovery facts 损坏时也会 fail closed，不会回退到
+唯一 active Workspace。
+
+Agent 无法确定目标时，会把结构化候选交给 `roll-.clarify workspace_target`。该 skill
+概括 requirement，展示 lifecycle/evidence/diagnostics，询问选择既有 Workspace、准备新建或
+修复 discovery，然后立即停止。选择既有 Workspace 只让 host 用显式 selector 重跑解析；
+选择 create 只授权收集 ID/config 并生成 `roll workspace create ... --check` preview，
+不授权 apply；选择 repair 只展示 canonical doctor/repair 命令。Direct CLI 的 TTY 交互使用
+同一个封闭 decision，不假装加载 skill。
+
+Interaction 与输出格式相互独立。`--no-input` 始终 non-interactive；`--interactive` 必须有
+可用 controlling TTY 或 agent host 提问能力，否则返回 `interaction_unavailable`。`--json`
+不会开启或关闭 prompt：prompt 写 stderr/TTY，stdout 仍只有一个 JSON 结果。成功 exit `0`；
+选择、冲突、需要 activate/create 等结构化 failure exit `1`，并提供稳定 `error.code`；
+non-interactive JSON 还会把 clarification payload 放入 error。
 
 planning 与 delivery 命令只把选定 Workspace 当作 project-data authority。即使从任意
 目录运行，也不会创建 `<cwd>/.roll`：
@@ -120,6 +171,11 @@ roll workspace issue init US-PAY-101 --workspace ws-payments --json
 可写代码只存在于 `issues/<storyId>/<repoAlias>/` worktree。只读 repository target 可以
 提供 context，但不成为必需交付 leg。任一 setup leg 失败时只回滚本次新建状态，而且不会
 spawn Builder。
+
+多 repository Issue 的 repository operation 必须从冻结的 Issue context 指定或继承一个
+binding，绝不选择“第一个”仓库。只有恰好一个 writable worktree 时 bash 才能默认使用它；
+filesystem 写入必须留在 writable binding 内；Git 仍要求显式 cwd，且必须匹配 Issue 声明的
+worktree。Repository context 缺失或歧义时返回 `missing_execution_context`，不使用 process cwd。
 
 ## 一个 Story，多个独立 repository 事实
 
@@ -196,6 +252,19 @@ roll workspace doctor ws-payments --json
 Doctor 只读检查 registry/manifest 一致性、cache identity、Requirement projection 与 archive
 trust、Issue journal/worktree、runtime lock 和机器容量。每次只能执行一个具名 typed repair；
 provider facts、不可变 Requirement archive 与 Issue completion evidence 不会被编造或删除。
+
+## Context policy 与兼容矩阵
+
+每个已注册 CLI、skill 和 tool operation 都声明 Workspace scope、selector 支持、authority
+访问与 context consumer。`machine_only` operation 不接收伪造的 Workspace context；
+`legacy_migration_only` operation 只能检查显式选择的历史 project layout，不能与 canonical
+Workspace authority 双写。其他 required scope 在执行前必须获得已选择并校验的 execution
+context。
+
+生成的 [Workspace context compatibility matrix](../../docs/generated/workspace-context-compatibility-matrix.json)
+是稳定的 operation-level 清单。它为每个 CLI leaf、skill family 和 tool adapter 记录 scope、
+selector 行为、legacy boundary、authority、context consumer 与可执行 validation case 链接。
+Registry、生成矩阵、validation case 或 source audit 漂移时，release consistency 会失败。
 
 更多细节见[配置](configuration.md)、[Workspace Doctor](workspace-doctor.md)、
 [Loop](loop.md)和[历史迁移](legacy-onboarding.md)。

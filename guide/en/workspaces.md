@@ -46,7 +46,7 @@ roll workspace create ws-payments --config /absolute/path/workspace-create.yaml 
 roll workspace activate ws-payments
 ```
 
-Initialization creates the Workspace authorities and repository bindings. It
+Creation writes the Workspace authorities and repository bindings. It
 does not create a persistent product checkout. It also does not imply that the
 Workspace is the command target: activation controls scheduler eligibility,
 while each command still resolves its own target.
@@ -58,11 +58,50 @@ roll workspace list --all --json
 roll workspace show ws-payments --json
 ```
 
+## Command and selector aliases
+
+`roll workspace` is the canonical command family. `roll ws` is one fixed alias
+for the complete subtree, so `roll ws create`, `roll ws edit`, `roll ws issue
+init` and every other public Workspace leaf execute the same operation. Likewise,
+every public `--workspace <id|path>` selector accepts `--ws <id|path>`; for
+example, `roll backlog --ws ws-payments` is identical to the canonical form.
+
+Aliases are CLI spelling only. They never create a second command tree, change
+`workspaceId`, alter configuration keys or establish a global current Workspace.
+Help and machine-readable next actions continue to use `roll workspace` and
+`--workspace` as the canonical spelling. Workspace creation has one lifecycle
+entry: `roll workspace create`; the retired `init` subcommand is rejected with a create migration hint.
+
+## Preview and apply metadata edits
+
+Use a versioned edit config to add, remove or change Workspace metadata. Preview
+first, then apply the same reviewed intent:
+
+```bash
+roll workspace edit ws-payments --config /absolute/path/workspace-edit.yaml --check --json
+roll workspace edit ws-payments --config /absolute/path/workspace-edit.yaml --json
+```
+
+The preview includes manifest, result and reference digests. Apply acquires the
+Workspace authority lock, reloads those facts and rebuilds the plan. A changed
+manifest returns `manifest_changed`; a new durable reference that makes the edit
+unsafe returns `metadata_referenced`; a changed result returns
+`edit_plan_changed`. The transaction journals its before/after state and retries
+idempotently. Recovery proceeds only when Roll can prove a safe before or after
+state; otherwise it stops with a doctor action instead of guessing.
+
+An edit atomically replaces `workspace.yaml` only. Existing Issue manifests,
+worktrees, requirement revisions and delivery facts remain byte-stable: metadata
+changes affect future Issues and never rewrite an Issue already created.
+
 ## Target resolution and fail-loud behavior
 
-Workspace-aware commands accept `--workspace <id|path>`. Resolution considers
-the explicit flag, `ROLL_WORKSPACE`, the current directory and active registry
-entries. Those signals must converge on one Workspace.
+Workspace-aware commands accept `--workspace <id|path>` (or `--ws`). Resolution
+first honors explicit, environment, reachable Workspace and Issue facts. When
+those do not select a target, bounded discovery compares the current requirement
+with registered canonical Workspace manifests and Issue facts. A single active
+Workspace is only a lifecycle fact: it is never sufficient by itself when its
+requirement does not match the current work.
 
 Examples:
 
@@ -77,6 +116,30 @@ If two Workspaces are active and no stronger selector resolves the command,
 Roll reports the candidates and exits non-zero. Conflicting explicit,
 environment and cwd selectors also fail loud. Mutations such as `pause`,
 `archive`, scheduler control and delivery reconciliation reject `--all`.
+
+Exact Issue identity or a unique exact requirement source may select a target.
+Repository/path containment and semantic similarity are ranking evidence only;
+they cannot authorize mutation. A mismatch between a chosen Workspace and the
+current requirement rejects mutation. Damaged discovery facts also fail closed
+instead of falling back to the only active Workspace.
+
+When an agent cannot determine the target, it hands the structured candidates to
+`roll-.clarify workspace_target`. The skill summarizes the requirement, shows
+lifecycle/evidence/diagnostics, asks whether to select an existing Workspace,
+prepare a new one or repair discovery, and then stops. Selecting an existing
+Workspace only causes the host to rerun resolution with an explicit selector.
+Choosing create only authorizes collection of ID/config and a
+`roll workspace create ... --check` preview; it does not authorize apply.
+Choosing repair only displays canonical doctor/repair commands. Direct CLI TTY
+interaction renders the same closed decision without pretending to load a skill.
+
+Interaction and output format are separate. `--no-input` is always
+non-interactive; `--interactive` requires a usable controlling TTY or an agent
+host that can ask questions; otherwise Roll returns `interaction_unavailable`.
+`--json` does not enable or disable prompting: prompts go to stderr/TTY, while
+stdout remains one JSON result. Success exits `0`; selection, conflict,
+activation/create requirements and other structured failures exit `1` with a
+stable `error.code` and, in non-interactive JSON mode, the clarification payload.
 
 Planning and delivery commands use the selected Workspace as their only
 project-data authority. They can run from an arbitrary directory without
@@ -133,6 +196,14 @@ Writable code exists only in `issues/<storyId>/<repoAlias>/` worktrees. A
 read-only repository target can provide context without becoming a required
 delivery leg. A partial setup failure rolls back clean new state and does not
 spawn a Builder.
+
+For a multi-repository Issue, repository operations must name or inherit one
+repository binding from the frozen Issue context. They never pick the first
+repository. Bash may default only when exactly one writable worktree exists;
+filesystem writes stay inside writable bindings, and Git still requires an
+explicit cwd that matches a declared Issue worktree. Missing or ambiguous
+repository context returns `missing_execution_context` rather than using the
+process cwd.
 
 ## One Story, independent repository facts
 
@@ -223,6 +294,21 @@ projections and archive trust, Issue journals/worktrees, runtime locks and
 machine capacity. Diagnosis is read-only. Only one named typed repair is allowed
 per invocation; provider facts, immutable Requirement archives and Issue
 completion evidence are never invented or deleted.
+
+## Context policy and compatibility matrix
+
+Every registered CLI, skill and tool operation declares its Workspace scope,
+selector support, authority access and context consumer. `machine_only`
+operations receive no fabricated Workspace context. `legacy_migration_only`
+operations may inspect an explicitly selected historical project layout but may
+not dual-write it with canonical Workspace authority. All other required scopes
+must receive the selected, validated execution context before running.
+
+The generated [Workspace context compatibility matrix](../../docs/generated/workspace-context-compatibility-matrix.json)
+is the stable operation-level inventory. For each CLI leaf, skill family and tool
+adapter it records the scope, selector behavior, legacy boundary, authority and
+context consumer, with executable validation-case links. Release consistency
+fails when the registry, generated matrix, validation cases or source audit drift.
 
 See [configuration](configuration.md), [Workspace doctor](workspace-doctor.md),
 [the loop](loop.md), and [historical migration](legacy-onboarding.md) for the
