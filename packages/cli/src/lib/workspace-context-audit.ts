@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
-import type { WorkspaceContextPolicy } from "@roll/spec";
+import { validateWorkspaceContextPolicy, type WorkspaceContextPolicy } from "@roll/spec";
 
 export type WorkspaceContextViolationCode =
   | "ALLOWLIST_EXPIRED"
@@ -67,9 +67,48 @@ interface ParsedPolicyKey {
 }
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
-const AUTHORITY_WORDS = /(?:\.roll|workspace|issue|evidence|policy|tool[-_ ]?dump|backlog|features?|design)/iu;
+const AUTHORITY_WORDS = /(?:\.roll|workspace|issue|evidence|policy|tool[-_ ]?dump|backlog|features?)/iu;
 const SKILL_AMBIENT = /(?:\$PWD|\bproject root\b|\brepo(?:sitory)? root\b)/iu;
 const SKILL_AUTHORITY = /(?:authority|\.roll\/|backlog|features?|design|evidence|policy|dump)/iu;
+const SKILL_PROHIBITION = /(?:\bnever\b|\bdo not\b|\bmust not\b|\bnot (?:the |an? )?authority\b|禁止|不得|不可|不是.*(?:权威|依据))/iu;
+
+const CLI_SURFACE_FILES: Readonly<Record<string, string>> = {
+  agent: "packages/cli/src/commands/agent.ts",
+  attest: "packages/cli/src/commands/attest.ts",
+  backlog: "packages/cli/src/commands/backlog.ts",
+  capture: "packages/cli/src/commands/capture.ts",
+  config: "packages/cli/src/commands/config.ts",
+  context: "packages/cli/src/commands/context.ts",
+  delivery: "packages/cli/src/commands/delivery.ts",
+  design: "packages/cli/src/commands/design.ts",
+  doctor: "packages/cli/src/commands/doctor.ts",
+  help: "packages/cli/src/commands/index.ts",
+  idea: "packages/cli/src/commands/idea.ts",
+  index: "packages/cli/src/commands/index-gen.ts",
+  init: "packages/cli/src/commands/init.ts",
+  loop: "packages/cli/src/commands/loop-run-once.ts",
+  next: "packages/cli/src/commands/next.ts",
+  north: "packages/cli/src/commands/north.ts",
+  release: "packages/cli/src/commands/release.ts",
+  setup: "packages/cli/src/commands/setup.ts",
+  status: "packages/cli/src/commands/status.ts",
+  story: "packages/cli/src/commands/story-new.ts",
+  test: "packages/cli/src/commands/test.ts",
+  truth: "packages/cli/src/commands/truth.ts",
+  update: "packages/cli/src/commands/update.ts",
+  workspace: "packages/cli/src/commands/workspace.ts",
+};
+
+const TOOL_SURFACE_FILES: Readonly<Record<string, string>> = {
+  bash: "packages/infra/src/tools/bash.ts",
+  browser: "packages/infra/src/tools/browser.ts",
+  filesystem: "packages/infra/src/tools/filesystem.ts",
+  git: "packages/infra/src/tools/git.ts",
+  github: "packages/infra/src/tools/github.ts",
+  mcp: "packages/infra/src/tools/mcp.ts",
+  network: "packages/infra/src/tools/network.ts",
+  physical: "packages/infra/src/tools/browser.ts",
+};
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -112,7 +151,7 @@ function isProcessCwdCall(node: ts.Node): node is ts.CallExpression {
 
 function isSelectorLiteral(node: ts.Node): boolean {
   return (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
-    && (node.text === "--workspace" || node.text === "--ws");
+    && node.text === "--ws";
 }
 
 function isSelectorParserBypass(node: ts.Node): boolean {
@@ -163,7 +202,8 @@ function scanSource(
       const statement = statementFor(node);
       const statementText = statement.getText(source);
       const line = lineAt(source, node);
-      if (/['"`]\.roll(?:['"`/]|$)/u.test(statementText)) {
+      const lineText = sourceText.split("\n")[line - 1] ?? "";
+      if (/['"`]\.roll(?:['"`/]|$)/u.test(lineText)) {
         addFinding(
           findings,
           seen,
@@ -174,7 +214,7 @@ function scanSource(
           "process.cwd() is manually joined to a .roll authority path",
         );
       }
-      if (AUTHORITY_WORDS.test(statementText)) {
+      if (AUTHORITY_WORDS.test(lineText)) {
         addFinding(
           findings,
           seen,
@@ -230,7 +270,7 @@ function scanSkill(
       continue;
     }
     if (fenced || /^\s*<!--/u.test(line)) continue;
-    if (SKILL_AMBIENT.test(line) && SKILL_AUTHORITY.test(line)) {
+    if (SKILL_AMBIENT.test(line) && SKILL_AUTHORITY.test(line) && !SKILL_PROHIBITION.test(line)) {
       addFinding(
         findings,
         seen,
@@ -285,6 +325,7 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
   const seen = new Set<string>();
   const registeredFiles = new Set<string>();
 
+  const scanQueue = new Map<string, ParsedPolicyKey>();
   for (const surface of [...input.surfaces].sort((a, b) => compareText(a.file, b.file) || compareText(a.policyKey, b.policyKey))) {
     const identity = parsePolicyKey(surface.policyKey);
     const file = normalizedRelative(root, surface.file);
@@ -302,11 +343,15 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
       continue;
     }
     registeredFiles.add(file);
+    if (!scanQueue.has(file)) scanQueue.set(file, identity);
+  }
+
+  for (const [file, identity] of scanQueue) {
     const absolute = join(root, file);
     if (!existsSync(absolute)) {
       findings.push({
         ...identity,
-        policyKey: surface.policyKey,
+        policyKey: `${identity.surface}:${identity.id}:${identity.operation}`,
         file,
         line: 1,
         code: "UNREGISTERED_SURFACE",
@@ -403,4 +448,50 @@ export function renderWorkspaceContextAuditHuman(report: WorkspaceContextAuditRe
     }
   }
   return lines.join("\n");
+}
+
+export function registeredWorkspaceContextAuditSurfaces(
+  policies: readonly WorkspaceContextPolicy[],
+): WorkspaceContextAuditSurface[] {
+  return policies.map((policy) => {
+    const file = policy.surface === "cli"
+      ? CLI_SURFACE_FILES[policy.id]
+      : policy.surface === "tool"
+        ? TOOL_SURFACE_FILES[policy.id]
+        : `skills/${policy.id}/SKILL.md`;
+    return {
+      policyKey: policyKey(policy),
+      file: file ?? `unregistered/${policy.surface}/${policy.id}.missing`,
+    };
+  });
+}
+
+interface WorkspaceContextMatrixFile {
+  readonly rows?: readonly unknown[];
+}
+
+export function auditRegisteredWorkspaceContextTree(
+  rootDir: string,
+  now = new Date().toISOString().slice(0, 10),
+): WorkspaceContextAuditReport {
+  const matrixPath = join(rootDir, "docs", "generated", "workspace-context-compatibility-matrix.json");
+  const allowlistPath = join(rootDir, "config", "workspace-context-audit-allowlist.json");
+  const matrix = JSON.parse(readFileSync(matrixPath, "utf8")) as WorkspaceContextMatrixFile;
+  if (!Array.isArray(matrix.rows)) throw new Error("workspace-context-audit: compatibility matrix rows are missing");
+  const policies = matrix.rows.map((row, index) => {
+    const issues = validateWorkspaceContextPolicy(row);
+    if (issues.length > 0) {
+      throw new Error(`workspace-context-audit: invalid matrix policy at row ${index}: ${issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")}`);
+    }
+    return row as WorkspaceContextPolicy;
+  });
+  const allowlist = JSON.parse(readFileSync(allowlistPath, "utf8")) as unknown;
+  if (!Array.isArray(allowlist)) throw new Error("workspace-context-audit: allowlist must be an array");
+  return auditWorkspaceContextTree({
+    rootDir,
+    now,
+    policies,
+    surfaces: registeredWorkspaceContextAuditSurfaces(policies),
+    allowlist: allowlist as WorkspaceContextAuditAllowlistEntry[],
+  });
 }

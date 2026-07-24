@@ -20,6 +20,7 @@ import {
   CONSISTENCY_DIMENSION_LABELS,
   ensureDeliveriesFresh,
   queryStoryDelivery,
+  workspaceContextAuditReleaseGap,
   type ConsistencyDimension,
   type ExecPort,
   type FreshnessPort,
@@ -28,6 +29,7 @@ import { resolveIntegrationBranch } from "@roll/infra";
 import { resolveLang, STATUS_MARKER, t, v2Catalog, type Lang } from "@roll/spec";
 import { c, renderState, strw, trunc } from "../render.js";
 import { consistencyAuditCommand } from "./consistency-audit.js";
+import { auditRegisteredWorkspaceContextTree } from "./workspace-context-audit.js";
 
 const EXEC_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
@@ -884,6 +886,23 @@ function runAll(projectDir: string): Report {
     const result = DIM_CHECKS[dim](projectDir);
     report.dimensions[dim] = result;
     if (result.status === "fail") report.overall = "fail";
+  }
+  const matrixPath = join(projectDir, "docs", "generated", "workspace-context-compatibility-matrix.json");
+  const allowlistPath = join(projectDir, "config", "workspace-context-audit-allowlist.json");
+  if (existsSync(matrixPath) || existsSync(allowlistPath)) {
+    const tests = report.dimensions["tests"] ?? { status: "pass", gaps: [] };
+    try {
+      const contextAudit = auditRegisteredWorkspaceContextTree(projectDir);
+      const gap = workspaceContextAuditReleaseGap(contextAudit.summary);
+      if (gap !== null) tests.gaps.push(gap);
+    } catch (error) {
+      tests.gaps.push(`Workspace context audit could not run: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (tests.gaps.length > 0) {
+      tests.status = "fail";
+      report.overall = "fail";
+    }
+    report.dimensions["tests"] = tests;
   }
   return report;
 }

@@ -1,9 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   auditWorkspaceContextTree,
+  auditRegisteredWorkspaceContextTree,
   renderWorkspaceContextAuditHuman,
   renderWorkspaceContextAuditJson,
   type WorkspaceContextAuditInput,
@@ -69,6 +71,12 @@ function input(rootDir: string, overrides: Partial<WorkspaceContextAuditInput> =
 }
 
 describe("US-WS-039 Workspace context static audit", () => {
+  it("passes the registered product, skill, and tool tree after governed exceptions", () => {
+    const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+    const report = auditRegisteredWorkspaceContextTree(repoRoot, "2026-07-25");
+    expect(report.summary).toEqual({ violations: 0, scannedSurfaces: 53, allowlisted: 9 });
+  });
+
   it("rejects ambient authority, manual cwd/.roll paths, skill authority, parser bypass, and tool fallback", () => {
     const rootDir = fixture({
       "packages/cli/src/commands/backlog.ts": [

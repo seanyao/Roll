@@ -1,0 +1,83 @@
+[
+  {
+    "policyKey": "cli:story:new",
+    "violationCode": "MANUAL_CWD_ROLL_AUTHORITY",
+    "file": "packages/cli/src/commands/story-new.ts",
+    "line": 114,
+    "rationale": "Test-only compatibility path when canonical Workspace target dependencies are not injected; production registration injects resolveBacklogCommandTarget.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:story:new",
+    "violationCode": "MANUAL_CWD_ROLL_AUTHORITY",
+    "file": "packages/cli/src/commands/story-new.ts",
+    "line": 115,
+    "rationale": "Test-only compatibility path when canonical Workspace target dependencies are not injected; production registration injects resolveBacklogCommandTarget.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:story:new",
+    "violationCode": "WORKSPACE_AUTHORITY_FROM_CWD",
+    "file": "packages/cli/src/commands/story-new.ts",
+    "line": 114,
+    "rationale": "Test-only compatibility path when canonical Workspace target dependencies are not injected; production registration injects resolveBacklogCommandTarget.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:story:new",
+    "violationCode": "WORKSPACE_AUTHORITY_FROM_CWD",
+    "file": "packages/cli/src/commands/story-new.ts",
+    "line": 115,
+    "rationale": "Test-only compatibility path when canonical Workspace target dependencies are not injected; production registration injects resolveBacklogCommandTarget.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:test:run",
+    "violationCode": "MANUAL_CWD_ROLL_AUTHORITY",
+    "file": "packages/cli/src/commands/test.ts",
+    "line": 162,
+    "rationale": "Repository-required test isolation reads local.yaml from the explicit command execution repository.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:test:run",
+    "violationCode": "WORKSPACE_AUTHORITY_FROM_CWD",
+    "file": "packages/cli/src/commands/test.ts",
+    "line": 162,
+    "rationale": "Repository-required test isolation reads local.yaml from the explicit command execution repository.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:test:run",
+    "violationCode": "MANUAL_CWD_ROLL_AUTHORITY",
+    "file": "packages/cli/src/commands/test.ts",
+    "line": 346,
+    "rationale": "Repository-required test isolation checks the same explicit execution repository for local.yaml.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:test:run",
+    "violationCode": "WORKSPACE_AUTHORITY_FROM_CWD",
+    "file": "packages/cli/src/commands/test.ts",
+    "line": 346,
+    "rationale": "Repository-required test isolation checks the same explicit execution repository for local.yaml.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  },
+  {
+    "policyKey": "cli:doctor:diagnose",
+    "violationCode": "WORKSPACE_AUTHORITY_FROM_CWD",
+    "file": "packages/cli/src/commands/doctor.ts",
+    "line": 810,
+    "rationale": "Doctor performs a read-only readiness probe against the explicit execution repository and does not select Workspace authority.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  }
+]

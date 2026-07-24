@@ -37,6 +37,13 @@ jobs:
           pnpm --filter @roll/cli exec vitest run test/context-command.difftest.test.ts test/context-command.e2e.test.ts test/context-skill-handoff.test.ts test/context-snapshot-handoff.e2e.test.ts test/context-agent-handoff.e2e.test.ts
       - name: Strict skill audit
         run: node skills/scripts/audit-skills.mjs --strict
+      - name: Workspace context authority audit
+        run: node scripts/audit-workspace-context.mjs --json | tee workspace-context-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-context-audit
+          path: workspace-context-audit.json
       - run: pnpm test:e2e
       # FIX-340 — story-id uniqueness guard. A no-op in the public repo (the
       # `.roll/features` corpus lives in the roll-meta repo, absent here → exit

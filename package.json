@@ -7,6 +7,7 @@
     "test": "bash scripts/test-ts.sh",
     "lint:story-ids": "node scripts/lint-story-ids.mjs",
     "lint:role-taxonomy": "node scripts/audit-role-taxonomy.mjs",
+    "lint:workspace-context": "pnpm -r build && node scripts/audit-workspace-context.mjs",
     "test:e2e": "pnpm -r build && PYTHONPATH=\"$(python3 -m site --user-site)${PYTHONPATH:+:$PYTHONPATH}\" pnpm --filter @roll/cli exec vitest run test/critical-flows.e2e.test.ts test/workspace-multirepo.critical.e2e.test.ts test/workspace-migrate-apply.critical.e2e.test.ts test/workspace-worktree-lifecycle.e2e.test.ts && pnpm --filter @roll/cli exec vitest run test/run-cycle.integration.test.ts -t \"US-WS-017b capacity exhaustion\"",
     "test:browser-live": "pnpm -r build && ROLL_BROWSER_LIVE=1 pnpm --filter @roll/cli exec vitest run --config vitest.live.config.ts",
     "test:controlled-capture-live": "pnpm -r build && ROLL_BROWSER_LIVE=1 pnpm --filter @roll/infra exec vitest run --config vitest.live.config.ts",
