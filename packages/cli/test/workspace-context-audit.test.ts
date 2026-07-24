@@ -251,6 +251,12 @@ describe("US-WS-039 Workspace context static audit", () => {
       "export function run(arg: string): boolean { return Object.is(arg, '--workspace'); }\n",
       "export function run(args: readonly string[], selector = '--workspace'): boolean { return args.includes(selector); }\n",
       "function selector(): string { return '--workspace'; }\nexport function run(args: readonly string[]): boolean { return args.includes(selector()); }\n",
+      "import * as workspaceSelectors from '../lib/workspace-selector.js';\nconst { CANONICAL_WORKSPACE_SELECTOR: selector } = workspaceSelectors;\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "const prefix = '--';\nconst name = 'workspace';\nconst selector = `${prefix}${name}`;\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "const selector = ['--', 'workspace'].join('');\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "const selector = 'x--workspace'.slice(1);\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "const selector = String.fromCharCode(45, 45, 119, 111, 114, 107, 115, 112, 97, 99, 101);\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "import { workspaceSelectorArgs } from '../lib/workspace-selector.js';\nconst selector = workspaceSelectorArgs('x')[0];\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
     ]) {
       const rootDir = fixture({
         "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,

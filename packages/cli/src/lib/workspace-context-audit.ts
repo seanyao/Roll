@@ -159,49 +159,112 @@ function isSelectorLiteral(node: ts.Node): boolean {
     && (node.text === "--workspace" || node.text === "--ws");
 }
 
-function staticStringValue(node: ts.Node): string | undefined {
+function staticNumberValue(node: ts.Node): number | undefined {
+  if (ts.isNumericLiteral(node)) return Number(node.text);
+  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+    const value = staticNumberValue(node.operand);
+    return value === undefined ? undefined : -value;
+  }
+  return undefined;
+}
+
+function staticStringValue(node: ts.Node, constants: ReadonlyMap<string, string> = new Map()): string | undefined {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  if (ts.isIdentifier(node)) return constants.get(node.text);
   if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
-    return staticStringValue(node.expression);
+    return staticStringValue(node.expression, constants);
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = staticStringValue(node.left);
-    const right = staticStringValue(node.right);
+    const left = staticStringValue(node.left, constants);
+    const right = staticStringValue(node.right, constants);
     return left === undefined || right === undefined ? undefined : `${left}${right}`;
   }
   if (ts.isTemplateExpression(node)) {
     let value = node.head.text;
     for (const span of node.templateSpans) {
-      const expression = staticStringValue(span.expression);
+      const expression = staticStringValue(span.expression, constants);
       if (expression === undefined) return undefined;
       value += expression + span.literal.text;
     }
     return value;
   }
+  if (ts.isCallExpression(node) && (ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression))) {
+    const receiver = node.expression.expression;
+    const method = ts.isPropertyAccessExpression(node.expression)
+      ? node.expression.name.text
+      : node.expression.argumentExpression === undefined
+        ? undefined
+        : staticStringValue(node.expression.argumentExpression, constants);
+    if (method === "join" && ts.isArrayLiteralExpression(receiver)) {
+      const values = receiver.elements.map((element) => staticStringValue(element, constants));
+      const separator = node.arguments[0] === undefined ? "," : staticStringValue(node.arguments[0], constants);
+      if (separator !== undefined && values.every((value): value is string => value !== undefined)) return values.join(separator);
+    }
+    const receiverValue = staticStringValue(receiver, constants);
+    if (receiverValue !== undefined && (method === "slice" || method === "substring" || method === "substr")) {
+      const start = node.arguments[0] === undefined ? 0 : staticNumberValue(node.arguments[0]);
+      const end = node.arguments[1] === undefined ? undefined : staticNumberValue(node.arguments[1]);
+      if (start !== undefined) {
+        if (method === "slice") return receiverValue.slice(start, end);
+        if (method === "substring") return receiverValue.substring(start, end);
+        return receiverValue.substr(start, end);
+      }
+    }
+    if (receiverValue !== undefined && method === "concat") {
+      const values = node.arguments.map((argument) => staticStringValue(argument, constants));
+      if (values.every((value): value is string => value !== undefined)) return receiverValue.concat(...values);
+    }
+    if (ts.isIdentifier(receiver) && receiver.text === "String" && (method === "fromCharCode" || method === "fromCodePoint")) {
+      const values = node.arguments.map(staticNumberValue);
+      if (values.every((value): value is number => value !== undefined)) {
+        return method === "fromCharCode" ? String.fromCharCode(...values) : String.fromCodePoint(...values);
+      }
+    }
+  }
   return undefined;
 }
 
-function isSelectorValue(node: ts.Node, aliases: ReadonlySet<string>, factories: ReadonlySet<string>): boolean {
-  const staticValue = staticStringValue(node);
+function collectStaticStringConstants(source: ts.SourceFile): ReadonlyMap<string, string> {
+  const constants = new Map<string, string>();
+  for (let pass = 0; pass < 8; pass += 1) {
+    let changed = false;
+    const visit = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
+        const value = staticStringValue(node.initializer, constants);
+        if (value !== undefined && constants.get(node.name.text) !== value) {
+          constants.set(node.name.text, value);
+          changed = true;
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    if (!changed) break;
+  }
+  return constants;
+}
+
+function isSelectorValue(node: ts.Node, aliases: ReadonlySet<string>, factories: ReadonlySet<string>, constants: ReadonlyMap<string, string>): boolean {
+  const staticValue = staticStringValue(node, constants);
   if (staticValue === "--workspace" || staticValue === "--ws") return true;
   if (ts.isIdentifier(node)) return aliases.has(node.text) || node.text === "CANONICAL_WORKSPACE_SELECTOR";
   if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && factories.has(node.expression.text)) return true;
   if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
-    return isSelectorValue(node.expression, aliases, factories);
+    return isSelectorValue(node.expression, aliases, factories, constants);
   }
-  if (ts.isArrayLiteralExpression(node)) return node.elements.some((element) => isSelectorValue(element, aliases, factories));
-  if (ts.isNewExpression(node)) return node.arguments?.some((argument) => isSelectorValue(argument, aliases, factories)) === true;
+  if (ts.isArrayLiteralExpression(node)) return node.elements.some((element) => isSelectorValue(element, aliases, factories, constants));
+  if (ts.isNewExpression(node)) return node.arguments?.some((argument) => isSelectorValue(argument, aliases, factories, constants)) === true;
   if (ts.isObjectLiteralExpression(node)) {
     return node.properties.some((property) => {
-      if (ts.isShorthandPropertyAssignment(property)) return isSelectorValue(property.name, aliases, factories);
-      if (ts.isPropertyAssignment(property)) return isSelectorValue(property.name, aliases, factories) || isSelectorValue(property.initializer, aliases, factories);
+      if (ts.isShorthandPropertyAssignment(property)) return isSelectorValue(property.name, aliases, factories, constants);
+      if (ts.isPropertyAssignment(property)) return isSelectorValue(property.name, aliases, factories, constants) || isSelectorValue(property.initializer, aliases, factories, constants);
       return false;
     });
   }
   return false;
 }
 
-function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>, factories: ReadonlySet<string>): boolean {
+function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>, factories: ReadonlySet<string>, constants: ReadonlyMap<string, string>): boolean {
   if (ts.isCallExpression(node)) {
     const receiver = ts.isPropertyAccessExpression(node.expression)
       ? node.expression.expression
@@ -211,23 +274,23 @@ function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>, fac
     const method = ts.isPropertyAccessExpression(node.expression)
       ? node.expression.name.text
       : ts.isElementAccessExpression(node.expression) && node.expression.argumentExpression !== undefined
-        ? staticStringValue(node.expression.argumentExpression)
+        ? staticStringValue(node.expression.argumentExpression, constants)
         : undefined;
     return method !== undefined
       && ["includes", "indexOf", "findIndex", "some", "has", "is", "startsWith", "endsWith", "match", "search", "test"].includes(method)
-      && ((receiver !== undefined && isSelectorValue(receiver, aliases, factories))
-        || node.arguments.some((argument) => isSelectorValue(argument, aliases, factories)));
+      && ((receiver !== undefined && isSelectorValue(receiver, aliases, factories, constants))
+        || node.arguments.some((argument) => isSelectorValue(argument, aliases, factories, constants)));
   }
   if (ts.isElementAccessExpression(node)) {
-    return isSelectorValue(node.expression, aliases, factories)
-      || (node.argumentExpression !== undefined && isSelectorValue(node.argumentExpression, aliases, factories));
+    return isSelectorValue(node.expression, aliases, factories, constants)
+      || (node.argumentExpression !== undefined && isSelectorValue(node.argumentExpression, aliases, factories, constants));
   }
   if (ts.isBinaryExpression(node)) {
-    return isSelectorValue(node.left, aliases, factories) || isSelectorValue(node.right, aliases, factories);
+    return isSelectorValue(node.left, aliases, factories, constants) || isSelectorValue(node.right, aliases, factories, constants);
   }
-  if (ts.isCaseClause(node)) return isSelectorValue(node.expression, aliases, factories);
-  if (ts.isParameter(node) && node.initializer !== undefined) return isSelectorValue(node.initializer, aliases, factories);
-  if (ts.isReturnStatement(node) && node.expression !== undefined) return isSelectorValue(node.expression, aliases, factories);
+  if (ts.isCaseClause(node)) return isSelectorValue(node.expression, aliases, factories, constants);
+  if (ts.isParameter(node) && node.initializer !== undefined) return isSelectorValue(node.initializer, aliases, factories, constants);
+  if (ts.isReturnStatement(node) && node.expression !== undefined) return isSelectorValue(node.expression, aliases, factories, constants);
   if (ts.isRegularExpressionLiteral(node)) return /--workspace|--ws/u.test(node.text);
   return false;
 }
@@ -286,21 +349,32 @@ function scanSource(
     return current;
   };
   const cwdAliases = new Map<ts.Node, Set<string>>();
+  const stringConstants = collectStaticStringConstants(source);
   const selectorAliases = new Set<string>();
   const selectorFactories = new Set<string>();
   const collectAliases = (node: ts.Node): void => {
     if (ts.isImportSpecifier(node)) {
       const imported = node.propertyName?.text ?? node.name.text;
       if (imported === "CANONICAL_WORKSPACE_SELECTOR") selectorAliases.add(node.name.text);
+      if (imported === "workspaceSelectorArgs" || imported === "withWorkspaceSelector") selectorFactories.add(node.name.text);
     }
-    if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isSelectorValue(node.initializer, selectorAliases, selectorFactories)) {
+    if (
+      ts.isBindingElement(node)
+      && node.propertyName !== undefined
+      && ts.isIdentifier(node.propertyName)
+      && node.propertyName.text === "CANONICAL_WORKSPACE_SELECTOR"
+      && ts.isIdentifier(node.name)
+    ) {
+      selectorAliases.add(node.name.text);
+    }
+    if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isSelectorValue(node.initializer, selectorAliases, selectorFactories, stringConstants)) {
       selectorAliases.add(node.name.text);
     }
     if (
       ts.isVariableDeclaration(node)
       && ts.isIdentifier(node.name)
       && node.initializer !== undefined
-      && isSelectorValue(node.initializer, selectorAliases, selectorFactories)
+      && isSelectorValue(node.initializer, selectorAliases, selectorFactories, stringConstants)
     ) selectorAliases.add(node.name.text);
     if (
       (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isMethodDeclaration(node))
@@ -311,20 +385,20 @@ function scanSource(
       let returnsSelector = false;
       const inspectReturn = (child: ts.Node): void => {
         if (child !== node.body && ts.isFunctionLike(child)) return;
-        if (ts.isReturnStatement(child) && child.expression !== undefined && isSelectorValue(child.expression, selectorAliases, selectorFactories)) returnsSelector = true;
+        if (ts.isReturnStatement(child) && child.expression !== undefined && isSelectorValue(child.expression, selectorAliases, selectorFactories, stringConstants)) returnsSelector = true;
         ts.forEachChild(child, inspectReturn);
       };
       if (ts.isBlock(node.body)) inspectReturn(node.body);
-      else returnsSelector = isSelectorValue(node.body, selectorAliases, selectorFactories);
+      else returnsSelector = isSelectorValue(node.body, selectorAliases, selectorFactories, stringConstants);
       if (returnsSelector) selectorFactories.add(node.name.text);
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
       const body = node.initializer.body;
-      let returnsSelector = !ts.isBlock(body) && isSelectorValue(body, selectorAliases, selectorFactories);
+      let returnsSelector = !ts.isBlock(body) && isSelectorValue(body, selectorAliases, selectorFactories, stringConstants);
       if (ts.isBlock(body)) {
         const inspectReturn = (child: ts.Node): void => {
           if (child !== body && ts.isFunctionLike(child)) return;
-          if (ts.isReturnStatement(child) && child.expression !== undefined && isSelectorValue(child.expression, selectorAliases, selectorFactories)) returnsSelector = true;
+          if (ts.isReturnStatement(child) && child.expression !== undefined && isSelectorValue(child.expression, selectorAliases, selectorFactories, stringConstants)) returnsSelector = true;
           ts.forEachChild(child, inspectReturn);
         };
         inspectReturn(body);
@@ -343,13 +417,14 @@ function scanSource(
   const hasTrustedSelectorBoundary = (): boolean => TRUSTED_SELECTOR_IMPLEMENTATION_FILES.has(file);
   const visit = (node: ts.Node): void => {
     if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary()) {
-      const selectorText = staticStringValue(node);
-      const parentText = node.parent === undefined ? undefined : staticStringValue(node.parent);
+      const selectorText = staticStringValue(node, stringConstants);
+      const parentText = node.parent === undefined ? undefined : staticStringValue(node.parent, stringConstants);
       const selectorSpelling = selectorText === "--workspace" || selectorText === "--ws";
       const importedSelector = ts.isImportSpecifier(node)
         && (node.propertyName?.text ?? node.name.text) === "CANONICAL_WORKSPACE_SELECTOR";
       const selectorProperty = (ts.isPropertyAccessExpression(node) && node.name.text === "CANONICAL_WORKSPACE_SELECTOR")
-        || (ts.isElementAccessExpression(node) && node.argumentExpression !== undefined && staticStringValue(node.argumentExpression) === "CANONICAL_WORKSPACE_SELECTOR");
+        || (ts.isElementAccessExpression(node) && node.argumentExpression !== undefined && staticStringValue(node.argumentExpression, stringConstants) === "CANONICAL_WORKSPACE_SELECTOR")
+        || (ts.isBindingElement(node) && node.propertyName !== undefined && ts.isIdentifier(node.propertyName) && node.propertyName.text === "CANONICAL_WORKSPACE_SELECTOR");
       if ((selectorSpelling && parentText !== selectorText) || importedSelector || selectorProperty) {
         addFinding(
           findings,
@@ -421,7 +496,7 @@ function scanSource(
         }
       }
     }
-    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node, selectorAliases, selectorFactories)) {
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node, selectorAliases, selectorFactories, stringConstants)) {
       addFinding(
         findings,
         seen,
