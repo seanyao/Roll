@@ -41,6 +41,7 @@ import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } fro
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Rig, WorkspaceExecutionContextV1 } from "@roll/spec";
+import { workspaceExecutionContextJson } from "./workspace-skill-handoff.js";
 import { getAgentSpec } from "@roll/core";
 import { worktreeGitDiscoveryEnv } from "./main-checkout-guard.js";
 
@@ -744,7 +745,7 @@ export function workspaceExecutionEnvironment(
 ): NodeJS.ProcessEnv {
   if (context === undefined) return {};
   return {
-    ROLL_WORKSPACE_EXECUTION_CONTEXT: JSON.stringify(context),
+    ROLL_WORKSPACE_EXECUTION_CONTEXT: workspaceExecutionContextJson(context),
     ROLL_WORKSPACE: context.workspace.workspaceId,
     ...(context.issue === undefined ? {} : { ROLL_STORY_ID: context.issue.storyId }),
   };

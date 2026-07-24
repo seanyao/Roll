@@ -63,7 +63,8 @@ import { storyValidateCommand } from "./story-validate.js";
 import { initCommand } from "./init.js";
 import { NEXT_USAGE, nextCommand } from "./next.js";
 import { northCommand } from "./north.js";
-import { designCommand } from "./design.js";
+import { designCommand, designRequirementHint } from "./design.js";
+import { loadWorkspaceExecutionContext } from "./workspace-execution-context.js";
 import { deliveryCommand, deliveryUsage } from "./delivery.js";
 // REFACTOR-049: `roll lang` retired → use `roll config lang <zh|en|--reset>`.
 // The lang module's write/clear/read surfaces are consumed by config.ts.
@@ -185,6 +186,11 @@ function removeWorkspaceSelector(args: readonly string[]): string[] {
     if (arg !== undefined) remaining.push(arg);
   }
   return remaining;
+}
+
+function explicitWorkspaceSelector(args: readonly string[]): string | undefined {
+  const index = args.indexOf("--workspace");
+  return index < 0 ? undefined : args[index + 1];
 }
 
 function isHelp(arg: string | undefined): boolean {
@@ -598,9 +604,27 @@ export function registerAll(): void {
   // (US-ONBOARD-NUDGE-004). Loads the skill and launches the selected agent;
   // all design logic lives in the skill, not here.
   registerPorted("design", (args) => {
-    const root = workspaceProjectRoot(args, "mutation");
-    if (typeof root === "number") return root;
-    return designCommand(removeWorkspaceSelector(args), { cwd: root });
+    const invocationCwd = process.cwd();
+    const designArgs = removeWorkspaceSelector(args);
+    const loaded = loadWorkspaceExecutionContext({
+      cwd: invocationCwd,
+      operation: "mutation",
+      scope: "workspace_required_mutation",
+      ...(explicitWorkspaceSelector(args) === undefined
+        ? {}
+        : { explicitWorkspace: explicitWorkspaceSelector(args) }),
+      requirement: designRequirementHint(designArgs, invocationCwd),
+    });
+    if (!loaded.ok) {
+      process.stderr.write(`roll design: ${loaded.route === undefined ? "" : `${loaded.route}:`}${loaded.code}\n`);
+      return 1;
+    }
+    return designCommand(designArgs, {
+      cwd: loaded.context.workspace.canonicalRoot,
+      invocationCwd,
+      workspaceExecution: loaded.context,
+      workspaceContextScope: "workspace_required_mutation",
+    });
   }, {
     help: "Usage: roll design [--from-file <path> | \"<requirement>\"] [--agent <name>] [--verbose|--raw]\n  Launch $roll-design interactively with bounded live progress, card-created events, quiet heartbeats, and final handoff; when new Todo cards are created, offer `roll loop go --review auto` after showing agent-pool health.\n交互式启动 $roll-design；默认实时显示有界进展、建卡事件、静默心跳和最终交付；产出新 Todo 卡时会显示 agent 池健康概况，并提议启动 `roll loop go --review auto`。",
     operations: [cliOperation("design", "design", [], true, ["Improve backlog", "--workspace", "roll"], true)],

@@ -1,8 +1,9 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { advanceContextCycleStageState, extractUsage, getAgentSpec, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
-import type { CycleCost } from "@roll/spec";
-import { agentSpawnEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
+import { isDeepStrictEqual } from "node:util";
+import { advanceContextCycleStageState, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
+import type { CycleCost, RepositoryExecutionContext } from "@roll/spec";
+import { agentSpawnEnvironment, workspaceExecutionEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
 import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination } from "./main-checkout-guard.js";
 import { recoverKimiUsage, recoverPiUsage } from "./usage-recovery.js";
@@ -21,6 +22,8 @@ import { recordSpawnRound } from "./round-journal-emit.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { invalidContextHandoff, type ContextStageHandoffV1 } from "./context-handoff.js";
 import type { ContextStageHostReadInputV1 } from "./context-stage-host.js";
+import { prepareWorkspaceSkillHandoff } from "./workspace-skill-handoff.js";
+import { resolveWorkspaceCycleRepository } from "./scoped-route.js";
 import {
   RepositoryObservationError,
   observeWritableRepositoryCommitCount,
@@ -85,13 +88,95 @@ export function applyRepositoryBuilderContext(
   ctx: CycleContext,
   options: AgentSpawnOptions,
 ): AgentSpawnOptions {
-  const execution = ctx.repositoryExecution;
-  if (execution === undefined) return options;
+  const execution = ctx.repositoryExecution ?? ctx.workspaceExecution?.issue?.execution;
+  const prepared = prepareWorkspaceBuilderSkillBody(ctx, options.skillBody);
+  if (!prepared.ok) throw new Error(prepared.code);
+  if (execution === undefined) return { ...options, skillBody: prepared.skillBody };
   return {
     ...options,
     cwd: execution.issueRoot,
-    skillBody: injectRepositoryContext(options.skillBody, execution),
+    skillBody: prepared.skillBody,
   };
+}
+
+export type WorkspaceBuilderSkillBodyResult =
+  | {
+      readonly ok: true;
+      readonly skillBody: string;
+      readonly contextJson?: string;
+      readonly selectedRepository?: RepositoryExecutionContext;
+    }
+  | { readonly ok: false; readonly code: string };
+
+export type WorkspaceSpawnIdentityResult =
+  | { readonly ok: true; readonly selectedRepository?: RepositoryExecutionContext }
+  | { readonly ok: false; readonly code: string };
+
+/** Validate the frozen Workspace/Issue/repository identity before any spawn side effect. */
+export function resolveWorkspaceSpawnIdentity(ctx: CycleContext): WorkspaceSpawnIdentityResult {
+  if (ctx.workspaceExecution === undefined) {
+    return { ok: false, code: "missing_execution_context" };
+  }
+  const scoped = resolveWorkspaceExecutionContextScope({
+    scope: "issue_required",
+    context: ctx.workspaceExecution,
+  });
+  if (!scoped.ok || scoped.context?.issue === undefined) {
+    return { ok: false, code: scoped.ok ? "missing_execution_context" : scoped.error.code };
+  }
+  if (ctx.storyId !== scoped.context.issue.storyId) {
+    return { ok: false, code: "story_identity_mismatch" };
+  }
+  if (
+    ctx.repositoryExecution !== undefined &&
+    !isDeepStrictEqual(ctx.repositoryExecution, scoped.context.issue.execution)
+  ) {
+    return { ok: false, code: "repository_context_mismatch" };
+  }
+  const selected = resolveWorkspaceCycleRepository(scoped.context, ctx.repositorySelector);
+  return selected.ok
+    ? { ok: true, selectedRepository: selected.repository }
+    : selected;
+}
+
+/** Compose repository details under the canonical Workspace handoff block. */
+export function prepareWorkspaceBuilderSkillBody(
+  ctx: CycleContext,
+  skillBody: string,
+): WorkspaceBuilderSkillBodyResult {
+  const identity = resolveWorkspaceSpawnIdentity(ctx);
+  if (!identity.ok) return identity;
+  const execution = ctx.repositoryExecution ?? ctx.workspaceExecution?.issue?.execution;
+  const repositoryBody = execution === undefined
+    ? skillBody
+    : injectRepositoryContext(skillBody, execution);
+  if (ctx.workspaceExecution === undefined) return { ok: true, skillBody: repositoryBody };
+  const selected = identity.selectedRepository;
+  if (selected === undefined) return { ok: false, code: "missing_repository_context" };
+  const selectedBody = [
+    "[Selected Workspace repository]",
+    `Selected repository: ${selected.repoId} (${selected.alias})`,
+    "Use this exact repoId for repository-scoped commands; do not infer another repository from cwd or ordering.",
+    "[/Selected Workspace repository]",
+    "",
+    repositoryBody,
+  ].join("\n");
+  const prepared = prepareWorkspaceSkillHandoff({
+    skillName: ctx.storyId?.startsWith("FIX-") || ctx.storyId?.startsWith("BUG-")
+      ? "roll-fix"
+      : "roll-build",
+    scope: "issue_required",
+    context: ctx.workspaceExecution,
+    skillBody: selectedBody,
+  });
+  return prepared.ok
+    ? {
+        ok: true,
+        skillBody: prepared.skillBody,
+        contextJson: prepared.contextJson,
+        selectedRepository: selected,
+      }
+    : prepared;
 }
 
 export async function executeSpawnAgentCommand(
@@ -101,6 +186,14 @@ export async function executeSpawnAgentCommand(
 ): Promise<ExecuteResult> {
   switch (cmd.kind) {
     case "spawn_agent": {
+      const spawnIdentity = resolveWorkspaceSpawnIdentity(ctx);
+      if (!spawnIdentity.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace spawn identity blocked for ${ctx.storyId ?? "?"}: ${spawnIdentity.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return { event: { type: "agent_exited", exit: 1, timedOut: false } };
+      }
       // FIX-343 (step ①): mint the BUILDER's unique session id ONCE, here at the
       // working-agent spawn, and reuse it across retries (a non-empty
       // ctx.builderSessionId means a prior attempt already minted it). The attest
@@ -119,7 +212,7 @@ export async function executeSpawnAgentCommand(
       // landing reads the HEAD. No targetSubmodule ⇒ ports.paths.worktreePath
       // (execRepoCwd ⇒ ports.repoCwd), byte-identical to today.
       const legacyExecCwd = resolveExecutionCwd(ports, ctx);
-      const execCwd = ctx.repositoryExecution?.issueRoot ?? legacyExecCwd;
+      const execCwd = spawnIdentity.selectedRepository?.worktreePath ?? legacyExecCwd;
       const execRepoCwd = ctx.repositoryExecution === undefined
         ? resolveExecutionRepoCwd(ports, ctx)
         : undefined;
@@ -208,7 +301,21 @@ export async function executeSpawnAgentCommand(
           },
         };
       }
-      const finalSkillBody = contextSkillBody.skillBody;
+      const workspaceSkillBody = prepareWorkspaceBuilderSkillBody(ctx, contextSkillBody.skillBody);
+      if (!workspaceSkillBody.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace skill handoff blocked for ${ctx.storyId ?? "?"}: ${workspaceSkillBody.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return {
+          event: { type: "agent_exited", exit: 1, timedOut: false },
+          ctxPatch: {
+            builderSessionId,
+            ...(contextStage === undefined ? {} : { contextStage }),
+          },
+        };
+      }
+      const finalSkillBody = workspaceSkillBody.skillBody;
       const nextContextStage: ContextCycleStageStateV1 | undefined = contextSkillBody.handoff === undefined
         ? contextStage
         : advanceContextCycleStageState(
@@ -371,16 +478,23 @@ export async function executeSpawnAgentCommand(
           mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
         }
         res = await Promise.race([
-          ports.agentSpawn(cmd.agent, applyRepositoryBuilderContext(ctx, {
+          ports.agentSpawn(cmd.agent, {
           purpose: "builder",
           // E4: the builder runs in the submodule cycle worktree for a submodule
           // story (execCwd); its git env + writable roots target the submodule's
           // own repo/object store so its commits actually land there.
-          cwd: execCwd,
+          cwd: workspaceSkillBody.selectedRepository?.worktreePath ?? execCwd,
           skillBody: finalSkillBody,
           ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-          ...(ctx.repositoryExecution !== undefined
-            ? { writableRoots: repositoryAgentWritableRoots(ctx.repositoryExecution) }
+          ...(ctx.repositoryExecution !== undefined && workspaceSkillBody.selectedRepository !== undefined
+            ? {
+                writableRoots: repositoryAgentWritableRoots({
+                  ...ctx.repositoryExecution,
+                  repositories: {
+                    [workspaceSkillBody.selectedRepository.repoId]: workspaceSkillBody.selectedRepository,
+                  },
+                }),
+              }
             : execRepoCwd === undefined
               ? {}
               : { writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath) }),
@@ -389,6 +503,11 @@ export async function executeSpawnAgentCommand(
           env: {
             ...process.env,
             ROLL_LOOP_ALERT: ports.paths.alertsPath,
+            ...workspaceExecutionEnvironment(ctx.workspaceExecution),
+            ...(workspaceSkillBody.selectedRepository === undefined ? {} : {
+              ROLL_REPOSITORY_ID: workspaceSkillBody.selectedRepository.repoId,
+              ROLL_REPOSITORY_ALIAS: workspaceSkillBody.selectedRepository.alias,
+            }),
             ...agentSpawnEnvironment(cmd.agent),
           },
           // FIX-204B: pin the executor-picked story into the agent prompt — the
@@ -416,7 +535,7 @@ export async function executeSpawnAgentCommand(
           onSpawn: (child) => {
             spawnedPid = child.pid;
           },
-          })),
+          }),
           lostRace,
         ]);
       } finally {

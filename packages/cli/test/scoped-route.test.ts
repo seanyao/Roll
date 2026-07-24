@@ -681,9 +681,10 @@ describe("US-WS-033 — frozen Workspace cycle route", () => {
     expect(frozen.ok).toBe(true);
     if (!frozen.ok) return;
 
-    expect(resolveWorkspaceCycleRepository(frozen.context)).toEqual({
-      ok: false,
-      code: "missing_execution_context",
+    expect(resolveWorkspaceCycleRepository(frozen.context)).toMatchObject({
+      ok: true,
+      repoId: "repo-111111111111",
+      repository: { alias: "product" },
     });
     expect(resolveWorkspaceCycleRepository(frozen.context, "repo-111111111111")).toMatchObject({
       ok: true,

@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { dispatch } from "../src/bridge.js";
 import { registerAll } from "../src/commands/index.js";
-import { initCommand, seedBacklogRow } from "../src/commands/init.js";
+import { initCommand, runDesignSync, seedBacklogRow } from "../src/commands/init.js";
 import { offboardCommand } from "../src/commands/offboard.js";
 
 const dirs: string[] = [];
@@ -503,6 +503,26 @@ describe("roll init diagnosis router", () => {
     write(cwd, "docs/PRD.md", "# Product Requirements\n\nBuild an intel radar.\n");
     return cwd;
   }
+
+  it("US-WS-037: init design continuation is explicitly legacy-scoped", () => {
+    const cwd = prdProject();
+    let received: Parameters<NonNullable<Parameters<typeof runDesignSync>[1]>>[1] | undefined;
+    const status = withCapturedOutput(cwd, () => runDesignSync(
+      ["--from-file", "docs/PRD.md"],
+      (_args, deps) => {
+        received = deps;
+        return 0;
+      },
+    ));
+
+    expect(status.status).toBe(0);
+    const canonicalCwd = realpathSync(cwd);
+    expect(received).toMatchObject({
+      cwd: canonicalCwd,
+      invocationCwd: canonicalCwd,
+      workspaceContextScope: "legacy_migration_only",
+    });
+  });
 
   it("US-INIT-010: PRD + interactive 'y' continues straight into design", () => {
     const cwd = prdProject();

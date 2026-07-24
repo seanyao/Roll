@@ -48,7 +48,11 @@ import { latestScreenLockEvent } from "./screen-lock-events.js";
 import { pendingRecoveryCandidateIds } from "./recovery-candidates.js";
 import { resolveStoryLeasePath } from "./story-lease-path.js";
 import { decideInProgressReclaim, parseLegacyClaimTimestamp, readLeaseEvents } from "./lease-reclaim.js";
-import { freezeWorkspaceCycleContext, persistWorkspaceCycleContext } from "./scoped-route.js";
+import {
+  freezeWorkspaceCycleContext,
+  persistWorkspaceCycleContext,
+  persistWorkspaceCycleRepositorySelector,
+} from "./scoped-route.js";
 
 type SetupCommand = Extract<CycleCommand, { kind:
   | "preflight"
@@ -548,10 +552,12 @@ export async function executeSetupCommand(
         repositoryExecution = await ports.repositories.resolve(story.id);
       }
       let workspaceExecution = ctx.workspaceExecution;
+      let repositorySelector = ctx.repositorySelector;
       if (workspaceExecution !== undefined) {
-        const frozen = repositoryExecution === undefined
+        const freezeExecution = repositoryExecution ?? workspaceExecution.issue?.execution;
+        const frozen = freezeExecution === undefined
           ? { ok: false as const, code: "missing_execution_context" }
-          : freezeWorkspaceCycleContext({ workspace: workspaceExecution, storyId: story.id, execution: repositoryExecution });
+          : freezeWorkspaceCycleContext({ workspace: workspaceExecution, storyId: story.id, execution: freezeExecution });
         if (!frozen.ok) {
           return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath,
             alert: `workspace cycle context blocked before spawn for ${story.id}: ${frozen.code}` });
@@ -563,6 +569,23 @@ export async function executeSetupCommand(
             alert: `workspace cycle context persistence blocked before spawn for ${story.id}: ${persisted.code}` });
         }
         workspaceExecution = persisted.context;
+        const selected = persistWorkspaceCycleRepositorySelector(
+          dirname(ports.paths.eventsPath),
+          ctx.cycleId,
+          workspaceExecution,
+          repositorySelector,
+        );
+        if (selected.ok) {
+          repositorySelector = selected.repoId;
+        } else if (selected.code !== "repository_selector_required") {
+          return workspaceSetupFailed({
+            ports,
+            storyId: story.id,
+            preCycleStatus,
+            leasePath,
+            alert: `workspace repository selection blocked before spawn for ${story.id}: ${selected.code}`,
+          });
+        }
       }
       // The visible claim follows successful Workspace preparation. Legacy
       // projects retain the same pick-time status transition.
@@ -586,6 +609,7 @@ export async function executeSetupCommand(
           storyId: story.id,
           ...(repositoryExecution === undefined ? {} : { repositoryExecution }),
           ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+          ...(repositorySelector === undefined ? {} : { repositorySelector }),
         },
         ctxPatch: {
           evidenceRunDir,

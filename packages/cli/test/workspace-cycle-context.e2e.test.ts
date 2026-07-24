@@ -13,7 +13,7 @@ import { cycleStep, initialCycleState } from "@roll/core";
 import { WorkspaceRegistry } from "@roll/infra";
 import { workspaceExecutionEnvironment } from "../src/runner/agent-spawn.js";
 import { freezeWorkspaceCycleContext } from "../src/runner/scoped-route.js";
-import { loopRunOnceCommand } from "../src/commands/loop-run-once.js";
+import { dispatch, registerAll } from "../src/index.js";
 import { GOAL_ALLOWED_CARDS_ENV } from "../src/lib/goal-progress.js";
 
 const initialCwd = process.cwd();
@@ -108,7 +108,7 @@ function fixture(): {
 }
 
 describe("US-WS-033 — Workspace cycle context handoff", () => {
-  it("starts from /tmp by exact Story requirement and prints stable Workspace/Story correlation", async () => {
+  it("US-WS-037: inherited legacy env cannot bypass exact Story Workspace resolution from /tmp", async () => {
     const rollHome = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-home-")));
     const arbitraryCwd = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-cwd-")));
     const target = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-target-")));
@@ -152,15 +152,16 @@ describe("US-WS-033 — Workspace cycle context handoff", () => {
     process.chdir(arbitraryCwd);
     process.env["ROLL_HOME"] = rollHome;
     delete process.env["ROLL_WORKSPACE"];
-    delete process.env["ROLL_MAIN_PROJECT"];
-    delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    process.env["ROLL_MAIN_PROJECT"] = arbitraryCwd;
+    process.env["ROLL_PROJECT_RUNTIME_DIR"] = join(arbitraryCwd, "legacy-runtime");
     process.env[GOAL_ALLOWED_CARDS_ENV] = "US-WS-033";
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: string | Uint8Array) => (chunks.push(String(chunk)), true)) as typeof process.stdout.write;
     let code: number;
     try {
-      code = await loopRunOnceCommand(["--dry-run"]);
+      registerAll();
+      code = (await dispatch(["loop", "run-once", "--repository", binding.alias, "--dry-run"])).status;
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -169,6 +170,7 @@ describe("US-WS-033 — Workspace cycle context handoff", () => {
     expect(chunks.join("")).toContain("# workspace: roll");
     expect(chunks.join("")).toContain("# story:   US-WS-033");
     expect(chunks.join("")).toContain("# context-source: requirement_discovery");
+    expect(chunks.join("")).toContain(`# repository: ${binding.repoId} (${binding.alias})`);
     expect(chunks.join("")).not.toContain("# workspace: decoy");
   });
 

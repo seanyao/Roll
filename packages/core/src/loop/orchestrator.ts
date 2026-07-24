@@ -116,6 +116,7 @@ import type {
   RepositoryExecutionContext,
   TerminalOutcome,
   WorkspaceExecutionContextV1,
+  WorkspaceContextScope,
 } from "@roll/spec";
 import { cycleCurrency } from "../cost/tracker.js";
 import type { RollEvent } from "@roll/spec";
@@ -1004,6 +1005,10 @@ export interface CycleContext {
    * invocation start and carried through runner, recovery, watch and terminal
    * handlers. Consumers must never rediscover authority from cwd. */
   workspaceExecution?: WorkspaceExecutionContextV1;
+  /** Explicit policy classification for missing Workspace authority. */
+  workspaceContextScope?: WorkspaceContextScope;
+  /** Explicit repository selector; canonicalized to repoId before spawn. */
+  repositorySelector?: string;
 }
 
 export type RepositoryCommandOperation = "context" | "edit" | "test" | "tcr" | "publish";
@@ -1173,6 +1178,7 @@ export type CycleEvent =
       storyId: string;
       repositoryExecution?: CycleRepositoryExecutionContext;
       workspaceExecution?: WorkspaceExecutionContextV1;
+      repositorySelector?: string;
     }
   | { type: "repository_setup_failed"; storyId: string }
   | { type: "no_story" } // picker returned nothing → idle (bin/roll:9180-class).
@@ -1467,6 +1473,9 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
             ...(event.workspaceExecution === undefined
               ? {}
               : { workspaceExecution: event.workspaceExecution }),
+            ...(event.repositorySelector === undefined
+              ? {}
+              : { repositorySelector: event.repositorySelector }),
           },
         },
         commands: [

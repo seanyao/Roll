@@ -1,4 +1,5 @@
 import type {
+  WorkspaceContextOperationProvenance,
   WorkspaceContextPolicy,
   WorkspaceContextPolicySurface,
 } from "@roll/spec";
@@ -39,6 +40,23 @@ export interface WorkspaceContextCompatibilityMatrixV1 {
     readonly toolOperations: number;
   };
   readonly rows: readonly WorkspaceContextPolicy[];
+}
+
+const LEGACY_WORKSPACE_CONTEXT_OPERATIONS = new Set([
+  "cli:workspace:migrate",
+  "cli:init:onboard",
+  "cli:setup:offboard",
+]);
+
+/** Legacy authority is granted only by one of the three public lifecycle
+ * operations whose audited policy explicitly owns that boundary. */
+export function authorizesLegacyWorkspaceContextOperation(
+  value: WorkspaceContextOperationProvenance | undefined,
+): boolean {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 3 || keys.some((key) => !["surface", "id", "operation"].includes(key))) return false;
+  return LEGACY_WORKSPACE_CONTEXT_OPERATIONS.has(`${value.surface}:${value.id}:${value.operation}`);
 }
 
 function keyOf(item: Pick<WorkspaceContextSurfaceInventoryItem, "surface" | "id" | "operation">): string {

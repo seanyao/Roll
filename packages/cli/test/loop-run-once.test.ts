@@ -17,8 +17,10 @@ import { realAgentSpawn } from "../src/runner/index.js";
 import {
   REPOSITORY_BINDING_V1,
   WORKSPACE_EXECUTION_CONTEXT_V1,
+  repositoryIdFromRemote,
   type WorkspaceExecutionContextV1,
 } from "@roll/spec";
+import { WorkspaceRegistry } from "@roll/infra";
 import { persistWorkspaceCycleContext } from "../src/runner/scoped-route.js";
 
 const dirs: string[] = [];
@@ -37,6 +39,63 @@ function tmp(tag: string): string {
   return realpathSync(d);
 }
 
+function provisionLoopWorkspace(
+  root: string,
+  storyIds: readonly string[] = [],
+  workspaceId = "proj-abc123",
+): { readonly rollHome: string; readonly runtimeRoot: string; readonly workspaceId: string } {
+  const remote = "https://github.com/example/loop-fixture.git";
+  const parsedRepoId = repositoryIdFromRemote(remote);
+  if (!parsedRepoId.ok) throw new Error("loop fixture remote must be canonicalizable");
+  const binding = {
+    schema: REPOSITORY_BINDING_V1,
+    repoId: parsedRepoId.value,
+    alias: "product",
+    remote,
+    integrationBranch: "main",
+    provider: "github",
+    workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+  } as const;
+  mkdirSync(join(root, "backlog"), { recursive: true });
+  mkdirSync(join(root, "runtime"), { recursive: true });
+  mkdirSync(join(root, "issues"), { recursive: true });
+  writeFileSync(join(root, "workspace.yaml"), `${JSON.stringify({
+    schema: "roll.workspace/v1",
+    workspaceId,
+    displayName: "loop run-once fixture",
+    requirements: [],
+    repositories: [binding],
+  }, null, 2)}\n`);
+  writeFileSync(join(root, "backlog", "index.md"), [
+    "| ID | Description | Status |",
+    "|---|---|---|",
+    ...storyIds.map((storyId) => `| [${storyId}](../issues/${storyId}) | fixture | 📋 Todo |`),
+    "",
+  ].join("\n"));
+  for (const storyId of storyIds) {
+    const issueRoot = join(root, "issues", storyId);
+    mkdirSync(issueRoot, { recursive: true });
+    writeFileSync(join(issueRoot, "manifest.json"), `${JSON.stringify({
+      schema: "roll.issue/v1",
+      workspaceId,
+      storyId,
+      requirements: [],
+      repositories: [{
+        repoId: binding.repoId,
+        alias: binding.alias,
+        access: "write",
+        requiredDelivery: true,
+        noChangePolicy: "changes_required",
+      }],
+    }, null, 2)}\n`);
+  }
+  const rollHome = tmp("workspace-home");
+  const registry = new WorkspaceRegistry({ rollHome });
+  registry.register({ workspaceId, root });
+  registry.activate(workspaceId);
+  return { rollHome, runtimeRoot: join(root, "runtime"), workspaceId };
+}
+
 async function captureRunOnce(fn: () => Promise<number>): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -53,6 +112,7 @@ async function captureRunOnce(fn: () => Promise<number>): Promise<{ code: number
 }
 
 async function runPausedRunOnce(project: string, childEnv: NodeJS.ProcessEnv): Promise<{ code: number; out: string; err: string }> {
+  const workspace = provisionLoopWorkspace(project, ["FIX-007"]);
   const previousCwd = process.cwd();
   const previous = {
     mainProject: process.env["ROLL_MAIN_PROJECT"],
@@ -61,13 +121,17 @@ async function runPausedRunOnce(project: string, childEnv: NodeJS.ProcessEnv): P
     lang: process.env["ROLL_LANG"],
     allowedCards: process.env[GOAL_ALLOWED_CARDS_ENV],
     guided: process.env[GOAL_GUIDED_ENV],
+    rollHome: process.env["ROLL_HOME"],
+    workspace: process.env["ROLL_WORKSPACE"],
   };
   try {
     process.chdir(project);
     process.env["ROLL_MAIN_PROJECT"] = project;
     process.env["ROLL_MAIN_SLUG"] = "proj-abc123";
     process.env["ROLL_LANG"] = "en";
-    delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    process.env["ROLL_PROJECT_RUNTIME_DIR"] = workspace.runtimeRoot;
+    process.env["ROLL_HOME"] = workspace.rollHome;
+    process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
     process.env[GOAL_ALLOWED_CARDS_ENV] = childEnv[GOAL_ALLOWED_CARDS_ENV] ?? "";
     process.env[GOAL_GUIDED_ENV] = childEnv[GOAL_GUIDED_ENV] ?? "";
     return await captureRunOnce(() => loopRunOnceCommand([]));
@@ -85,6 +149,10 @@ async function runPausedRunOnce(project: string, childEnv: NodeJS.ProcessEnv): P
     else process.env[GOAL_ALLOWED_CARDS_ENV] = previous.allowedCards;
     if (previous.guided === undefined) delete process.env[GOAL_GUIDED_ENV];
     else process.env[GOAL_GUIDED_ENV] = previous.guided;
+    if (previous.rollHome === undefined) delete process.env["ROLL_HOME"];
+    else process.env["ROLL_HOME"] = previous.rollHome;
+    if (previous.workspace === undefined) delete process.env["ROLL_WORKSPACE"];
+    else process.env["ROLL_WORKSPACE"] = previous.workspace;
   }
 }
 
@@ -108,10 +176,13 @@ describe("loop run-once CLI wiring", () => {
   it("--dry-run prints the command plan without executing (exit 0)", async () => {
     const p = tmp("dry-run-project");
     execFileSync("git", ["init", "-q", p]);
+    const workspace = provisionLoopWorkspace(p);
     registerAll();
     const write = process.stdout.write.bind(process.stdout);
     const prevMain = process.env["ROLL_MAIN_PROJECT"];
     const prevSlug = process.env["ROLL_MAIN_SLUG"];
+    const prevRollHome = process.env["ROLL_HOME"];
+    const prevWorkspace = process.env["ROLL_WORKSPACE"];
     let out = "";
     process.stdout.write = ((s: string) => {
       out += s;
@@ -120,7 +191,9 @@ describe("loop run-once CLI wiring", () => {
     try {
       process.env["ROLL_MAIN_PROJECT"] = p;
       process.env["ROLL_MAIN_SLUG"] = "dry-run-project";
-      const r = await dispatch(["loop", "run-once", "--dry-run"]);
+      process.env["ROLL_HOME"] = workspace.rollHome;
+      process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
+      const r = await dispatch(["loop", "run-once", "--workspace", workspace.workspaceId, "--dry-run"]);
       expect(r.status).toBe(0);
     } finally {
       process.stdout.write = write;
@@ -128,6 +201,10 @@ describe("loop run-once CLI wiring", () => {
       else process.env["ROLL_MAIN_PROJECT"] = prevMain;
       if (prevSlug === undefined) delete process.env["ROLL_MAIN_SLUG"];
       else process.env["ROLL_MAIN_SLUG"] = prevSlug;
+      if (prevRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = prevRollHome;
+      if (prevWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
+      else process.env["ROLL_WORKSPACE"] = prevWorkspace;
     }
     expect(out).toContain("command plan (orchestrator → executor)");
     expect(out).toContain("spawn_agent");
@@ -178,9 +255,13 @@ describe("loop run-once CLI wiring", () => {
   });
 
   it("US-DELIV-005: usage documents --race (same-card parallel opt-in)", () => {
-    expect(RUN_ONCE_USAGE).toContain("[--workspace <id|path>] [--dry-run] [--race]");
+    expect(RUN_ONCE_USAGE).toContain("[--workspace <id|path>] [--repository <repoId|alias>] [--dry-run] [--race]");
     expect(RUN_ONCE_USAGE).toContain("cycle runtime, backlog, locks, and events to one Workspace");
     expect(RUN_ONCE_USAGE).toContain("--race");
+  });
+
+  it("US-WS-037: usage exposes the public repository selector carrier", () => {
+    expect(RUN_ONCE_USAGE).toContain("--repository <repoId|alias>");
   });
 
   it("US-DELIV-013: published help hands merge progression to the reconciler", () => {
@@ -192,7 +273,8 @@ describe("loop run-once CLI wiring", () => {
   it("FIX-1040: unscoped run-once yields while a scoped loop go session holds directory go.lock", async () => {
     const p = tmp("go-lock-dir");
     execFileSync("git", ["init", "-q", p]);
-    const rt = join(p, ".roll", "loop");
+    const workspace = provisionLoopWorkspace(p);
+    const rt = workspace.runtimeRoot;
     const lockDir = join(rt, "go.lock");
     mkdirSync(lockDir, { recursive: true });
     writeFileSync(
@@ -209,6 +291,8 @@ describe("loop run-once CLI wiring", () => {
     const prevRt = process.env["ROLL_PROJECT_RUNTIME_DIR"];
     const prevSlug = process.env["ROLL_MAIN_SLUG"];
     const prevAllowed = process.env["ROLL_LOOP_GO_ALLOWED_CARDS"];
+    const prevRollHome = process.env["ROLL_HOME"];
+    const prevWorkspace = process.env["ROLL_WORKSPACE"];
     let out = "";
     const write = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((s: string) => {
@@ -219,6 +303,8 @@ describe("loop run-once CLI wiring", () => {
       process.chdir(p);
       process.env["ROLL_PROJECT_RUNTIME_DIR"] = rt;
       process.env["ROLL_MAIN_SLUG"] = "proj-abc123";
+      process.env["ROLL_HOME"] = workspace.rollHome;
+      process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
       delete process.env["ROLL_LOOP_GO_ALLOWED_CARDS"];
       const r = await loopRunOnceCommand([]);
       expect(r).toBe(0);
@@ -231,6 +317,10 @@ describe("loop run-once CLI wiring", () => {
       else process.env["ROLL_MAIN_SLUG"] = prevSlug;
       if (prevAllowed === undefined) delete process.env["ROLL_LOOP_GO_ALLOWED_CARDS"];
       else process.env["ROLL_LOOP_GO_ALLOWED_CARDS"] = prevAllowed;
+      if (prevRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = prevRollHome;
+      if (prevWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
+      else process.env["ROLL_WORKSPACE"] = prevWorkspace;
     }
 
     expect(out).toContain("go session already active");
@@ -527,11 +617,16 @@ describe("FIX-204A — skill resolution + blind-agent refusal", () => {
     registerAll();
     const p = proj("refuse");
     execFileSync("git", ["init", "-q", p]);
-    const rt = join(p, ".roll", "loop");
+    const workspace = provisionLoopWorkspace(p, ["FIX-204A"]);
+    const rt = workspace.runtimeRoot;
     const prevCwd = process.cwd();
     const prevRt = process.env["ROLL_PROJECT_RUNTIME_DIR"];
     const prevHome = process.env["HOME"];
+    const prevRollHome = process.env["ROLL_HOME"];
+    const prevWorkspace = process.env["ROLL_WORKSPACE"];
     process.env["ROLL_PROJECT_RUNTIME_DIR"] = rt;
+    process.env["ROLL_HOME"] = workspace.rollHome;
+    process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
     // Isolate HOME so the new ~/.roll/skills/ fallback doesn't resolve
     // against the developer's real ~/.roll/skills/roll-loop/SKILL.md.
     process.env["HOME"] = join(tmpdir(), `.roll-skill-refuse-${process.pid}`);
@@ -551,6 +646,10 @@ describe("FIX-204A — skill resolution + blind-agent refusal", () => {
       process.env["HOME"] = prevHome;
       if (prevRt === undefined) delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
       else process.env["ROLL_PROJECT_RUNTIME_DIR"] = prevRt;
+      if (prevRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = prevRollHome;
+      if (prevWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
+      else process.env["ROLL_WORKSPACE"] = prevWorkspace;
     }
     // Early-exit gates (in order): pause, repo pushability, network, skill body.
     // The network guard may block before the skill check. Older egress-only paths
@@ -902,11 +1001,11 @@ describe("FIX-1472 — loop run-once pause gate consumes the loop-go child envir
   function pausedProject(tag: string): string {
     const project = tmp(tag);
     execFileSync("git", ["init", "-q", project]);
-    mkdirSync(join(project, ".roll", "loop"), { recursive: true });
-    writeFileSync(join(project, ".roll", "loop", "PAUSE-proj-abc123"), "owner pause\n");
+    mkdirSync(join(project, "runtime"), { recursive: true });
+    writeFileSync(join(project, "runtime", "PAUSE-proj-abc123"), "owner pause\n");
     // Keep the positive case local and deterministic after it gets through the
     // pause gate: no remote makes the next preflight return 1 before any agent.
-    writeFileSync(join(project, ".roll", "policy.yaml"), "loop_safety:\n  skip_network_check: true\n");
+    writeFileSync(join(project, "policy.yaml"), "loop_safety:\n  skip_network_check: true\n");
     return project;
   }
 
@@ -926,7 +1025,7 @@ describe("FIX-1472 — loop run-once pause gate consumes the loop-go child envir
     // starting an agent or changing the owner's pause marker.
     expect(r.code).toBe(1);
     expect(r.out).not.toContain("loop is paused (PAUSE marker present)");
-    expect(existsSync(join(project, ".roll", "loop", "PAUSE-proj-abc123"))).toBe(true);
+    expect(existsSync(join(project, "runtime", "PAUSE-proj-abc123"))).toBe(true);
   });
 
   it("blocks a real paused run-once when loop-go explicitly clears an ambient guided=1", async () => {
@@ -944,7 +1043,7 @@ describe("FIX-1472 — loop run-once pause gate consumes the loop-go child envir
 
     expect(r.code).toBe(0);
     expect(r.out).toContain("loop is paused (PAUSE marker present)");
-    expect(existsSync(join(project, ".roll", "loop", "PAUSE-proj-abc123"))).toBe(true);
+    expect(existsSync(join(project, "runtime", "PAUSE-proj-abc123"))).toBe(true);
   });
 });
 
@@ -1336,7 +1435,8 @@ describe("FIX-1043 — scoped retry clears pending-publish so the picker does no
     mkdirSync(join(p, ".roll", "skills", "roll-loop"), { recursive: true });
     writeFileSync(join(p, ".roll", "skills", "roll-loop", "SKILL.md"), "# loop\n", "utf8");
 
-    const rt = join(p, ".roll", "loop");
+    const workspace = provisionLoopWorkspace(p, ["FIX-1042"]);
+    const rt = workspace.runtimeRoot;
     mkdirSync(rt, { recursive: true });
     writeFileSync(join(rt, "pending-publish.json"), JSON.stringify(["FIX-1042"]), "utf8");
 
@@ -1344,10 +1444,14 @@ describe("FIX-1043 — scoped retry clears pending-publish so the picker does no
     const prevRt = process.env["ROLL_PROJECT_RUNTIME_DIR"];
     const prevSlug = process.env["ROLL_MAIN_SLUG"];
     const prevAllowed = process.env[GOAL_ALLOWED_CARDS_ENV];
+    const prevRollHome = process.env["ROLL_HOME"];
+    const prevWorkspace = process.env["ROLL_WORKSPACE"];
     try {
       process.chdir(p);
       process.env["ROLL_PROJECT_RUNTIME_DIR"] = rt;
       process.env["ROLL_MAIN_SLUG"] = "proj-abc123";
+      process.env["ROLL_HOME"] = workspace.rollHome;
+      process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
       process.env[GOAL_ALLOWED_CARDS_ENV] = "FIX-1042";
       // No git remote → repo pushable check fails fast after pending-publish is cleared.
       await loopRunOnceCommand([]);
@@ -1359,6 +1463,10 @@ describe("FIX-1043 — scoped retry clears pending-publish so the picker does no
       else process.env["ROLL_MAIN_SLUG"] = prevSlug;
       if (prevAllowed === undefined) delete process.env[GOAL_ALLOWED_CARDS_ENV];
       else process.env[GOAL_ALLOWED_CARDS_ENV] = prevAllowed;
+      if (prevRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = prevRollHome;
+      if (prevWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
+      else process.env["ROLL_WORKSPACE"] = prevWorkspace;
     }
 
     // The scoped retry intent must clear the marker so a later cycle can pick it.
@@ -1433,14 +1541,19 @@ describe("FIX-1209: core.worktree contamination guard", () => {
     execFileSync("git", ["init", fakeWt]);
     execFileSync("git", ["config", "user.name", "test"], { cwd: fakeWt });
     execFileSync("git", ["config", "user.email", "test@test"], { cwd: fakeWt });
+    const workspace = provisionLoopWorkspace(fakeWt, [], "identity-drift");
 
     // Mock ROLL_PROJECT_RUNTIME_DIR to avoid polluting real loop dirs
     const prevSlug = process.env["ROLL_MAIN_SLUG"];
     const prevRt = process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    const prevRollHome = process.env["ROLL_HOME"];
+    const prevWorkspace = process.env["ROLL_WORKSPACE"];
     const prevCwd = process.cwd();
     try {
       process.env["ROLL_MAIN_SLUG"] = "test-identity";
       process.env["ROLL_PROJECT_RUNTIME_DIR"] = join(repo, ".roll", "loop");
+      process.env["ROLL_HOME"] = workspace.rollHome;
+      process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
       process.chdir(fakeWt);
 
       // run-once resolves identity from cwd; since we're inside a repo with
@@ -1452,7 +1565,7 @@ describe("FIX-1209: core.worktree contamination guard", () => {
         return true;
       }) as typeof process.stderr.write;
       try {
-        const r = await loopRunOnceCommand([]);
+        const r = await loopRunOnceCommand(["--workspace", workspace.workspaceId]);
         // We may not reach here if identity assertion exits early
         // Just verify there's an error in stderr
         expect(r).toBe(1);
@@ -1467,10 +1580,14 @@ describe("FIX-1209: core.worktree contamination guard", () => {
       else process.env["ROLL_PROJECT_RUNTIME_DIR"] = prevRt;
       if (prevSlug === undefined) delete process.env["ROLL_MAIN_SLUG"];
       else process.env["ROLL_MAIN_SLUG"] = prevSlug;
+      if (prevRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = prevRollHome;
+      if (prevWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
+      else process.env["ROLL_WORKSPACE"] = prevWorkspace;
     }
   });
 
-  it("FIX-1226: cycle worktree self-check uses ROLL_MAIN_PROJECT and is not misclassified as drift", async () => {
+  it("FIX-1226: ambient ROLL_MAIN_PROJECT cannot replace the selected Workspace identity", async () => {
     const repo = tmp("identity-main-anchor");
     execFileSync("git", ["init", repo]);
     execFileSync("git", ["config", "user.name", "test"], { cwd: repo });
@@ -1481,11 +1598,14 @@ describe("FIX-1209: core.worktree contamination guard", () => {
     execFileSync("git", ["init", cycleWt]);
     execFileSync("git", ["config", "user.name", "test"], { cwd: cycleWt });
     execFileSync("git", ["config", "user.email", "test@test"], { cwd: cycleWt });
+    const workspace = provisionLoopWorkspace(repo, [], "test-identity");
 
     const prevSlug = process.env["ROLL_MAIN_SLUG"];
     const prevMain = process.env["ROLL_MAIN_PROJECT"];
     const prevRt = process.env["ROLL_PROJECT_RUNTIME_DIR"];
     const prevCwd = process.cwd();
+    const prevRollHome = process.env["ROLL_HOME"];
+    const prevWorkspace = process.env["ROLL_WORKSPACE"];
     const stdoutWrite = process.stdout.write.bind(process.stdout);
     const stderrWrite = process.stderr.write.bind(process.stderr);
     let out = "";
@@ -1494,6 +1614,8 @@ describe("FIX-1209: core.worktree contamination guard", () => {
       process.env["ROLL_MAIN_SLUG"] = "test-identity";
       process.env["ROLL_MAIN_PROJECT"] = repo;
       process.env["ROLL_PROJECT_RUNTIME_DIR"] = join(repo, ".roll", "loop");
+      process.env["ROLL_HOME"] = workspace.rollHome;
+      process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
       process.chdir(cycleWt);
       process.stdout.write = ((s: string) => {
         out += s;
@@ -1504,7 +1626,7 @@ describe("FIX-1209: core.worktree contamination guard", () => {
         return true;
       }) as typeof process.stderr.write;
 
-      const r = await loopRunOnceCommand(["--dry-run"]);
+      const r = await loopRunOnceCommand(["--workspace", workspace.workspaceId, "--dry-run"]);
 
       expect(r).toBe(0);
       expect(out).toContain("# roll loop run-once --dry-run");
@@ -1521,6 +1643,10 @@ describe("FIX-1209: core.worktree contamination guard", () => {
       else process.env["ROLL_MAIN_PROJECT"] = prevMain;
       if (prevSlug === undefined) delete process.env["ROLL_MAIN_SLUG"];
       else process.env["ROLL_MAIN_SLUG"] = prevSlug;
+      if (prevRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = prevRollHome;
+      if (prevWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
+      else process.env["ROLL_WORKSPACE"] = prevWorkspace;
     }
   });
 });
