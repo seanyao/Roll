@@ -241,7 +241,7 @@ export function registerAll(): void {
   registerPorted("workspace", workspaceCommand, {
     help: workspaceUsage,
     operations: [
-      cliMatchedOperation("workspace", "usage", [], (args) => args.length === 0),
+      cliMatchedOperation("workspace", "usage", [], [], (args) => args.length === 0),
       cliOperation("workspace", "create", ["create"]),
       cliMatchedSelectorOperation(
         "workspace",
@@ -261,12 +261,14 @@ export function registerAll(): void {
         "workspace",
         "doctor.read",
         ["doctor"],
+        ["doctor", "roll"],
         (args) => args[0] === "doctor" && !args.slice(1).includes("--repair"),
       ),
       cliMatchedOperation(
         "workspace",
         "doctor.repair",
         ["doctor"],
+        ["doctor", "roll", "--repair", "rebuild_cache:product"],
         (args) => args[0] === "doctor" && args.slice(1).includes("--repair"),
       ),
       cliSelectorOperation("workspace", "migrate", ["migrate"], withWorkspaceSelector(["migrate"], "roll")),
@@ -293,7 +295,7 @@ export function registerAll(): void {
   registerPorted("delivery", deliveryCommand, {
     help: deliveryUsage,
     operations: [
-      cliMatchedOperation("delivery", "usage", [], (args) => args.length === 0),
+      cliMatchedOperation("delivery", "usage", [], [], (args) => args.length === 0),
       ...["list", "show", "reconcile"].map((name) =>
         cliSelectorOperation("delivery", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
@@ -461,7 +463,7 @@ export function registerAll(): void {
         workspaceSelectorArgs("roll"),
         hasWorkspaceSelectorArg,
       ),
-      cliMatchedOperation("agent", "view", [], (args) => args.length === 0),
+      cliMatchedOperation("agent", "view", [], [], (args) => args.length === 0),
       ...["cast", "list", "readiness", "disable", "enable", "default", "set", "migrate", "use"].map((name) =>
         cliOperation("agent", name, [name])),
     ],
@@ -584,8 +586,8 @@ export function registerAll(): void {
     return configCommand(args);
   }, {
     operations: [
-      cliMatchedOperation("config", "read", [], (args) => configWorkspaceContextOperation(args) === "read"),
-      cliMatchedOperation("config", "write", [], (args) => configWorkspaceContextOperation(args) === "write"),
+      cliMatchedOperation("config", "read", [], ["lang"], (args) => configWorkspaceContextOperation(args) === "read"),
+      cliMatchedOperation("config", "write", [], ["lang", "en"], (args) => configWorkspaceContextOperation(args) === "write"),
       cliOperation("config", "prices", ["prices"]),
       cliOperation("config", "tune", ["tune"]),
     ],
@@ -854,18 +856,21 @@ export function registerAll(): void {
         "loop",
         "fallback.status",
         ["fallback"],
+        ["fallback", "status"],
         (args) => args[0] === "fallback" && (args[1] === undefined || args[1] === "status" || isHelp(args[1])),
       ),
       cliMatchedOperation(
         "loop",
         "fallback.start",
         ["fallback"],
+        ["fallback", "start", "--confirm"],
         (args) => args[0] === "fallback" && args[1] === "start",
       ),
       cliMatchedOperation(
         "loop",
         "fallback.stop",
         ["fallback"],
+        ["fallback", "stop"],
         (args) => args[0] === "fallback" && args[1] === "stop",
       ),
       cliMatchedSelectorOperation(

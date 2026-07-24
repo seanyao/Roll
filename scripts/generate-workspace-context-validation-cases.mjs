@@ -6,38 +6,83 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const matrix = JSON.parse(fs.readFileSync(path.join(root, "docs", "generated", "workspace-context-compatibility-matrix.json"), "utf8"));
 
-const cases = [
-  { id: "registry.policy-closure", testFile: "packages/cli/test/workspace-surface-inventory.test.ts", marker: "closes the registered inventory and matches the stable machine artifact" },
-  { id: "cli.public-boundary", testFile: "packages/cli/test/workspace-context.critical.e2e.test.ts", marker: "US-WS-040 public Workspace context boundary" },
-  { id: "selector.alias-equivalence", testFile: "packages/cli/test/workspace-alias.difftest.test.ts", marker: "canonicalizes every representative workspace subtree through one handler" },
-  { id: "workspace.discovery-clarify", testFile: "packages/cli/test/workspace-interaction.e2e.test.ts", marker: "US-WS-030 direct Workspace clarification" },
-  { id: "workspace.create-recovery", testFile: "packages/cli/test/workspace-create.e2e.test.ts", marker: "previews, applies, and reuses one complete Workspace through the built CLI" },
-  { id: "workspace.edit-transaction", testFile: "packages/cli/test/workspace-edit.e2e.test.ts", marker: "rejects a stale preview without overwriting the concurrent manifest" },
-  { id: "skill.handoff-authority", testFile: "skills/scripts/test-audit-skills.mjs", marker: "workspaceContextPolicies" },
-  { id: "tool.context-envelope", testFile: "packages/cli/test/tool-context-invocation.e2e.test.ts", marker: "carries correlation through ToolRegistry into bash" },
-  { id: "legacy.explicit-boundary", testFile: "packages/cli/test/workspace-create-recovery.e2e.test.ts", marker: "legacy" },
-];
+const operationTestFiles = {
+  cli: "packages/cli/test/workspace-context-operation-evidence.test.ts",
+  skill: "packages/cli/test/workspace-context-operation-evidence.test.ts",
+  tool: "packages/infra/test/workspace-context-operation-evidence.test.ts",
+};
 
-const operations = matrix.rows.map((row) => {
-  const mapped = ["registry.policy-closure"];
-  if (row.surface === "cli") mapped.push("cli.public-boundary");
-  if (row.acceptsWorkspaceSelector === true) mapped.push("selector.alias-equivalence");
-  if (row.surface === "skill") mapped.push("skill.handoff-authority");
-  if (row.surface === "tool") mapped.push("tool.context-envelope");
-  if (String(row.scope).startsWith("workspace_") || row.scope === "issue_required" || row.scope === "repository_required") {
-    mapped.push("workspace.discovery-clarify");
-  }
-  if (row.surface === "cli" && row.id === "workspace" && row.operation === "create") mapped.push("workspace.create-recovery");
-  if (row.surface === "cli" && row.id === "workspace" && row.operation === "edit") mapped.push("workspace.edit-transaction");
-  if (row.scope === "legacy_migration_only") mapped.push("legacy.explicit-boundary");
-  return { policyKey: `${row.surface}:${row.id}:${row.operation}`, cases: [...new Set(mapped)].sort() };
+function operationTestName(row, policyKey) {
+  if (row.surface === "cli") return `executes registered CLI probe for ${policyKey}`;
+  if (row.surface === "skill") return `validates shipped Skill manifest policy for ${policyKey}`;
+  return `rejects missing execution context before adapter effects for ${policyKey}`;
+}
+
+const operationCases = matrix.rows.map((row) => {
+  const policyKey = `${row.surface}:${row.id}:${row.operation}`;
+  return {
+    id: `operation:${policyKey}`,
+    policyKey,
+    surface: row.surface,
+    testFile: operationTestFiles[row.surface],
+    testName: operationTestName(row, policyKey),
+  };
 });
 
+const crossCuttingCases = [
+  {
+    id: "matrix.registry-closure",
+    testFile: "packages/cli/test/workspace-surface-inventory.test.ts",
+    testName: "closes the registered inventory and matches the stable machine artifact",
+  },
+  {
+    id: "boundary.alias-equivalence",
+    testFile: "packages/cli/test/workspace-context.critical.e2e.test.ts",
+    testName: "keeps full command and selector aliases byte-equivalent from a poisoned arbitrary cwd",
+  },
+  {
+    id: "boundary.fail-closed",
+    testFile: "packages/cli/test/workspace-context.critical.e2e.test.ts",
+    testName: "fails closed on duplicate/missing selectors and retired init without mutation",
+  },
+  {
+    id: "selector.complete-tree",
+    testFile: "packages/cli/test/workspace-alias.difftest.test.ts",
+    testName: "canonicalizes every representative workspace subtree through one handler",
+  },
+  {
+    id: "workspace.discovery-clarify",
+    testFile: "packages/cli/test/workspace-interaction.e2e.test.ts",
+    testName: "US-WS-030 direct Workspace clarification",
+  },
+  {
+    id: "workspace.create-authorization",
+    testFile: "packages/cli/test/workspace-create.e2e.test.ts",
+    testName: "previews, applies, and reuses one complete Workspace through the built CLI",
+  },
+  {
+    id: "workspace.edit-transaction",
+    testFile: "packages/cli/test/workspace-edit.e2e.test.ts",
+    testName: "rejects a stale preview without overwriting the concurrent manifest",
+  },
+  {
+    id: "tool.authority-isolation",
+    testFile: "packages/cli/test/tool-context-invocation.e2e.test.ts",
+    testName: "freezes the cycle context and carries correlation through ToolRegistry into bash",
+  },
+  {
+    id: "mapping.semantic-closure",
+    testFile: "packages/cli/test/workspace-context-case-map.test.ts",
+    testName: "binds every detailed design AC to Story ACs and concrete executable cases",
+  },
+];
+
 const artifact = {
-  schema: "roll.workspace-context-validation-cases/v1",
+  schema: "roll.workspace-context-validation-cases/v2",
   sourceMatrix: "docs/generated/workspace-context-compatibility-matrix.json",
-  cases,
-  operations,
+  operationCases,
+  operations: operationCases.map((testCase) => ({ policyKey: testCase.policyKey, caseId: testCase.id })),
+  crossCuttingCases,
 };
 const output = path.join(root, "docs", "generated", "workspace-context-validation-cases.json");
 fs.writeFileSync(output, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");

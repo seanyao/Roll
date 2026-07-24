@@ -1,1433 +1,1936 @@
 {
-  "schema": "roll.workspace-context-validation-cases/v1",
+  "schema": "roll.workspace-context-validation-cases/v2",
   "sourceMatrix": "docs/generated/workspace-context-compatibility-matrix.json",
-  "cases": [
+  "operationCases": [
     {
-      "id": "registry.policy-closure",
-      "testFile": "packages/cli/test/workspace-surface-inventory.test.ts",
-      "marker": "closes the registered inventory and matches the stable machine artifact"
+      "id": "operation:cli:agent:cast",
+      "policyKey": "cli:agent:cast",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:cast"
     },
     {
-      "id": "cli.public-boundary",
-      "testFile": "packages/cli/test/workspace-context.critical.e2e.test.ts",
-      "marker": "US-WS-040 public Workspace context boundary"
+      "id": "operation:cli:agent:default",
+      "policyKey": "cli:agent:default",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:default"
     },
     {
-      "id": "selector.alias-equivalence",
-      "testFile": "packages/cli/test/workspace-alias.difftest.test.ts",
-      "marker": "canonicalizes every representative workspace subtree through one handler"
+      "id": "operation:cli:agent:disable",
+      "policyKey": "cli:agent:disable",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:disable"
     },
     {
-      "id": "workspace.discovery-clarify",
-      "testFile": "packages/cli/test/workspace-interaction.e2e.test.ts",
-      "marker": "US-WS-030 direct Workspace clarification"
+      "id": "operation:cli:agent:enable",
+      "policyKey": "cli:agent:enable",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:enable"
     },
     {
-      "id": "workspace.create-recovery",
-      "testFile": "packages/cli/test/workspace-create.e2e.test.ts",
-      "marker": "previews, applies, and reuses one complete Workspace through the built CLI"
+      "id": "operation:cli:agent:list",
+      "policyKey": "cli:agent:list",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:list"
     },
     {
-      "id": "workspace.edit-transaction",
-      "testFile": "packages/cli/test/workspace-edit.e2e.test.ts",
-      "marker": "rejects a stale preview without overwriting the concurrent manifest"
+      "id": "operation:cli:agent:migrate",
+      "policyKey": "cli:agent:migrate",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:migrate"
     },
     {
-      "id": "skill.handoff-authority",
-      "testFile": "skills/scripts/test-audit-skills.mjs",
-      "marker": "workspaceContextPolicies"
+      "id": "operation:cli:agent:readiness",
+      "policyKey": "cli:agent:readiness",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:readiness"
     },
     {
-      "id": "tool.context-envelope",
-      "testFile": "packages/cli/test/tool-context-invocation.e2e.test.ts",
-      "marker": "carries correlation through ToolRegistry into bash"
+      "id": "operation:cli:agent:set",
+      "policyKey": "cli:agent:set",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:set"
     },
     {
-      "id": "legacy.explicit-boundary",
-      "testFile": "packages/cli/test/workspace-create-recovery.e2e.test.ts",
-      "marker": "legacy"
+      "id": "operation:cli:agent:use",
+      "policyKey": "cli:agent:use",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:use"
+    },
+    {
+      "id": "operation:cli:agent:view",
+      "policyKey": "cli:agent:view",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:view"
+    },
+    {
+      "id": "operation:cli:agent:workspace",
+      "policyKey": "cli:agent:workspace",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:agent:workspace"
+    },
+    {
+      "id": "operation:cli:attest:audit",
+      "policyKey": "cli:attest:audit",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:attest:audit"
+    },
+    {
+      "id": "operation:cli:attest:render",
+      "policyKey": "cli:attest:render",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:attest:render"
+    },
+    {
+      "id": "operation:cli:backlog:block",
+      "policyKey": "cli:backlog:block",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:block"
+    },
+    {
+      "id": "operation:cli:backlog:claim",
+      "policyKey": "cli:backlog:claim",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:claim"
+    },
+    {
+      "id": "operation:cli:backlog:defer",
+      "policyKey": "cli:backlog:defer",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:defer"
+    },
+    {
+      "id": "operation:cli:backlog:lint",
+      "policyKey": "cli:backlog:lint",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:lint"
+    },
+    {
+      "id": "operation:cli:backlog:promote",
+      "policyKey": "cli:backlog:promote",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:promote"
+    },
+    {
+      "id": "operation:cli:backlog:read",
+      "policyKey": "cli:backlog:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:read"
+    },
+    {
+      "id": "operation:cli:backlog:show",
+      "policyKey": "cli:backlog:show",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:show"
+    },
+    {
+      "id": "operation:cli:backlog:sync",
+      "policyKey": "cli:backlog:sync",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:sync"
+    },
+    {
+      "id": "operation:cli:backlog:unblock",
+      "policyKey": "cli:backlog:unblock",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:unblock"
+    },
+    {
+      "id": "operation:cli:backlog:unstick",
+      "policyKey": "cli:backlog:unstick",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:backlog:unstick"
+    },
+    {
+      "id": "operation:cli:capture:local-window",
+      "policyKey": "cli:capture:local-window",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:capture:local-window"
+    },
+    {
+      "id": "operation:cli:capture:migrate",
+      "policyKey": "cli:capture:migrate",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:capture:migrate"
+    },
+    {
+      "id": "operation:cli:capture:refresh",
+      "policyKey": "cli:capture:refresh",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:capture:refresh"
+    },
+    {
+      "id": "operation:cli:capture:repair",
+      "policyKey": "cli:capture:repair",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:capture:repair"
+    },
+    {
+      "id": "operation:cli:capture:status",
+      "policyKey": "cli:capture:status",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:capture:status"
+    },
+    {
+      "id": "operation:cli:config:prices",
+      "policyKey": "cli:config:prices",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:config:prices"
+    },
+    {
+      "id": "operation:cli:config:read",
+      "policyKey": "cli:config:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:config:read"
+    },
+    {
+      "id": "operation:cli:config:tune",
+      "policyKey": "cli:config:tune",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:config:tune"
+    },
+    {
+      "id": "operation:cli:config:write",
+      "policyKey": "cli:config:write",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:config:write"
+    },
+    {
+      "id": "operation:cli:context:read",
+      "policyKey": "cli:context:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:context:read"
+    },
+    {
+      "id": "operation:cli:context:status",
+      "policyKey": "cli:context:status",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:context:status"
+    },
+    {
+      "id": "operation:cli:context:usage",
+      "policyKey": "cli:context:usage",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:context:usage"
+    },
+    {
+      "id": "operation:cli:delivery:list",
+      "policyKey": "cli:delivery:list",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:delivery:list"
+    },
+    {
+      "id": "operation:cli:delivery:reconcile",
+      "policyKey": "cli:delivery:reconcile",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:delivery:reconcile"
+    },
+    {
+      "id": "operation:cli:delivery:show",
+      "policyKey": "cli:delivery:show",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:delivery:show"
+    },
+    {
+      "id": "operation:cli:delivery:usage",
+      "policyKey": "cli:delivery:usage",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:delivery:usage"
+    },
+    {
+      "id": "operation:cli:design:design",
+      "policyKey": "cli:design:design",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:design:design"
+    },
+    {
+      "id": "operation:cli:doctor:diagnose",
+      "policyKey": "cli:doctor:diagnose",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:doctor:diagnose"
+    },
+    {
+      "id": "operation:cli:doctor:language",
+      "policyKey": "cli:doctor:language",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:doctor:language"
+    },
+    {
+      "id": "operation:cli:doctor:pardon",
+      "policyKey": "cli:doctor:pardon",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:doctor:pardon"
+    },
+    {
+      "id": "operation:cli:doctor:repair-protection",
+      "policyKey": "cli:doctor:repair-protection",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:doctor:repair-protection"
+    },
+    {
+      "id": "operation:cli:doctor:skills",
+      "policyKey": "cli:doctor:skills",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:doctor:skills"
+    },
+    {
+      "id": "operation:cli:doctor:tools",
+      "policyKey": "cli:doctor:tools",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:doctor:tools"
+    },
+    {
+      "id": "operation:cli:help:read",
+      "policyKey": "cli:help:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:help:read"
+    },
+    {
+      "id": "operation:cli:idea:capture",
+      "policyKey": "cli:idea:capture",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:idea:capture"
+    },
+    {
+      "id": "operation:cli:index:rebuild",
+      "policyKey": "cli:index:rebuild",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:index:rebuild"
+    },
+    {
+      "id": "operation:cli:init:onboard",
+      "policyKey": "cli:init:onboard",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:init:onboard"
+    },
+    {
+      "id": "operation:cli:loop:adversarial",
+      "policyKey": "cli:loop:adversarial",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:adversarial"
+    },
+    {
+      "id": "operation:cli:loop:agent-routes",
+      "policyKey": "cli:loop:agent-routes",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:agent-routes"
+    },
+    {
+      "id": "operation:cli:loop:alert",
+      "policyKey": "cli:loop:alert",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:alert"
+    },
+    {
+      "id": "operation:cli:loop:cycle",
+      "policyKey": "cli:loop:cycle",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:cycle"
+    },
+    {
+      "id": "operation:cli:loop:cycles",
+      "policyKey": "cli:loop:cycles",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:cycles"
+    },
+    {
+      "id": "operation:cli:loop:enforce-tcr",
+      "policyKey": "cli:loop:enforce-tcr",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:enforce-tcr"
+    },
+    {
+      "id": "operation:cli:loop:eval",
+      "policyKey": "cli:loop:eval",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:eval"
+    },
+    {
+      "id": "operation:cli:loop:events",
+      "policyKey": "cli:loop:events",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:events"
+    },
+    {
+      "id": "operation:cli:loop:exhaustion-split",
+      "policyKey": "cli:loop:exhaustion-split",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:exhaustion-split"
+    },
+    {
+      "id": "operation:cli:loop:fallback.start",
+      "policyKey": "cli:loop:fallback.start",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:fallback.start"
+    },
+    {
+      "id": "operation:cli:loop:fallback.status",
+      "policyKey": "cli:loop:fallback.status",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:fallback.status"
+    },
+    {
+      "id": "operation:cli:loop:fallback.stop",
+      "policyKey": "cli:loop:fallback.stop",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:fallback.stop"
+    },
+    {
+      "id": "operation:cli:loop:fmt",
+      "policyKey": "cli:loop:fmt",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:fmt"
+    },
+    {
+      "id": "operation:cli:loop:gc",
+      "policyKey": "cli:loop:gc",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:gc"
+    },
+    {
+      "id": "operation:cli:loop:go",
+      "policyKey": "cli:loop:go",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:go"
+    },
+    {
+      "id": "operation:cli:loop:goal",
+      "policyKey": "cli:loop:goal",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:goal"
+    },
+    {
+      "id": "operation:cli:loop:hotfix-head-context",
+      "policyKey": "cli:loop:hotfix-head-context",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:hotfix-head-context"
+    },
+    {
+      "id": "operation:cli:loop:log",
+      "policyKey": "cli:loop:log",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:log"
+    },
+    {
+      "id": "operation:cli:loop:mute",
+      "policyKey": "cli:loop:mute",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:mute"
+    },
+    {
+      "id": "operation:cli:loop:notify",
+      "policyKey": "cli:loop:notify",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:notify"
+    },
+    {
+      "id": "operation:cli:loop:now",
+      "policyKey": "cli:loop:now",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:now"
+    },
+    {
+      "id": "operation:cli:loop:off",
+      "policyKey": "cli:loop:off",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:off"
+    },
+    {
+      "id": "operation:cli:loop:on",
+      "policyKey": "cli:loop:on",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:on"
+    },
+    {
+      "id": "operation:cli:loop:pardon-skip-list",
+      "policyKey": "cli:loop:pardon-skip-list",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:pardon-skip-list"
+    },
+    {
+      "id": "operation:cli:loop:pause",
+      "policyKey": "cli:loop:pause",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:pause"
+    },
+    {
+      "id": "operation:cli:loop:precheck-ci",
+      "policyKey": "cli:loop:precheck-ci",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:precheck-ci"
+    },
+    {
+      "id": "operation:cli:loop:reconcile",
+      "policyKey": "cli:loop:reconcile",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:reconcile"
+    },
+    {
+      "id": "operation:cli:loop:reconcile-pending",
+      "policyKey": "cli:loop:reconcile-pending",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:reconcile-pending"
+    },
+    {
+      "id": "operation:cli:loop:recover",
+      "policyKey": "cli:loop:recover",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:recover"
+    },
+    {
+      "id": "operation:cli:loop:reset",
+      "policyKey": "cli:loop:reset",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:reset"
+    },
+    {
+      "id": "operation:cli:loop:resume",
+      "policyKey": "cli:loop:resume",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:resume"
+    },
+    {
+      "id": "operation:cli:loop:review-resize",
+      "policyKey": "cli:loop:review-resize",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:review-resize"
+    },
+    {
+      "id": "operation:cli:loop:run-once",
+      "policyKey": "cli:loop:run-once",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:run-once"
+    },
+    {
+      "id": "operation:cli:loop:runs",
+      "policyKey": "cli:loop:runs",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:runs"
+    },
+    {
+      "id": "operation:cli:loop:self-downgrade",
+      "policyKey": "cli:loop:self-downgrade",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:self-downgrade"
+    },
+    {
+      "id": "operation:cli:loop:signals",
+      "policyKey": "cli:loop:signals",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:signals"
+    },
+    {
+      "id": "operation:cli:loop:status",
+      "policyKey": "cli:loop:status",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:status"
+    },
+    {
+      "id": "operation:cli:loop:story",
+      "policyKey": "cli:loop:story",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:story"
+    },
+    {
+      "id": "operation:cli:loop:test",
+      "policyKey": "cli:loop:test",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:test"
+    },
+    {
+      "id": "operation:cli:loop:unmute",
+      "policyKey": "cli:loop:unmute",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:unmute"
+    },
+    {
+      "id": "operation:cli:loop:watch",
+      "policyKey": "cli:loop:watch",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:loop:watch"
+    },
+    {
+      "id": "operation:cli:next:read",
+      "policyKey": "cli:next:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:next:read"
+    },
+    {
+      "id": "operation:cli:north:read",
+      "policyKey": "cli:north:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:north:read"
+    },
+    {
+      "id": "operation:cli:release:consistency",
+      "policyKey": "cli:release:consistency",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:release:consistency"
+    },
+    {
+      "id": "operation:cli:release:release",
+      "policyKey": "cli:release:release",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:release:release"
+    },
+    {
+      "id": "operation:cli:release:showcase",
+      "policyKey": "cli:release:showcase",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:release:showcase"
+    },
+    {
+      "id": "operation:cli:release:verify",
+      "policyKey": "cli:release:verify",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:release:verify"
+    },
+    {
+      "id": "operation:cli:setup:offboard",
+      "policyKey": "cli:setup:offboard",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:setup:offboard"
+    },
+    {
+      "id": "operation:cli:setup:setup",
+      "policyKey": "cli:setup:setup",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:setup:setup"
+    },
+    {
+      "id": "operation:cli:setup:skills",
+      "policyKey": "cli:setup:skills",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:setup:skills"
+    },
+    {
+      "id": "operation:cli:status:ci",
+      "policyKey": "cli:status:ci",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:status:ci"
+    },
+    {
+      "id": "operation:cli:status:pulse",
+      "policyKey": "cli:status:pulse",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:status:pulse"
+    },
+    {
+      "id": "operation:cli:status:read",
+      "policyKey": "cli:status:read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:status:read"
+    },
+    {
+      "id": "operation:cli:story:new",
+      "policyKey": "cli:story:new",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:story:new"
+    },
+    {
+      "id": "operation:cli:story:validate",
+      "policyKey": "cli:story:validate",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:story:validate"
+    },
+    {
+      "id": "operation:cli:test:run",
+      "policyKey": "cli:test:run",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:test:run"
+    },
+    {
+      "id": "operation:cli:truth:audit",
+      "policyKey": "cli:truth:audit",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:truth:audit"
+    },
+    {
+      "id": "operation:cli:truth:query",
+      "policyKey": "cli:truth:query",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:truth:query"
+    },
+    {
+      "id": "operation:cli:update:apply",
+      "policyKey": "cli:update:apply",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:update:apply"
+    },
+    {
+      "id": "operation:cli:workspace:activate",
+      "policyKey": "cli:workspace:activate",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:activate"
+    },
+    {
+      "id": "operation:cli:workspace:archive",
+      "policyKey": "cli:workspace:archive",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:archive"
+    },
+    {
+      "id": "operation:cli:workspace:create",
+      "policyKey": "cli:workspace:create",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:create"
+    },
+    {
+      "id": "operation:cli:workspace:doctor.read",
+      "policyKey": "cli:workspace:doctor.read",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:doctor.read"
+    },
+    {
+      "id": "operation:cli:workspace:doctor.repair",
+      "policyKey": "cli:workspace:doctor.repair",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:doctor.repair"
+    },
+    {
+      "id": "operation:cli:workspace:edit",
+      "policyKey": "cli:workspace:edit",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:edit"
+    },
+    {
+      "id": "operation:cli:workspace:issue.init",
+      "policyKey": "cli:workspace:issue.init",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:issue.init"
+    },
+    {
+      "id": "operation:cli:workspace:list",
+      "policyKey": "cli:workspace:list",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:list"
+    },
+    {
+      "id": "operation:cli:workspace:migrate",
+      "policyKey": "cli:workspace:migrate",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:migrate"
+    },
+    {
+      "id": "operation:cli:workspace:pause",
+      "policyKey": "cli:workspace:pause",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:pause"
+    },
+    {
+      "id": "operation:cli:workspace:register",
+      "policyKey": "cli:workspace:register",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:register"
+    },
+    {
+      "id": "operation:cli:workspace:requirement.add",
+      "policyKey": "cli:workspace:requirement.add",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:requirement.add"
+    },
+    {
+      "id": "operation:cli:workspace:show",
+      "policyKey": "cli:workspace:show",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:show"
+    },
+    {
+      "id": "operation:cli:workspace:usage",
+      "policyKey": "cli:workspace:usage",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:usage"
+    },
+    {
+      "id": "operation:skill:roll-.changelog:generate",
+      "policyKey": "skill:roll-.changelog:generate",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.changelog:generate"
+    },
+    {
+      "id": "operation:skill:roll-.changelog:refresh_feature_catalog",
+      "policyKey": "skill:roll-.changelog:refresh_feature_catalog",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.changelog:refresh_feature_catalog"
+    },
+    {
+      "id": "operation:skill:roll-.clarify:scope",
+      "policyKey": "skill:roll-.clarify:scope",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.clarify:scope"
+    },
+    {
+      "id": "operation:skill:roll-.clarify:workspace_target",
+      "policyKey": "skill:roll-.clarify:workspace_target",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.clarify:workspace_target"
+    },
+    {
+      "id": "operation:skill:roll-.dream:record_candidates",
+      "policyKey": "skill:roll-.dream:record_candidates",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.dream:record_candidates"
+    },
+    {
+      "id": "operation:skill:roll-.dream:scan",
+      "policyKey": "skill:roll-.dream:scan",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.dream:scan"
+    },
+    {
+      "id": "operation:skill:roll-.echo:restate",
+      "policyKey": "skill:roll-.echo:restate",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.echo:restate"
+    },
+    {
+      "id": "operation:skill:roll-.qa:evaluate",
+      "policyKey": "skill:roll-.qa:evaluate",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.qa:evaluate"
+    },
+    {
+      "id": "operation:skill:roll-.review:review",
+      "policyKey": "skill:roll-.review:review",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-.review:review"
+    },
+    {
+      "id": "operation:skill:roll-build:build",
+      "policyKey": "skill:roll-build:build",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-build:build"
+    },
+    {
+      "id": "operation:skill:roll-debug:diagnose",
+      "policyKey": "skill:roll-debug:diagnose",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-debug:diagnose"
+    },
+    {
+      "id": "operation:skill:roll-debug:source_fix",
+      "policyKey": "skill:roll-debug:source_fix",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-debug:source_fix"
+    },
+    {
+      "id": "operation:skill:roll-design:design",
+      "policyKey": "skill:roll-design:design",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-design:design"
+    },
+    {
+      "id": "operation:skill:roll-doc-audit:audit",
+      "policyKey": "skill:roll-doc-audit:audit",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-doc-audit:audit"
+    },
+    {
+      "id": "operation:skill:roll-doc-audit:draft",
+      "policyKey": "skill:roll-doc-audit:draft",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-doc-audit:draft"
+    },
+    {
+      "id": "operation:skill:roll-doc-audit:index",
+      "policyKey": "skill:roll-doc-audit:index",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-doc-audit:index"
+    },
+    {
+      "id": "operation:skill:roll-doctor:diagnose",
+      "policyKey": "skill:roll-doctor:diagnose",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-doctor:diagnose"
+    },
+    {
+      "id": "operation:skill:roll-doctor:repair",
+      "policyKey": "skill:roll-doctor:repair",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-doctor:repair"
+    },
+    {
+      "id": "operation:skill:roll-fix:fix",
+      "policyKey": "skill:roll-fix:fix",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-fix:fix"
+    },
+    {
+      "id": "operation:skill:roll-idea:capture",
+      "policyKey": "skill:roll-idea:capture",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-idea:capture"
+    },
+    {
+      "id": "operation:skill:roll-loop:operate",
+      "policyKey": "skill:roll-loop:operate",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-loop:operate"
+    },
+    {
+      "id": "operation:skill:roll-notes:record",
+      "policyKey": "skill:roll-notes:record",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-notes:record"
+    },
+    {
+      "id": "operation:skill:roll-onboard:diagnose",
+      "policyKey": "skill:roll-onboard:diagnose",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-onboard:diagnose"
+    },
+    {
+      "id": "operation:skill:roll-onboard:write_plan",
+      "policyKey": "skill:roll-onboard:write_plan",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-onboard:write_plan"
+    },
+    {
+      "id": "operation:skill:roll-peer:record_evidence",
+      "policyKey": "skill:roll-peer:record_evidence",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-peer:record_evidence"
+    },
+    {
+      "id": "operation:skill:roll-peer:review",
+      "policyKey": "skill:roll-peer:review",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-peer:review"
+    },
+    {
+      "id": "operation:skill:roll-prime:supervise",
+      "policyKey": "skill:roll-prime:supervise",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-prime:supervise"
+    },
+    {
+      "id": "operation:skill:roll-propose:propose",
+      "policyKey": "skill:roll-propose:propose",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-propose:propose"
+    },
+    {
+      "id": "operation:skill:roll-review-pr:review",
+      "policyKey": "skill:roll-review-pr:review",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-review-pr:review"
+    },
+    {
+      "id": "operation:skill:roll-spar:adversarial_tdd",
+      "policyKey": "skill:roll-spar:adversarial_tdd",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-spar:adversarial_tdd"
+    },
+    {
+      "id": "operation:skill:roll-ws-create:apply",
+      "policyKey": "skill:roll-ws-create:apply",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-ws-create:apply"
+    },
+    {
+      "id": "operation:skill:roll-ws-create:preview",
+      "policyKey": "skill:roll-ws-create:preview",
+      "surface": "skill",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "validates shipped Skill manifest policy for skill:roll-ws-create:preview"
+    },
+    {
+      "id": "operation:tool:bash:bash",
+      "policyKey": "tool:bash:bash",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:bash:bash"
+    },
+    {
+      "id": "operation:tool:browser:browser.console",
+      "policyKey": "tool:browser:browser.console",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:browser:browser.console"
+    },
+    {
+      "id": "operation:tool:browser:browser.dom-query",
+      "policyKey": "tool:browser:browser.dom-query",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:browser:browser.dom-query"
+    },
+    {
+      "id": "operation:tool:browser:browser.screenshot",
+      "policyKey": "tool:browser:browser.screenshot",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:browser:browser.screenshot"
+    },
+    {
+      "id": "operation:tool:filesystem:filesystem.read",
+      "policyKey": "tool:filesystem:filesystem.read",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:filesystem:filesystem.read"
+    },
+    {
+      "id": "operation:tool:filesystem:filesystem.stat",
+      "policyKey": "tool:filesystem:filesystem.stat",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:filesystem:filesystem.stat"
+    },
+    {
+      "id": "operation:tool:filesystem:filesystem.write",
+      "policyKey": "tool:filesystem:filesystem.write",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:filesystem:filesystem.write"
+    },
+    {
+      "id": "operation:tool:git:git.commit",
+      "policyKey": "tool:git:git.commit",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:git:git.commit"
+    },
+    {
+      "id": "operation:tool:git:git.merge",
+      "policyKey": "tool:git:git.merge",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:git:git.merge"
+    },
+    {
+      "id": "operation:tool:git:git.push",
+      "policyKey": "tool:git:git.push",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:git:git.push"
+    },
+    {
+      "id": "operation:tool:git:git.status",
+      "policyKey": "tool:git:git.status",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:git:git.status"
+    },
+    {
+      "id": "operation:tool:github:github.ci",
+      "policyKey": "tool:github:github.ci",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:github:github.ci"
+    },
+    {
+      "id": "operation:tool:github:github.pr",
+      "policyKey": "tool:github:github.pr",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:github:github.pr"
+    },
+    {
+      "id": "operation:tool:mcp:mcp.call",
+      "policyKey": "tool:mcp:mcp.call",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:mcp:mcp.call"
+    },
+    {
+      "id": "operation:tool:network:network.fetch",
+      "policyKey": "tool:network:network.fetch",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:network:network.fetch"
+    },
+    {
+      "id": "operation:tool:physical:physical.screenshot",
+      "policyKey": "tool:physical:physical.screenshot",
+      "surface": "tool",
+      "testFile": "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      "testName": "rejects missing execution context before adapter effects for tool:physical:physical.screenshot"
     }
   ],
   "operations": [
     {
       "policyKey": "cli:agent:cast",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:agent:cast"
     },
     {
       "policyKey": "cli:agent:default",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:default"
     },
     {
       "policyKey": "cli:agent:disable",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:disable"
     },
     {
       "policyKey": "cli:agent:enable",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:enable"
     },
     {
       "policyKey": "cli:agent:list",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:list"
     },
     {
       "policyKey": "cli:agent:migrate",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:migrate"
     },
     {
       "policyKey": "cli:agent:readiness",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:readiness"
     },
     {
       "policyKey": "cli:agent:set",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:set"
     },
     {
       "policyKey": "cli:agent:use",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:use"
     },
     {
       "policyKey": "cli:agent:view",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:agent:view"
     },
     {
       "policyKey": "cli:agent:workspace",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:agent:workspace"
     },
     {
       "policyKey": "cli:attest:audit",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:attest:audit"
     },
     {
       "policyKey": "cli:attest:render",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:attest:render"
     },
     {
       "policyKey": "cli:backlog:block",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:block"
     },
     {
       "policyKey": "cli:backlog:claim",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:claim"
     },
     {
       "policyKey": "cli:backlog:defer",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:defer"
     },
     {
       "policyKey": "cli:backlog:lint",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:lint"
     },
     {
       "policyKey": "cli:backlog:promote",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:promote"
     },
     {
       "policyKey": "cli:backlog:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:read"
     },
     {
       "policyKey": "cli:backlog:show",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:show"
     },
     {
       "policyKey": "cli:backlog:sync",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:sync"
     },
     {
       "policyKey": "cli:backlog:unblock",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:unblock"
     },
     {
       "policyKey": "cli:backlog:unstick",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:backlog:unstick"
     },
     {
       "policyKey": "cli:capture:local-window",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:capture:local-window"
     },
     {
       "policyKey": "cli:capture:migrate",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:capture:migrate"
     },
     {
       "policyKey": "cli:capture:refresh",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:capture:refresh"
     },
     {
       "policyKey": "cli:capture:repair",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:capture:repair"
     },
     {
       "policyKey": "cli:capture:status",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:capture:status"
     },
     {
       "policyKey": "cli:config:prices",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:config:prices"
     },
     {
       "policyKey": "cli:config:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:config:read"
     },
     {
       "policyKey": "cli:config:tune",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:config:tune"
     },
     {
       "policyKey": "cli:config:write",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:config:write"
     },
     {
       "policyKey": "cli:context:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:context:read"
     },
     {
       "policyKey": "cli:context:status",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:context:status"
     },
     {
       "policyKey": "cli:context:usage",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:context:usage"
     },
     {
       "policyKey": "cli:delivery:list",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:delivery:list"
     },
     {
       "policyKey": "cli:delivery:reconcile",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:delivery:reconcile"
     },
     {
       "policyKey": "cli:delivery:show",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:delivery:show"
     },
     {
       "policyKey": "cli:delivery:usage",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:delivery:usage"
     },
     {
       "policyKey": "cli:design:design",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:design:design"
     },
     {
       "policyKey": "cli:doctor:diagnose",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:doctor:diagnose"
     },
     {
       "policyKey": "cli:doctor:language",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:doctor:language"
     },
     {
       "policyKey": "cli:doctor:pardon",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:doctor:pardon"
     },
     {
       "policyKey": "cli:doctor:repair-protection",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:doctor:repair-protection"
     },
     {
       "policyKey": "cli:doctor:skills",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:doctor:skills"
     },
     {
       "policyKey": "cli:doctor:tools",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:doctor:tools"
     },
     {
       "policyKey": "cli:help:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:help:read"
     },
     {
       "policyKey": "cli:idea:capture",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:idea:capture"
     },
     {
       "policyKey": "cli:index:rebuild",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:index:rebuild"
     },
     {
       "policyKey": "cli:init:onboard",
-      "cases": [
-        "cli.public-boundary",
-        "legacy.explicit-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:init:onboard"
     },
     {
       "policyKey": "cli:loop:adversarial",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:adversarial"
     },
     {
       "policyKey": "cli:loop:agent-routes",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:agent-routes"
     },
     {
       "policyKey": "cli:loop:alert",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:alert"
     },
     {
       "policyKey": "cli:loop:cycle",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:cycle"
     },
     {
       "policyKey": "cli:loop:cycles",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:cycles"
     },
     {
       "policyKey": "cli:loop:enforce-tcr",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:enforce-tcr"
     },
     {
       "policyKey": "cli:loop:eval",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:eval"
     },
     {
       "policyKey": "cli:loop:events",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:events"
     },
     {
       "policyKey": "cli:loop:exhaustion-split",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:exhaustion-split"
     },
     {
       "policyKey": "cli:loop:fallback.start",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:fallback.start"
     },
     {
       "policyKey": "cli:loop:fallback.status",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:fallback.status"
     },
     {
       "policyKey": "cli:loop:fallback.stop",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:fallback.stop"
     },
     {
       "policyKey": "cli:loop:fmt",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:fmt"
     },
     {
       "policyKey": "cli:loop:gc",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:gc"
     },
     {
       "policyKey": "cli:loop:go",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:go"
     },
     {
       "policyKey": "cli:loop:goal",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:goal"
     },
     {
       "policyKey": "cli:loop:hotfix-head-context",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:hotfix-head-context"
     },
     {
       "policyKey": "cli:loop:log",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:log"
     },
     {
       "policyKey": "cli:loop:mute",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:mute"
     },
     {
       "policyKey": "cli:loop:notify",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:notify"
     },
     {
       "policyKey": "cli:loop:now",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:now"
     },
     {
       "policyKey": "cli:loop:off",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:off"
     },
     {
       "policyKey": "cli:loop:on",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:on"
     },
     {
       "policyKey": "cli:loop:pardon-skip-list",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:pardon-skip-list"
     },
     {
       "policyKey": "cli:loop:pause",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:pause"
     },
     {
       "policyKey": "cli:loop:precheck-ci",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:precheck-ci"
     },
     {
       "policyKey": "cli:loop:reconcile",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:reconcile"
     },
     {
       "policyKey": "cli:loop:reconcile-pending",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:reconcile-pending"
     },
     {
       "policyKey": "cli:loop:recover",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:recover"
     },
     {
       "policyKey": "cli:loop:reset",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:reset"
     },
     {
       "policyKey": "cli:loop:resume",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:resume"
     },
     {
       "policyKey": "cli:loop:review-resize",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:review-resize"
     },
     {
       "policyKey": "cli:loop:run-once",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:run-once"
     },
     {
       "policyKey": "cli:loop:runs",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:runs"
     },
     {
       "policyKey": "cli:loop:self-downgrade",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:self-downgrade"
     },
     {
       "policyKey": "cli:loop:signals",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:signals"
     },
     {
       "policyKey": "cli:loop:status",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:status"
     },
     {
       "policyKey": "cli:loop:story",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:story"
     },
     {
       "policyKey": "cli:loop:test",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:test"
     },
     {
       "policyKey": "cli:loop:unmute",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:unmute"
     },
     {
       "policyKey": "cli:loop:watch",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:loop:watch"
     },
     {
       "policyKey": "cli:next:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:next:read"
     },
     {
       "policyKey": "cli:north:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:north:read"
     },
     {
       "policyKey": "cli:release:consistency",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:release:consistency"
     },
     {
       "policyKey": "cli:release:release",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:release:release"
     },
     {
       "policyKey": "cli:release:showcase",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:release:showcase"
     },
     {
       "policyKey": "cli:release:verify",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:release:verify"
     },
     {
       "policyKey": "cli:setup:offboard",
-      "cases": [
-        "cli.public-boundary",
-        "legacy.explicit-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:setup:offboard"
     },
     {
       "policyKey": "cli:setup:setup",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:setup:setup"
     },
     {
       "policyKey": "cli:setup:skills",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:setup:skills"
     },
     {
       "policyKey": "cli:status:ci",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:status:ci"
     },
     {
       "policyKey": "cli:status:pulse",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:status:pulse"
     },
     {
       "policyKey": "cli:status:read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:status:read"
     },
     {
       "policyKey": "cli:story:new",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:story:new"
     },
     {
       "policyKey": "cli:story:validate",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:story:validate"
     },
     {
       "policyKey": "cli:test:run",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:test:run"
     },
     {
       "policyKey": "cli:truth:audit",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:truth:audit"
     },
     {
       "policyKey": "cli:truth:query",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:truth:query"
     },
     {
       "policyKey": "cli:update:apply",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:update:apply"
     },
     {
       "policyKey": "cli:workspace:activate",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:activate"
     },
     {
       "policyKey": "cli:workspace:archive",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:archive"
     },
     {
       "policyKey": "cli:workspace:create",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.create-recovery"
-      ]
+      "caseId": "operation:cli:workspace:create"
     },
     {
       "policyKey": "cli:workspace:doctor.read",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:doctor.read"
     },
     {
       "policyKey": "cli:workspace:doctor.repair",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:doctor.repair"
     },
     {
       "policyKey": "cli:workspace:edit",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "workspace.discovery-clarify",
-        "workspace.edit-transaction"
-      ]
+      "caseId": "operation:cli:workspace:edit"
     },
     {
       "policyKey": "cli:workspace:issue.init",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:issue.init"
     },
     {
       "policyKey": "cli:workspace:list",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:workspace:list"
     },
     {
       "policyKey": "cli:workspace:migrate",
-      "cases": [
-        "cli.public-boundary",
-        "legacy.explicit-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence"
-      ]
+      "caseId": "operation:cli:workspace:migrate"
     },
     {
       "policyKey": "cli:workspace:pause",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:pause"
     },
     {
       "policyKey": "cli:workspace:register",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:workspace:register"
     },
     {
       "policyKey": "cli:workspace:requirement.add",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:requirement.add"
     },
     {
       "policyKey": "cli:workspace:show",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure",
-        "selector.alias-equivalence",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:cli:workspace:show"
     },
     {
       "policyKey": "cli:workspace:usage",
-      "cases": [
-        "cli.public-boundary",
-        "registry.policy-closure"
-      ]
+      "caseId": "operation:cli:workspace:usage"
     },
     {
       "policyKey": "skill:roll-.changelog:generate",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.changelog:generate"
     },
     {
       "policyKey": "skill:roll-.changelog:refresh_feature_catalog",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.changelog:refresh_feature_catalog"
     },
     {
       "policyKey": "skill:roll-.clarify:scope",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.clarify:scope"
     },
     {
       "policyKey": "skill:roll-.clarify:workspace_target",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.clarify:workspace_target"
     },
     {
       "policyKey": "skill:roll-.dream:record_candidates",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.dream:record_candidates"
     },
     {
       "policyKey": "skill:roll-.dream:scan",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.dream:scan"
     },
     {
       "policyKey": "skill:roll-.echo:restate",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-.echo:restate"
     },
     {
       "policyKey": "skill:roll-.qa:evaluate",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.qa:evaluate"
     },
     {
       "policyKey": "skill:roll-.review:review",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-.review:review"
     },
     {
       "policyKey": "skill:roll-build:build",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-build:build"
     },
     {
       "policyKey": "skill:roll-debug:diagnose",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-debug:diagnose"
     },
     {
       "policyKey": "skill:roll-debug:source_fix",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-debug:source_fix"
     },
     {
       "policyKey": "skill:roll-design:design",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-design:design"
     },
     {
       "policyKey": "skill:roll-doc-audit:audit",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-doc-audit:audit"
     },
     {
       "policyKey": "skill:roll-doc-audit:draft",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-doc-audit:draft"
     },
     {
       "policyKey": "skill:roll-doc-audit:index",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-doc-audit:index"
     },
     {
       "policyKey": "skill:roll-doctor:diagnose",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-doctor:diagnose"
     },
     {
       "policyKey": "skill:roll-doctor:repair",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-doctor:repair"
     },
     {
       "policyKey": "skill:roll-fix:fix",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-fix:fix"
     },
     {
       "policyKey": "skill:roll-idea:capture",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-idea:capture"
     },
     {
       "policyKey": "skill:roll-loop:operate",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-loop:operate"
     },
     {
       "policyKey": "skill:roll-notes:record",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-notes:record"
     },
     {
       "policyKey": "skill:roll-onboard:diagnose",
-      "cases": [
-        "legacy.explicit-boundary",
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-onboard:diagnose"
     },
     {
       "policyKey": "skill:roll-onboard:write_plan",
-      "cases": [
-        "legacy.explicit-boundary",
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-onboard:write_plan"
     },
     {
       "policyKey": "skill:roll-peer:record_evidence",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-peer:record_evidence"
     },
     {
       "policyKey": "skill:roll-peer:review",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-peer:review"
     },
     {
       "policyKey": "skill:roll-prime:supervise",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-prime:supervise"
     },
     {
       "policyKey": "skill:roll-propose:propose",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-propose:propose"
     },
     {
       "policyKey": "skill:roll-review-pr:review",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-review-pr:review"
     },
     {
       "policyKey": "skill:roll-spar:adversarial_tdd",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:skill:roll-spar:adversarial_tdd"
     },
     {
       "policyKey": "skill:roll-ws-create:apply",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-ws-create:apply"
     },
     {
       "policyKey": "skill:roll-ws-create:preview",
-      "cases": [
-        "registry.policy-closure",
-        "skill.handoff-authority"
-      ]
+      "caseId": "operation:skill:roll-ws-create:preview"
     },
     {
       "policyKey": "tool:bash:bash",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:bash:bash"
     },
     {
       "policyKey": "tool:browser:browser.console",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:browser:browser.console"
     },
     {
       "policyKey": "tool:browser:browser.dom-query",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:browser:browser.dom-query"
     },
     {
       "policyKey": "tool:browser:browser.screenshot",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:browser:browser.screenshot"
     },
     {
       "policyKey": "tool:filesystem:filesystem.read",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:filesystem:filesystem.read"
     },
     {
       "policyKey": "tool:filesystem:filesystem.stat",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:filesystem:filesystem.stat"
     },
     {
       "policyKey": "tool:filesystem:filesystem.write",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:filesystem:filesystem.write"
     },
     {
       "policyKey": "tool:git:git.commit",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:git:git.commit"
     },
     {
       "policyKey": "tool:git:git.merge",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:git:git.merge"
     },
     {
       "policyKey": "tool:git:git.push",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:git:git.push"
     },
     {
       "policyKey": "tool:git:git.status",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:git:git.status"
     },
     {
       "policyKey": "tool:github:github.ci",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:github:github.ci"
     },
     {
       "policyKey": "tool:github:github.pr",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:github:github.pr"
     },
     {
       "policyKey": "tool:mcp:mcp.call",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:mcp:mcp.call"
     },
     {
       "policyKey": "tool:network:network.fetch",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:network:network.fetch"
     },
     {
       "policyKey": "tool:physical:physical.screenshot",
-      "cases": [
-        "registry.policy-closure",
-        "tool.context-envelope",
-        "workspace.discovery-clarify"
-      ]
+      "caseId": "operation:tool:physical:physical.screenshot"
+    }
+  ],
+  "crossCuttingCases": [
+    {
+      "id": "matrix.registry-closure",
+      "testFile": "packages/cli/test/workspace-surface-inventory.test.ts",
+      "testName": "closes the registered inventory and matches the stable machine artifact"
+    },
+    {
+      "id": "boundary.alias-equivalence",
+      "testFile": "packages/cli/test/workspace-context.critical.e2e.test.ts",
+      "testName": "keeps full command and selector aliases byte-equivalent from a poisoned arbitrary cwd"
+    },
+    {
+      "id": "boundary.fail-closed",
+      "testFile": "packages/cli/test/workspace-context.critical.e2e.test.ts",
+      "testName": "fails closed on duplicate/missing selectors and retired init without mutation"
+    },
+    {
+      "id": "selector.complete-tree",
+      "testFile": "packages/cli/test/workspace-alias.difftest.test.ts",
+      "testName": "canonicalizes every representative workspace subtree through one handler"
+    },
+    {
+      "id": "workspace.discovery-clarify",
+      "testFile": "packages/cli/test/workspace-interaction.e2e.test.ts",
+      "testName": "US-WS-030 direct Workspace clarification"
+    },
+    {
+      "id": "workspace.create-authorization",
+      "testFile": "packages/cli/test/workspace-create.e2e.test.ts",
+      "testName": "previews, applies, and reuses one complete Workspace through the built CLI"
+    },
+    {
+      "id": "workspace.edit-transaction",
+      "testFile": "packages/cli/test/workspace-edit.e2e.test.ts",
+      "testName": "rejects a stale preview without overwriting the concurrent manifest"
+    },
+    {
+      "id": "tool.authority-isolation",
+      "testFile": "packages/cli/test/tool-context-invocation.e2e.test.ts",
+      "testName": "freezes the cycle context and carries correlation through ToolRegistry into bash"
+    },
+    {
+      "id": "mapping.semantic-closure",
+      "testFile": "packages/cli/test/workspace-context-case-map.test.ts",
+      "testName": "binds every detailed design AC to Story ACs and concrete executable cases"
     }
   ]
 }

@@ -304,7 +304,7 @@ export async function dispatch(
           command: operation.command,
           route: operation.route,
           canonicalCommand: operation.canonicalCommand,
-          exampleArgs: operation.exampleArgs ?? [],
+          exampleArgs: operation.exampleArgs,
           acceptsWorkspaceSelector: true,
         };
         const parsed = parseCanonicalWorkspaceSelectorArgs(rest);

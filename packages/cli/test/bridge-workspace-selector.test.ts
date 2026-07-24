@@ -489,8 +489,8 @@ describe("US-WS-022 bridge Workspace selector normalization", () => {
       return 45;
     }, {
       operations: [
-        cliMatchedOperation("status", "one", [], () => true),
-        cliMatchedOperation("status", "two", [], () => true),
+        cliMatchedOperation("status", "one", [], [], () => true),
+        cliMatchedOperation("status", "two", [], [], () => true),
       ],
     });
     await expect(dispatch(["status"])).resolves.toEqual({ status: 1 });

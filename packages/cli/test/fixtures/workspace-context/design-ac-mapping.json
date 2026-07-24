@@ -1,0 +1,116 @@
+{
+  "schema": "roll.workspace-context-design-ac-mapping/v1",
+  "story": {
+    "id": "US-WS-040",
+    "acceptanceCriteria": [
+      { "id": "AC1", "topic": "operation_matrix_closure" },
+      { "id": "AC2", "topic": "public_alias_equivalence" },
+      { "id": "AC3", "topic": "create_only_and_recovery" },
+      { "id": "AC4", "topic": "metadata_edit_transaction" },
+      { "id": "AC5", "topic": "requirement_match_and_clarification" },
+      { "id": "AC6", "topic": "multi_workspace_repo_authority_isolation" },
+      { "id": "AC7", "topic": "fail_closed_interaction_boundaries" },
+      { "id": "AC8", "topic": "isolated_no_external_authority" },
+      { "id": "AC9", "topic": "focused_audit_and_ci_gates" },
+      { "id": "AC10", "topic": "design_story_evidence_mapping" }
+    ]
+  },
+  "designAcceptanceCriteria": [
+    {
+      "id": "D15-01",
+      "topic": "idea_product_decisions",
+      "storyAcceptance": ["AC10"],
+      "evidenceCaseIds": ["mapping.semantic-closure"]
+    },
+    {
+      "id": "D15-02",
+      "topic": "complete_ws_tree_and_selector_alias",
+      "storyAcceptance": ["AC2"],
+      "evidenceCaseIds": ["selector.complete-tree", "boundary.alias-equivalence"]
+    },
+    {
+      "id": "D15-03",
+      "topic": "create_only_retired_init",
+      "storyAcceptance": ["AC3"],
+      "evidenceCaseIds": ["workspace.create-authorization", "boundary.fail-closed"]
+    },
+    {
+      "id": "D15-04",
+      "topic": "single_active_requirement_mismatch",
+      "storyAcceptance": ["AC5"],
+      "evidenceCaseIds": ["workspace.discovery-clarify"]
+    },
+    {
+      "id": "D15-05",
+      "topic": "deterministic_and_semantic_requirement_evidence",
+      "storyAcceptance": ["AC5"],
+      "evidenceCaseIds": ["workspace.discovery-clarify"]
+    },
+    {
+      "id": "D15-06",
+      "topic": "edit_preview_lock_digest_atomic_recovery",
+      "storyAcceptance": ["AC4"],
+      "evidenceCaseIds": ["workspace.edit-transaction"]
+    },
+    {
+      "id": "D15-07",
+      "topic": "existing_issue_byte_preservation",
+      "storyAcceptance": ["AC4"],
+      "evidenceCaseIds": ["workspace.edit-transaction"]
+    },
+    {
+      "id": "D15-08",
+      "topic": "all_cli_skill_tool_operations_have_policy",
+      "storyAcceptance": ["AC1", "AC6", "AC8"],
+      "evidenceCaseIds": [
+        "matrix.registry-closure",
+        "operation:cli:workspace:create",
+        "operation:skill:roll-build:build",
+        "operation:tool:github:github.pr",
+        "operation:tool:mcp:mcp.call"
+      ]
+    },
+    {
+      "id": "D15-09",
+      "topic": "noninteractive_mutation_fail_closed",
+      "storyAcceptance": ["AC7"],
+      "evidenceCaseIds": ["boundary.fail-closed"]
+    },
+    {
+      "id": "D15-10",
+      "topic": "doc_refresh_and_compatibility_matrix_gate",
+      "storyAcceptance": ["AC1", "AC9", "AC10"],
+      "evidenceCaseIds": ["matrix.registry-closure", "mapping.semantic-closure"]
+    },
+    {
+      "id": "D15-11",
+      "topic": "legacy_pending_recovery_without_init",
+      "storyAcceptance": ["AC3"],
+      "evidenceCaseIds": ["workspace.create-authorization", "boundary.fail-closed"]
+    },
+    {
+      "id": "D15-12",
+      "topic": "existing_requirement_and_cycle_repository_identity",
+      "storyAcceptance": ["AC6"],
+      "evidenceCaseIds": ["tool.authority-isolation"]
+    },
+    {
+      "id": "D15-13",
+      "topic": "agent_clarify_stops_before_mutation",
+      "storyAcceptance": ["AC5", "AC7"],
+      "evidenceCaseIds": ["workspace.discovery-clarify", "boundary.fail-closed"]
+    },
+    {
+      "id": "D15-14",
+      "topic": "direct_and_agent_shared_clarification_contract",
+      "storyAcceptance": ["AC5", "AC7"],
+      "evidenceCaseIds": ["workspace.discovery-clarify"]
+    },
+    {
+      "id": "D15-15",
+      "topic": "create_intent_is_not_apply_authorization",
+      "storyAcceptance": ["AC3", "AC5"],
+      "evidenceCaseIds": ["workspace.create-authorization", "workspace.discovery-clarify"]
+    }
+  ]
+}

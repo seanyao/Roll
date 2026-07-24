@@ -116,7 +116,7 @@ export function policyWorkspaceSelectorOperations(
     .map((policy) => {
       const registration = registrations.find((entry) =>
         entry.command === policy.id && entry.operation === policy.operation);
-      if (registration === undefined || registration.exampleArgs === undefined) {
+      if (registration === undefined) {
         throw new Error(`workspace-context-policy: selector policy lacks a registered route for ${policy.id}:${policy.operation}`);
       }
       return {

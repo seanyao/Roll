@@ -158,8 +158,8 @@ describe("US-WS-032 actual Workspace surface inventory", () => {
     expect(cliOperationForArgs("config", ["future"], config)).toBeUndefined();
 
     const ambiguous = [
-      cliMatchedOperation("status", "one", [], () => true),
-      cliMatchedOperation("status", "two", [], () => true),
+      cliMatchedOperation("status", "one", [], [], () => true),
+      cliMatchedOperation("status", "two", [], [], () => true),
     ];
     expect(cliOperationForArgs("status", [], ambiguous)).toBeUndefined();
   });

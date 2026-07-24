@@ -187,7 +187,8 @@ export interface CliCommandOperationRegistration {
   readonly operation: string;
   readonly route: readonly string[];
   readonly canonicalCommand: string;
-  readonly exampleArgs?: readonly string[];
+  /** One matcher-only argument shape that must resolve back to this registration. */
+  readonly exampleArgs: readonly string[];
   readonly supportsWorkspaceSelector: boolean;
   /** Root operation may consume positional operands instead of a nested route token. */
   readonly acceptsPositionalArgs?: boolean;
@@ -231,7 +232,7 @@ export function cliOperation(
     operation: name,
     route,
     canonicalCommand: `roll ${command}${route.length === 0 ? "" : ` ${route.join(" ")}`}`,
-    ...(exampleArgs === undefined ? {} : { exampleArgs }),
+    exampleArgs: exampleArgs ?? (acceptsPositionalArgs ? ["operation-probe"] : [...route]),
     supportsWorkspaceSelector: selector,
     ...(acceptsPositionalArgs ? { acceptsPositionalArgs: true } : {}),
   };
@@ -248,9 +249,10 @@ export function cliMatchedOperation(
   command: string,
   name: string,
   route: readonly string[],
+  exampleArgs: readonly string[],
   matchesArgs: (args: readonly string[]) => boolean,
 ): CliCommandOperationRegistration {
-  return { ...cliOperation(command, name, route), matchesArgs };
+  return { ...cliOperation(command, name, route, false, exampleArgs), matchesArgs };
 }
 
 export function cliMatchedSelectorOperation(
@@ -301,7 +303,7 @@ export function workspaceSelectorOperations(
     command: entry.command,
     route: entry.route,
     canonicalCommand: entry.canonicalCommand,
-    exampleArgs: entry.exampleArgs ?? [],
+    exampleArgs: entry.exampleArgs,
     acceptsWorkspaceSelector: true as const,
   }));
   validateWorkspaceSelectorOperations(decisions);
