@@ -108,7 +108,7 @@ function fixture(): {
 }
 
 describe("US-WS-033 — Workspace cycle context handoff", () => {
-  it("starts from /tmp by exact Story requirement and prints stable Workspace/Story correlation", async () => {
+  it("US-WS-037: starts from /tmp by exact Story requirement and prints stable Workspace/Story/repository correlation", async () => {
     const rollHome = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-home-")));
     const arbitraryCwd = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-cwd-")));
     const target = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-target-")));
@@ -160,7 +160,7 @@ describe("US-WS-033 — Workspace cycle context handoff", () => {
     process.stdout.write = ((chunk: string | Uint8Array) => (chunks.push(String(chunk)), true)) as typeof process.stdout.write;
     let code: number;
     try {
-      code = await loopRunOnceCommand(["--dry-run"]);
+      code = await loopRunOnceCommand(["--repository", binding.alias, "--dry-run"]);
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -169,6 +169,7 @@ describe("US-WS-033 — Workspace cycle context handoff", () => {
     expect(chunks.join("")).toContain("# workspace: roll");
     expect(chunks.join("")).toContain("# story:   US-WS-033");
     expect(chunks.join("")).toContain("# context-source: requirement_discovery");
+    expect(chunks.join("")).toContain(`# repository: ${binding.repoId} (${binding.alias})`);
     expect(chunks.join("")).not.toContain("# workspace: decoy");
   });
 

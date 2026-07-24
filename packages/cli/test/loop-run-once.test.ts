@@ -183,6 +183,10 @@ describe("loop run-once CLI wiring", () => {
     expect(RUN_ONCE_USAGE).toContain("--race");
   });
 
+  it("US-WS-037: usage exposes the public repository selector carrier", () => {
+    expect(RUN_ONCE_USAGE).toContain("--repository <repoId|alias>");
+  });
+
   it("US-DELIV-013: published help hands merge progression to the reconciler", () => {
     expect(PUBLISHED_DELIVERY_MESSAGE).toContain("Delivery Reconciler");
     expect(PUBLISHED_DELIVERY_MESSAGE).toContain("交付对账器");

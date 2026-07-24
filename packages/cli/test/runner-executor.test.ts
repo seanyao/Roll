@@ -13,7 +13,7 @@ import type { CycleCommand, CycleContext, CycleEvent, RollEvent, WarmSessionEntr
 import { AGENTS } from "../../core/src/agent/specs.js";
 import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { classifyComplexity, cycleStep, initialCycleState, mapV2Status, readLeases } from "@roll/core";
-import { AWAITING_REVIEW_STATUS_MARKER, REPOSITORY_BINDING_V1, STATUS_MARKER, repositoryIdFromRemote } from "@roll/spec";
+import { AWAITING_REVIEW_STATUS_MARKER, REPOSITORY_BINDING_V1, STATUS_MARKER, WORKSPACE_EXECUTION_CONTEXT_V1, repositoryIdFromRemote } from "@roll/spec";
 import { agentWritableRoots, checkMainDirty, planAdversarial, recordExecutionProfile, writeEvaluatorArtifact, runDesignerStage } from "../src/runner/executor.js";
 import { submoduleAgentWritableRoots } from "../src/runner/worktree-bootstrap.js";
 import { evaluateReviewScoreGate, readLatestStoryPeerScore, writeReviewScoreNote } from "../src/lib/review-score.js";
@@ -81,6 +81,83 @@ const CTX: CycleContext = {
   agent: "claude",
   model: "",
 };
+
+function workspaceSpawnContext(): {
+  readonly ctx: CycleContext;
+  readonly productRepoId: string;
+  readonly skillsRepoId: string;
+  readonly productWorktree: string;
+} {
+  const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-037-spawn-")));
+  execDirs.push(workspaceRoot);
+  const storyId = "US-WS-037";
+  const issueRoot = join(workspaceRoot, "issues", storyId);
+  const remotes = [
+    ["product", "git@github.com:acme/product.git"],
+    ["skills", "git@github.com:acme/skills.git"],
+  ] as const;
+  const bindings = remotes.map(([alias, remote]) => {
+    const identity = repositoryIdFromRemote(remote);
+    if (!identity.ok) throw new Error("fixture remote must be canonical");
+    return {
+      schema: REPOSITORY_BINDING_V1,
+      repoId: identity.value,
+      alias,
+      remote,
+      integrationBranch: "main",
+      provider: "github" as const,
+      workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+    };
+  });
+  const repositories = Object.fromEntries(bindings.map((binding, index) => {
+    const worktreePath = join(issueRoot, binding.alias);
+    mkdirSync(worktreePath, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: worktreePath });
+    return [binding.repoId, {
+      repoId: binding.repoId,
+      alias: binding.alias,
+      access: "write" as const,
+      requiredDelivery: true,
+      noChangePolicy: "changes_required" as const,
+      worktreePath,
+      baseSha: `${index + 1}`.repeat(40),
+      headSha: `${index + 3}`.repeat(40),
+      commands: { test: [], integration: [] },
+    }];
+  }));
+  const repositoryExecution = { workspaceId: "roll", issueRoot, repositories };
+  const workspaceExecution = {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: { workspaceId: "roll", root: workspaceRoot, canonicalRoot: workspaceRoot, lifecycle: "active" as const },
+    resolution: { source: "explicit" as const, evidence: [] },
+    bindings,
+    issue: { storyId, manifestPath: join(issueRoot, "manifest.json"), execution: repositoryExecution },
+    authorities: {
+      backlog: join(workspaceRoot, "backlog", "index.md"),
+      features: join(workspaceRoot, "features"),
+      design: join(workspaceRoot, "design"),
+      requirements: join(workspaceRoot, "requirements"),
+      policy: join(workspaceRoot, "policy.yaml"),
+      evidence: join(workspaceRoot, "evidence"),
+      toolDumps: join(workspaceRoot, "runtime", "tool-dumps"),
+      events: join(workspaceRoot, "runtime", "events"),
+      runtime: join(workspaceRoot, "runtime"),
+      locks: join(workspaceRoot, "runtime", "locks"),
+    },
+  };
+  return {
+    ctx: {
+      ...CTX,
+      storyId,
+      repositoryExecution,
+      workspaceExecution,
+      workspaceContextScope: "issue_required",
+    } as CycleContext,
+    productRepoId: bindings[0]?.repoId ?? "",
+    skillsRepoId: bindings[1]?.repoId ?? "",
+    productWorktree: repositories[bindings[0]?.repoId ?? ""]?.worktreePath ?? "",
+  };
+}
 
 describe("buildClaudeArgv — v2 flag set, fixed arg order", () => {
   it("binds the prompt to -p (v2's prompt-after---add-dir order is a live bug vs claude ≥2.1.x)", () => {
@@ -2574,6 +2651,136 @@ describe("executeCommand — command → executor mapping", () => {
     const { ports } = fakePorts();
     const r = await executeCommand({ kind: "spawn_agent", agent: "claude", attempt: 1 }, ports, CTX);
     expect(r.event).toEqual({ type: "agent_exited", exit: 0, timedOut: false });
+  });
+
+  it.each([
+    { kind: "spawn_agent", agent: "claude", attempt: 1 } as const,
+    { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
+  ])("US-WS-037: $kind fails closed before agentSpawn when required Workspace context is missing", async (command) => {
+    const { ports } = fakePorts();
+    const result = await executeCommand(command, ports, {
+      ...CTX,
+      workspaceContextScope: "issue_required",
+    } as CycleContext);
+
+    expect(ports.agentSpawn).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({ exit: 1, timedOut: false });
+  });
+
+  it.each([
+    { kind: "spawn_agent", agent: "claude", attempt: 1 } as const,
+    { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
+  ])("US-WS-037: $kind retains explicitly classified legacy migration execution", async (command) => {
+    const { ports } = fakePorts();
+    await executeCommand(command, ports, {
+      ...CTX,
+      workspaceContextScope: "legacy_migration_only",
+    } as CycleContext);
+
+    expect(ports.agentSpawn).toHaveBeenCalledOnce();
+  });
+
+  it("US-WS-037: multi-repository spawn_role requires an explicit repository selector", async () => {
+    const fixture = workspaceSpawnContext();
+    const { ports } = fakePorts();
+    const result = await executeCommand(
+      { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 },
+      ports,
+      fixture.ctx,
+    );
+
+    expect(ports.agentSpawn).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({ type: "role_exited", exit: 1, timedOut: false });
+  });
+
+  it.each(["repoId", "alias"] as const)(
+    "US-WS-037: spawn_role canonicalizes a repository %s into command, prompt and env",
+    async (selectorKind) => {
+      const fixture = workspaceSpawnContext();
+      const selector = selectorKind === "repoId" ? fixture.productRepoId : "product";
+      const { ports } = fakePorts();
+      await executeCommand(
+        { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 },
+        ports,
+        { ...fixture.ctx, repositorySelector: selector } as CycleContext,
+      );
+
+      expect(ports.agentSpawn).toHaveBeenCalledWith("codex", expect.objectContaining({
+        cwd: fixture.productWorktree,
+        skillBody: expect.stringContaining(`Selected repository: ${fixture.productRepoId} (product)`),
+        env: expect.objectContaining({
+          ROLL_REPOSITORY_ID: fixture.productRepoId,
+          ROLL_REPOSITORY_ALIAS: "product",
+        }),
+      }));
+    },
+  );
+
+  it.each(["story", "execution"] as const)(
+    "US-WS-037: spawn_role rejects %s identity drift before agentSpawn",
+    async (mismatch) => {
+      const fixture = workspaceSpawnContext();
+      const ctx = mismatch === "story"
+        ? { ...fixture.ctx, storyId: "US-OTHER-001", repositorySelector: fixture.productRepoId }
+        : {
+            ...fixture.ctx,
+            repositorySelector: fixture.productRepoId,
+            repositoryExecution: {
+              ...(fixture.ctx.repositoryExecution ?? { workspaceId: "roll", issueRoot: "", repositories: {} }),
+              workspaceId: "other-workspace",
+            },
+          };
+      const { ports } = fakePorts();
+      const result = await executeCommand(
+        { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 },
+        ports,
+        ctx as CycleContext,
+      );
+
+      expect(ports.agentSpawn).not.toHaveBeenCalled();
+      expect(result.event).toMatchObject({ type: "role_exited", exit: 1, timedOut: false });
+    },
+  );
+
+  it("US-WS-037: retry and cwd drift preserve one semantic Workspace/repository identity", async () => {
+    const fixture = workspaceSpawnContext();
+    const spawns: AgentSpawnOptions[] = [];
+    const first = fakePorts({
+      agentSpawn: vi.fn(async (_agent: string, options: AgentSpawnOptions) => {
+        spawns.push(options);
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }),
+    });
+    const secondBase = fakePorts();
+    const second = fakePorts({
+      repoCwd: "/different/scheduler/cwd",
+      paths: { ...secondBase.ports.paths, worktreePath: "/different/cycle/cwd" },
+      agentSpawn: vi.fn(async (_agent: string, options: AgentSpawnOptions) => {
+        spawns.push(options);
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }),
+    });
+
+    await executeCommand(
+      { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 },
+      first.ports,
+      { ...fixture.ctx, repositorySelector: "product" } as CycleContext,
+    );
+    await executeCommand(
+      { kind: "spawn_role", role: "implementer", agent: "codex", round: 1 },
+      second.ports,
+      { ...fixture.ctx, repositorySelector: fixture.productRepoId } as CycleContext,
+    );
+
+    expect(spawns).toHaveLength(2);
+    const identities = spawns.map((options) => ({
+      cwd: options.cwd,
+      repositoryId: options.env?.["ROLL_REPOSITORY_ID"],
+      workspace: JSON.parse(options.env?.["ROLL_WORKSPACE_EXECUTION_CONTEXT"] ?? "null"),
+      promptContext: JSON.parse(/context-json: (\{.*\})/u.exec(options.skillBody)?.[1] ?? "null"),
+    }));
+    expect(identities[0]).toEqual(identities[1]);
+    expect(identities[0]?.workspace).toEqual(identities[0]?.promptContext);
   });
 
   it("routes a US builder to the roll-build skill instead of the loop scheduler skill", async () => {
@@ -7413,7 +7620,7 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
     expect(spawns[0]?.cwd).toBe(subWt);
   });
 
-  it("US-WS-033: pick_story persists the frozen Issue context before any agent spawn", async () => {
+  it("US-WS-033/US-WS-037: pick_story persists frozen Issue context and canonical repository selection", async () => {
     const runtimeRoot = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws-033-persist-")));
     execDirs.push(runtimeRoot);
     const workspaceRoot = join(runtimeRoot, "workspace");
@@ -7485,7 +7692,13 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
     const result = await executeCommand(
       { kind: "pick_story" },
       ports,
-      { ...CTX, cycleId: "cycle-ws-033-persist", workspaceExecution },
+      {
+        ...CTX,
+        cycleId: "cycle-ws-033-persist",
+        workspaceExecution,
+        workspaceContextScope: "issue_required",
+        repositorySelector: binding.alias,
+      } as CycleContext,
     );
 
     expect(result.event).toMatchObject({ type: "story_picked", storyId: "US-WS-033" });
@@ -7494,6 +7707,11 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
       ok: true,
       context: { workspace: { workspaceId: "roll" }, issue: { storyId: "US-WS-033" } },
     });
+    expect(result.event).toMatchObject({ repositorySelector: binding.repoId });
+    expect(readFileSync(
+      join(runtimeRoot, "cycle-contexts", "cycle-ws-033-persist.repository"),
+      "utf8",
+    )).toBe(`${binding.repoId}\n`);
   });
 
   it("US-WS-033: spawn_role receives the frozen Workspace context and Issue root", async () => {
