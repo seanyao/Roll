@@ -188,6 +188,42 @@ describe("US-WS-039 Workspace context static audit", () => {
     }
   });
 
+  it("does not trust shadowed imports, parser calls on unrelated input, or same-name methods", () => {
+    const policy = { ...input("unused").policies[0], contextConsumer: "workspace" as const };
+    for (const source of [
+      [
+        "import { parseWorkspaceInteractionArgs } from '../lib/workspace-interaction.js';",
+        "function run(args) {",
+        "  const parseWorkspaceInteractionArgs = () => null;",
+        "  parseWorkspaceInteractionArgs();",
+        "  return args.includes('--workspace');",
+        "}",
+      ].join("\n"),
+      [
+        "import { parseWorkspaceInteractionArgs } from '../lib/workspace-interaction.js';",
+        "function run(args) {",
+        "  parseWorkspaceInteractionArgs([], caps);",
+        "  return args.includes('--workspace');",
+        "}",
+      ].join("\n"),
+      [
+        "const helper = { positionalArgs(args) { return args.includes('--workspace'); } };",
+        "helper.positionalArgs(args);",
+      ].join("\n"),
+      [
+        "function positionalArgs(args) { return args.includes('--workspace'); }",
+        "positionalArgs(args);",
+      ].join("\n"),
+    ]) {
+      const rootDir = fixture({
+        "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,
+        "config/workspace-context-audit-allowlist.json": "[]\n",
+        "packages/cli/src/commands/backlog.ts": source,
+      });
+      expect(auditRegisteredWorkspaceContextTree(rootDir, "2026-07-25").findings.map((finding) => finding.code)).toContain("CLI_SELECTOR_PARSER_BYPASS");
+    }
+  });
+
   it("audits repository-required split cwd authority while allowing explicit execution config", () => {
     const repositoryPolicy = { ...input("unused").policies[1], surface: "cli" as const, id: "test", operation: "run", contextConsumer: "repository" as const };
     const rootDir = fixture({

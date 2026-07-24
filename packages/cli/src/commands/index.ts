@@ -193,6 +193,10 @@ function explicitWorkspaceSelector(args: readonly string[]): string | undefined 
   return index < 0 ? undefined : args[index + 1];
 }
 
+function hasWorkspaceSelectorArg(args: readonly string[]): boolean {
+  return args.includes("--workspace");
+}
+
 function isHelp(arg: string | undefined): boolean {
   return arg === "help" || arg === "--help" || arg === "-h";
 }
@@ -448,7 +452,7 @@ export function registerAll(): void {
         "workspace",
         [],
         ["--workspace", "roll"],
-        (args) => args.includes("--workspace"),
+        hasWorkspaceSelectorArg,
       ),
       cliMatchedOperation("agent", "view", [], (args) => args.length === 0),
       ...["cast", "list", "readiness", "disable", "enable", "default", "set", "migrate", "use"].map((name) =>
@@ -715,14 +719,14 @@ export function registerAll(): void {
   registerPorted("worktree", (args): number | Promise<number> => {
     if (args[0] === "audit") {
       const rest = args.slice(1);
-      if (rest.includes("--workspace") || (process.env["ROLL_WORKSPACE"] ?? "") !== "") {
+      if (hasWorkspaceSelectorArg(rest) || (process.env["ROLL_WORKSPACE"] ?? "") !== "") {
         return workspaceWorktreeAuditCommand(rest);
       }
       return worktreeAuditCommand(rest);
     }
     if (args[0] === "cleanup") {
       const rest = args.slice(1);
-      if (rest.includes("--workspace") || (process.env["ROLL_WORKSPACE"] ?? "") !== "") {
+      if (hasWorkspaceSelectorArg(rest) || (process.env["ROLL_WORKSPACE"] ?? "") !== "") {
         return workspaceWorktreeCleanupCommand(rest);
       }
       return worktreeCleanupCommand(rest);
@@ -741,7 +745,7 @@ export function registerAll(): void {
     if ((args[0] === undefined || args[0] === "status") && args.includes("--capture")) {
       return captureCommand(["status", ...args.slice(1).filter((a) => a !== "--capture")]);
     }
-    if (args[0] === "status" && (args.includes("--workspace") || args.includes("--all"))) {
+    if (args[0] === "status" && (hasWorkspaceSelectorArg(args) || args.includes("--all"))) {
       return loopWorkspaceStatusCommand(args.slice(1));
     }
     if (args[0] === undefined || args[0] === "status") return dashboardCommand(args.slice(1));

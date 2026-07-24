@@ -71,20 +71,14 @@ const AUTHORITY_WORDS = /(?:\.roll|workspace|issue|evidence|policy|tool[-_ ]?dum
 const SKILL_AMBIENT = /(?:\$PWD|\bproject root\b|\brepo(?:sitory)? root\b)/iu;
 const SKILL_AUTHORITY = /(?:authority|\.roll\/|backlog|features?|design|evidence|policy|dump)/iu;
 const SKILL_PROHIBITION = /(?:\bnever\b|\bdo not\b|\bmust not\b|\bnot (?:the |an? )?authority\b|禁止|不得|不可|不是.*(?:权威|依据))/iu;
-const TRUSTED_SELECTOR_IMPORTS: Readonly<Record<string, ReadonlySet<string>>> = {
-  "../bridge.js": new Set(["canonicalizeWorkspaceAliasTokens", "parseCanonicalWorkspaceSelectorArgs"]),
-  "../lib/workspace-interaction.js": new Set(["parseWorkspaceInteractionArgs"]),
-  "./backlog-target.js": new Set(["resolveBacklogCommandTarget", "stripBacklogScopeArgs"]),
-};
-
 const TRUSTED_LOCAL_SELECTOR_SCOPES: Readonly<Record<string, ReadonlySet<string>>> = {
   "packages/cli/src/commands/agent.ts": new Set(["agentCommand", "workspaceViewCommand"]),
   "packages/cli/src/commands/backlog-target.ts": new Set(["resolveBacklogCommandTarget", "stripBacklogScopeArgs"]),
   "packages/cli/src/commands/backlog.ts": new Set(["positionalArgs"]),
   "packages/cli/src/commands/context.ts": new Set(["parseArgs"]),
-  "packages/cli/src/commands/delivery.ts": new Set(["positionalArgs"]),
+  "packages/cli/src/commands/delivery.ts": new Set(["listCommand", "positionalArgs"]),
   "packages/cli/src/commands/idea.ts": new Set(["ideaCommand"]),
-  "packages/cli/src/commands/index.ts": new Set(["explicitWorkspaceSelector", "registerAll", "removeWorkspaceSelector", "workspaceProjectRoot"]),
+  "packages/cli/src/commands/index.ts": new Set(["explicitWorkspaceSelector", "hasWorkspaceSelectorArg", "registerAll", "removeWorkspaceSelector", "workspaceProjectRoot"]),
   "packages/cli/src/commands/loop-go.ts": new Set(["loopGoCommand", "parseOptions"]),
   "packages/cli/src/commands/loop-run-once.ts": new Set(["loopRunOnceCommand"]),
   "packages/cli/src/commands/workspace-issue.ts": new Set(["parseArgs"]),
@@ -190,13 +184,13 @@ function isSelectorParserBypass(node: ts.Node): boolean {
   return false;
 }
 
-function functionName(node: ts.Node): string | undefined {
-  if (!ts.isFunctionLike(node)) return undefined;
-  if ("name" in node && node.name !== undefined && ts.isIdentifier(node.name)) return node.name.text;
-  const parent = node.parent;
-  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
-  if (ts.isPropertyAssignment(parent) && (ts.isIdentifier(parent.name) || ts.isStringLiteral(parent.name))) return parent.name.text;
-  return undefined;
+function isTrustedLocalSelectorScope(source: ts.SourceFile, file: string, node: ts.Node): boolean {
+  if (!ts.isFunctionDeclaration(node) || node.parent !== source || node.name === undefined) return false;
+  if (TRUSTED_LOCAL_SELECTOR_SCOPES[file]?.has(node.name.text) !== true) return false;
+  // Registered parser boundaries are concrete top-level TypeScript declarations.
+  // Requiring the production signature prevents a same-name local function or
+  // object method from borrowing the boundary merely by spelling its name.
+  return node.parameters.every((parameter) => parameter.type !== undefined);
 }
 
 function exactExecutionConfigPath(call: ts.CallExpression, cwdArgument: (argument: ts.Expression) => boolean): boolean {
@@ -255,21 +249,10 @@ function scanSource(
   const cwdAliases = new Map<ts.Node, Set<string>>();
   const functionScopes = new Set<ts.Node>();
   const trustedSelectorScopes = new Set<ts.Node>();
-  const trustedImportedBindings = new Set<string>();
   const collectAliases = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause?.namedBindings !== undefined && ts.isNamedImports(node.importClause.namedBindings)) {
-      const trustedExports = TRUSTED_SELECTOR_IMPORTS[node.moduleSpecifier.text];
-      if (trustedExports !== undefined) {
-        for (const element of node.importClause.namedBindings.elements) {
-          const imported = element.propertyName?.text ?? element.name.text;
-          if (trustedExports.has(imported)) trustedImportedBindings.add(element.name.text);
-        }
-      }
-    }
     if (ts.isFunctionLike(node)) {
       functionScopes.add(node);
-      const name = functionName(node);
-      if (name !== undefined && TRUSTED_LOCAL_SELECTOR_SCOPES[file]?.has(name) === true) trustedSelectorScopes.add(node);
+      if (isTrustedLocalSelectorScope(source, file, node)) trustedSelectorScopes.add(node);
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isProcessCwdCall(node.initializer)) {
       const scope = scopeFor(node);
@@ -277,16 +260,13 @@ function scanSource(
       aliases.add(node.name.text);
       cwdAliases.set(scope, aliases);
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && trustedImportedBindings.has(node.expression.text)) {
-      trustedSelectorScopes.add(scopeFor(node));
-    }
     ts.forEachChild(node, collectAliases);
   };
   collectAliases(source);
   const hasTrustedSelectorBoundary = (node: ts.Node): boolean => {
     let current: ts.Node | undefined = node;
     while (current !== undefined) {
-      if (functionScopes.has(current) && trustedSelectorScopes.has(current)) return true;
+      if (functionScopes.has(current)) return trustedSelectorScopes.has(current);
       current = current.parent;
     }
     return false;
