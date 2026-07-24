@@ -635,21 +635,93 @@ export function restorePersistedWorkspaceCycleContext(
 }
 
 export type WorkspaceCycleRepositoryResult =
-  | { readonly ok: true; readonly repository: RepositoryExecutionContext }
-  | { readonly ok: false; readonly code: "missing_execution_context" };
+  | { readonly ok: true; readonly repoId: string; readonly repository: RepositoryExecutionContext }
+  | {
+      readonly ok: false;
+      readonly code:
+        | "missing_execution_context"
+        | "repository_selector_required"
+        | "unknown_repository_selector"
+        | "ambiguous_repository_selector";
+    };
 
 /** Repository-required operations always name a stable repoId. Cardinality one
  * is not a selector and multi-repo order is never authority. */
 export function resolveWorkspaceCycleRepository(
   context: WorkspaceExecutionContextV1,
-  repoId?: string,
+  selector?: string,
 ): WorkspaceCycleRepositoryResult {
   const scoped = resolveWorkspaceExecutionContextScope({ scope: "repository_required", context });
-  if (!scoped.ok || scoped.context?.issue === undefined || (repoId ?? "").trim() === "") {
+  if (!scoped.ok || scoped.context?.issue === undefined) {
     return { ok: false, code: "missing_execution_context" };
   }
-  const repository = scoped.context.issue.execution.repositories[repoId as string];
+  const repositories = Object.values(scoped.context.issue.execution.repositories);
+  const requested = (selector ?? "").trim();
+  if (requested === "") {
+    return repositories.length === 1 && repositories[0] !== undefined
+      ? { ok: true, repoId: repositories[0].repoId, repository: repositories[0] }
+      : { ok: false, code: "repository_selector_required" };
+  }
+  const byId = repositories.find((repository) => repository.repoId === requested);
+  if (byId !== undefined) return { ok: true, repoId: byId.repoId, repository: byId };
+  const byAlias = repositories.filter((repository) => repository.alias === requested);
+  if (byAlias.length > 1) return { ok: false, code: "ambiguous_repository_selector" };
+  const repository = byAlias[0];
   return repository === undefined
-    ? { ok: false, code: "missing_execution_context" }
-    : { ok: true, repository };
+    ? { ok: false, code: "unknown_repository_selector" }
+    : { ok: true, repoId: repository.repoId, repository };
+}
+
+export function workspaceCycleRepositorySelectorPath(runtimeDir: string, cycleId: string): string {
+  return join(runtimeDir, "cycle-contexts", `${encodeURIComponent(cycleId)}.repository`);
+}
+
+export function persistWorkspaceCycleRepositorySelector(
+  runtimeDir: string,
+  cycleId: string,
+  context: WorkspaceExecutionContextV1,
+  selector?: string,
+): WorkspaceCycleRepositoryResult {
+  if (cycleId.trim() === "") return { ok: false, code: "missing_execution_context" };
+  const resolved = resolveWorkspaceCycleRepository(context, selector);
+  if (!resolved.ok) return resolved;
+  const path = workspaceCycleRepositorySelectorPath(runtimeDir, cycleId);
+  const serialized = `${resolved.repoId}\n`;
+  let tempPath: string | undefined;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    try {
+      linkSync(tempPath, path);
+      return resolved;
+    } catch (error) {
+      const code = error instanceof Error && "code" in error
+        ? (error as NodeJS.ErrnoException).code
+        : undefined;
+      if (code !== "EEXIST") return { ok: false, code: "missing_execution_context" };
+      const existing = readFileSync(path, "utf8").trim();
+      return existing === resolved.repoId
+        ? resolved
+        : { ok: false, code: "unknown_repository_selector" };
+    }
+  } catch {
+    return { ok: false, code: "missing_execution_context" };
+  } finally {
+    if (tempPath !== undefined) rmSync(tempPath, { force: true });
+  }
+}
+
+export function restorePersistedWorkspaceCycleRepositorySelector(
+  runtimeDir: string,
+  cycleId: string,
+  context: WorkspaceExecutionContextV1,
+): WorkspaceCycleRepositoryResult {
+  const path = workspaceCycleRepositorySelectorPath(runtimeDir, cycleId);
+  if (!existsSync(path)) return { ok: false, code: "missing_execution_context" };
+  try {
+    return resolveWorkspaceCycleRepository(context, readFileSync(path, "utf8").trim());
+  } catch {
+    return { ok: false, code: "missing_execution_context" };
+  }
 }

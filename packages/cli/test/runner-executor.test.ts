@@ -65,7 +65,12 @@ import {
 import { suspendRig, readRigLifecycleState } from "../src/runner/agent-liveness.js";
 import { startMainCheckoutLeakWatchdog } from "../src/runner/sandbox-boundary.js";
 import { captureMainHeadBaseline, writeMainDirtyBaseline } from "../src/runner/main-checkout-guard.js";
-import { restorePersistedWorkspaceCycleContext, workspaceCycleContextPath } from "../src/runner/scoped-route.js";
+import {
+  restorePersistedWorkspaceCycleContext,
+  restorePersistedWorkspaceCycleRepositorySelector,
+  workspaceCycleContextPath,
+} from "../src/runner/scoped-route.js";
+import { workspaceExecutionEnvironment } from "../src/runner/agent-spawn.js";
 
 /** Temp dirs created by FIX-207 attest-gate executor tests; cleaned at end. */
 const execDirs: string[] = [];
@@ -80,6 +85,7 @@ const CTX: CycleContext = {
   storyId: "US-RUN-001",
   agent: "claude",
   model: "",
+  workspaceContextScope: "legacy_migration_only",
 };
 
 function workspaceSpawnContext(): {
@@ -2742,6 +2748,50 @@ describe("executeCommand — command → executor mapping", () => {
     },
   );
 
+  it("US-WS-037: unknown repository alias fails closed before agentSpawn", async () => {
+    const fixture = workspaceSpawnContext();
+    const { ports } = fakePorts();
+    const result = await executeCommand(
+      { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 },
+      ports,
+      { ...fixture.ctx, repositorySelector: "unknown-alias" } as CycleContext,
+    );
+
+    expect(ports.agentSpawn).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({ type: "role_exited", exit: 1, timedOut: false });
+  });
+
+  it("US-WS-037: an ambiguous alias in recovered repository state fails closed", async () => {
+    const fixture = workspaceSpawnContext();
+    const workspaceExecution = fixture.ctx.workspaceExecution;
+    if (workspaceExecution?.issue === undefined) throw new Error("missing fixture Issue context");
+    const repositories = Object.fromEntries(Object.entries(workspaceExecution.issue.execution.repositories).map(
+      ([repoId, repository]) => [repoId, { ...repository, alias: "duplicate" }],
+    ));
+    const ambiguous = {
+      ...workspaceExecution,
+      bindings: workspaceExecution.bindings.map((binding) => ({ ...binding, alias: "duplicate" })),
+      issue: {
+        ...workspaceExecution.issue,
+        execution: { ...workspaceExecution.issue.execution, repositories },
+      },
+    };
+    const { ports } = fakePorts();
+    const result = await executeCommand(
+      { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 },
+      ports,
+      {
+        ...fixture.ctx,
+        workspaceExecution: ambiguous,
+        repositoryExecution: ambiguous.issue.execution,
+        repositorySelector: "duplicate",
+      } as CycleContext,
+    );
+
+    expect(ports.agentSpawn).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({ type: "role_exited", exit: 1, timedOut: false });
+  });
+
   it("US-WS-037: retry and cwd drift preserve one semantic Workspace/repository identity", async () => {
     const fixture = workspaceSpawnContext();
     const spawns: AgentSpawnOptions[] = [];
@@ -2776,7 +2826,9 @@ describe("executeCommand — command → executor mapping", () => {
     const identities = spawns.map((options) => ({
       cwd: options.cwd,
       repositoryId: options.env?.["ROLL_REPOSITORY_ID"],
-      workspace: JSON.parse(options.env?.["ROLL_WORKSPACE_EXECUTION_CONTEXT"] ?? "null"),
+      workspace: JSON.parse(
+        workspaceExecutionEnvironment(options.workspaceExecution).ROLL_WORKSPACE_EXECUTION_CONTEXT ?? "null",
+      ),
       promptContext: JSON.parse(/context-json: (\{.*\})/u.exec(options.skillBody)?.[1] ?? "null"),
     }));
     expect(identities[0]).toEqual(identities[1]);
@@ -7712,6 +7764,11 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
       join(runtimeRoot, "cycle-contexts", "cycle-ws-033-persist.repository"),
       "utf8",
     )).toBe(`${binding.repoId}\n`);
+    expect(restorePersistedWorkspaceCycleRepositorySelector(
+      runtimeRoot,
+      "cycle-ws-033-persist",
+      restored.ok ? restored.context : workspaceExecution,
+    )).toMatchObject({ ok: true, repoId: binding.repoId, repository: { alias: binding.alias } });
   });
 
   it("US-WS-033: spawn_role receives the frozen Workspace context and Issue root", async () => {
@@ -7793,7 +7850,7 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
       { ...CTX, storyId: "US-WS-033", repositoryExecution, workspaceExecution },
     );
 
-    expect(spawns[0]?.cwd).toBe(issueRoot);
+    expect(spawns[0]?.cwd).toBe(productWorktree);
     expect(spawns[0]?.workspaceExecution).toBe(workspaceExecution);
     expect(spawns[0]?.writableRoots).toEqual(expect.arrayContaining([productWorktree]));
   });

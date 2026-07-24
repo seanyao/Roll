@@ -1,7 +1,8 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { advanceContextCycleStageState, extractUsage, getAgentSpec, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
-import type { CycleCost } from "@roll/spec";
+import { isDeepStrictEqual } from "node:util";
+import { advanceContextCycleStageState, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
+import type { CycleCost, RepositoryExecutionContext } from "@roll/spec";
 import { agentSpawnEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
 import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination } from "./main-checkout-guard.js";
@@ -22,6 +23,7 @@ import type { ExecuteResult, Ports } from "./ports.js";
 import { invalidContextHandoff, type ContextStageHandoffV1 } from "./context-handoff.js";
 import type { ContextStageHostReadInputV1 } from "./context-stage-host.js";
 import { prepareWorkspaceSkillHandoff } from "./workspace-skill-handoff.js";
+import { resolveWorkspaceCycleRepository } from "./scoped-route.js";
 import {
   RepositoryObservationError,
   observeWritableRepositoryCommitCount,
@@ -98,28 +100,83 @@ export function applyRepositoryBuilderContext(
 }
 
 export type WorkspaceBuilderSkillBodyResult =
-  | { readonly ok: true; readonly skillBody: string; readonly contextJson?: string }
+  | {
+      readonly ok: true;
+      readonly skillBody: string;
+      readonly contextJson?: string;
+      readonly selectedRepository?: RepositoryExecutionContext;
+    }
   | { readonly ok: false; readonly code: string };
+
+export type WorkspaceSpawnIdentityResult =
+  | { readonly ok: true; readonly selectedRepository?: RepositoryExecutionContext }
+  | { readonly ok: false; readonly code: string };
+
+/** Validate the frozen Workspace/Issue/repository identity before any spawn side effect. */
+export function resolveWorkspaceSpawnIdentity(ctx: CycleContext): WorkspaceSpawnIdentityResult {
+  if (ctx.workspaceExecution === undefined) {
+    return ctx.workspaceContextScope === "legacy_migration_only"
+      ? { ok: true }
+      : { ok: false, code: "missing_execution_context" };
+  }
+  const scoped = resolveWorkspaceExecutionContextScope({
+    scope: "issue_required",
+    context: ctx.workspaceExecution,
+  });
+  if (!scoped.ok || scoped.context?.issue === undefined) {
+    return { ok: false, code: scoped.ok ? "missing_execution_context" : scoped.error.code };
+  }
+  if (ctx.storyId !== scoped.context.issue.storyId) {
+    return { ok: false, code: "story_identity_mismatch" };
+  }
+  if (
+    ctx.repositoryExecution === undefined ||
+    !isDeepStrictEqual(ctx.repositoryExecution, scoped.context.issue.execution)
+  ) {
+    return { ok: false, code: "repository_context_mismatch" };
+  }
+  const selected = resolveWorkspaceCycleRepository(scoped.context, ctx.repositorySelector);
+  return selected.ok
+    ? { ok: true, selectedRepository: selected.repository }
+    : selected;
+}
 
 /** Compose repository details under the canonical Workspace handoff block. */
 export function prepareWorkspaceBuilderSkillBody(
   ctx: CycleContext,
   skillBody: string,
 ): WorkspaceBuilderSkillBodyResult {
+  const identity = resolveWorkspaceSpawnIdentity(ctx);
+  if (!identity.ok) return identity;
   const repositoryBody = ctx.repositoryExecution === undefined
     ? skillBody
     : injectRepositoryContext(skillBody, ctx.repositoryExecution);
   if (ctx.workspaceExecution === undefined) return { ok: true, skillBody: repositoryBody };
+  const selected = identity.selectedRepository;
+  if (selected === undefined) return { ok: false, code: "missing_repository_context" };
+  const selectedBody = [
+    "[Selected Workspace repository]",
+    `Selected repository: ${selected.repoId} (${selected.alias})`,
+    "Use this exact repoId for repository-scoped commands; do not infer another repository from cwd or ordering.",
+    "[/Selected Workspace repository]",
+    "",
+    repositoryBody,
+  ].join("\n");
   const prepared = prepareWorkspaceSkillHandoff({
     skillName: ctx.storyId?.startsWith("FIX-") || ctx.storyId?.startsWith("BUG-")
       ? "roll-fix"
       : "roll-build",
     scope: "issue_required",
     context: ctx.workspaceExecution,
-    skillBody: repositoryBody,
+    skillBody: selectedBody,
   });
   return prepared.ok
-    ? { ok: true, skillBody: prepared.skillBody, contextJson: prepared.contextJson }
+    ? {
+        ok: true,
+        skillBody: prepared.skillBody,
+        contextJson: prepared.contextJson,
+        selectedRepository: selected,
+      }
     : prepared;
 }
 
@@ -130,6 +187,14 @@ export async function executeSpawnAgentCommand(
 ): Promise<ExecuteResult> {
   switch (cmd.kind) {
     case "spawn_agent": {
+      const spawnIdentity = resolveWorkspaceSpawnIdentity(ctx);
+      if (!spawnIdentity.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace spawn identity blocked for ${ctx.storyId ?? "?"}: ${spawnIdentity.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return { event: { type: "agent_exited", exit: 1, timedOut: false } };
+      }
       // FIX-343 (step ①): mint the BUILDER's unique session id ONCE, here at the
       // working-agent spawn, and reuse it across retries (a non-empty
       // ctx.builderSessionId means a prior attempt already minted it). The attest
@@ -148,7 +213,7 @@ export async function executeSpawnAgentCommand(
       // landing reads the HEAD. No targetSubmodule ⇒ ports.paths.worktreePath
       // (execRepoCwd ⇒ ports.repoCwd), byte-identical to today.
       const legacyExecCwd = resolveExecutionCwd(ports, ctx);
-      const execCwd = ctx.repositoryExecution?.issueRoot ?? legacyExecCwd;
+      const execCwd = spawnIdentity.selectedRepository?.worktreePath ?? legacyExecCwd;
       const execRepoCwd = ctx.repositoryExecution === undefined
         ? resolveExecutionRepoCwd(ports, ctx)
         : undefined;
@@ -419,11 +484,18 @@ export async function executeSpawnAgentCommand(
           // E4: the builder runs in the submodule cycle worktree for a submodule
           // story (execCwd); its git env + writable roots target the submodule's
           // own repo/object store so its commits actually land there.
-          cwd: ctx.repositoryExecution?.issueRoot ?? execCwd,
+          cwd: workspaceSkillBody.selectedRepository?.worktreePath ?? execCwd,
           skillBody: finalSkillBody,
           ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-          ...(ctx.repositoryExecution !== undefined
-            ? { writableRoots: repositoryAgentWritableRoots(ctx.repositoryExecution) }
+          ...(ctx.repositoryExecution !== undefined && workspaceSkillBody.selectedRepository !== undefined
+            ? {
+                writableRoots: repositoryAgentWritableRoots({
+                  ...ctx.repositoryExecution,
+                  repositories: {
+                    [workspaceSkillBody.selectedRepository.repoId]: workspaceSkillBody.selectedRepository,
+                  },
+                }),
+              }
             : execRepoCwd === undefined
               ? {}
               : { writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath) }),
@@ -432,6 +504,10 @@ export async function executeSpawnAgentCommand(
           env: {
             ...process.env,
             ROLL_LOOP_ALERT: ports.paths.alertsPath,
+            ...(workspaceSkillBody.selectedRepository === undefined ? {} : {
+              ROLL_REPOSITORY_ID: workspaceSkillBody.selectedRepository.repoId,
+              ROLL_REPOSITORY_ALIAS: workspaceSkillBody.selectedRepository.alias,
+            }),
             ...agentSpawnEnvironment(cmd.agent),
           },
           // FIX-204B: pin the executor-picked story into the agent prompt — the

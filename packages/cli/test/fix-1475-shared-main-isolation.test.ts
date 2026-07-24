@@ -218,7 +218,12 @@ describe("FIX-1475 — the supervised path never moves the shared main ref", () 
     });
     const result = await runCycleOnce({
       ports: { ...base, agentSpawn: shimAgent, github: fakeGithub() },
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: {
+        cycleId,
+        branch: `loop/cycle-${cycleId}`,
+        loop: "ci" as never,
+        workspaceContextScope: "legacy_migration_only",
+      },
     });
 
     // The cycle still ran (and delivered) — isolation did not break dispatch.
@@ -292,7 +297,12 @@ describe("FIX-1475 — the supervised path never moves the shared main ref", () 
     });
     const result = await runCycleOnce({
       ports: { ...base, agentSpawn: shimAgent, github: fakeGithub() },
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: {
+        cycleId,
+        branch: `loop/cycle-${cycleId}`,
+        loop: "ci" as never,
+        workspaceContextScope: "legacy_migration_only",
+      },
     });
 
     expect(result.terminal).toBe("published");

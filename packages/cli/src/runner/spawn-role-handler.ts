@@ -132,14 +132,18 @@ export async function executeSpawnRoleCommand(
     // tests just like the builder, so a submodule cycle runs it in the submodule
     // cycle worktree (execCwd) with the submodule's git env + writable roots. No
     // targetSubmodule ⇒ ports.paths.worktreePath / ports.repoCwd, unchanged.
-    const execCwd = ctx.repositoryExecution?.issueRoot ?? resolveExecutionCwd(ports, ctx);
-    const writableRoots = ctx.repositoryExecution === undefined
+    const selectedRepository = skillHandoff.selectedRepository;
+    const execCwd = selectedRepository?.worktreePath ?? resolveExecutionCwd(ports, ctx);
+    const writableRoots = ctx.repositoryExecution === undefined || selectedRepository === undefined
       ? submoduleAgentWritableRoots(
           ports.repoCwd,
           resolveExecutionRepoCwd(ports, ctx),
           ports.paths.alertsPath,
         )
-      : repositoryAgentWritableRoots(ctx.repositoryExecution);
+      : repositoryAgentWritableRoots({
+          ...ctx.repositoryExecution,
+          repositories: { [selectedRepository.repoId]: selectedRepository },
+        });
     res = await ports.agentSpawn(cmd.agent, {
       purpose: cmd.role,
       cwd: execCwd,
@@ -154,6 +158,10 @@ export async function executeSpawnRoleCommand(
         ...process.env,
         ROLL_LOOP_ALERT: ports.paths.alertsPath,
         ROLL_ADVERSARIAL_MARKER: markerPath,
+        ...(selectedRepository === undefined ? {} : {
+          ROLL_REPOSITORY_ID: selectedRepository.repoId,
+          ROLL_REPOSITORY_ALIAS: selectedRepository.alias,
+        }),
         ...agentSpawnEnvironment(cmd.agent),
       },
     });

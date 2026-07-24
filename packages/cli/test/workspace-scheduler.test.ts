@@ -55,7 +55,11 @@ function workspaceManifest(root: string, workspaceId: string): void {
   })}\n`);
 }
 
-function workspaceIssue(root: string, workspaceId: string, storyId: string): { readonly issueRoot: string } {
+function workspaceIssue(
+  root: string,
+  workspaceId: string,
+  storyId: string,
+): { readonly issueRoot: string; readonly worktreePath: string; readonly repoId: string } {
   const remote = `https://example.test/workspaces/${workspaceId}.git`;
   const repoId = repositoryIdFromRemote(remote);
   if (!repoId.ok) throw new Error("fixture remote must be valid");
@@ -94,7 +98,7 @@ function workspaceIssue(root: string, workspaceId: string, storyId: string): { r
     workBranch: `roll/${workspaceId}/${storyId}`,
     ts: 1,
   })}\n`);
-  return { issueRoot };
+  return { issueRoot, worktreePath, repoId: repoId.value };
 }
 
 function target(workspaceId: string, workspaceRoot: string): BacklogTargetDecision {
@@ -611,7 +615,12 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     const agentSpawn: AgentSpawn = vi.fn(async (_agent, options) => {
       if (options.purpose === "builder") {
         builderSpawned = true;
-        expect(options.cwd).toBe(realpathSync(issue.issueRoot));
+        expect(options.cwd).toBe(realpathSync(issue.worktreePath));
+        expect(options.env).toMatchObject({
+          ROLL_REPOSITORY_ID: issue.repoId,
+          ROLL_REPOSITORY_ALIAS: "primary",
+        });
+        expect(options.skillBody).toContain(`Selected repository: ${issue.repoId} (primary)`);
         expect(readFileSync(backlogPath, "utf8")).toContain(
           `${storyId} | Workspace production story | 🔨 In Progress`,
         );

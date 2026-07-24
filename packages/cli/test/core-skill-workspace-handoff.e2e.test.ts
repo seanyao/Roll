@@ -392,6 +392,8 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       storyId,
       workspaceExecution: frozen.context,
       repositoryExecution: execution,
+      workspaceContextScope: "issue_required",
+      repositorySelector: f.productRepoId,
     }, "# Roll Build");
     expect(spawned.ok).toBe(true);
     if (!spawned.ok) return;
@@ -449,7 +451,7 @@ describe("US-WS-037 core skill Workspace handoff", () => {
         },
       },
     } as WorkspaceExecutionContextV1;
-    expect(resolveWorkspaceCycleRepository(context)).toEqual({ ok: false, code: "missing_execution_context" });
+    expect(resolveWorkspaceCycleRepository(context)).toEqual({ ok: false, code: "repository_selector_required" });
     expect(resolveWorkspaceCycleRepository(context, f.skillsRepoId)).toMatchObject({
       ok: true,
       repository: { repoId: f.skillsRepoId, alias: "skills" },

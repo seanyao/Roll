@@ -5,13 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   repositoryIdFromRemote,
+  WORKSPACE_EXECUTION_CONTEXT_V1,
   type CycleRepositoryExecutionContext,
   type RepositoryExecutionContext,
+  type WorkspaceExecutionContextV1,
 } from "@roll/spec";
 import {
   BUILD_HEARTBEAT_GAP_MS,
   claimStoryLease,
   cycleStep,
+  deriveWorkspaceExecutionAuthorities,
   initialCycleState,
   nodeExecPort,
   readLeases,
@@ -222,6 +225,26 @@ function productionMultiWorkspaceFixture(): {
   return { root, issueRoot, storyId, repositories };
 }
 
+function workspaceExecutionFor(root: string): WorkspaceExecutionContextV1 {
+  const canonicalRoot = realpathSync(root);
+  const manifest = JSON.parse(readFileSync(join(canonicalRoot, "workspace.yaml"), "utf8")) as {
+    workspaceId: string;
+    repositories: WorkspaceExecutionContextV1["bindings"];
+  };
+  return {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: {
+      workspaceId: manifest.workspaceId,
+      root: canonicalRoot,
+      canonicalRoot,
+      lifecycle: "active",
+    },
+    resolution: { source: "explicit", evidence: [] },
+    bindings: manifest.repositories,
+    authorities: deriveWorkspaceExecutionAuthorities(canonicalRoot),
+  };
+}
+
 describe("US-WS-010 repository Builder context", () => {
   it("resolves the production Workspace Issue only after the Story identity is known", async () => {
     const fixture = productionWorkspaceFixture();
@@ -402,6 +425,7 @@ describe("US-WS-010 repository Builder context", () => {
       branch: "cycle-fixture",
       loop: "ci",
       repositoryExecution: execution,
+      workspaceContextScope: "legacy_migration_only",
     }, {
       purpose: "builder",
       cwd: paths.worktreePath,
@@ -745,15 +769,27 @@ describe("US-WS-010 repository Builder context", () => {
     ].map((row) => JSON.stringify(row)).join("\n") + "\n");
     const spawn = fakeSpawn();
     vi.mocked(spawn).mockImplementation(async (_agent, options) => {
-      expect(options.cwd).toBe(realpathSync(fixture.issueRoot));
+      const selected = fixture.repositories[0];
+      if (selected === undefined) throw new Error("missing selected fixture repository");
+      expect(options.cwd).toBe(realpathSync(selected.path));
+      expect(options.skillBody).toContain(`Selected repository: ${selected.repoId} (${selected.alias})`);
+      expect(options.env).toMatchObject({
+        ROLL_REPOSITORY_ID: selected.repoId,
+        ROLL_REPOSITORY_ALIAS: selected.alias,
+      });
+      const promptContext = JSON.parse(
+        /context-json: (\{.*\})/u.exec(options.skillBody)?.[1] ?? "null",
+      ) as WorkspaceExecutionContextV1 | null;
+      expect(promptContext).toEqual(options.workspaceExecution);
       expect(options.skillBody).toContain(fixture.repositories[0]?.repoId ?? "missing-repo");
       expect(options.skillBody).toContain(fixture.repositories[1]?.repoId ?? "missing-repo");
       expect(options.writableRoots).toEqual(expect.arrayContaining([
         realpathSync(join(fixture.issueRoot, "artifacts")),
         realpathSync(join(fixture.issueRoot, "evidence")),
         realpathSync(join(fixture.issueRoot, "runtime")),
-        ...fixture.repositories.map((repo) => realpathSync(repo.path)),
+        realpathSync(fixture.repositories[0]?.path ?? ""),
       ]));
+      expect(options.writableRoots).not.toContain(realpathSync(fixture.repositories[1]?.path ?? ""));
       expect(options.writableRoots).not.toContain(realpathSync(fixture.issueRoot));
       for (const repo of fixture.repositories) {
         writeFileSync(join(repo.path, "delivery.txt"), `${repo.alias} delivered\n`);
@@ -807,6 +843,9 @@ describe("US-WS-010 repository Builder context", () => {
       cycleId: "cycle-production-chain",
       branch: "cycle-production-chain",
       loop: "ci",
+      workspaceExecution: workspaceExecutionFor(fixture.root),
+      workspaceContextScope: "issue_required" as const,
+      repositorySelector: fixture.repositories[0]?.repoId,
     };
     const rootModeBefore = statSync(fixture.root).mode & 0o777;
     const nodeExec = vi.spyOn(nodeExecPort, "run");
@@ -904,6 +943,7 @@ describe("US-WS-010 repository Builder context", () => {
       cycleId: "cycle-legacy",
       branch: "cycle-legacy",
       loop: "ci",
+      workspaceContextScope: "legacy_migration_only",
     }, input);
 
     await spawn("claude", spawnOptions);

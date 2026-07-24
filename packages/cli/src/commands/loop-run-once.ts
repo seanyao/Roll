@@ -50,9 +50,14 @@ import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { emitBacklogTargetError, resolveBacklogCommandTarget, stripBacklogScopeArgs, type ResolvedBacklogTarget } from "./backlog-target.js";
-import { resolveLang, t, v3Catalog } from "@roll/spec";
+import { resolveLang, t, v3Catalog, type WorkspaceExecutionContextV1 } from "@roll/spec";
 import { resolveStoryLeasePath } from "../runner/story-lease-path.js";
-import { resolveRequirementMatchedWorkspace, restorePersistedWorkspaceCycleContext, validateRequirementMatchedWorkspace } from "../runner/scoped-route.js";
+import {
+  resolveRequirementMatchedWorkspace,
+  restorePersistedWorkspaceCycleContext,
+  restorePersistedWorkspaceCycleRepositorySelector,
+  validateRequirementMatchedWorkspace,
+} from "../runner/scoped-route.js";
 import { workspaceRollHome } from "./workspace-target.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
@@ -170,13 +175,22 @@ export function cycleSignalTeardown(
     // the signal, so an aborted cycle is never anonymous.
     const attr = readCycleAttributionFromEvents(paths.eventsPath, cycleId);
     const restored = restorePersistedWorkspaceCycleContext(deps.runtimeDir ?? dirname(paths.eventsPath), cycleId);
+    const restoredRepository = restored.ok
+      ? restorePersistedWorkspaceCycleRepositorySelector(
+          deps.runtimeDir ?? dirname(paths.eventsPath),
+          cycleId,
+          restored.context,
+        )
+      : undefined;
     const ctx: CycleContext = {
       cycleId,
       branch,
       loop: "ci" as never,
       storyId: restored.ok ? restored.context.issue?.storyId : attr.storyId,
       agent: attr.agent,
+      workspaceContextScope: restored.ok ? "issue_required" : "legacy_migration_only",
       ...(restored.ok ? { workspaceExecution: restored.context } : {}),
+      ...(restoredRepository?.ok ? { repositorySelector: restoredRepository.repoId } : {}),
     };
     const tctx = { cycleId, branch, agent: ctx.agent ?? "", model: ctx.model ?? "" };
     const terminalSec = now();
@@ -859,17 +873,19 @@ export function buildLoopRouteDeps(projectPath: string): RouteDeps {
 
 /** `roll loop run-once --help` usage. Bilingual on separate lines (EN then ZH). */
 export const RUN_ONCE_USAGE =
-  "Usage: roll loop run-once [--workspace <id|path>] [--dry-run] [--race]\n" +
+  "Usage: roll loop run-once [--workspace <id|path>] [--repository <repoId|alias>] [--dry-run] [--race]\n" +
   "  Run ONE loop cycle now: pick a Todo card, build it through TCR, run the\n" +
   "  gates (attest + peer), and publish a PR. Exits when the cycle terminates.\n" +
   "  --workspace Bind the cycle runtime, backlog, locks, and events to one Workspace.\n" +
   "              A scoped Story requirement may resolve the matching Workspace from any cwd.\n" +
+  "  --repository Select one repository by stable repoId or unique alias.\n" +
   "  --dry-run   Print the command plan only — no git / gh / agent side effects.\n" +
   "  --race      Opt in to same-card parallel racing (default: one-card-one-lease).\n" +
   "              The first merge atomically supersedes the remaining siblings.\n" +
   "立即跑一个 loop 周期:选一张 Todo 卡,经 TCR 建造,过闸(验收+同行评审),发 PR。\n" +
   "  --workspace 将周期 runtime、backlog、锁和事件绑定到一个 Workspace。\n" +
   "              带 Story 范围时可从任意 cwd 精确匹配 Workspace。\n" +
+  "  --repository 通过稳定 repoId 或唯一 alias 选择一个仓库。\n" +
   "  --dry-run   只打印命令计划——不动 git / gh / agent。\n" +
   "  --race      显式开同卡并行竞速(默认一卡一租约);首个 merge 原子取消其余 sibling。";
 
@@ -886,6 +902,45 @@ export interface LoopRunOnceDeps {
   readonly backfillMergedRuns?: typeof backfillMergedRuns;
 }
 
+function repositorySelectorArg(args: readonly string[]):
+  | { readonly ok: true; readonly selector?: string }
+  | { readonly ok: false } {
+  const indices = args.flatMap((arg, index) => arg === "--repository" ? [index] : []);
+  if (indices.length > 1) return { ok: false };
+  const index = indices[0];
+  if (index === undefined) return { ok: true };
+  const selector = args[index + 1];
+  return selector === undefined || selector.startsWith("-")
+    ? { ok: false }
+    : { ok: true, selector };
+}
+
+function canonicalWorkspaceRepositorySelector(
+  context: WorkspaceExecutionContextV1 | undefined,
+  selector: string | undefined,
+): { readonly ok: true; readonly repoId?: string; readonly alias?: string } | { readonly ok: false; readonly code: string } {
+  if (context === undefined) {
+    return selector === undefined
+      ? { ok: true }
+      : { ok: false, code: "missing_execution_context" };
+  }
+  const requested = (selector ?? "").trim();
+  if (requested === "") {
+    const only = context.bindings.length === 1 ? context.bindings[0] : undefined;
+    return only === undefined
+      ? { ok: true }
+      : { ok: true, repoId: only.repoId, alias: only.alias };
+  }
+  const byId = context.bindings.find((binding) => binding.repoId === requested);
+  if (byId !== undefined) return { ok: true, repoId: byId.repoId, alias: byId.alias };
+  const byAlias = context.bindings.filter((binding) => binding.alias === requested);
+  if (byAlias.length > 1) return { ok: false, code: "ambiguous_repository_selector" };
+  const selected = byAlias[0];
+  return selected === undefined
+    ? { ok: false, code: "unknown_repository_selector" }
+    : { ok: true, repoId: selected.repoId, alias: selected.alias };
+}
+
 /**
  * The `loop run-once` entry. Returns a process exit code (0 ok).
  */
@@ -898,6 +953,11 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     return 0;
   }
   const dryRun = args.includes("--dry-run");
+  const repositorySelector = repositorySelectorArg(args);
+  if (!repositorySelector.ok) {
+    process.stderr.write("loop run-once: invalid_repository_selector\n");
+    return 1;
+  }
   // US-DELIV-005: `--race` is the explicit opt-in for same-card parallel
   // racing. It is carried to the pick_story handler via env (the default —
   // one-card-one-lease — needs no signal).
@@ -1049,11 +1109,21 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     }
     workspaceExecution = built.context;
   }
+  const selectedRepository = canonicalWorkspaceRepositorySelector(
+    workspaceExecution,
+    repositorySelector.selector,
+  );
+  if (!selectedRepository.ok) {
+    process.stderr.write(`loop run-once: ${selectedRepository.code}\n`);
+    return 1;
+  }
   const ctx: CycleContext = {
     cycleId,
     branch,
     loop: "ci" as never,
+    workspaceContextScope: workspaceExecution === undefined ? "legacy_migration_only" : "issue_required",
     ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+    ...(selectedRepository.repoId === undefined ? {} : { repositorySelector: selectedRepository.repoId }),
   };
 
   if (dryRun) {
@@ -1067,6 +1137,9 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
         `# workspace: ${ctx.workspaceExecution?.workspace.workspaceId ?? "legacy"}`,
         `# story:   ${allowedCards === undefined ? "scheduler-pick" : [...allowedCards].join(",")}`,
         `# context-source: ${ctx.workspaceExecution?.resolution.source ?? "legacy"}`,
+        ...(selectedRepository.repoId === undefined
+          ? []
+          : [`# repository: ${selectedRepository.repoId} (${selectedRepository.alias ?? "unknown"})`]),
         "#",
         "# command plan (orchestrator → executor):",
         ...plan.map((l) => `  ${l}`),

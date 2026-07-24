@@ -13,7 +13,7 @@ import { cycleStep, initialCycleState } from "@roll/core";
 import { WorkspaceRegistry } from "@roll/infra";
 import { workspaceExecutionEnvironment } from "../src/runner/agent-spawn.js";
 import { freezeWorkspaceCycleContext } from "../src/runner/scoped-route.js";
-import { loopRunOnceCommand } from "../src/commands/loop-run-once.js";
+import { dispatch, registerAll } from "../src/index.js";
 import { GOAL_ALLOWED_CARDS_ENV } from "../src/lib/goal-progress.js";
 
 const initialCwd = process.cwd();
@@ -160,7 +160,8 @@ describe("US-WS-033 — Workspace cycle context handoff", () => {
     process.stdout.write = ((chunk: string | Uint8Array) => (chunks.push(String(chunk)), true)) as typeof process.stdout.write;
     let code: number;
     try {
-      code = await loopRunOnceCommand(["--repository", binding.alias, "--dry-run"]);
+      registerAll();
+      code = (await dispatch(["loop", "run-once", "--repository", binding.alias, "--dry-run"])).status;
     } finally {
       process.stdout.write = originalWrite;
     }

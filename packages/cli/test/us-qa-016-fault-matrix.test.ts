@@ -186,7 +186,15 @@ async function runFixtureCycle(
   const p = paths(rt, cycleId);
   const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps: opts.routeDeps ?? routeDeps });
   const ports: Ports = { ...base, agentSpawn: opts.agentSpawn ?? shimAgentTcr, github: opts.github ?? fakeGithub(0) };
-  const result = await runCycleOnce({ ports, ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never } });
+  const result = await runCycleOnce({
+    ports,
+    ctx: {
+      cycleId,
+      branch: `loop/cycle-${cycleId}`,
+      loop: "ci" as never,
+      workspaceContextScope: "legacy_migration_only",
+    },
+  });
   return { repo, result, paths: p, runtimeDir: rt };
 }
 
@@ -252,7 +260,12 @@ describe("US-QA-016 fault injection matrix", () => {
     const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
     const result = await runCycleOnce({
       ports: { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0) },
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: {
+        cycleId,
+        branch: `loop/cycle-${cycleId}`,
+        loop: "ci" as never,
+        workspaceContextScope: "legacy_migration_only",
+      },
     });
 
     const events = readEvents(p.eventsPath);
@@ -372,7 +385,12 @@ describe("US-QA-016 fault injection matrix", () => {
 
     const result = await runCycleOnce({
       ports: { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0) },
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: {
+        cycleId,
+        branch: `loop/cycle-${cycleId}`,
+        loop: "ci" as never,
+        workspaceContextScope: "legacy_migration_only",
+      },
     });
 
     expect(result.ran).toBe(false);

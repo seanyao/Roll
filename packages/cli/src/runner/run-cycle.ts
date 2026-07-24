@@ -44,7 +44,10 @@ import { type Ports, type ProcessClock, executeCommand, buildRunRow, revertPrema
 import { readCycleAttributionFromEvents } from "../lib/cycle-attribution.js";
 import { classifyCycleFailure, readCycleEvents } from "./failure-attribution.js";
 import { killLiveAgents } from "./agent-spawn.js";
-import { restorePersistedWorkspaceCycleContext } from "./scoped-route.js";
+import {
+  restorePersistedWorkspaceCycleContext,
+  restorePersistedWorkspaceCycleRepositorySelector,
+} from "./scoped-route.js";
 import { resolveStoryLeasePath } from "./story-lease-path.js";
 
 /** Inputs for one cycle run. */
@@ -82,7 +85,21 @@ export interface RunCycleResult {
  * terminal event in `finally`.
  */
 export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResult> {
-  const { ports, ctx } = opts;
+  const { ports } = opts;
+  let ctx = opts.ctx;
+  if (
+    ctx.repositorySelector === undefined &&
+    ctx.workspaceExecution?.issue !== undefined
+  ) {
+    const restoredRepository = restorePersistedWorkspaceCycleRepositorySelector(
+      dirname(ports.paths.eventsPath),
+      ctx.cycleId,
+      ctx.workspaceExecution,
+    );
+    if (restoredRepository.ok) {
+      ctx = { ...ctx, repositorySelector: restoredRepository.repoId };
+    }
+  }
   const timeoutSec = opts.timeoutSec ?? CYCLE_TIMEOUT_SEC;
   const maxSteps = opts.maxSteps ?? 1000;
   const killAgents = opts.killAgents ?? ((): number => killLiveAgents("SIGKILL"));
@@ -400,6 +417,8 @@ function mergeCtx(live: CycleContext, next: CycleContext): CycleContext {
     publishConfirmed: next.publishConfirmed ?? live.publishConfirmed,
     repositoryExecution: next.repositoryExecution ?? live.repositoryExecution,
     workspaceExecution: next.workspaceExecution ?? live.workspaceExecution,
+    workspaceContextScope: next.workspaceContextScope ?? live.workspaceContextScope,
+    repositorySelector: next.repositorySelector ?? live.repositorySelector,
   };
 }
 
