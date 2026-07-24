@@ -1,0 +1,1433 @@
+{
+  "schema": "roll.workspace-context-validation-cases/v1",
+  "sourceMatrix": "docs/generated/workspace-context-compatibility-matrix.json",
+  "cases": [
+    {
+      "id": "registry.policy-closure",
+      "testFile": "packages/cli/test/workspace-surface-inventory.test.ts",
+      "marker": "closes the registered inventory and matches the stable machine artifact"
+    },
+    {
+      "id": "cli.public-boundary",
+      "testFile": "packages/cli/test/workspace-context.critical.e2e.test.ts",
+      "marker": "US-WS-040 public Workspace context boundary"
+    },
+    {
+      "id": "selector.alias-equivalence",
+      "testFile": "packages/cli/test/workspace-alias.difftest.test.ts",
+      "marker": "canonicalizes every representative workspace subtree through one handler"
+    },
+    {
+      "id": "workspace.discovery-clarify",
+      "testFile": "packages/cli/test/workspace-interaction.e2e.test.ts",
+      "marker": "US-WS-030 direct Workspace clarification"
+    },
+    {
+      "id": "workspace.create-recovery",
+      "testFile": "packages/cli/test/workspace-create.e2e.test.ts",
+      "marker": "previews, applies, and reuses one complete Workspace through the built CLI"
+    },
+    {
+      "id": "workspace.edit-transaction",
+      "testFile": "packages/cli/test/workspace-edit.e2e.test.ts",
+      "marker": "rejects a stale preview without overwriting the concurrent manifest"
+    },
+    {
+      "id": "skill.handoff-authority",
+      "testFile": "skills/scripts/test-audit-skills.mjs",
+      "marker": "workspaceContextPolicies"
+    },
+    {
+      "id": "tool.context-envelope",
+      "testFile": "packages/cli/test/tool-context-invocation.e2e.test.ts",
+      "marker": "carries correlation through ToolRegistry into bash"
+    },
+    {
+      "id": "legacy.explicit-boundary",
+      "testFile": "packages/cli/test/workspace-create-recovery.e2e.test.ts",
+      "marker": "legacy"
+    }
+  ],
+  "operations": [
+    {
+      "policyKey": "cli:agent:cast",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:default",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:disable",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:enable",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:list",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:migrate",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:readiness",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:set",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:use",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:view",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:agent:workspace",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:attest:audit",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:attest:render",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:block",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:claim",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:defer",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:lint",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:promote",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:show",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:sync",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:unblock",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:backlog:unstick",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:capture:local-window",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:capture:migrate",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:capture:refresh",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:capture:repair",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:capture:status",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:config:prices",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:config:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:config:tune",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:config:write",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:context:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:context:status",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:context:usage",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:delivery:list",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:delivery:reconcile",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:delivery:show",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:delivery:usage",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:design:design",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:doctor:diagnose",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:doctor:language",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:doctor:pardon",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:doctor:repair-protection",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:doctor:skills",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:doctor:tools",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:help:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:idea:capture",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:index:rebuild",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:init:onboard",
+      "cases": [
+        "cli.public-boundary",
+        "legacy.explicit-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:adversarial",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:agent-routes",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:alert",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:cycle",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:cycles",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:enforce-tcr",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:eval",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:events",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:exhaustion-split",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:fallback.start",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:fallback.status",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:fallback.stop",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:fmt",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:gc",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:go",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:goal",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:hotfix-head-context",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:log",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:mute",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:notify",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:now",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:off",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:on",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:pardon-skip-list",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:pause",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:precheck-ci",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:reconcile",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:reconcile-pending",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:recover",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:reset",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:resume",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:review-resize",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:run-once",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:runs",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:self-downgrade",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:signals",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:status",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:story",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:test",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:unmute",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:loop:watch",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:next:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:north:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:release:consistency",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:release:release",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:release:showcase",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:release:verify",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:setup:offboard",
+      "cases": [
+        "cli.public-boundary",
+        "legacy.explicit-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:setup:setup",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:setup:skills",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:status:ci",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:status:pulse",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:status:read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:story:new",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:story:validate",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:test:run",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:truth:audit",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:truth:query",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:update:apply",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:activate",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:archive",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:create",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.create-recovery"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:doctor.read",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:doctor.repair",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:edit",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "workspace.discovery-clarify",
+        "workspace.edit-transaction"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:issue.init",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:list",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:migrate",
+      "cases": [
+        "cli.public-boundary",
+        "legacy.explicit-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:pause",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:register",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:requirement.add",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:show",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure",
+        "selector.alias-equivalence",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "cli:workspace:usage",
+      "cases": [
+        "cli.public-boundary",
+        "registry.policy-closure"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.changelog:generate",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.changelog:refresh_feature_catalog",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.clarify:scope",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.clarify:workspace_target",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.dream:record_candidates",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.dream:scan",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.echo:restate",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.qa:evaluate",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-.review:review",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-build:build",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-debug:diagnose",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-debug:source_fix",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-design:design",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-doc-audit:audit",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-doc-audit:draft",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-doc-audit:index",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-doctor:diagnose",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-doctor:repair",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-fix:fix",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-idea:capture",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-loop:operate",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-notes:record",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-onboard:diagnose",
+      "cases": [
+        "legacy.explicit-boundary",
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-onboard:write_plan",
+      "cases": [
+        "legacy.explicit-boundary",
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-peer:record_evidence",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-peer:review",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-prime:supervise",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-propose:propose",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-review-pr:review",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-spar:adversarial_tdd",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-ws-create:apply",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "skill:roll-ws-create:preview",
+      "cases": [
+        "registry.policy-closure",
+        "skill.handoff-authority"
+      ]
+    },
+    {
+      "policyKey": "tool:bash:bash",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:browser:browser.console",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:browser:browser.dom-query",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:browser:browser.screenshot",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:filesystem:filesystem.read",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:filesystem:filesystem.stat",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:filesystem:filesystem.write",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:git:git.commit",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:git:git.merge",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:git:git.push",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:git:git.status",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:github:github.ci",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:github:github.pr",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:mcp:mcp.call",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:network:network.fetch",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    },
+    {
+      "policyKey": "tool:physical:physical.screenshot",
+      "cases": [
+        "registry.policy-closure",
+        "tool.context-envelope",
+        "workspace.discovery-clarify"
+      ]
+    }
+  ]
+}

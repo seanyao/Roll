@@ -39,6 +39,11 @@ jobs:
         run: node skills/scripts/audit-skills.mjs --strict
       - name: Workspace context authority audit
         run: node scripts/audit-workspace-context.mjs --json | tee workspace-context-audit.json
+      - name: Workspace context operation case closure
+        run: |
+          node scripts/generate-workspace-context-validation-cases.mjs
+          git diff --exit-code -- docs/generated/workspace-context-validation-cases.json
+          pnpm --filter @roll/cli exec vitest run test/workspace-context-case-map.test.ts test/workspace-context.critical.e2e.test.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
