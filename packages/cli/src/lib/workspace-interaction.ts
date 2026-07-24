@@ -13,7 +13,7 @@ import {
   type WorkspaceClarificationHandoffV1,
   type WorkspaceIntentV1,
 } from "@roll/spec";
-import { isCanonicalWorkspaceSelectorToken } from "./workspace-selector.js";
+import { isCanonicalWorkspaceSelectorToken, workspaceSelectorArgs } from "./workspace-selector.js";
 
 export interface WorkspaceInteractionCapabilities {
   readonly stdinTTY: boolean;
@@ -294,13 +294,13 @@ function replaceCanonicalWorkspaceSelector(
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--") {
-      if (!inserted) replaced.push("--workspace", workspaceId);
+      if (!inserted) replaced.push(...workspaceSelectorArgs(workspaceId));
       replaced.push(...args.slice(index));
       return replaced;
     }
     if (isCanonicalWorkspaceSelectorToken(arg)) {
       if (!inserted) {
-        replaced.push("--workspace", workspaceId);
+        replaced.push(...workspaceSelectorArgs(workspaceId));
         inserted = true;
       }
       const oldValue = args[index + 1];
@@ -309,7 +309,7 @@ function replaceCanonicalWorkspaceSelector(
     }
     if (arg !== undefined) replaced.push(arg);
   }
-  if (!inserted) replaced.push("--workspace", workspaceId);
+  if (!inserted) replaced.push(...workspaceSelectorArgs(workspaceId));
   return replaced;
 }
 

@@ -28,7 +28,7 @@ import { guideExternalToolSetup, silentPreinstallChromium } from "../lib/externa
 import { loopControlRunnerReadout, rollBin, staleLoopRunnerMessage } from "./loop-runner-readout.js";
 import { screenLockedCycleIds } from "../runner/screen-lock-events.js";
 import { emitBacklogTargetError, resolveBacklogCommandTarget, type BacklogTargetResolver } from "./backlog-target.js";
-import { canonicalWorkspaceSelectorIndex, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
+import { canonicalWorkspaceSelectorIndex, isCanonicalWorkspaceSelectorToken, workspaceSelectorArgs } from "../lib/workspace-selector.js";
 
 /**
  * FIX-906: node fs-backed {@link FreshnessPort} for `ensureDeliveriesFresh`.
@@ -1945,7 +1945,7 @@ export async function loopGoCommand(args: string[], deps: LoopGoDeps = realDeps(
   if (deps.resolveTarget !== undefined) {
     const selectorArgs: string[] = [];
     const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
-    if (workspaceIndex >= 0) selectorArgs.push("--workspace", args[workspaceIndex + 1] ?? "");
+    if (workspaceIndex >= 0) selectorArgs.push(...workspaceSelectorArgs(args[workspaceIndex + 1] ?? ""));
     const decision = deps.resolveTarget(selectorArgs, "mutation");
     if (!decision.ok) return emitBacklogTargetError(decision);
     if ("aggregate" in decision) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });

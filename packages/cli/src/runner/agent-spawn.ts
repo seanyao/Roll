@@ -47,6 +47,7 @@ import {
 } from "./workspace-skill-handoff.js";
 import { getAgentSpec } from "@roll/core";
 import { worktreeGitDiscoveryEnv } from "./main-checkout-guard.js";
+import { workspaceSelectorArgs } from "../lib/workspace-selector.js";
 
 /**
  * FIX-204D — live-children registry. The signal teardown must kill an
@@ -432,8 +433,7 @@ const AGENT_PROFILES: Readonly<Record<string, AgentProfile>> = {
         "--print",
         "--trust",
         "--force",
-        "--workspace",
-        opts.cwd,
+        ...workspaceSelectorArgs(opts.cwd),
         "--output-format",
         "text",
         agentPrompt(opts),

@@ -9,6 +9,8 @@ import {
   canonicalWorkspaceSelectorIndex,
   containsCanonicalWorkspaceSelector,
   isCanonicalWorkspaceSelectorToken,
+  withWorkspaceSelector,
+  workspaceSelectorArgs,
 } from "../lib/workspace-selector.js";
 import {
   cliMatchedOperation,
@@ -245,14 +247,14 @@ export function registerAll(): void {
         "workspace",
         "issue.init",
         ["issue", "init"],
-        ["issue", "init", "US-WS-022", "--workspace", "roll"],
+        withWorkspaceSelector(["issue", "init", "US-WS-022"], "roll"),
         (args) => args[0] === "issue" && (args[1] === "init" || isHelp(args[1])),
       ),
       cliMatchedSelectorOperation(
         "workspace",
         "requirement.add",
         ["requirement", "add"],
-        ["requirement", "add", "--workspace", "roll"],
+        withWorkspaceSelector(["requirement", "add"], "roll"),
         (args) => args[0] === "requirement" && (args[1] === "add" || isHelp(args[1])),
       ),
       cliMatchedOperation(
@@ -267,13 +269,13 @@ export function registerAll(): void {
         ["doctor"],
         (args) => args[0] === "doctor" && args.slice(1).includes("--repair"),
       ),
-      cliSelectorOperation("workspace", "migrate", ["migrate"], ["migrate", "--workspace", "roll"]),
+      cliSelectorOperation("workspace", "migrate", ["migrate"], withWorkspaceSelector(["migrate"], "roll")),
       cliOperation("workspace", "edit", ["edit"]),
       cliOperation("workspace", "list", ["list"]),
-      cliSelectorOperation("workspace", "show", ["show"], ["show", "--workspace", "roll"]),
+      cliSelectorOperation("workspace", "show", ["show"], withWorkspaceSelector(["show"], "roll")),
       cliOperation("workspace", "register", ["register"]),
       ...["activate", "pause", "archive"].map((name) =>
-        cliSelectorOperation("workspace", name, [name], [name, "--workspace", "roll"])),
+        cliSelectorOperation("workspace", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
     rejectedRoutes: [{
       route: ["init"],
@@ -284,8 +286,8 @@ export function registerAll(): void {
     help: contextUsage,
     operations: [
       cliOperation("context", "usage"),
-      cliSelectorOperation("context", "status", ["status"], ["status", "--workspace", "roll"]),
-      cliSelectorOperation("context", "read", ["read"], ["read", "--stage", "build", "--workspace", "roll"]),
+      cliSelectorOperation("context", "status", ["status"], withWorkspaceSelector(["status"], "roll")),
+      cliSelectorOperation("context", "read", ["read"], withWorkspaceSelector(["read", "--stage", "build"], "roll")),
     ],
   });
   registerPorted("delivery", deliveryCommand, {
@@ -293,7 +295,7 @@ export function registerAll(): void {
     operations: [
       cliMatchedOperation("delivery", "usage", [], (args) => args.length === 0),
       ...["list", "show", "reconcile"].map((name) =>
-        cliSelectorOperation("delivery", name, [name], [name, "--workspace", "roll"])),
+        cliSelectorOperation("delivery", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
   });
   // REFACTOR-049: `roll lang` retired → use `roll config lang <zh|en|--reset>`.
@@ -363,10 +365,10 @@ export function registerAll(): void {
       "  repair  <story-id> [--health <path>] [--json]  evidence-only repair; never reopens the build\n" +
       "  local-window --story <ID> --url <loopback-url> [--prepare <json>] [--run <id>] [--json]  isolated local synthetic page only\n",
     operations: [
-      cliSelectorOperation("capture", "status", ["status"], ["status", "--workspace", "roll"]),
-      cliSelectorOperation("capture", "migrate", ["migrate"], ["migrate", "--workspace", "roll"]),
-      cliSelectorOperation("capture", "repair", ["repair"], ["repair", "US-DEMO-1", "--workspace", "roll"]),
-      cliSelectorOperation("capture", "local-window", ["local-window"], ["local-window", "--story", "US-DEMO-1", "--url", "http://127.0.0.1:3000", "--workspace", "roll"]),
+      cliSelectorOperation("capture", "status", ["status"], withWorkspaceSelector(["status"], "roll")),
+      cliSelectorOperation("capture", "migrate", ["migrate"], withWorkspaceSelector(["migrate"], "roll")),
+      cliSelectorOperation("capture", "repair", ["repair"], withWorkspaceSelector(["repair", "US-DEMO-1"], "roll")),
+      cliSelectorOperation("capture", "local-window", ["local-window"], withWorkspaceSelector(["local-window", "--story", "US-DEMO-1", "--url", "http://127.0.0.1:3000"], "roll")),
       cliOperation("capture", "refresh", ["refresh"]),
     ],
   });
@@ -382,8 +384,8 @@ export function registerAll(): void {
   }, {
     hidden: true,
     operations: [
-      cliSelectorOperation("attest", "audit", ["audit"], ["audit", "--workspace", "roll"]),
-      cliOperation("attest", "render", [], true, ["US-DEMO-1", "--workspace", "roll"], true),
+      cliSelectorOperation("attest", "audit", ["audit"], withWorkspaceSelector(["audit"], "roll")),
+      cliOperation("attest", "render", [], true, withWorkspaceSelector(["US-DEMO-1"], "roll"), true),
     ],
   });
   // `cycles`: the cycle ledger as a first-class command (US-CLI-012) — same
@@ -406,7 +408,7 @@ export function registerAll(): void {
     return indexCommand(removeWorkspaceSelector(args), { projectPath: root, authorityMode: "workspace" });
   }, {
     hidden: true,
-    operations: [cliSelectorOperation("index", "rebuild", ["--rebuild"], ["--rebuild", "--workspace", "roll"])],
+    operations: [cliSelectorOperation("index", "rebuild", ["--rebuild"], withWorkspaceSelector(["--rebuild"], "roll"))],
   });
   // `ls`: the cross-project registry listing (US-DOSSIER-028) — name·tag·verdict·path
   // from ~/.roll/projects.json; --json echoes the file verbatim. ONE registry, two
@@ -431,8 +433,8 @@ export function registerAll(): void {
     return args[0] === undefined || args[0] === "--help" || args[0] === "-h" ? 0 : 1;
   }, {
     operations: [
-      cliSelectorOperation("story", "new", ["new"], ["new", "US-DEMO-1", "--title", "Demo", "--workspace", "roll"]),
-      cliSelectorOperation("story", "validate", ["validate"], ["validate", "US-DEMO-1", "--workspace", "roll"]),
+      cliSelectorOperation("story", "new", ["new"], withWorkspaceSelector(["new", "US-DEMO-1", "--title", "Demo"], "roll")),
+      cliSelectorOperation("story", "validate", ["validate"], withWorkspaceSelector(["validate", "US-DEMO-1"], "roll")),
     ],
   });
   // `gc`: age out old surplus attest runs across the archive layout (US-META-001).
@@ -456,7 +458,7 @@ export function registerAll(): void {
         "agent",
         "workspace",
         [],
-        ["--workspace", "roll"],
+        workspaceSelectorArgs("roll"),
         hasWorkspaceSelectorArg,
       ),
       cliMatchedOperation("agent", "view", [], (args) => args.length === 0),
@@ -489,9 +491,9 @@ export function registerAll(): void {
   }, {
     help: backlogUsage,
     operations: [
-      cliSelectorOperation("backlog", "read", [], ["--workspace", "roll"]),
+      cliSelectorOperation("backlog", "read", [], workspaceSelectorArgs("roll")),
       ...["show", "block", "defer", "unblock", "promote", "claim", "lint", "unstick", "sync"].map((name) =>
-        cliSelectorOperation("backlog", name, [name], [name, "--workspace", "roll"])),
+        cliSelectorOperation("backlog", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
   });
   // FIX-356a: `roll brief` retired — US-PORT-002 was an immature owner digest.
@@ -525,7 +527,7 @@ export function registerAll(): void {
       remoteBacklogIds: () => [],
     });
   }, {
-    operations: [cliOperation("idea", "capture", [], true, ["Improve backlog", "--workspace", "roll"], true)],
+    operations: [cliOperation("idea", "capture", [], true, withWorkspaceSelector(["Improve backlog"], "roll"), true)],
   });
   // `release`: v3-native read-only release guidance (US-PORT-004). Computes the
   // next calver version from package.json + today, surfaces changelog readiness,
@@ -636,7 +638,7 @@ export function registerAll(): void {
     });
   }, {
     help: "Usage: roll design [--from-file <path> | \"<requirement>\"] [--agent <name>] [--verbose|--raw]\n  Launch $roll-design interactively with bounded live progress, card-created events, quiet heartbeats, and final handoff; when new Todo cards are created, offer `roll loop go --review auto` after showing agent-pool health.\n交互式启动 $roll-design；默认实时显示有界进展、建卡事件、静默心跳和最终交付；产出新 Todo 卡时会显示 agent 池健康概况，并提议启动 `roll loop go --review auto`。",
-    operations: [cliOperation("design", "design", [], true, ["Improve backlog", "--workspace", "roll"], true)],
+    operations: [cliOperation("design", "design", [], true, withWorkspaceSelector(["Improve backlog"], "roll"), true)],
   });
   // REFACTOR-048: `migrate-features` (card-skeleton backfill for pre-card-era
   // stories, US-META-007) retired — that one-time backfill completed; new cards
@@ -696,8 +698,8 @@ export function registerAll(): void {
     help: TRUTH_USAGE,
     hidden: true,
     operations: [
-      cliSelectorOperation("truth", "query", ["query"], ["query", "US-DEMO-1", "--workspace", "roll"]),
-      cliSelectorOperation("truth", "audit", ["audit"], ["audit", "--workspace", "roll"]),
+      cliSelectorOperation("truth", "query", ["query"], withWorkspaceSelector(["query", "US-DEMO-1"], "roll")),
+      cliSelectorOperation("truth", "audit", ["audit"], withWorkspaceSelector(["audit"], "roll")),
     ],
   });
   // `tune`: v3-native US-EVID-015 second-order control loop, READ-ONLY. Aggregates
@@ -870,11 +872,11 @@ export function registerAll(): void {
         "loop",
         "status",
         ["status"],
-        ["status", "--workspace", "roll"],
+        withWorkspaceSelector(["status"], "roll"),
         (args) => args[0] === undefined || args[0] === "status",
       ),
       ...["go", "run-once", "reconcile", "on", "pause", "resume"].map((name) =>
-        cliSelectorOperation("loop", name, [name], [name, "--workspace", "roll"])),
+        cliSelectorOperation("loop", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
     rejectedRoutes: ["monitor", "attach", "branches", "test-quality-check"].map((route) => ({
       route: [route],

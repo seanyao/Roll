@@ -50,7 +50,7 @@ import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { emitBacklogTargetError, resolveBacklogCommandTarget, stripBacklogScopeArgs, type ResolvedBacklogTarget } from "./backlog-target.js";
-import { canonicalWorkspaceSelectorIndex, containsCanonicalWorkspaceSelector } from "../lib/workspace-selector.js";
+import { canonicalWorkspaceSelectorIndex, containsCanonicalWorkspaceSelector, workspaceSelectorArgs } from "../lib/workspace-selector.js";
 import { resolveLang, t, v3Catalog, type WorkspaceExecutionContextV1 } from "@roll/spec";
 import { resolveStoryLeasePath } from "../runner/story-lease-path.js";
 import {
@@ -980,7 +980,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     if (!scoped.ok) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
     const selectorArgs: string[] = [];
     const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
-    if (workspaceIndex >= 0) selectorArgs.push("--workspace", args[workspaceIndex + 1] ?? "");
+    if (workspaceIndex >= 0) selectorArgs.push(...workspaceSelectorArgs(args[workspaceIndex + 1] ?? ""));
     let decision = resolveBacklogCommandTarget(selectorArgs, "mutation");
     if (!decision.ok && decision.code === "target_missing" && allowedCards !== undefined && allowedCards.size > 0) {
       const discovery = loadWorkspaceDiscovery({ rollHome: workspaceRollHome() });
@@ -994,7 +994,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
       });
       if (requirementDecision.ok) {
         decision = resolveBacklogCommandTarget(
-          ["--workspace", requirementDecision.target.workspaceId],
+          workspaceSelectorArgs(requirementDecision.target.workspaceId),
           "mutation",
         );
         workspaceResolutionSource = "requirement_discovery";

@@ -72,6 +72,7 @@ const SKILL_AMBIENT = /(?:\$PWD|\bproject root\b|\brepo(?:sitory)? root\b)/iu;
 const SKILL_AUTHORITY = /(?:authority|\.roll\/|backlog|features?|design|evidence|policy|dump)/iu;
 const SKILL_PROHIBITION = /(?:\bnever\b|\bdo not\b|\bmust not\b|\bnot (?:the |an? )?authority\b|禁止|不得|不可|不是.*(?:权威|依据))/iu;
 const TRUSTED_SELECTOR_IMPLEMENTATION_FILES = new Set([
+  "packages/cli/src/lib/command-surface.ts",
   "packages/cli/src/lib/workspace-context-audit.ts",
   "packages/cli/src/lib/workspace-selector.ts",
 ]);
@@ -168,42 +169,65 @@ function staticStringValue(node: ts.Node): string | undefined {
     const right = staticStringValue(node.right);
     return left === undefined || right === undefined ? undefined : `${left}${right}`;
   }
+  if (ts.isTemplateExpression(node)) {
+    let value = node.head.text;
+    for (const span of node.templateSpans) {
+      const expression = staticStringValue(span.expression);
+      if (expression === undefined) return undefined;
+      value += expression + span.literal.text;
+    }
+    return value;
+  }
   return undefined;
 }
 
-function isSelectorValue(node: ts.Node, aliases: ReadonlySet<string>): boolean {
+function isSelectorValue(node: ts.Node, aliases: ReadonlySet<string>, factories: ReadonlySet<string>): boolean {
   const staticValue = staticStringValue(node);
   if (staticValue === "--workspace" || staticValue === "--ws") return true;
   if (ts.isIdentifier(node)) return aliases.has(node.text) || node.text === "CANONICAL_WORKSPACE_SELECTOR";
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && factories.has(node.expression.text)) return true;
   if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
-    return isSelectorValue(node.expression, aliases);
+    return isSelectorValue(node.expression, aliases, factories);
   }
-  if (ts.isArrayLiteralExpression(node)) return node.elements.some((element) => isSelectorValue(element, aliases));
-  if (ts.isNewExpression(node)) return node.arguments?.some((argument) => isSelectorValue(argument, aliases)) === true;
+  if (ts.isArrayLiteralExpression(node)) return node.elements.some((element) => isSelectorValue(element, aliases, factories));
+  if (ts.isNewExpression(node)) return node.arguments?.some((argument) => isSelectorValue(argument, aliases, factories)) === true;
   if (ts.isObjectLiteralExpression(node)) {
     return node.properties.some((property) => {
-      if (ts.isShorthandPropertyAssignment(property)) return isSelectorValue(property.name, aliases);
-      if (ts.isPropertyAssignment(property)) return isSelectorValue(property.name, aliases) || isSelectorValue(property.initializer, aliases);
+      if (ts.isShorthandPropertyAssignment(property)) return isSelectorValue(property.name, aliases, factories);
+      if (ts.isPropertyAssignment(property)) return isSelectorValue(property.name, aliases, factories) || isSelectorValue(property.initializer, aliases, factories);
       return false;
     });
   }
   return false;
 }
 
-function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>): boolean {
-  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-    const method = node.expression.name.text;
-    return ["includes", "indexOf", "findIndex", "some", "has", "startsWith", "endsWith", "match", "search", "test"].includes(method)
-      && (isSelectorValue(node.expression.expression, aliases) || node.arguments.some((argument) => isSelectorValue(argument, aliases)));
+function isSelectorParserBypass(node: ts.Node, aliases: ReadonlySet<string>, factories: ReadonlySet<string>): boolean {
+  if (ts.isCallExpression(node)) {
+    const receiver = ts.isPropertyAccessExpression(node.expression)
+      ? node.expression.expression
+      : ts.isElementAccessExpression(node.expression)
+        ? node.expression.expression
+        : undefined;
+    const method = ts.isPropertyAccessExpression(node.expression)
+      ? node.expression.name.text
+      : ts.isElementAccessExpression(node.expression) && node.expression.argumentExpression !== undefined
+        ? staticStringValue(node.expression.argumentExpression)
+        : undefined;
+    return method !== undefined
+      && ["includes", "indexOf", "findIndex", "some", "has", "is", "startsWith", "endsWith", "match", "search", "test"].includes(method)
+      && ((receiver !== undefined && isSelectorValue(receiver, aliases, factories))
+        || node.arguments.some((argument) => isSelectorValue(argument, aliases, factories)));
   }
   if (ts.isElementAccessExpression(node)) {
-    return isSelectorValue(node.expression, aliases)
-      || (node.argumentExpression !== undefined && isSelectorValue(node.argumentExpression, aliases));
+    return isSelectorValue(node.expression, aliases, factories)
+      || (node.argumentExpression !== undefined && isSelectorValue(node.argumentExpression, aliases, factories));
   }
   if (ts.isBinaryExpression(node)) {
-    return isSelectorValue(node.left, aliases) || isSelectorValue(node.right, aliases);
+    return isSelectorValue(node.left, aliases, factories) || isSelectorValue(node.right, aliases, factories);
   }
-  if (ts.isCaseClause(node)) return isSelectorValue(node.expression, aliases);
+  if (ts.isCaseClause(node)) return isSelectorValue(node.expression, aliases, factories);
+  if (ts.isParameter(node) && node.initializer !== undefined) return isSelectorValue(node.initializer, aliases, factories);
+  if (ts.isReturnStatement(node) && node.expression !== undefined) return isSelectorValue(node.expression, aliases, factories);
   if (ts.isRegularExpressionLiteral(node)) return /--workspace|--ws/u.test(node.text);
   return false;
 }
@@ -263,13 +287,50 @@ function scanSource(
   };
   const cwdAliases = new Map<ts.Node, Set<string>>();
   const selectorAliases = new Set<string>();
+  const selectorFactories = new Set<string>();
   const collectAliases = (node: ts.Node): void => {
+    if (ts.isImportSpecifier(node)) {
+      const imported = node.propertyName?.text ?? node.name.text;
+      if (imported === "CANONICAL_WORKSPACE_SELECTOR") selectorAliases.add(node.name.text);
+    }
+    if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isSelectorValue(node.initializer, selectorAliases, selectorFactories)) {
+      selectorAliases.add(node.name.text);
+    }
     if (
       ts.isVariableDeclaration(node)
       && ts.isIdentifier(node.name)
       && node.initializer !== undefined
-      && isSelectorValue(node.initializer, selectorAliases)
+      && isSelectorValue(node.initializer, selectorAliases, selectorFactories)
     ) selectorAliases.add(node.name.text);
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isMethodDeclaration(node))
+      && node.name !== undefined
+      && ts.isIdentifier(node.name)
+      && node.body !== undefined
+    ) {
+      let returnsSelector = false;
+      const inspectReturn = (child: ts.Node): void => {
+        if (child !== node.body && ts.isFunctionLike(child)) return;
+        if (ts.isReturnStatement(child) && child.expression !== undefined && isSelectorValue(child.expression, selectorAliases, selectorFactories)) returnsSelector = true;
+        ts.forEachChild(child, inspectReturn);
+      };
+      if (ts.isBlock(node.body)) inspectReturn(node.body);
+      else returnsSelector = isSelectorValue(node.body, selectorAliases, selectorFactories);
+      if (returnsSelector) selectorFactories.add(node.name.text);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+      const body = node.initializer.body;
+      let returnsSelector = !ts.isBlock(body) && isSelectorValue(body, selectorAliases, selectorFactories);
+      if (ts.isBlock(body)) {
+        const inspectReturn = (child: ts.Node): void => {
+          if (child !== body && ts.isFunctionLike(child)) return;
+          if (ts.isReturnStatement(child) && child.expression !== undefined && isSelectorValue(child.expression, selectorAliases, selectorFactories)) returnsSelector = true;
+          ts.forEachChild(child, inspectReturn);
+        };
+        inspectReturn(body);
+      }
+      if (returnsSelector) selectorFactories.add(node.name.text);
+    }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isProcessCwdCall(node.initializer)) {
       const scope = scopeFor(node);
       const aliases = cwdAliases.get(scope) ?? new Set<string>();
@@ -281,6 +342,26 @@ function scanSource(
   collectAliases(source);
   const hasTrustedSelectorBoundary = (): boolean => TRUSTED_SELECTOR_IMPLEMENTATION_FILES.has(file);
   const visit = (node: ts.Node): void => {
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary()) {
+      const selectorText = staticStringValue(node);
+      const parentText = node.parent === undefined ? undefined : staticStringValue(node.parent);
+      const selectorSpelling = selectorText === "--workspace" || selectorText === "--ws";
+      const importedSelector = ts.isImportSpecifier(node)
+        && (node.propertyName?.text ?? node.name.text) === "CANONICAL_WORKSPACE_SELECTOR";
+      const selectorProperty = (ts.isPropertyAccessExpression(node) && node.name.text === "CANONICAL_WORKSPACE_SELECTOR")
+        || (ts.isElementAccessExpression(node) && node.argumentExpression !== undefined && staticStringValue(node.argumentExpression) === "CANONICAL_WORKSPACE_SELECTOR");
+      if ((selectorSpelling && parentText !== selectorText) || importedSelector || selectorProperty) {
+        addFinding(
+          findings,
+          seen,
+          identity,
+          file,
+          lineAt(source, node),
+          "CLI_SELECTOR_PARSER_BYPASS",
+          "selector spelling or constant escapes the central Workspace selector helper",
+        );
+      }
+    }
     if (
       ts.isCallExpression(node)
       && ts.isIdentifier(node.expression)
@@ -340,7 +421,7 @@ function scanSource(
         }
       }
     }
-    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node, selectorAliases)) {
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !hasTrustedSelectorBoundary() && isSelectorParserBypass(node, selectorAliases, selectorFactories)) {
       addFinding(
         findings,
         seen,

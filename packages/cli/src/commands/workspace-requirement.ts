@@ -10,7 +10,7 @@ import {
 import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
-import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
+import { canonicalWorkspaceSelectorValue, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const RESULT_V1 = "roll.workspace-requirement-result/v1" as const;
 const ERROR_V1 = "roll.workspace-requirement-error/v1" as const;
@@ -97,7 +97,7 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
   const revision = scalar.get("--revision");
   const bodyFile = scalar.get("--body-file");
   if (provider === undefined || ref === undefined || revision === undefined || bodyFile === undefined || storyIds.length === 0) return undefined;
-  const workspace = scalar.get("--workspace");
+  const workspace = canonicalWorkspaceSelectorValue(args);
   const contextRoot = scalar.get("--context-root");
   if (contextPaths.length > 0 && contextRoot === undefined) return undefined;
   return {

@@ -40,7 +40,7 @@ import {
   type WorkspaceInteractionModeDecision,
   type WorkspaceInteractionHost,
 } from "../lib/workspace-interaction.js";
-import { containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
+import { canonicalWorkspaceSelectorValue, containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import { configLang } from "./lang.js";
 import {
   resolveBacklogCommandTarget,
@@ -500,23 +500,19 @@ function resolveInteractiveTargets(
   return { ok: true, decision: target.result, args: target.args };
 }
 
-function flagValue(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  return index < 0 ? undefined : args[index + 1];
-}
-
 function positionalArgs(args: readonly string[], allowedFlags: ReadonlySet<string>): string[] | undefined {
   const positional: string[] = [];
   const seenFlags = new Set<string>();
+  let workspaceSeen = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (isCanonicalWorkspaceSelectorToken(arg)) {
       const value = args[index + 1];
       if (
-        !allowedFlags.has(arg) || seenFlags.has(arg) ||
+        workspaceSeen ||
         value === undefined || value.startsWith("--")
       ) return undefined;
-      seenFlags.add(arg);
+      workspaceSeen = true;
       index += 1;
       continue;
     }
@@ -716,7 +712,7 @@ function listCommand(args: readonly string[], resolver: BacklogTargetResolver, i
   const json = args.includes("--json");
   const parsedInteraction = parseWorkspaceInteractionArgs(args, interaction.capabilities);
   if (!parsedInteraction.ok) return emitError(parsedInteraction.code, json);
-  const positional = positionalArgs(parsedInteraction.args, new Set(["--workspace", "--all", "--json"]));
+  const positional = positionalArgs(parsedInteraction.args, new Set(["--all", "--json"]));
   if (positional === undefined || positional.length > 0 || (parsedInteraction.args.includes("--all") && containsCanonicalWorkspaceSelector(parsedInteraction.args))) {
     return emitError("invalid_arguments", json);
   }
@@ -741,7 +737,7 @@ function showCommand(args: readonly string[], resolver: BacklogTargetResolver, i
   const json = args.includes("--json");
   const parsedInteraction = parseWorkspaceInteractionArgs(args, interaction.capabilities);
   if (!parsedInteraction.ok) return emitError(parsedInteraction.code, json);
-  const positional = positionalArgs(parsedInteraction.args, new Set(["--workspace", "--json"]));
+  const positional = positionalArgs(parsedInteraction.args, new Set(["--json"]));
   const storyId = positional?.[0];
   if (positional === undefined || positional.length !== 1 || storyId === undefined || !validateStoryId(storyId).ok) {
     return emitError("invalid_arguments", json);
@@ -771,10 +767,10 @@ export function reconcileWorkspaceDeliveries(
   resolver: BacklogTargetResolver = resolveBacklogCommandTarget,
 ): number {
   const json = args.includes("--json");
-  const positional = positionalArgs(args, new Set(["--workspace", "--dry-run", "--json", "--all"]));
+  const positional = positionalArgs(args, new Set(["--dry-run", "--json", "--all"]));
   if (
     positional === undefined || positional.length > 1 || args.includes("--all") ||
-    flagValue(args, "--workspace") === undefined ||
+    canonicalWorkspaceSelectorValue(args) === undefined ||
     (positional[0] !== undefined && !validateStoryId(positional[0]).ok)
   ) {
     return emitError(args.includes("--all") ? "all_requires_readonly" : "invalid_arguments", json);

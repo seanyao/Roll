@@ -245,6 +245,12 @@ describe("US-WS-039 Workspace context static audit", () => {
       "const selectors = { '--workspace': true };\nexport function run(arg: string): boolean { return selectors[arg] === true; }\n",
       "const selector = '--' + 'workspace';\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
       "export function run(arg: string): boolean { return /--workspace/u.test(arg); }\n",
+      "const selector = `--${'workspace'}`;\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "import { CANONICAL_WORKSPACE_SELECTOR as selector } from '../lib/workspace-selector.js';\nexport function run(args: readonly string[]): boolean { return args.includes(selector); }\n",
+      "export function run(args: readonly string[]): boolean { return args['includes']('--workspace'); }\n",
+      "export function run(arg: string): boolean { return Object.is(arg, '--workspace'); }\n",
+      "export function run(args: readonly string[], selector = '--workspace'): boolean { return args.includes(selector); }\n",
+      "function selector(): string { return '--workspace'; }\nexport function run(args: readonly string[]): boolean { return args.includes(selector()); }\n",
     ]) {
       const rootDir = fixture({
         "docs/generated/workspace-context-compatibility-matrix.json": `${JSON.stringify({ rows: [policy] })}\n`,

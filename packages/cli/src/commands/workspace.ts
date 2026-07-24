@@ -18,7 +18,7 @@ import { workspaceDoctorCommand } from "./workspace-doctor.js";
 import { workspaceMigrateCommand } from "./workspace-migrate.js";
 import { workspaceEditCommand } from "./workspace-edit.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
-import { containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
+import { canonicalWorkspaceSelectorValue, containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const WORKSPACE_LIST_V1 = "roll.workspace-list/v1" as const;
 const WORKSPACE_VIEW_V1 = "roll.workspace-view/v1" as const;
@@ -74,11 +74,6 @@ function view(entry: InspectedWorkspace): WorkspaceView {
       reason: "scheduler_not_available",
     },
   };
-}
-
-function flagValue(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  return index >= 0 ? args[index + 1] : undefined;
 }
 
 function positionalArgs(args: readonly string[]): string[] {
@@ -185,7 +180,7 @@ function resolveOne(
 
 function parseTarget(args: readonly string[]): { readonly ok: true; readonly target?: string } | { readonly ok: false } {
   if (unknownFlags(args).length > 0) return { ok: false };
-  const optionTarget = flagValue(args, "--workspace");
+  const optionTarget = canonicalWorkspaceSelectorValue(args);
   if (containsCanonicalWorkspaceSelector(args) && optionTarget === undefined) return { ok: false };
   const positional = positionalArgs(args);
   if (positional.length > 1 || (optionTarget !== undefined && positional.length > 0)) return { ok: false };
