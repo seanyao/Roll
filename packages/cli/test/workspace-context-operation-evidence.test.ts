@@ -18,7 +18,7 @@ const matrix = JSON.parse(readFileSync(join(root, "docs", "generated", "workspac
   rows: WorkspaceContextPolicy[];
 };
 const validation = JSON.parse(readFileSync(join(root, "docs", "generated", "workspace-context-validation-cases.json"), "utf8")) as {
-  operationCases: Array<{ id: string; policyKey: string; surface: string; testFile: string; testName: string }>;
+  operationCases: Array<{ id: string; policyKey: string; surface: string; testFile: string; testName: string; proves: string[] }>;
 };
 const manifest = JSON.parse(readFileSync(join(skillsRoot, "route-cases", "skills.json"), "utf8")) as unknown;
 
@@ -69,6 +69,7 @@ describe("US-WS-040 executable operation evidence", () => {
       surface: "cli",
       testFile: "packages/cli/test/workspace-context-operation-evidence.test.ts",
       testName: `executes registered CLI probe for ${key}`,
+      proves: ["operation_policy", "cli_registration_probe"],
     }]);
   });
 
@@ -84,6 +85,7 @@ describe("US-WS-040 executable operation evidence", () => {
       surface: "skill",
       testFile: "packages/cli/test/workspace-context-operation-evidence.test.ts",
       testName: `validates shipped Skill manifest policy for ${key}`,
+      proves: ["operation_policy", "skill_manifest_policy"],
     }]);
   });
 });

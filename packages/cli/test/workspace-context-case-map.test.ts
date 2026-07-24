@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,12 +19,14 @@ interface OperationCase {
   readonly surface: MatrixRow["surface"];
   readonly testFile: string;
   readonly testName: string;
+  readonly proves: readonly string[];
 }
 
 interface EvidenceCase {
   readonly id: string;
   readonly testFile: string;
   readonly testName: string;
+  readonly proves: readonly string[];
 }
 
 interface ValidationArtifact {
@@ -37,7 +40,7 @@ function key(row: MatrixRow): string {
   return `${row.surface}:${row.id}:${row.operation}`;
 }
 
-function expectedEvidence(row: MatrixRow): Pick<OperationCase, "id" | "policyKey" | "surface" | "testFile" | "testName"> {
+function expectedEvidence(row: MatrixRow): OperationCase {
   const policyKey = key(row);
   const testFile = row.surface === "tool"
     ? "packages/infra/test/workspace-context-operation-evidence.test.ts"
@@ -47,7 +50,12 @@ function expectedEvidence(row: MatrixRow): Pick<OperationCase, "id" | "policyKey
     : row.surface === "skill"
       ? `validates shipped Skill manifest policy for ${policyKey}`
       : `rejects missing execution context before adapter effects for ${policyKey}`;
-  return { id: `operation:${policyKey}`, policyKey, surface: row.surface, testFile, testName };
+  const proves = row.surface === "cli"
+    ? ["operation_policy", "cli_registration_probe"]
+    : row.surface === "skill"
+      ? ["operation_policy", "skill_manifest_policy"]
+      : ["operation_policy", "tool_adapter_context_boundary"];
+  return { id: `operation:${policyKey}`, policyKey, surface: row.surface, testFile, testName, proves };
 }
 
 function validationIssues(rows: readonly MatrixRow[], artifact: ValidationArtifact): string[] {
@@ -78,24 +86,6 @@ function validationIssues(rows: readonly MatrixRow[], artifact: ValidationArtifa
   return issues;
 }
 
-const expectedDesignSemantics: Record<string, { topic: string; storyAcceptance: string[]; evidenceCaseIds: string[] }> = {
-  "D15-01": { topic: "idea_product_decisions", storyAcceptance: ["AC10"], evidenceCaseIds: ["mapping.semantic-closure"] },
-  "D15-02": { topic: "complete_ws_tree_and_selector_alias", storyAcceptance: ["AC2"], evidenceCaseIds: ["selector.complete-tree", "boundary.alias-equivalence"] },
-  "D15-03": { topic: "create_only_retired_init", storyAcceptance: ["AC3"], evidenceCaseIds: ["workspace.create-authorization", "boundary.fail-closed"] },
-  "D15-04": { topic: "single_active_requirement_mismatch", storyAcceptance: ["AC5"], evidenceCaseIds: ["workspace.discovery-clarify"] },
-  "D15-05": { topic: "deterministic_and_semantic_requirement_evidence", storyAcceptance: ["AC5"], evidenceCaseIds: ["workspace.discovery-clarify"] },
-  "D15-06": { topic: "edit_preview_lock_digest_atomic_recovery", storyAcceptance: ["AC4"], evidenceCaseIds: ["workspace.edit-transaction"] },
-  "D15-07": { topic: "existing_issue_byte_preservation", storyAcceptance: ["AC4"], evidenceCaseIds: ["workspace.edit-transaction"] },
-  "D15-08": { topic: "all_cli_skill_tool_operations_have_policy", storyAcceptance: ["AC1", "AC6", "AC8"], evidenceCaseIds: ["matrix.registry-closure", "operation:cli:workspace:create", "operation:skill:roll-build:build", "operation:tool:github:github.pr", "operation:tool:mcp:mcp.call"] },
-  "D15-09": { topic: "noninteractive_mutation_fail_closed", storyAcceptance: ["AC7"], evidenceCaseIds: ["boundary.fail-closed"] },
-  "D15-10": { topic: "doc_refresh_and_compatibility_matrix_gate", storyAcceptance: ["AC1", "AC9", "AC10"], evidenceCaseIds: ["matrix.registry-closure", "mapping.semantic-closure"] },
-  "D15-11": { topic: "legacy_pending_recovery_without_init", storyAcceptance: ["AC3"], evidenceCaseIds: ["workspace.create-authorization", "boundary.fail-closed"] },
-  "D15-12": { topic: "existing_requirement_and_cycle_repository_identity", storyAcceptance: ["AC6"], evidenceCaseIds: ["tool.authority-isolation"] },
-  "D15-13": { topic: "agent_clarify_stops_before_mutation", storyAcceptance: ["AC5", "AC7"], evidenceCaseIds: ["workspace.discovery-clarify", "boundary.fail-closed"] },
-  "D15-14": { topic: "direct_and_agent_shared_clarification_contract", storyAcceptance: ["AC5", "AC7"], evidenceCaseIds: ["workspace.discovery-clarify"] },
-  "D15-15": { topic: "create_intent_is_not_apply_authorization", storyAcceptance: ["AC3", "AC5"], evidenceCaseIds: ["workspace.create-authorization", "workspace.discovery-clarify"] },
-};
-
 describe("US-WS-040 operation validation case closure", () => {
   it("maps every compatibility row bidirectionally to one operation-specific executable case", () => {
     expect(existsSync(artifactPath), "generate workspace-context-validation-cases.json").toBe(true);
@@ -125,27 +115,81 @@ describe("US-WS-040 operation validation case closure", () => {
     const mismatched = structuredClone(artifact) as { operationCases: OperationCase[] } & ValidationArtifact;
     mismatched.operationCases.find((entry) => entry.policyKey === key(second))!.testName = "generic green marker";
     expect(validationIssues(matrix.rows, mismatched)).toContain(`case evidence ${key(second)}`);
+
+    const orphanMapping = structuredClone(artifact) as { operations: Array<{ policyKey: string; caseId: string }> } & ValidationArtifact;
+    orphanMapping.operations.push({ policyKey: "tool:future:future.call", caseId: "operation:tool:future:future.call" });
+    expect(validationIssues(matrix.rows, orphanMapping)).toContain("orphan mapping tool:future:future.call");
+
+    const orphanCase = structuredClone(artifact) as { operationCases: OperationCase[] } & ValidationArtifact;
+    orphanCase.operationCases.push({
+      id: "operation:tool:future:future.call",
+      policyKey: "tool:future:future.call",
+      surface: "tool",
+      testFile: "packages/infra/test/workspace-context-operation-evidence.test.ts",
+      testName: "future operation",
+      proves: ["operation_policy", "tool_adapter_context_boundary"],
+    });
+    expect(validationIssues(matrix.rows, orphanCase)).toContain("orphan case tool:future:future.call");
+  });
+
+  it("verifies the external design and documentation source contract", () => {
+    const mapping = JSON.parse(readFileSync(join(root, "packages", "cli", "test", "fixtures", "workspace-context", "design-ac-mapping.json"), "utf8")) as {
+      sourceContract: { repository: string; commit: string; path: string; sourceSha256: string; snapshot: string };
+    };
+    const source = JSON.parse(readFileSync(join(root, mapping.sourceContract.snapshot), "utf8")) as {
+      schema: string;
+      sourceSha256: string;
+      designAcceptanceCriteria: Array<{ id: string; statement: string }>;
+      storyAcceptanceCriteria: Array<{ id: string; statement: string }>;
+      documentationStory: { id: string; dependsOn: string[]; acceptanceCriteria: Array<{ id: string; statement: string }> };
+    };
+    const payload = {
+      designAcceptanceCriteria: source.designAcceptanceCriteria,
+      storyAcceptanceCriteria: source.storyAcceptanceCriteria,
+      documentationStory: source.documentationStory,
+    };
+    const digest = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+    expect(source.schema).toBe("roll.workspace-context-design-source/v1");
+    expect(mapping.sourceContract).toMatchObject({
+      repository: "roll-meta",
+      commit: "8f69dcc6c0329dd0cab696ac67106edaffa39800",
+      path: "features/workspace-orchestration/US-WS-040/design-ac-source-contract.json",
+    });
+    expect(digest).toBe(source.sourceSha256);
+    expect(digest).toBe(mapping.sourceContract.sourceSha256);
+    expect(source.designAcceptanceCriteria).toHaveLength(15);
+    expect(source.storyAcceptanceCriteria).toHaveLength(10);
+    expect(source.documentationStory.id).toBe("US-WS-041");
+    expect(source.documentationStory.dependsOn).toContain("US-WS-040");
+    expect(source.documentationStory.acceptanceCriteria.map((entry) => entry.statement).join("\n"))
+      .toMatch(/README.*guide.*help.*completion.*skill docs/su);
+  });
+
+  it("gates generated operation evidence in CI", () => {
+    const workflow = readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8");
+    expect(workflow).toContain("node scripts/generate-workspace-context-validation-cases.mjs");
+    expect(workflow).toContain("git diff --exit-code -- docs/generated/workspace-context-validation-cases.json");
+    expect(workflow).toContain("test/workspace-context-operation-evidence.test.ts");
+    expect(workflow).toContain("pnpm --filter @roll/infra exec vitest run test/workspace-context-operation-evidence.test.ts");
   });
 
   it("binds every detailed design AC to Story ACs and concrete executable cases", () => {
     const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as ValidationArtifact;
     const mapping = JSON.parse(readFileSync(join(root, "packages", "cli", "test", "fixtures", "workspace-context", "design-ac-mapping.json"), "utf8")) as {
       schema: string;
-      story: { id: string; acceptanceCriteria: Array<{ id: string; topic: string }> };
-      designAcceptanceCriteria: Array<{ id: string; topic: string; storyAcceptance: string[]; evidenceCaseIds: string[] }>;
+      sourceContract: { snapshot: string };
+      story: { id: string };
+      designAcceptanceCriteria: Array<{ id: string; topic: string; storyAcceptance: string[]; requiredCapabilities: string[]; evidenceCaseIds: string[] }>;
     };
-    expect(mapping.schema).toBe("roll.workspace-context-design-ac-mapping/v1");
+    const source = JSON.parse(readFileSync(join(root, mapping.sourceContract.snapshot), "utf8")) as {
+      designAcceptanceCriteria: Array<{ id: string; statement: string }>;
+      storyAcceptanceCriteria: Array<{ id: string; statement: string }>;
+    };
+    expect(mapping.schema).toBe("roll.workspace-context-design-ac-mapping/v2");
     expect(mapping.story.id).toBe("US-WS-040");
-    expect(mapping.story.acceptanceCriteria.map((entry) => entry.id)).toEqual(
-      Array.from({ length: 10 }, (_, index) => `AC${index + 1}`),
-    );
-    expect(Object.fromEntries(mapping.designAcceptanceCriteria.map((entry) => [entry.id, {
-      topic: entry.topic,
-      storyAcceptance: entry.storyAcceptance,
-      evidenceCaseIds: entry.evidenceCaseIds,
-    }]))).toEqual(expectedDesignSemantics);
+    expect(mapping.designAcceptanceCriteria.map((entry) => entry.id)).toEqual(source.designAcceptanceCriteria.map((entry) => entry.id));
 
-    const storyAcIds = new Set(mapping.story.acceptanceCriteria.map((entry) => entry.id));
+    const storyAcIds = new Set(source.storyAcceptanceCriteria.map((entry) => entry.id));
     const evidenceCases = new Map([
       ...artifact.operationCases.map((entry) => [entry.id, entry] as const),
       ...artifact.crossCuttingCases.map((entry) => [entry.id, entry] as const),
@@ -162,7 +206,25 @@ describe("US-WS-040 operation validation case closure", () => {
         expect(existsSync(join(root, evidence!.testFile)), `${caseId} test file`).toBe(true);
         expect(evidence!.testName.trim(), `${caseId} concrete test name`).not.toBe("");
       }
+      const capabilities = new Set(design.evidenceCaseIds.flatMap((caseId) => evidenceCases.get(caseId)?.proves ?? []));
+      for (const capability of design.requiredCapabilities) {
+        expect(capabilities.has(capability), `${design.id} missing capability ${capability}`).toBe(true);
+      }
     }
     expect([...usedStoryAcs].sort()).toEqual([...storyAcIds].sort());
+
+    const sourceStatements = new Map(source.designAcceptanceCriteria.map((entry) => [entry.id, entry.statement]));
+    const d15_01 = mapping.designAcceptanceCriteria.find((entry) => entry.id === "D15-01")!;
+    expect(sourceStatements.get("D15-01")).toMatch(/IDEA-075\.\.079/u);
+    expect(d15_01.evidenceCaseIds).not.toContain("mapping.semantic-closure");
+    expect(d15_01.requiredCapabilities).toEqual(expect.arrayContaining([
+      "workspace_alias_complete_tree", "create_only", "edit_transaction", "requirement_match_guard", "clarify_select_or_create",
+    ]));
+    const d15_10 = mapping.designAcceptanceCriteria.find((entry) => entry.id === "D15-10")!;
+    expect(sourceStatements.get("D15-10")).toMatch(/文档刷新.*help\/completion\/skill.*兼容矩阵/u);
+    expect(d15_10.evidenceCaseIds).not.toContain("mapping.semantic-closure");
+    expect(d15_10.requiredCapabilities).toEqual(expect.arrayContaining([
+      "documentation_refresh_dependency", "compatibility_matrix_ci_gate", "matrix_registry_closure",
+    ]));
   });
 });

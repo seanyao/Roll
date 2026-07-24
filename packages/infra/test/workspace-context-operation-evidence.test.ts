@@ -17,7 +17,7 @@ import {
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const validation = JSON.parse(readFileSync(join(root, "docs", "generated", "workspace-context-validation-cases.json"), "utf8")) as {
-  operationCases: Array<{ id: string; policyKey: string; surface: string; testFile: string; testName: string }>;
+  operationCases: Array<{ id: string; policyKey: string; surface: string; testFile: string; testName: string; proves: string[] }>;
 };
 const adapters = [
   new BashTool(),
@@ -79,6 +79,7 @@ describe("US-WS-040 executable built-in tool operation evidence", () => {
       surface: "tool",
       testFile: "packages/infra/test/workspace-context-operation-evidence.test.ts",
       testName: `rejects missing execution context before adapter effects for ${key}`,
+      proves: ["operation_policy", "tool_adapter_context_boundary"],
     }]);
   });
 });
