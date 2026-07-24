@@ -512,6 +512,11 @@ export interface WorkspaceSkillInvocation {
   readonly legacyProjectRoot?: string;
 }
 
+const REGISTERED_WORKSPACE_SKILL_ENV: unique symbol = Symbol("registeredWorkspaceSkillEnv");
+type RegisteredWorkspaceSkillSpawnOptions = AgentSpawnOptions & {
+  readonly [REGISTERED_WORKSPACE_SKILL_ENV]?: NodeJS.ProcessEnv;
+};
+
 export function adversarialRolePrompt(role: "test_author" | "implementer" | "attacker"): string {
   switch (role) {
     case "test_author":
@@ -547,9 +552,6 @@ export interface AgentSpawnOptions {
    * spawn resolves its authority policy from the shipped registry; callers
    * cannot self-report scope/access/effect target. */
   workspaceSkillInvocation?: WorkspaceSkillInvocation;
-  /** Internal result of resolving workspaceSkillInvocation against the shipped
-   * registry. It is applied only after ambient authority variables are scrubbed. */
-  registeredWorkspaceSkillEnv?: NodeJS.ProcessEnv;
   /** Hard wall-clock kill after this many ms (the watchdog also enforces this at
    *  the orchestrator layer; this is the spawn-local belt-and-braces). */
   timeoutMs?: number;
@@ -791,7 +793,7 @@ function childEnv(opts: AgentSpawnOptions): NodeJS.ProcessEnv {
   env.PWD = opts.cwd;
   delete env.OLDPWD;
   Object.assign(env, workspaceExecutionEnvironment(opts.workspaceExecution));
-  Object.assign(env, opts.registeredWorkspaceSkillEnv ?? {});
+  Object.assign(env, (opts as RegisteredWorkspaceSkillSpawnOptions)[REGISTERED_WORKSPACE_SKILL_ENV] ?? {});
   return opts.runDir !== undefined && opts.runDir !== "" ? { ...env, ...evidenceFrameEnv(opts.runDir) } : env;
 }
 
@@ -905,9 +907,9 @@ function prepareRegisteredSkillSpawnOptions(opts: AgentSpawnOptions): AgentSpawn
     ...opts,
     cwd: prepared.cwd,
     skillBody: prepared.skillBody,
-    registeredWorkspaceSkillEnv: prepared.env,
+    [REGISTERED_WORKSPACE_SKILL_ENV]: prepared.env,
     ...(prepared.context === undefined ? { workspaceExecution: undefined } : { workspaceExecution: prepared.context }),
-  };
+  } as RegisteredWorkspaceSkillSpawnOptions;
 }
 
 export const realAgentSpawn: AgentSpawn = (agent, rawOpts) => {
