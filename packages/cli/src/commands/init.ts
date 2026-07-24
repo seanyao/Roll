@@ -66,7 +66,7 @@ import {
 import { computeInitFactsHash } from "../lib/onboard-plan.js";
 import { discoverInteractiveAgents } from "../lib/interactive-agent.js";
 import { confirmYesNo, readConfirmLine } from "../lib/tty-confirm.js";
-import { designCommand, type DesignCommandDeps } from "./design.js";
+import { initOnboardDesignCommand, type DesignCommandDeps } from "./design.js";
 
 /**
  * FIX-283 (AC4): adopting roll registers the project into `~/.roll/projects.json`
@@ -1749,7 +1749,7 @@ interface InitCommandDeps {
 
 export function runDesignSync(
   args: string[],
-  runDesign: (args: string[], deps: Partial<DesignCommandDeps>) => number | Promise<number> = designCommand,
+  runDesign: (args: string[], deps: Partial<DesignCommandDeps>) => number | Promise<number> = initOnboardDesignCommand,
 ): number {
   const cwd = process.cwd();
   const result = runDesign(args, {

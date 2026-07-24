@@ -418,7 +418,6 @@ function mergeCtx(live: CycleContext, next: CycleContext): CycleContext {
     repositoryExecution: next.repositoryExecution ?? live.repositoryExecution,
     workspaceExecution: next.workspaceExecution ?? live.workspaceExecution,
     workspaceContextScope: next.workspaceContextScope ?? live.workspaceContextScope,
-    workspaceContextOperationProvenance: next.workspaceContextOperationProvenance ?? live.workspaceContextOperationProvenance,
     repositorySelector: next.repositorySelector ?? live.repositorySelector,
   };
 }

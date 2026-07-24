@@ -418,35 +418,18 @@ describe("US-WS-010 repository Builder context", () => {
     expect(() => buildRepositoryContextMap(oversized)).toThrow("repository_context_too_large");
   });
 
-  it("runs the Builder at the Issue root and injects the repository map without spawning an external engine", async () => {
-    const spawn = fakeSpawn();
-    const spawnOptions = applyRepositoryBuilderContext({
+  it("rejects a repository map that is not bound to a Workspace execution context", () => {
+    expect(() => applyRepositoryBuilderContext({
       cycleId: "cycle-fixture",
       branch: "cycle-fixture",
       loop: "ci",
       repositoryExecution: execution,
       workspaceContextScope: "legacy_migration_only",
-      workspaceContextOperationProvenance: {
-        surface: "cli",
-        id: "workspace",
-        operation: "migrate",
-      },
     }, {
       purpose: "builder",
       cwd: paths.worktreePath,
       skillBody: "BUILD STORY",
-    });
-
-    await spawn("claude", spawnOptions);
-
-    expect(spawn).toHaveBeenCalledOnce();
-    expect(spawn).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({
-        cwd: execution.issueRoot,
-        skillBody: expect.stringContaining("repo-111111111111"),
-      }),
-    );
+    })).toThrow("missing_execution_context");
   });
 
   it("binds Git/provider adapters by repoId and rejects read-only publish before the adapter runs", async () => {
@@ -937,32 +920,18 @@ describe("US-WS-010 repository Builder context", () => {
     });
   });
 
-  it("preserves the current one-repository spawn contract when no Workspace context is supplied", async () => {
-    const spawn = fakeSpawn();
+  it("fails closed when no Workspace context is supplied", () => {
     const input = {
       purpose: "builder",
       cwd: paths.worktreePath,
       skillBody: "BUILD STORY",
     } as const;
-    const spawnOptions = applyRepositoryBuilderContext({
+    expect(() => applyRepositoryBuilderContext({
       cycleId: "cycle-legacy",
       branch: "cycle-legacy",
       loop: "ci",
       workspaceContextScope: "legacy_migration_only",
-      workspaceContextOperationProvenance: {
-        surface: "cli",
-        id: "workspace",
-        operation: "migrate",
-      },
-    }, input);
-
-    await spawn("claude", spawnOptions);
-
-    expect(spawn).toHaveBeenCalledWith("claude", {
-      purpose: "builder",
-      cwd: paths.worktreePath,
-      skillBody: "BUILD STORY",
-    });
+    }, input)).toThrow("missing_execution_context");
   });
 
   it("does not let nodePorts construction statically rewrite a Builder call", async () => {

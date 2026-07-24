@@ -13,12 +13,12 @@
  * us-qa-016-fault-matrix.test.ts).
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { RouteDeps } from "@roll/core";
-import type { RollEvent } from "@roll/spec";
+import { REPOSITORY_BINDING_V1, WORKSPACE_EXECUTION_CONTEXT_V1, type RollEvent, type WorkspaceExecutionContextV1 } from "@roll/spec";
 import {
   type AgentSpawn,
   type AgentSpawnResult,
@@ -52,6 +52,58 @@ function readEvents(path: string): RollEvent[] {
     .split("\n")
     .filter((line) => line.trim() !== "")
     .map((line) => JSON.parse(line) as RollEvent);
+}
+
+function workspaceExecutionContext(workspaceRoot: string, storyId: string, worktreeTarget: string): WorkspaceExecutionContextV1 {
+  const issueRoot = join(workspaceRoot, "issues", storyId);
+  const worktreePath = join(issueRoot, "product");
+  mkdirSync(issueRoot, { recursive: true });
+  symlinkSync(worktreeTarget, worktreePath, "dir");
+  const repoId = "repo-fix1475-product";
+  const execution = {
+    workspaceId: "roll",
+    issueRoot,
+    repositories: {
+      [repoId]: {
+        repoId,
+        alias: "product",
+        access: "write" as const,
+        requiredDelivery: true,
+        noChangePolicy: "changes_required" as const,
+        worktreePath,
+        baseSha: "1".repeat(40),
+        headSha: "2".repeat(40),
+        commands: { test: [], integration: [] },
+      },
+    },
+  };
+  return {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: { workspaceId: "roll", root: workspaceRoot, canonicalRoot: workspaceRoot, lifecycle: "active" },
+    resolution: { source: "explicit", evidence: [] },
+    bindings: [{
+      schema: REPOSITORY_BINDING_V1,
+      repoId,
+      alias: "product",
+      remote: "git@github.com:acme/fix1475-product.git",
+      integrationBranch: "main",
+      provider: "github",
+      workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+    }],
+    issue: { storyId, manifestPath: join(issueRoot, "manifest.json"), execution },
+    authorities: {
+      backlog: join(workspaceRoot, "backlog", "index.md"),
+      features: join(workspaceRoot, "features"),
+      design: join(workspaceRoot, "design"),
+      requirements: join(workspaceRoot, "requirements"),
+      policy: join(workspaceRoot, "policy.yaml"),
+      evidence: join(workspaceRoot, "evidence"),
+      toolDumps: join(workspaceRoot, "runtime", "tool-dumps"),
+      events: join(workspaceRoot, "runtime", "events"),
+      runtime: join(workspaceRoot, "runtime"),
+      locks: join(workspaceRoot, "runtime", "locks"),
+    },
+  };
 }
 
 const BACKLOG = [
@@ -222,12 +274,8 @@ describe("FIX-1475 — the supervised path never moves the shared main ref", () 
         cycleId,
         branch: `loop/cycle-${cycleId}`,
         loop: "ci" as never,
-        workspaceContextScope: "legacy_migration_only",
-        workspaceContextOperationProvenance: {
-          surface: "cli",
-          id: "workspace",
-          operation: "migrate",
-        },
+        workspaceExecution: workspaceExecutionContext(tmp("ahead-workspace"), "US-RUN-001", p.worktreePath),
+        workspaceContextScope: "issue_required",
       },
     });
 
@@ -306,12 +354,8 @@ describe("FIX-1475 — the supervised path never moves the shared main ref", () 
         cycleId,
         branch: `loop/cycle-${cycleId}`,
         loop: "ci" as never,
-        workspaceContextScope: "legacy_migration_only",
-        workspaceContextOperationProvenance: {
-          surface: "cli",
-          id: "workspace",
-          operation: "migrate",
-        },
+        workspaceExecution: workspaceExecutionContext(tmp("dirtyahead-workspace"), "US-RUN-001", p.worktreePath),
+        workspaceContextScope: "issue_required",
       },
     });
 

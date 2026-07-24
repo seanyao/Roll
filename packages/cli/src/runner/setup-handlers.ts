@@ -554,9 +554,10 @@ export async function executeSetupCommand(
       let workspaceExecution = ctx.workspaceExecution;
       let repositorySelector = ctx.repositorySelector;
       if (workspaceExecution !== undefined) {
-        const frozen = repositoryExecution === undefined
+        const freezeExecution = repositoryExecution ?? workspaceExecution.issue?.execution;
+        const frozen = freezeExecution === undefined
           ? { ok: false as const, code: "missing_execution_context" }
-          : freezeWorkspaceCycleContext({ workspace: workspaceExecution, storyId: story.id, execution: repositoryExecution });
+          : freezeWorkspaceCycleContext({ workspace: workspaceExecution, storyId: story.id, execution: freezeExecution });
         if (!frozen.ok) {
           return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath,
             alert: `workspace cycle context blocked before spawn for ${story.id}: ${frozen.code}` });

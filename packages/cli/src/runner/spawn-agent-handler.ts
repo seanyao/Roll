@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { advanceContextCycleStageState, authorizesLegacyWorkspaceContextOperation, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
+import { advanceContextCycleStageState, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext } from "@roll/core";
 import type { CycleCost, RepositoryExecutionContext } from "@roll/spec";
 import { agentSpawnEnvironment, workspaceExecutionEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
@@ -88,7 +88,7 @@ export function applyRepositoryBuilderContext(
   ctx: CycleContext,
   options: AgentSpawnOptions,
 ): AgentSpawnOptions {
-  const execution = ctx.repositoryExecution;
+  const execution = ctx.repositoryExecution ?? ctx.workspaceExecution?.issue?.execution;
   const prepared = prepareWorkspaceBuilderSkillBody(ctx, options.skillBody);
   if (!prepared.ok) throw new Error(prepared.code);
   if (execution === undefined) return { ...options, skillBody: prepared.skillBody };
@@ -115,15 +115,7 @@ export type WorkspaceSpawnIdentityResult =
 /** Validate the frozen Workspace/Issue/repository identity before any spawn side effect. */
 export function resolveWorkspaceSpawnIdentity(ctx: CycleContext): WorkspaceSpawnIdentityResult {
   if (ctx.workspaceExecution === undefined) {
-    return ctx.workspaceContextScope === "legacy_migration_only" &&
-      authorizesLegacyWorkspaceContextOperation(ctx.workspaceContextOperationProvenance)
-      ? { ok: true }
-      : {
-          ok: false,
-          code: ctx.workspaceContextScope === "legacy_migration_only"
-            ? "legacy_operation_provenance_required"
-            : "missing_execution_context",
-        };
+    return { ok: false, code: "missing_execution_context" };
   }
   const scoped = resolveWorkspaceExecutionContextScope({
     scope: "issue_required",
@@ -136,7 +128,7 @@ export function resolveWorkspaceSpawnIdentity(ctx: CycleContext): WorkspaceSpawn
     return { ok: false, code: "story_identity_mismatch" };
   }
   if (
-    ctx.repositoryExecution === undefined ||
+    ctx.repositoryExecution !== undefined &&
     !isDeepStrictEqual(ctx.repositoryExecution, scoped.context.issue.execution)
   ) {
     return { ok: false, code: "repository_context_mismatch" };
@@ -154,9 +146,10 @@ export function prepareWorkspaceBuilderSkillBody(
 ): WorkspaceBuilderSkillBodyResult {
   const identity = resolveWorkspaceSpawnIdentity(ctx);
   if (!identity.ok) return identity;
-  const repositoryBody = ctx.repositoryExecution === undefined
+  const execution = ctx.repositoryExecution ?? ctx.workspaceExecution?.issue?.execution;
+  const repositoryBody = execution === undefined
     ? skillBody
-    : injectRepositoryContext(skillBody, ctx.repositoryExecution);
+    : injectRepositoryContext(skillBody, execution);
   if (ctx.workspaceExecution === undefined) return { ok: true, skillBody: repositoryBody };
   const selected = identity.selectedRepository;
   if (selected === undefined) return { ok: false, code: "missing_repository_context" };

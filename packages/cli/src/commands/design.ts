@@ -216,6 +216,38 @@ export interface DesignCommandDeps {
   heartbeatMs: number;
 }
 
+const INIT_ONBOARD_DESIGN_AUTHORITY = Symbol("roll.init.onboard.design");
+
+interface LegacyWorkspaceSkillHandoffV1 {
+  readonly schemaVersion: 1;
+  readonly scope: "legacy_migration_only";
+  readonly operation: WorkspaceContextOperationProvenance;
+}
+
+function prepareLegacyWorkspaceSkillHandoff(input: {
+  readonly skillName: string;
+  readonly operation: WorkspaceContextOperationProvenance;
+  readonly skillBody: string;
+}): { readonly skillBody: string; readonly handoffJson: string } {
+  const handoff: LegacyWorkspaceSkillHandoffV1 = {
+    schemaVersion: 1,
+    scope: "legacy_migration_only",
+    operation: input.operation,
+  };
+  const handoffJson = JSON.stringify(handoff);
+  const block = [
+    "[Roll Workspace legacy skill handoff]",
+    `skill: ${input.skillName}`,
+    "scope: legacy_migration_only",
+    `operation: ${JSON.stringify(input.operation)}`,
+    "This run is an explicitly authorized legacy migration input; no canonical Workspace authority exists yet.",
+    "Use the selected legacy project only as onboarding input, then produce a canonical Workspace next action without dual-writing authority.",
+    `handoff-json: ${handoffJson}`,
+    "[/Roll Workspace legacy skill handoff]",
+  ].join("\n");
+  return { skillBody: `${block}\n\n${input.skillBody}`, handoffJson };
+}
+
 function formatRunFolder(ts: number, target: string | null): string {
   const d = new Date(ts);
   const iso = d.toISOString();
@@ -768,7 +800,11 @@ function maybeStartLoopAfterDesign(
   return statusCode;
 }
 
-export function designCommand(args: string[], deps: Partial<DesignCommandDeps> = {}): number | Promise<number> {
+function runDesignCommand(
+  args: string[],
+  deps: Partial<DesignCommandDeps> = {},
+  legacyAuthority?: symbol,
+): number | Promise<number> {
   const d: DesignCommandDeps = {
     ...defaultDeps,
     ...deps,
@@ -799,6 +835,7 @@ export function designCommand(args: string[], deps: Partial<DesignCommandDeps> =
   if (
     d.workspaceExecution === undefined &&
     (
+      legacyAuthority !== INIT_ONBOARD_DESIGN_AUTHORITY ||
       d.workspaceContextScope !== "legacy_migration_only" ||
       !authorizesLegacyWorkspaceContextOperation(d.workspaceContextOperationProvenance)
     )
@@ -853,8 +890,15 @@ export function designCommand(args: string[], deps: Partial<DesignCommandDeps> =
     return 1;
   }
 
+  const legacyHandoff = d.workspaceExecution === undefined
+    ? prepareLegacyWorkspaceSkillHandoff({
+        skillName: "roll-design",
+        operation: d.workspaceContextOperationProvenance!,
+        skillBody: rawPrompt,
+      })
+    : undefined;
   const handoff = d.workspaceExecution === undefined
-    ? { ok: true as const, skillBody: rawPrompt }
+    ? { ok: true as const, skillBody: legacyHandoff!.skillBody }
     : prepareWorkspaceSkillHandoff({
         skillName: "roll-design",
         scope: "workspace_required_mutation",
@@ -920,6 +964,10 @@ export function designCommand(args: string[], deps: Partial<DesignCommandDeps> =
       env: {
         ...d.env,
         ...workspaceExecutionEnvironment(d.workspaceExecution),
+        ...(legacyHandoff === undefined ? {} : {
+          ROLL_WORKSPACE_CONTEXT_SCOPE: "legacy_migration_only",
+          ROLL_WORKSPACE_LEGACY_HANDOFF: legacyHandoff.handoffJson,
+        }),
       },
     },
     { onStdout: live.ingestStdout, onStderr: live.ingestStderr },
@@ -931,4 +979,25 @@ export function designCommand(args: string[], deps: Partial<DesignCommandDeps> =
     });
   }
   return finish(spawned);
+}
+
+/** Public design entry: missing Workspace authority always fails closed. */
+export function designCommand(args: string[], deps: Partial<DesignCommandDeps> = {}): number | Promise<number> {
+  return runDesignCommand(args, deps);
+}
+
+/** Internal lifecycle entry used only by `roll init` before a Workspace exists. */
+export function initOnboardDesignCommand(
+  args: string[],
+  deps: Partial<DesignCommandDeps> = {},
+): number | Promise<number> {
+  return runDesignCommand(args, {
+    ...deps,
+    workspaceContextScope: "legacy_migration_only",
+    workspaceContextOperationProvenance: {
+      surface: "cli",
+      id: "init",
+      operation: "onboard",
+    },
+  }, INIT_ONBOARD_DESIGN_AUTHORITY);
 }

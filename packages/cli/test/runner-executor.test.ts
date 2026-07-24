@@ -5,7 +5,7 @@
  * row builder, and the dry-run plan. No real git / gh / agent — pure fakes.
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -42,7 +42,7 @@ import {
   buildSpawnCommand,
   buildTerminalRecord,
   dryRunPlan,
-  executeCommand,
+  executeCommand as executeCommandRaw,
   isParkedAtHold,
   parseEstMin,
   parseEstMinFromSpec,
@@ -71,6 +71,7 @@ import {
   workspaceCycleContextPath,
 } from "../src/runner/scoped-route.js";
 import { workspaceExecutionEnvironment } from "../src/runner/agent-spawn.js";
+import { resolveExecutionCwd } from "../src/runner/submodule-worktree.js";
 
 /** Temp dirs created by FIX-207 attest-gate executor tests; cleaned at end. */
 const execDirs: string[] = [];
@@ -86,12 +87,108 @@ const CTX: CycleContext = {
   agent: "claude",
   model: "",
   workspaceContextScope: "legacy_migration_only",
-  workspaceContextOperationProvenance: {
-    surface: "cli",
-    id: "workspace",
-    operation: "migrate",
-  },
 };
+
+async function executeCommand(command: CycleCommand, ports: Ports, ctx: CycleContext) {
+  if (
+    (command.kind !== "spawn_agent" && command.kind !== "spawn_role") ||
+    ctx.workspaceExecution !== undefined
+  ) {
+    return executeCommandRaw(command, ports, ctx);
+  }
+  const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "roll-executor-workspace-")));
+  execDirs.push(workspaceRoot);
+  const storyId = ctx.storyId ?? "US-RUN-001";
+  const issueRoot = join(workspaceRoot, "issues", storyId);
+  const worktreePath = join(issueRoot, "product");
+  const targetCwd = resolveExecutionCwd(ports, ctx);
+  mkdirSync(issueRoot, { recursive: true });
+  const targetIsGit = existsSync(targetCwd) && spawnSync(
+    "git",
+    ["-C", targetCwd, "rev-parse", "--git-dir"],
+    { encoding: "utf8" },
+  ).status === 0;
+  if (targetIsGit) {
+    symlinkSync(targetCwd, worktreePath, "dir");
+  } else {
+    mkdirSync(worktreePath, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: worktreePath });
+  }
+  const remote = "git@github.com:acme/executor-fixture.git";
+  const identity = repositoryIdFromRemote(remote);
+  if (!identity.ok) throw new Error("executor fixture remote must be canonical");
+  const repository = {
+    repoId: identity.value,
+    alias: "product",
+    access: "write" as const,
+    requiredDelivery: true,
+    noChangePolicy: "changes_required" as const,
+    worktreePath,
+    baseSha: "1".repeat(40),
+    headSha: "2".repeat(40),
+    commands: { test: [], integration: [] },
+  };
+  const repositoryExecution = {
+    workspaceId: "roll",
+    issueRoot,
+    repositories: { [identity.value]: repository },
+  };
+  const workspaceExecution = {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: { workspaceId: "roll", root: workspaceRoot, canonicalRoot: workspaceRoot, lifecycle: "active" as const },
+    resolution: { source: "explicit" as const, evidence: [] },
+    bindings: [{
+      schema: REPOSITORY_BINDING_V1,
+      repoId: identity.value,
+      alias: "product",
+      remote,
+      integrationBranch: "main",
+      provider: "github" as const,
+      workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+    }],
+    issue: { storyId, manifestPath: join(issueRoot, "manifest.json"), execution: repositoryExecution },
+    authorities: {
+      backlog: join(workspaceRoot, "backlog", "index.md"),
+      features: join(workspaceRoot, "features"),
+      design: join(workspaceRoot, "design"),
+      requirements: join(workspaceRoot, "requirements"),
+      policy: join(workspaceRoot, "policy.yaml"),
+      evidence: join(workspaceRoot, "evidence"),
+      toolDumps: join(workspaceRoot, "runtime", "tool-dumps"),
+      events: join(workspaceRoot, "runtime", "events"),
+      runtime: join(workspaceRoot, "runtime"),
+      locks: join(workspaceRoot, "runtime", "locks"),
+    },
+  };
+  if (command.kind === "spawn_agent" && command.agent === "pi") {
+    const sessionsRoot = process.env["ROLL_PI_SESSIONS_ROOT"];
+    if (sessionsRoot !== undefined) {
+      const encode = (cwd: string) => join(sessionsRoot, `--${cwd.replace(/^\//, "").replace(/\//g, "-")}--`);
+      const legacySessions = encode(targetCwd);
+      const workspaceSessions = encode(worktreePath);
+      if (existsSync(legacySessions) && !existsSync(workspaceSessions)) {
+        symlinkSync(legacySessions, workspaceSessions, "dir");
+      }
+    }
+  }
+  return executeCommandRaw(command, {
+    ...ports,
+    agentSpawn: async (agent, options) => {
+      const result = await ports.agentSpawn(agent, { ...options, cwd: targetCwd });
+      if (existsSync(targetCwd)) {
+        for (const name of readdirSync(targetCwd).filter((entry) => /^ALERT.*\.md$/u.test(entry))) {
+          copyFileSync(join(targetCwd, name), join(worktreePath, name));
+        }
+      }
+      return result;
+    },
+  }, {
+    ...ctx,
+    storyId,
+    workspaceExecution,
+    workspaceContextScope: "issue_required",
+  });
+}
 
 function workspaceSpawnContext(): {
   readonly ctx: CycleContext;
@@ -2669,7 +2766,7 @@ describe("executeCommand — command → executor mapping", () => {
     { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
   ])("US-WS-037: $kind fails closed before agentSpawn when required Workspace context is missing", async (command) => {
     const { ports } = fakePorts();
-    const result = await executeCommand(command, ports, {
+    const result = await executeCommandRaw(command, ports, {
       ...CTX,
       workspaceContextScope: "issue_required",
     } as CycleContext);
@@ -2683,7 +2780,7 @@ describe("executeCommand — command → executor mapping", () => {
     { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
   ])("US-WS-037: $kind rejects a caller-forged legacy scope without operation provenance", async (command) => {
     const { ports } = fakePorts();
-    const result = await executeCommand(command, ports, {
+    const result = await executeCommandRaw(command, ports, {
       ...CTX,
       workspaceContextScope: "legacy_migration_only",
       workspaceContextOperationProvenance: undefined,
@@ -2696,9 +2793,9 @@ describe("executeCommand — command → executor mapping", () => {
   it.each([
     { kind: "spawn_agent", agent: "claude", attempt: 1 } as const,
     { kind: "spawn_role", role: "implementer", agent: "codex", round: 0 } as const,
-  ])("US-WS-037: $kind retains legacy migration with explicit operation provenance", async (command) => {
+  ])("US-WS-037: $kind rejects even a fully allowlisted forged legacy operation tuple", async (command) => {
     const { ports } = fakePorts();
-    await executeCommand(command, ports, {
+    const result = await executeCommandRaw(command, ports, {
       ...CTX,
       workspaceContextScope: "legacy_migration_only",
       workspaceContextOperationProvenance: {
@@ -2708,7 +2805,8 @@ describe("executeCommand — command → executor mapping", () => {
       },
     } as CycleContext);
 
-    expect(ports.agentSpawn).toHaveBeenCalledOnce();
+    expect(ports.agentSpawn).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({ exit: 1, timedOut: false });
   });
 
   it("US-WS-037: multi-repository spawn_role requires an explicit repository selector", async () => {
@@ -2937,7 +3035,7 @@ describe("executeCommand — command → executor mapping", () => {
 
     expect(ports.agentSpawn).toHaveBeenCalledWith(
       "claude",
-      expect.objectContaining({ skillBody: "BUILD THIS STORY" }),
+      expect.objectContaining({ skillBody: expect.stringContaining("BUILD THIS STORY") }),
     );
   });
 
