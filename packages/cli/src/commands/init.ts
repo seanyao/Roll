@@ -66,7 +66,7 @@ import {
 import { computeInitFactsHash } from "../lib/onboard-plan.js";
 import { discoverInteractiveAgents } from "../lib/interactive-agent.js";
 import { confirmYesNo, readConfirmLine } from "../lib/tty-confirm.js";
-import { designCommand } from "./design.js";
+import { designCommand, type DesignCommandDeps } from "./design.js";
 
 /**
  * FIX-283 (AC4): adopting roll registers the project into `~/.roll/projects.json`
@@ -1747,8 +1747,16 @@ interface InitCommandDeps {
   runDesign?: (args: string[]) => number;
 }
 
-function runDesignSync(args: string[]): number {
-  const result = designCommand(args);
+export function runDesignSync(
+  args: string[],
+  runDesign: (args: string[], deps: Partial<DesignCommandDeps>) => number | Promise<number> = designCommand,
+): number {
+  const cwd = process.cwd();
+  const result = runDesign(args, {
+    cwd,
+    invocationCwd: cwd,
+    workspaceContextScope: "legacy_migration_only",
+  });
   if (typeof result === "number") return result;
   process.stderr.write("roll design failed during init handoff: async design continuation is unsupported in init\n");
   return 1;

@@ -85,6 +85,7 @@ function fixture(): {
   const decoyRoot = join(root, "workspace-decoy");
   const inputFile = join(arbitraryCwd, "brief.md");
   mkdirSync(rollHome);
+  writeFileSync(join(rollHome, "config.yaml"), "ai_claude: ~/.claude\n", "utf8");
   mkdirSync(arbitraryCwd);
   mkdirSync(workspaceRoot);
   mkdirSync(decoyRoot);
@@ -212,6 +213,7 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       runLoopGo: () => 0,
       now: () => 1,
       heartbeatMs: 60_000,
+      workspaceContextScope: "workspace_required_mutation",
     };
 
     expect(designCommand(["--from-file", "brief.md"], deps)).toBe(0);
@@ -267,7 +269,7 @@ describe("US-WS-037 core skill Workspace handoff", () => {
   it("dispatches public design from arbitrary cwd through requirement discovery and Workspace authorities", async () => {
     const f = fixture();
     const result = await runPublicDesign(f, ["--from-file", "brief.md"], "requirement-match");
-    expect(result.status).toBe(0);
+    expect(result.status, JSON.stringify(result)).toBe(0);
     expect(result.spawn?.cwd).toBe(f.workspaceRoot);
     const context = JSON.parse(result.spawn?.context ?? "null") as WorkspaceExecutionContextV1 | null;
     expect(context).toMatchObject({
@@ -311,7 +313,7 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       ["--ws", "roll", "--from-file", "brief.md"],
       "alias-selector",
     );
-    expect(alias.status).toBe(0);
+    expect(alias.status, JSON.stringify(alias)).toBe(0);
     expect(alias.spawn).toEqual(canonical.spawn);
   });
 

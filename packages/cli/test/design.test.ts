@@ -44,6 +44,7 @@ function makeDeps(proj: string, bin: string): DesignCommandDeps & { calls: Spawn
   const loopGoCalls: LoopGoCall[] = [];
   return {
     cwd: proj,
+    workspaceContextScope: "legacy_migration_only",
     env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
     readLine: () => null,
     spawn: (binName, args, opts) => {

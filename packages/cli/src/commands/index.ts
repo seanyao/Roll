@@ -604,8 +604,6 @@ export function registerAll(): void {
   // (US-ONBOARD-NUDGE-004). Loads the skill and launches the selected agent;
   // all design logic lives in the skill, not here.
   registerPorted("design", (args) => {
-    const root = workspaceProjectRoot(args, "mutation");
-    if (typeof root === "number") return root;
     const invocationCwd = process.cwd();
     const designArgs = removeWorkspaceSelector(args);
     const loaded = loadWorkspaceExecutionContext({
@@ -615,16 +613,17 @@ export function registerAll(): void {
       ...(explicitWorkspaceSelector(args) === undefined
         ? {}
         : { explicitWorkspace: explicitWorkspaceSelector(args) }),
-      requirement: designRequirementHint(designArgs),
+      requirement: designRequirementHint(designArgs, invocationCwd),
     });
     if (!loaded.ok) {
-      process.stderr.write(`roll design: ${loaded.code}\n`);
+      process.stderr.write(`roll design: ${loaded.route === undefined ? "" : `${loaded.route}:`}${loaded.code}\n`);
       return 1;
     }
     return designCommand(designArgs, {
       cwd: loaded.context.workspace.canonicalRoot,
       invocationCwd,
       workspaceExecution: loaded.context,
+      workspaceContextScope: "workspace_required_mutation",
     });
   }, {
     help: "Usage: roll design [--from-file <path> | \"<requirement>\"] [--agent <name>] [--verbose|--raw]\n  Launch $roll-design interactively with bounded live progress, card-created events, quiet heartbeats, and final handoff; when new Todo cards are created, offer `roll loop go --review auto` after showing agent-pool health.\n交互式启动 $roll-design；默认实时显示有界进展、建卡事件、静默心跳和最终交付；产出新 Todo 卡时会显示 agent 池健康概况，并提议启动 `roll loop go --review auto`。",

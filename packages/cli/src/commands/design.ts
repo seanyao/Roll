@@ -11,7 +11,7 @@
 import { spawn as spawnChild, type SpawnOptions } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { REQUIREMENT_HINT_V1, classifyStatus, t, v2Catalog, v3Catalog, type Lang, type RequirementHintV1, type WorkspaceExecutionContextV1 } from "@roll/spec";
+import { REQUIREMENT_HINT_V1, classifyStatus, t, v2Catalog, v3Catalog, type Lang, type RequirementHintV1, type WorkspaceContextScope, type WorkspaceExecutionContextV1 } from "@roll/spec";
 import { normalizerFor, newNormalizerState, parseBacklog, type ActivitySignal } from "@roll/core";
 import { currentLang } from "./agent-list.js";
 import { loopGoCommand } from "./loop-go.js";
@@ -104,9 +104,18 @@ function parseDesignFlags(args: string[]): ParsedDesignFlags {
 }
 
 /** Deterministic structured identities only; prose inference stays out of the host. */
-export function designRequirementHint(args: string[]): RequirementHintV1 {
+export function designRequirementHint(args: string[], invocationCwd = process.cwd()): RequirementHintV1 {
   const parsed = parseDesignFlags(args);
-  const text = parsed.rest.join(" ");
+  const fromFilePath = parsed.fromFile === undefined ? undefined : resolve(invocationCwd, parsed.fromFile);
+  let fromFileText = "";
+  if (fromFilePath !== undefined && isRegularFile(fromFilePath)) {
+    try {
+      fromFileText = readFileSync(fromFilePath, "utf8");
+    } catch {
+      fromFileText = "";
+    }
+  }
+  const text = `${parsed.rest.join(" ")}\n${fromFileText}`;
   const storyIds = [...new Set(text.match(/\b(?:US|FIX|REFACTOR|IDEA|BUG)(?:-[A-Z0-9]+)+[a-z]?\d*\b/gu) ?? [])];
   const storySet = new Set(storyIds);
   const jiraRefs = [...new Set(text.match(/\b[A-Z][A-Z0-9]+-[0-9]+\b/gu) ?? [])]
@@ -122,7 +131,9 @@ export function designRequirementHint(args: string[]): RequirementHintV1 {
       provenance: "deterministic_extraction" as const,
     })),
     repositoryRemotes: [],
-    paths: [],
+    paths: fromFilePath === undefined || !isRegularFile(fromFilePath)
+      ? []
+      : [{ path: fromFilePath, provenance: "cli_argument" as const }],
   };
 }
 
@@ -187,6 +198,8 @@ export interface DesignCommandDeps {
   invocationCwd: string;
   /** Frozen host-resolved authority for Workspace-native production runs. */
   workspaceExecution?: WorkspaceExecutionContextV1;
+  /** Missing context is allowed only for an explicitly classified legacy migration. */
+  workspaceContextScope: WorkspaceContextScope;
   /** Environment variables (used for `ROLL_DESIGN_AGENT`). */
   env: NodeJS.ProcessEnv;
   /** Read one interactive selection line. */
@@ -550,6 +563,7 @@ function createLiveProgress(ctx: RunContext, deps: DesignCommandDeps, opts: { ra
 const defaultDeps: DesignCommandDeps = {
   cwd: process.cwd(),
   invocationCwd: process.cwd(),
+  workspaceContextScope: "workspace_required_mutation",
   env: process.env,
   readLine: readLineFromStdin,
   runLoopGo: loopGoCommand,
@@ -777,6 +791,11 @@ export function designCommand(args: string[], deps: Partial<DesignCommandDeps> =
   }
   if (fromFile !== undefined && rest.length > 0) {
     process.stderr.write(`${t(v3Catalog, l, "design.usage")}\n`);
+    return 1;
+  }
+
+  if (d.workspaceExecution === undefined && d.workspaceContextScope !== "legacy_migration_only") {
+    emit("roll design: missing_execution_context");
     return 1;
   }
 

@@ -1,6 +1,7 @@
 import {
   buildWorkspaceExecutionContext,
   deriveWorkspaceExecutionAuthorities,
+  discoverWorkspaceForIntent,
   resolveWorkspaceExecutionContextScope,
   resolveWorkspaceTarget,
   validateResolvedTargetRequirement,
@@ -11,6 +12,7 @@ import type {
   WorkspaceContextScope,
   WorkspaceExecutionContextV1,
 } from "@roll/spec";
+import { WORKSPACE_INTENT_V1 } from "@roll/spec";
 import {
   inspectWorkspaceCwd,
   workspaceRegistryCandidates,
@@ -20,7 +22,7 @@ import {
 
 export type WorkspaceExecutionContextLoadResult =
   | { readonly ok: true; readonly context: WorkspaceExecutionContextV1 }
-  | { readonly ok: false; readonly code: string };
+  | { readonly ok: false; readonly code: string; readonly route?: "workspace_target" };
 
 /** Resolve and freeze one Workspace context before a skill spawn. */
 export function loadWorkspaceExecutionContext(input: {
@@ -60,23 +62,54 @@ export function loadWorkspaceExecutionContext(input: {
       ...(cwdInspection.cwdManifest === undefined ? {} : { cwdManifest: cwdInspection.cwdManifest }),
     },
   });
-  if (!target.ok || target.target.kind !== "workspace") {
-    return { ok: false, code: target.ok ? "invalid_target" : target.error.code };
-  }
-  const selected = target.target;
-
   const discovery = loadWorkspaceDiscovery({ rollHome });
-  const facts = discovery.workspaces.find((candidate) => (
-    candidate.candidate.workspaceId === selected.workspaceId &&
-    candidate.candidate.canonicalRoot === selected.canonicalRoot
-  ));
+  let source: WorkspaceExecutionContextV1["resolution"]["source"];
+  let facts;
+  let evidence = [] as WorkspaceExecutionContextV1["resolution"]["evidence"];
+  if (target.ok && target.target.kind === "workspace") {
+    const selected = target.target;
+    facts = discovery.workspaces.find((candidate) => (
+      candidate.candidate.workspaceId === selected.workspaceId &&
+      candidate.candidate.canonicalRoot === selected.canonicalRoot
+    ));
+    source = input.explicitWorkspace !== undefined
+      ? "explicit"
+      : environmentWorkspace !== undefined && environmentWorkspace.trim() !== ""
+        ? "environment"
+        : "cwd_manifest";
+  } else if (!target.ok && target.error.code === "target_missing" && input.requirement !== undefined) {
+    const decision = discoverWorkspaceForIntent({
+      intent: {
+        schema: WORKSPACE_INTENT_V1,
+        operation: input.operation,
+        interaction: "non_interactive",
+        scope: input.scope,
+        cwd: input.cwd,
+        requirement: input.requirement,
+      },
+      workspaces: discovery.workspaces,
+      diagnostics: discovery.diagnostics,
+    });
+    if (!decision.ok) return { ok: false, code: decision.code, route: "workspace_target" };
+    facts = discovery.workspaces.find((candidate) => (
+      candidate.candidate.workspaceId === decision.target.workspaceId &&
+      candidate.candidate.canonicalRoot === decision.target.root
+    ));
+    source = "requirement_discovery";
+    evidence = decision.target.evidence;
+  } else {
+    return {
+      ok: false,
+      code: target.ok ? "invalid_target" : target.error.code,
+      ...(!target.ok ? { route: "workspace_target" as const } : {}),
+    };
+  }
   if (facts === undefined || discovery.diagnostics.some((diagnostic) => (
-    diagnostic.workspaceId === selected.workspaceId
+    diagnostic.workspaceId === facts?.candidate.workspaceId
   ))) {
-    return { ok: false, code: "workspace_discovery_incomplete" };
+    return { ok: false, code: "workspace_discovery_incomplete", route: "workspace_target" };
   }
 
-  let evidence = [] as WorkspaceExecutionContextV1["resolution"]["evidence"];
   if (input.requirement !== undefined) {
     const validated = validateResolvedTargetRequirement({
       target: facts,
@@ -84,14 +117,9 @@ export function loadWorkspaceExecutionContext(input: {
       requirement: input.requirement,
       operation: input.operation,
     });
-    if (!validated.ok) return { ok: false, code: validated.code };
+    if (!validated.ok) return { ok: false, code: validated.code, route: "workspace_target" };
     evidence = validated.evidence;
   }
-  const source = input.explicitWorkspace !== undefined
-    ? "explicit"
-    : environmentWorkspace !== undefined && environmentWorkspace.trim() !== ""
-      ? "environment"
-      : "cwd_manifest";
   const built = buildWorkspaceExecutionContext({
     facts: {
       candidate: facts.candidate,
