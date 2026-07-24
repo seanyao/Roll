@@ -891,13 +891,8 @@ function runAll(projectDir: string): Report {
   const allowlistPath = join(projectDir, "config", "workspace-context-audit-allowlist.json");
   if (existsSync(matrixPath) || existsSync(allowlistPath)) {
     const tests = report.dimensions["tests"] ?? { status: "pass", gaps: [] };
-    try {
-      const contextAudit = auditRegisteredWorkspaceContextTree(projectDir);
-      const gap = workspaceContextAuditReleaseGap(contextAudit.summary);
-      if (gap !== null) tests.gaps.push(gap);
-    } catch (error) {
-      tests.gaps.push(`Workspace context audit could not run: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    const contextGate = checkWorkspaceContextAudit(projectDir);
+    tests.gaps.push(...contextGate.gaps);
     if (tests.gaps.length > 0) {
       tests.status = "fail";
       report.overall = "fail";
@@ -905,6 +900,20 @@ function runAll(projectDir: string): Report {
     report.dimensions["tests"] = tests;
   }
   return report;
+}
+
+/** The exact static authority check injected into the release tests dimension. */
+export function checkWorkspaceContextAudit(projectDir: string): DimResult {
+  try {
+    const contextAudit = auditRegisteredWorkspaceContextTree(projectDir);
+    const gap = workspaceContextAuditReleaseGap(contextAudit.summary);
+    return gap === null ? { status: "pass", gaps: [] } : { status: "fail", gaps: [gap] };
+  } catch (error) {
+    return {
+      status: "fail",
+      gaps: [`Workspace context audit could not run: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
 }
 
 /** Port of format_human. */

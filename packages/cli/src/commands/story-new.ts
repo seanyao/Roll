@@ -83,7 +83,7 @@ function updateCanonicalIndex(authority: StoryNewAuthority, id: string, epic: st
   renameSync(temporary, path);
 }
 
-export function storyNewCommand(args: string[], deps?: StoryNewCommandDeps): number {
+export function storyNewCommand(args: string[], deps: StoryNewCommandDeps): number {
   if (args[0] === "--help" || args[0] === "-h" || args[0] === undefined) {
     process.stdout.write(
       "Usage: roll story new <ID> --title <text> [--epic <epic>] [--note <text>] [--no-index]\n" +
@@ -108,14 +108,7 @@ export function storyNewCommand(args: string[], deps?: StoryNewCommandDeps): num
   const epic = flagValue(args, "--epic") ?? UNCATEGORIZED;
   const note = flagValue(args, "--note");
 
-  const authority = deps === undefined
-    ? {
-        projectPath: process.cwd(),
-        backlogPath: join(process.cwd(), ".roll", "backlog.md"),
-        featuresDir: join(process.cwd(), ".roll", "features"),
-        canonical: false,
-      }
-    : canonicalAuthority(args, deps);
+  const authority = canonicalAuthority(args, deps);
   if (typeof authority === "number") return authority;
   if (authority.canonical && !requireWorkspaceAuthorities("roll story new", [
     { path: authority.backlogPath, kind: "file" },

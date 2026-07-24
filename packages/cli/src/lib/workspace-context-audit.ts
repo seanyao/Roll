@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { validateWorkspaceContextPolicy, type WorkspaceContextPolicy } from "@roll/spec";
@@ -18,6 +18,8 @@ export type WorkspaceContextViolationCode =
 export interface WorkspaceContextAuditSurface {
   readonly policyKey: string;
   readonly file: string;
+  /** True only when the public bridge already canonicalized selector aliases. */
+  readonly selectorTokensNormalized?: boolean;
 }
 
 export interface WorkspaceContextAuditAllowlistEntry {
@@ -151,7 +153,7 @@ function isProcessCwdCall(node: ts.Node): node is ts.CallExpression {
 
 function isSelectorLiteral(node: ts.Node): boolean {
   return (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
-    && node.text === "--ws";
+    && (node.text === "--workspace" || node.text === "--ws");
 }
 
 function isSelectorParserBypass(node: ts.Node): boolean {
@@ -194,16 +196,45 @@ function scanSource(
   identity: ParsedPolicyKey,
   findings: WorkspaceContextAuditFinding[],
   seen: Set<string>,
+  selectorTokensNormalized = false,
 ): void {
   const kind = [".js", ".jsx", ".mjs", ".cjs"].includes(extname(file)) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, kind);
+  const scopeFor = (node: ts.Node): ts.Node => {
+    let current = node;
+    while (current.parent !== undefined && !ts.isFunctionLike(current)) current = current.parent;
+    return current;
+  };
+  const cwdAliases = new Map<ts.Node, Set<string>>();
+  const collectAliases = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined && isProcessCwdCall(node.initializer)) {
+      const scope = scopeFor(node);
+      const aliases = cwdAliases.get(scope) ?? new Set<string>();
+      aliases.add(node.name.text);
+      cwdAliases.set(scope, aliases);
+    }
+    ts.forEachChild(node, collectAliases);
+  };
+  collectAliases(source);
   const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && (node.expression.text === "join" || node.expression.text === "resolve")
+      && node.arguments.some((argument) => (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) && argument.text === ".roll")
+      && node.arguments.some((argument) => ts.isIdentifier(argument) && cwdAliases.get(scopeFor(node))?.has(argument.text) === true)
+    ) {
+      const line = lineAt(source, node);
+      addFinding(findings, seen, identity, file, line, "MANUAL_CWD_ROLL_AUTHORITY", "a process.cwd() alias is manually joined to a .roll authority path");
+      addFinding(findings, seen, identity, file, line, "WORKSPACE_AUTHORITY_FROM_CWD", "a process.cwd() alias participates in Workspace authority derivation");
+    }
     if (isProcessCwdCall(node)) {
       const statement = statementFor(node);
       const statementText = statement.getText(source);
       const line = lineAt(source, node);
       const lineText = sourceText.split("\n")[line - 1] ?? "";
-      if (/['"`]\.roll(?:['"`/]|$)/u.test(lineText)) {
+      const explicitExecutionConfig = /['"`]\.roll['"`].{0,80}['"`](?:local\.yaml|\.gitignore)['"`]/u.test(lineText);
+      if (/['"`]\.roll(?:['"`/]|$)/u.test(lineText) && !explicitExecutionConfig) {
         addFinding(
           findings,
           seen,
@@ -214,7 +245,7 @@ function scanSource(
           "process.cwd() is manually joined to a .roll authority path",
         );
       }
-      if (AUTHORITY_WORDS.test(lineText)) {
+      if (AUTHORITY_WORDS.test(lineText) && !explicitExecutionConfig) {
         addFinding(
           findings,
           seen,
@@ -240,7 +271,7 @@ function scanSource(
         }
       }
     }
-    if (identity.surface === "cli" && isSelectorParserBypass(node)) {
+    if (identity.surface === "cli" && !selectorTokensNormalized && isSelectorParserBypass(node)) {
       addFinding(
         findings,
         seen,
@@ -325,7 +356,7 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
   const seen = new Set<string>();
   const registeredFiles = new Set<string>();
 
-  const scanQueue = new Map<string, ParsedPolicyKey>();
+  const scanQueue = new Map<string, { readonly identity: ParsedPolicyKey; readonly selectorTokensNormalized: boolean }>();
   for (const surface of [...input.surfaces].sort((a, b) => compareText(a.file, b.file) || compareText(a.policyKey, b.policyKey))) {
     const identity = parsePolicyKey(surface.policyKey);
     const file = normalizedRelative(root, surface.file);
@@ -343,10 +374,11 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
       continue;
     }
     registeredFiles.add(file);
-    if (!scanQueue.has(file)) scanQueue.set(file, identity);
+    if (!scanQueue.has(file)) scanQueue.set(file, { identity, selectorTokensNormalized: surface.selectorTokensNormalized === true });
   }
 
-  for (const [file, identity] of scanQueue) {
+  for (const [file, queued] of scanQueue) {
+    const { identity, selectorTokensNormalized } = queued;
     const absolute = join(root, file);
     if (!existsSync(absolute)) {
       findings.push({
@@ -363,13 +395,14 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
     const sourceText = readFileSync(absolute, "utf8");
     if (file.endsWith("/SKILL.md") || file === "SKILL.md") scanSkill(sourceText, file, identity, findings, seen);
     else if (SOURCE_EXTENSIONS.has(extname(file)) && !/(?:^|\/)(?:test|tests|__tests__|fixtures)(?:\/|$)/u.test(file)) {
-      scanSource(sourceText, file, identity, findings, seen);
+      scanSource(sourceText, file, identity, findings, seen, selectorTokensNormalized);
     }
   }
 
   const allowlistFindings: WorkspaceContextAuditFinding[] = [];
   let allowlisted = 0;
   for (const entry of input.allowlist) {
+    const entryPolicy = policies.get(entry.policyKey);
     if (
       entry.rationale.trim() === ""
       || !/^US-[A-Z0-9]+-\d+$/u.test(entry.ownerStory)
@@ -379,8 +412,12 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
       allowlistFindings.push(auditAllowlistFinding(entry, "ALLOWLIST_INVALID", "allowlist entry requires rationale, owner Story, expiry, and positive line"));
       continue;
     }
-    if (!policies.has(entry.policyKey)) {
+    if (entryPolicy === undefined) {
       allowlistFindings.push(auditAllowlistFinding(entry, "ALLOWLIST_UNKNOWN_POLICY", "allowlist entry refers to an unknown policy key"));
+      continue;
+    }
+    if (entryPolicy.scope !== "machine_only" && entryPolicy.scope !== "legacy_migration_only") {
+      allowlistFindings.push(auditAllowlistFinding(entry, "ALLOWLIST_INVALID", "allowlist is restricted to machine_only or legacy_migration_only policy boundaries"));
       continue;
     }
     if (entry.expiresOn < input.now) {
@@ -452,8 +489,9 @@ export function renderWorkspaceContextAuditHuman(report: WorkspaceContextAuditRe
 
 export function registeredWorkspaceContextAuditSurfaces(
   policies: readonly WorkspaceContextPolicy[],
+  rootDir?: string,
 ): WorkspaceContextAuditSurface[] {
-  return policies.map((policy) => {
+  const surfaces = policies.map((policy) => {
     const file = policy.surface === "cli"
       ? CLI_SURFACE_FILES[policy.id]
       : policy.surface === "tool"
@@ -462,8 +500,64 @@ export function registeredWorkspaceContextAuditSurfaces(
     return {
       policyKey: policyKey(policy),
       file: file ?? `unregistered/${policy.surface}/${policy.id}.missing`,
+      ...(policy.surface === "cli" ? { selectorTokensNormalized: true } : {}),
     };
   });
+  if (rootDir === undefined) return surfaces;
+  const walk = (relativeDir: string): string[] => {
+    const absolute = join(rootDir, relativeDir);
+    if (!existsSync(absolute)) return [];
+    return readdirSync(absolute, { withFileTypes: true }).flatMap((entry) => {
+      const relativePath = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) return walk(relativePath);
+      return SOURCE_EXTENSIONS.has(extname(entry.name)) ? [relativePath] : [];
+    });
+  };
+  const existing = new Set(surfaces.map((surface) => surface.file));
+  const resolveImport = (fromFile: string, specifier: string): string | undefined => {
+    if (!specifier.startsWith(".")) return undefined;
+    const base = resolve(rootDir, fromFile, "..", specifier);
+    for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, join(base, "index.ts")]) {
+      if (!existsSync(candidate)) continue;
+      const rel = relative(resolve(rootDir), candidate).split(sep).join("/");
+      if (rel !== "" && !rel.startsWith("../")) return rel;
+    }
+    return undefined;
+  };
+  const entrySurfaces = [...surfaces];
+  for (const entry of entrySurfaces) {
+    const queue = [entry.file];
+    const visited = new Set<string>();
+    while (queue.length > 0) {
+      const file = queue.shift();
+      if (file === undefined || visited.has(file) || !SOURCE_EXTENSIONS.has(extname(file))) continue;
+      visited.add(file);
+      const absolute = join(rootDir, file);
+      if (!existsSync(absolute)) continue;
+      const imports = ts.preProcessFile(readFileSync(absolute, "utf8"), true, true).importedFiles;
+      for (const imported of imports) {
+        const resolved = resolveImport(file, imported.fileName);
+        if (resolved === undefined) continue;
+        queue.push(resolved);
+        if (existing.has(resolved)) continue;
+        existing.add(resolved);
+        surfaces.push({
+          policyKey: entry.policyKey,
+          file: resolved,
+          ...(entry.selectorTokensNormalized === true ? { selectorTokensNormalized: true } : {}),
+        });
+      }
+    }
+  }
+  const browserPolicy = policies.find((policy) => policy.surface === "tool" && policy.id === "browser");
+  if (browserPolicy !== undefined) {
+    for (const file of walk("packages/infra/src/browser-operations").sort(compareText)) {
+      if (existing.has(file)) continue;
+      existing.add(file);
+      surfaces.push({ policyKey: policyKey(browserPolicy), file });
+    }
+  }
+  return surfaces;
 }
 
 interface WorkspaceContextMatrixFile {
@@ -491,7 +585,7 @@ export function auditRegisteredWorkspaceContextTree(
     rootDir,
     now,
     policies,
-    surfaces: registeredWorkspaceContextAuditSurfaces(policies),
+    surfaces: registeredWorkspaceContextAuditSurfaces(policies, rootDir),
     allowlist: allowlist as WorkspaceContextAuditAllowlistEntry[],
   });
 }
