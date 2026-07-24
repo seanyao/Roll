@@ -10,7 +10,11 @@ import {
   repositoryIdFromRemote,
   type WorkspaceExecutionContextV1,
 } from "@roll/spec";
-import { prepareRegisteredWorkspaceSkillHandoff } from "../src/runner/workspace-skill-handoff.js";
+import {
+  prepareRegisteredWorkspaceSkillHandoff,
+  prepareRegisteredWorkspaceSkillHandoffForTest,
+} from "../src/runner/workspace-skill-handoff.js";
+import { realAgentSpawn } from "../src/runner/agent-spawn.js";
 
 const roots: string[] = [];
 
@@ -26,6 +30,7 @@ const manifest = {
       operation: "review",
       scope: "issue_required",
       contextConsumer: "issue",
+      effectTarget: "none",
       access: "read",
       repositorySelector: "required",
       allowsAmbientCwd: false,
@@ -37,6 +42,7 @@ const manifest = {
       operation: "audit",
       scope: "workspace_required_read",
       contextConsumer: "workspace",
+      effectTarget: "none",
       access: "read",
       repositorySelector: "required",
       allowsAmbientCwd: false,
@@ -48,6 +54,7 @@ const manifest = {
       operation: "review",
       scope: "repository_required",
       contextConsumer: "repository",
+      effectTarget: "none",
       access: "read",
       repositorySelector: "required",
       allowsAmbientCwd: false,
@@ -59,6 +66,7 @@ const manifest = {
       operation: "generate",
       scope: "issue_required",
       contextConsumer: "issue",
+      effectTarget: "repository",
       access: "mutation",
       repositorySelector: "required",
       allowsAmbientCwd: false,
@@ -70,6 +78,7 @@ const manifest = {
       operation: "scan",
       scope: "workspace_required_read",
       contextConsumer: "workspace",
+      effectTarget: "none",
       access: "read",
       repositorySelector: "required",
       allowsAmbientCwd: false,
@@ -81,10 +90,35 @@ const manifest = {
       operation: "record",
       scope: "workspace_required_mutation",
       contextConsumer: "workspace",
+      effectTarget: "workspace",
       access: "mutation",
       repositorySelector: "not_applicable",
       allowsAmbientCwd: false,
       allowsLegacyRollPath: false,
+    },
+    {
+      surface: "skill",
+      id: "roll-doctor",
+      operation: "diagnose",
+      scope: "machine_only",
+      effectTarget: "machine",
+      access: "read",
+      repositorySelector: "forbidden",
+      allowsAmbientCwd: true,
+      allowsLegacyRollPath: false,
+      rationale: "Machine diagnosis runs before Workspace authority exists.",
+    },
+    {
+      surface: "skill",
+      id: "roll-onboard",
+      operation: "diagnose",
+      scope: "legacy_migration_only",
+      effectTarget: "legacy_project",
+      access: "read",
+      repositorySelector: "not_applicable",
+      allowsAmbientCwd: true,
+      allowsLegacyRollPath: true,
+      rationale: "Onboarding inspects one explicitly selected legacy project.",
     },
   ],
 };
@@ -210,7 +244,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
     const previousCwd = process.cwd();
     try {
       process.chdir(f.arbitraryCwd);
-      const handoff = prepareRegisteredWorkspaceSkillHandoff({
+      const handoff = prepareRegisteredWorkspaceSkillHandoffForTest({
         manifest,
         skillName,
         operation,
@@ -261,11 +295,55 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
     }
   });
 
+  it.each([
+    ["roll-doctor", "diagnose", "machine"],
+    ["roll-onboard", "diagnose", "legacy"],
+  ] as const)("spawns shipped %s %s with no inherited Workspace authority", async (skillName, operation, mode) => {
+    const f = fixture();
+    const explicitRoot = join(dirname(f.arbitraryCwd), `${mode}-spawn-root`);
+    mkdirSync(explicitRoot);
+    const shim = join(dirname(f.arbitraryCwd), `${mode}-spawn-shim`);
+    writeFileSync(shim, [
+      "#!/bin/sh",
+      "echo cwd=$(pwd)",
+      "echo workspace=${ROLL_WORKSPACE-unset}",
+      "echo story=${ROLL_STORY_ID-unset}",
+      "echo repository=${ROLL_REPOSITORY_ID-unset}",
+      "exit 0",
+      "",
+    ].join("\n"), "utf8");
+    chmodSync(shim, 0o755);
+
+    const result = await realAgentSpawn("claude", {
+      cwd: f.arbitraryCwd,
+      skillBody: `# ${skillName}`,
+      bin: shim,
+      bare: true,
+      env: {
+        ...process.env,
+        ROLL_WORKSPACE: "ambient-wrong",
+        ROLL_STORY_ID: "AMBIENT-1",
+        ROLL_REPOSITORY_ID: "ambient-repo",
+      },
+      workspaceSkillInvocation: {
+        skillName,
+        operation,
+        ...(mode === "machine" ? { machineCwd: explicitRoot } : { legacyProjectRoot: explicitRoot }),
+      },
+    });
+
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(result.stdout).toContain(`cwd=${explicitRoot}`);
+    expect(result.stdout).toContain("workspace=unset");
+    expect(result.stdout).toContain("story=unset");
+    expect(result.stdout).toContain("repository=unset");
+  });
+
   it("fails closed before spawn on missing or conflicting explicit identity", () => {
     const f = fixture();
     let spawnCount = 0;
     const attempt = (context: WorkspaceExecutionContextV1 | undefined, expectedWorkspaceId: string) => {
-      const handoff = prepareRegisteredWorkspaceSkillHandoff({
+      const handoff = prepareRegisteredWorkspaceSkillHandoffForTest({
         manifest,
         skillName: "roll-peer",
         operation: "review",
@@ -286,7 +364,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
 
   it("does not let a mutation policy write through a read-only repository binding", () => {
     const f = fixture();
-    const handoff = prepareRegisteredWorkspaceSkillHandoff({
+    const handoff = prepareRegisteredWorkspaceSkillHandoffForTest({
       manifest,
       skillName: "roll-.changelog",
       operation: "generate",
@@ -302,7 +380,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
 
   it("allows a registry-declared Workspace mutation without inventing a repository selector", () => {
     const f = fixture();
-    const handoff = prepareRegisteredWorkspaceSkillHandoff({
+    const handoff = prepareRegisteredWorkspaceSkillHandoffForTest({
       manifest,
       skillName: "roll-notes",
       operation: "record",
@@ -324,7 +402,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
 
   it("requires the host to bind Story identity for issue and repository operations", () => {
     const f = fixture();
-    const handoff = prepareRegisteredWorkspaceSkillHandoff({
+    const handoff = prepareRegisteredWorkspaceSkillHandoffForTest({
       manifest,
       skillName: "roll-peer",
       operation: "review",
@@ -337,6 +415,95 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
     expect(handoff).toMatchObject({ ok: false, code: "missing_expected_story_identity" });
   });
 
+  it("loads the shipped registry for a real supporting-skill handoff instead of accepting caller policy", () => {
+    const f = fixture();
+    const handoff = prepareRegisteredWorkspaceSkillHandoff({
+      skillName: "roll-peer",
+      operation: "review",
+      context: f.alpha.context,
+      expectedWorkspaceId: "alpha",
+      expectedStoryId: "US-WS-038",
+      repositorySelector: "product",
+      skillBody: "# roll-peer",
+    });
+
+    expect(handoff).toMatchObject({
+      ok: true,
+      cwd: f.alpha.worktreePaths[0],
+      policy: {
+        scope: "repository_required",
+        effectTarget: "none",
+        access: "read",
+        repositorySelector: "required",
+      },
+    });
+  });
+
+  it("routes the real agent spawn through the shipped roll-peer policy before process creation", async () => {
+    const f = fixture();
+    const shim = join(dirname(f.arbitraryCwd), "claude-peer-shim");
+    writeFileSync(shim, [
+      "#!/bin/sh",
+      "echo cwd=$(pwd)",
+      "echo workspace=$ROLL_WORKSPACE",
+      "echo story=$ROLL_STORY_ID",
+      "echo repository=$ROLL_REPOSITORY_ALIAS",
+      "case \"$2\" in *\"skill: roll-peer\"*) echo handoff=yes;; *) echo handoff=no;; esac",
+      "exit 0",
+      "",
+    ].join("\n"), "utf8");
+    chmodSync(shim, 0o755);
+
+    const result = await realAgentSpawn("claude", {
+      cwd: f.arbitraryCwd,
+      skillBody: "review only",
+      bin: shim,
+      bare: true,
+      workspaceExecution: f.alpha.context,
+      workspaceSkillInvocation: {
+        skillName: "roll-peer",
+        operation: "review",
+        expectedWorkspaceId: "alpha",
+        expectedStoryId: "US-WS-038",
+        repositorySelector: "product",
+      },
+    });
+
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(result.stdout).toContain(`cwd=${f.alpha.worktreePaths[0]}`);
+    expect(result.stdout).toContain("workspace=alpha");
+    expect(result.stdout).toContain("story=US-WS-038");
+    expect(result.stdout).toContain("repository=product");
+    expect(result.stdout).toContain("handoff=yes");
+  });
+
+  it.each([
+    ["roll-doctor", "diagnose", "machine"],
+    ["roll-onboard", "diagnose", "legacy"],
+  ] as const)("runs valid %s %s without inventing Workspace authority", (skillName, operation, mode) => {
+    const f = fixture();
+    const explicitRoot = join(dirname(f.arbitraryCwd), `${mode}-root`);
+    mkdirSync(explicitRoot);
+    const handoff = prepareRegisteredWorkspaceSkillHandoffForTest({
+      manifest,
+      skillName,
+      operation,
+      context: undefined,
+      ...(mode === "machine" ? { machineCwd: explicitRoot } : { legacyProjectRoot: explicitRoot }),
+      skillBody: `# ${skillName}`,
+    });
+
+    expect(handoff).toMatchObject({ ok: true, cwd: explicitRoot, env: {} });
+    if (!handoff.ok) return;
+    expect(handoff.context).toBeUndefined();
+    expect(handoff.skillBody).toContain("No Workspace");
+    if (mode === "legacy") {
+      expect(handoff.skillBody).toContain(`legacyProjectRoot: ${explicitRoot}`);
+      expect(handoff.skillBody).toContain("never dual-write");
+      expect(handoff.skillBody).toContain("roll workspace create --config");
+    }
+  });
+
   it.each([
     ["roll-doc-audit", "audit"],
     ["roll-.dream", "scan"],
@@ -344,7 +511,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
   ] as const)("fails closed for %s on missing, unknown, or ambiguous multi-repository selector", (skillName, operation) => {
     const f = fixture();
     const prepare = (context: WorkspaceExecutionContextV1, repositorySelector?: string) =>
-      prepareRegisteredWorkspaceSkillHandoff({
+      prepareRegisteredWorkspaceSkillHandoffForTest({
         manifest,
         skillName,
         operation,
@@ -363,7 +530,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
 
   it("fails closed for unknown, duplicate, or incomplete operation registry rows", () => {
     const f = fixture();
-    const prepare = (candidateManifest: unknown, operation = "review") => prepareRegisteredWorkspaceSkillHandoff({
+    const prepare = (candidateManifest: unknown, operation = "review") => prepareRegisteredWorkspaceSkillHandoffForTest({
       manifest: candidateManifest,
       skillName: "roll-peer",
       operation,
@@ -392,6 +559,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
       id: "roll-peer",
       operation: "review",
       scope: "machine_only",
+      effectTarget: "machine",
       access: "none",
       repositorySelector: "required",
       allowsAmbientCwd: false,
@@ -403,6 +571,7 @@ describe("US-WS-038 supporting skill Workspace handoff", () => {
       id: "roll-peer",
       operation: "review",
       scope: "legacy_migration_only",
+      effectTarget: "legacy_project",
       access: "none",
       repositorySelector: "forbidden",
       allowsAmbientCwd: false,

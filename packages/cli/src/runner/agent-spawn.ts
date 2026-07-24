@@ -41,7 +41,10 @@ import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } fro
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Rig, WorkspaceExecutionContextV1 } from "@roll/spec";
-import { workspaceSkillHandoffEnvironment } from "./workspace-skill-handoff.js";
+import {
+  prepareRegisteredWorkspaceSkillHandoff,
+  workspaceSkillHandoffEnvironment,
+} from "./workspace-skill-handoff.js";
 import { getAgentSpec } from "@roll/core";
 import { worktreeGitDiscoveryEnv } from "./main-checkout-guard.js";
 
@@ -499,6 +502,16 @@ export function missingAgentSecretEnv(
 
 export type AgentSpawnPurpose = "builder" | "pick_ranking" | "test_author" | "implementer" | "attacker";
 
+export interface WorkspaceSkillInvocation {
+  readonly skillName: string;
+  readonly operation: string;
+  readonly expectedWorkspaceId?: string;
+  readonly expectedStoryId?: string;
+  readonly repositorySelector?: string;
+  readonly machineCwd?: string;
+  readonly legacyProjectRoot?: string;
+}
+
 export function adversarialRolePrompt(role: "test_author" | "implementer" | "attacker"): string {
   switch (role) {
     case "test_author":
@@ -530,6 +543,13 @@ export interface AgentSpawnOptions {
   /** US-WS-033: the frozen invocation authority. The child receives this exact
    * serializable snapshot; it must not rediscover Workspace/Issue from cwd. */
   workspaceExecution?: WorkspaceExecutionContextV1;
+  /** US-WS-038: operation identity for a supporting-skill spawn. The real
+   * spawn resolves its authority policy from the shipped registry; callers
+   * cannot self-report scope/access/effect target. */
+  workspaceSkillInvocation?: WorkspaceSkillInvocation;
+  /** Internal result of resolving workspaceSkillInvocation against the shipped
+   * registry. It is applied only after ambient authority variables are scrubbed. */
+  registeredWorkspaceSkillEnv?: NodeJS.ProcessEnv;
   /** Hard wall-clock kill after this many ms (the watchdog also enforces this at
    *  the orchestrator layer; this is the spawn-local belt-and-braces). */
   timeoutMs?: number;
@@ -755,6 +775,15 @@ function childEnv(opts: AgentSpawnOptions): NodeJS.ProcessEnv {
   for (const key of Object.keys(env)) {
     if (key.startsWith("GIT_")) delete env[key];
   }
+  for (const key of [
+    "ROLL_WORKSPACE_EXECUTION_CONTEXT",
+    "ROLL_WORKSPACE",
+    "ROLL_STORY_ID",
+    "ROLL_REPOSITORY_ID",
+    "ROLL_REPOSITORY_ALIAS",
+  ]) {
+    delete env[key];
+  }
   // The cycle worktree itself remains discoverable from cwd. The ceiling only
   // prevents an invalid/missing worktree from walking upward into the product
   // checkout that physically contains `.roll/loop/worktrees`.
@@ -762,6 +791,7 @@ function childEnv(opts: AgentSpawnOptions): NodeJS.ProcessEnv {
   env.PWD = opts.cwd;
   delete env.OLDPWD;
   Object.assign(env, workspaceExecutionEnvironment(opts.workspaceExecution));
+  Object.assign(env, opts.registeredWorkspaceSkillEnv ?? {});
   return opts.runDir !== undefined && opts.runDir !== "" ? { ...env, ...evidenceFrameEnv(opts.runDir) } : env;
 }
 
@@ -860,7 +890,28 @@ function spawnAndWait(bin: string, args: string[], opts: AgentSpawnOptions, pty 
   });
 }
 
-export const realAgentSpawn: AgentSpawn = (agent, opts) => {
+function prepareRegisteredSkillSpawnOptions(opts: AgentSpawnOptions): AgentSpawnOptions {
+  const invocation = opts.workspaceSkillInvocation;
+  if (invocation === undefined) return opts;
+  const prepared = prepareRegisteredWorkspaceSkillHandoff({
+    ...invocation,
+    context: opts.workspaceExecution,
+    skillBody: opts.skillBody,
+  });
+  if (!prepared.ok) {
+    throw new Error(`workspace_skill_handoff:${prepared.code}`);
+  }
+  return {
+    ...opts,
+    cwd: prepared.cwd,
+    skillBody: prepared.skillBody,
+    registeredWorkspaceSkillEnv: prepared.env,
+    ...(prepared.context === undefined ? { workspaceExecution: undefined } : { workspaceExecution: prepared.context }),
+  };
+}
+
+export const realAgentSpawn: AgentSpawn = (agent, rawOpts) => {
+  const opts = prepareRegisteredSkillSpawnOptions(rawOpts);
   const profile = agentProfile(agent);
   const { bin, args, pty } = withPtyWrap(profile.buildSpawnCommand(opts), agent);
   return spawnAndWait(bin, args, withAgentProfileEnv(agent, opts), pty);
