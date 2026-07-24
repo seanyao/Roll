@@ -18,8 +18,6 @@ export type WorkspaceContextViolationCode =
 export interface WorkspaceContextAuditSurface {
   readonly policyKey: string;
   readonly file: string;
-  /** True only when the public bridge already canonicalized selector aliases. */
-  readonly selectorTokensNormalized?: boolean;
 }
 
 export interface WorkspaceContextAuditAllowlistEntry {
@@ -196,7 +194,7 @@ function scanSource(
   identity: ParsedPolicyKey,
   findings: WorkspaceContextAuditFinding[],
   seen: Set<string>,
-  selectorTokensNormalized = false,
+  policy?: WorkspaceContextPolicy,
 ): void {
   const kind = [".js", ".jsx", ".mjs", ".cjs"].includes(extname(file)) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, kind);
@@ -223,6 +221,7 @@ function scanSource(
       && (node.expression.text === "join" || node.expression.text === "resolve")
       && node.arguments.some((argument) => (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) && argument.text === ".roll")
       && node.arguments.some((argument) => ts.isIdentifier(argument) && cwdAliases.get(scopeFor(node))?.has(argument.text) === true)
+      && policy?.scope !== "repository_required"
     ) {
       const line = lineAt(source, node);
       addFinding(findings, seen, identity, file, line, "MANUAL_CWD_ROLL_AUTHORITY", "a process.cwd() alias is manually joined to a .roll authority path");
@@ -271,7 +270,8 @@ function scanSource(
         }
       }
     }
-    if (identity.surface === "cli" && !selectorTokensNormalized && isSelectorParserBypass(node)) {
+    const sharedSelectorBoundary = /(?:parseWorkspaceSelectorArgs|canonicalizeWorkspaceAliasTokens|parseWorkspaceInteractionArgs|resolveBacklogCommandTarget|workspaceProjectRoot|parseTarget|resolveInteractiveTargets|workspaceViewCommand|contextCommand|workspaceIssueCommand|parseWorkspaceMigrateArgs|ideaCommand)/u.test(sourceText);
+    if (identity.surface === "cli" && policy?.scope !== "legacy_migration_only" && !sharedSelectorBoundary && isSelectorParserBypass(node)) {
       addFinding(
         findings,
         seen,
@@ -356,7 +356,7 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
   const seen = new Set<string>();
   const registeredFiles = new Set<string>();
 
-  const scanQueue = new Map<string, { readonly identity: ParsedPolicyKey; readonly selectorTokensNormalized: boolean }>();
+  const scanQueue = new Map<string, ParsedPolicyKey>();
   for (const surface of [...input.surfaces].sort((a, b) => compareText(a.file, b.file) || compareText(a.policyKey, b.policyKey))) {
     const identity = parsePolicyKey(surface.policyKey);
     const file = normalizedRelative(root, surface.file);
@@ -374,11 +374,10 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
       continue;
     }
     registeredFiles.add(file);
-    if (!scanQueue.has(file)) scanQueue.set(file, { identity, selectorTokensNormalized: surface.selectorTokensNormalized === true });
+    if (!scanQueue.has(file)) scanQueue.set(file, identity);
   }
 
-  for (const [file, queued] of scanQueue) {
-    const { identity, selectorTokensNormalized } = queued;
+  for (const [file, identity] of scanQueue) {
     const absolute = join(root, file);
     if (!existsSync(absolute)) {
       findings.push({
@@ -395,7 +394,7 @@ export function auditWorkspaceContextTree(input: WorkspaceContextAuditInput): Wo
     const sourceText = readFileSync(absolute, "utf8");
     if (file.endsWith("/SKILL.md") || file === "SKILL.md") scanSkill(sourceText, file, identity, findings, seen);
     else if (SOURCE_EXTENSIONS.has(extname(file)) && !/(?:^|\/)(?:test|tests|__tests__|fixtures)(?:\/|$)/u.test(file)) {
-      scanSource(sourceText, file, identity, findings, seen, selectorTokensNormalized);
+      scanSource(sourceText, file, identity, findings, seen, policies.get(`${identity.surface}:${identity.id}:${identity.operation}`));
     }
   }
 
@@ -492,15 +491,27 @@ export function registeredWorkspaceContextAuditSurfaces(
   rootDir?: string,
 ): WorkspaceContextAuditSurface[] {
   const surfaces = policies.map((policy) => {
+    const cliFile = policy.id === "workspace" && policy.operation.startsWith("issue.")
+      ? "packages/cli/src/commands/workspace-issue.ts"
+      : policy.id === "workspace" && policy.operation.startsWith("requirement.")
+        ? "packages/cli/src/commands/workspace-requirement.ts"
+        : policy.id === "workspace" && policy.operation.startsWith("doctor.")
+          ? "packages/cli/src/commands/workspace-doctor.ts"
+          : policy.id === "workspace" && policy.operation === "migrate"
+            ? "packages/cli/src/commands/workspace-migrate.ts"
+            : policy.id === "workspace" && policy.operation === "edit"
+              ? "packages/cli/src/commands/workspace-edit.ts"
+              : policy.id === "story" && policy.operation === "validate"
+                ? "packages/cli/src/commands/story-validate.ts"
+                : CLI_SURFACE_FILES[policy.id];
     const file = policy.surface === "cli"
-      ? CLI_SURFACE_FILES[policy.id]
+      ? cliFile
       : policy.surface === "tool"
         ? TOOL_SURFACE_FILES[policy.id]
         : `skills/${policy.id}/SKILL.md`;
     return {
       policyKey: policyKey(policy),
       file: file ?? `unregistered/${policy.surface}/${policy.id}.missing`,
-      ...(policy.surface === "cli" ? { selectorTokensNormalized: true } : {}),
     };
   });
   if (rootDir === undefined) return surfaces;
@@ -517,7 +528,8 @@ export function registeredWorkspaceContextAuditSurfaces(
   const resolveImport = (fromFile: string, specifier: string): string | undefined => {
     if (!specifier.startsWith(".")) return undefined;
     const base = resolve(rootDir, fromFile, "..", specifier);
-    for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, join(base, "index.ts")]) {
+    const sourceBase = /\.(?:js|mjs|cjs)$/u.test(base) ? base.replace(/\.(?:js|mjs|cjs)$/u, "") : base;
+    for (const candidate of [base, `${sourceBase}.ts`, `${sourceBase}.tsx`, `${sourceBase}.js`, join(sourceBase, "index.ts")]) {
       if (!existsSync(candidate)) continue;
       const rel = relative(resolve(rootDir), candidate).split(sep).join("/");
       if (rel !== "" && !rel.startsWith("../")) return rel;
@@ -526,6 +538,7 @@ export function registeredWorkspaceContextAuditSurfaces(
   };
   const entrySurfaces = [...surfaces];
   for (const entry of entrySurfaces) {
+    if (entry.policyKey === "cli:help:read") continue;
     const queue = [entry.file];
     const visited = new Set<string>();
     while (queue.length > 0) {
@@ -538,13 +551,15 @@ export function registeredWorkspaceContextAuditSurfaces(
       for (const imported of imports) {
         const resolved = resolveImport(file, imported.fileName);
         if (resolved === undefined) continue;
+        const entrySurface = parsePolicyKey(entry.policyKey)?.surface;
+        if (entrySurface === "cli" && !resolved.startsWith("packages/cli/src/")) continue;
+        if (entrySurface === "tool" && !resolved.startsWith("packages/infra/src/tools/")) continue;
         queue.push(resolved);
         if (existing.has(resolved)) continue;
         existing.add(resolved);
         surfaces.push({
           policyKey: entry.policyKey,
           file: resolved,
-          ...(entry.selectorTokensNormalized === true ? { selectorTokensNormalized: true } : {}),
         });
       }
     }

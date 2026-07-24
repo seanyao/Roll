@@ -50,12 +50,12 @@ const DIM_CHECKS: Record<ConsistencyDimension, (projectDir: string) => DimResult
   "truth-live": (p) => checkTruthLive(p),
 };
 
-interface DimResult {
+export interface DimResult {
   status: "pass" | "fail";
   gaps: string[];
   note?: string;
 }
-interface Report {
+export interface Report {
   overall: "pass" | "fail";
   dimensions: Record<string, DimResult>;
 }
@@ -877,13 +877,16 @@ function pyListRepr(items: string[]): string {
 // ─── orchestration ────────────────────────────────────────────────────────────
 /** Programmatic pass/fail for the seven dimensions — the `roll release` gate. */
 export function consistencyPasses(projectDir: string): boolean {
-  return runAll(projectDir).overall === "pass";
+  return buildConsistencyReport(projectDir).overall === "pass";
 }
 
-function runAll(projectDir: string): Report {
+export function buildConsistencyReport(
+  projectDir: string,
+  dimensionChecks: Record<ConsistencyDimension, (projectDir: string) => DimResult> = DIM_CHECKS,
+): Report {
   const report: Report = { overall: "pass", dimensions: {} };
   for (const dim of CONSISTENCY_DIMENSIONS) {
-    const result = DIM_CHECKS[dim](projectDir);
+    const result = dimensionChecks[dim](projectDir);
     report.dimensions[dim] = result;
     if (result.status === "fail") report.overall = "fail";
   }
@@ -1135,7 +1138,7 @@ export function runConsistencyCheck(
       else if (a === "--project-dir") projectDir = rest[++i] ?? projectDir;
       else if (a.startsWith("--project-dir=")) projectDir = a.slice("--project-dir=".length);
     }
-    const report = runAll(projectDir);
+    const report = buildConsistencyReport(projectDir);
     if (renderMode === "table") {
       // Public command: NO_COLOR-aware verdict-first table; JSON carries f/w/?.
       if (!process.stdout.isTTY || (process.env["NO_COLOR"] ?? "") !== "") renderState.useColor = false;
