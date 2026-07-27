@@ -16,7 +16,10 @@ import {
   cardArchiveDir,
   epicForStory,
   bulkLiveEpics,
+  findFeatureFile,
+  findFeatureFiles,
   generateIndex,
+  isRunArtifactDir,
   liveEpicOf,
   mountExecutionAtPublish,
   readIndex,
@@ -104,6 +107,71 @@ describe("liveEpicOf", () => {
   it("returns null when no feature file exists (→ uncategorized at call site)", () => {
     const proj = project(["| US-A-1 | x | 📋 Todo |"]);
     expect(liveEpicOf(proj, "US-A-1")).toBeNull();
+  });
+});
+
+// FIX-1483 — the run-artifact heuristic used to run at EVERY depth, so an epic
+// whose own name starts with `cycle-` was skipped whole: every card of the real
+// `cycle-efficiency` epic was invisible to `roll attest` ("story not found") and
+// could never earn an acceptance report. Epics live at depth 0; run artifacts
+// only ever live inside a card folder.
+describe("FIX-1483 — a cycle-* epic is not mistaken for a cycle run directory", () => {
+  it("resolves a card under an epic named cycle-efficiency", () => {
+    const proj = project(
+      ["| US-CYCLE-001 | x | ✅ Done |"],
+      [["cycle-efficiency/US-CYCLE-001/spec.md", "# US-CYCLE-001\n"]],
+    );
+    expect(findFeatureFile(proj, "US-CYCLE-001")).toBe(
+      join(proj, ".roll", "features", "cycle-efficiency", "US-CYCLE-001", "spec.md"),
+    );
+    expect(liveEpicOf(proj, "US-CYCLE-001")).toBe("cycle-efficiency");
+    expect(bulkLiveEpics(proj, ["US-CYCLE-001"]).get("US-CYCLE-001")).toBe("cycle-efficiency");
+  });
+
+  it("still skips run artifacts INSIDE a card folder (cycle-<id>, latest, timestamped)", () => {
+    const proj = project(["| US-A-1 | x | ✅ Done |"], [["alpha/US-A-1/spec.md", "# US-A-1\n"]]);
+    for (const run of ["cycle-42", "latest", "2026-07-27T10-00-00", "evidence", "pre-evidence-backfill"]) {
+      const dir = join(proj, ".roll", "features", "alpha", "US-A-1", run);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "spec.md"), "# US-A-1 stale run copy\n");
+    }
+    expect(findFeatureFiles(proj, "US-A-1")).toEqual([
+      join(proj, ".roll", "features", "alpha", "US-A-1", "spec.md"),
+    ]);
+  });
+
+  // Depth boundary (codex review): epics sit at depth 0, card folders at depth 1,
+  // run artifacts at depth 2+. Gating at depth ≥ 1 would still swallow a legacy
+  // feature-slug folder like `cycle-meta-sync/` that legitimately owns specs.
+  it("isRunArtifactDir: run artifacts only from depth 2 (epic 0, card 1)", () => {
+    const runNames = [
+      "cycle-42",
+      "latest",
+      "notes",
+      "evidence",
+      "screenshots",
+      "pre-evidence-backfill",
+      "2026-07-27T10-00-00",
+    ];
+    for (const name of ["cycle-efficiency", ...runNames]) {
+      expect(isRunArtifactDir(name, 0), `epic level: ${name}`).toBe(false);
+      expect(isRunArtifactDir(name, 1), `card level: ${name}`).toBe(false);
+    }
+    for (const name of runNames) {
+      expect(isRunArtifactDir(name, 2), `run level: ${name}`).toBe(true);
+      expect(isRunArtifactDir(name, 3), `nested run level: ${name}`).toBe(true);
+    }
+    expect(isRunArtifactDir("US-CYCLE-001", 2)).toBe(false);
+  });
+
+  it("resolves a card under a legacy feature-slug folder named cycle-*", () => {
+    const proj = project(
+      ["| FIX-9001 | x | ✅ Done |"],
+      [["autonomous-evolution/cycle-meta-sync/FIX-9001.md", "# FIX-9001\n"]],
+    );
+    expect(findFeatureFile(proj, "FIX-9001")).toBe(
+      join(proj, ".roll", "features", "autonomous-evolution", "cycle-meta-sync", "FIX-9001.md"),
+    );
   });
 });
 

@@ -45,6 +45,24 @@ export function isMarkdownStoryEntry(path: string, entry: Dirent): boolean {
   }
 }
 
+/** FIX-1483: run artifacts (`latest/`, an `evidence/` payload, a timestamped or
+ *  `cycle-` prefixed run directory, …) only ever live INSIDE a card folder —
+ *  `features/<epic>/<ID>/<run>` — never at the epic level. Applying the
+ *  heuristic to a direct child of `features/` silently hid EVERY card of the
+ *  `cycle-efficiency` epic from `roll attest` ("story not found"), because that
+ *  epic's own name starts with `cycle-`; the whole epic could therefore never
+ *  earn an acceptance report. `depth` is the distance below `features/`: epics
+ *  sit at depth 0, card folders at depth 1, run artifacts at depth 2+ — so the
+ *  heuristic is confined to depth ≥ 2 (codex review: a depth ≥ 1 gate would
+ *  still swallow a legacy feature-slug folder such as `cycle-meta-sync/` that
+ *  legitimately owns specs; measured on the live tree, all 2675 run-shaped
+ *  directories sit at depth 2 and none at depth 1). */
+export function isRunArtifactDir(name: string, depth: number): boolean {
+  if (depth < 2) return false;
+  if (name === "notes" || name === "evidence" || name === "screenshots" || name === "latest") return true;
+  return /^\d{4}-\d{2}-\d{2}T/.test(name) || name.startsWith("cycle-") || name === "pre-evidence-backfill";
+}
+
 /** Every feature markdown that could define a story, in resolution priority:
  *  ID-named owners (the legacy flat `<storyId>.md` and the card-folder
  *  `<storyId>/spec.md`, FIX-225 / US-META-001) first, then prose/content
@@ -57,13 +75,12 @@ export function findFeatureFiles(projectPath: string, storyId: string): string[]
   const root = join(projectPath, ".roll", "features");
   if (!existsSync(root)) return [];
   const hits: string[] = [];
-  const walk = (dir: string): void => {
+  const walk = (dir: string, depth: number): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
       if (e.isDirectory()) {
-        if (e.name === "notes" || e.name === "evidence" || e.name === "screenshots" || e.name === "latest") continue;
-        if (/^\d{4}-\d{2}-\d{2}T/.test(e.name) || e.name.startsWith("cycle-") || e.name === "pre-evidence-backfill") continue;
-        walk(p);
+        if (isRunArtifactDir(e.name, depth)) continue;
+        walk(p, depth + 1);
       } else if (isMarkdownStoryEntry(p, e)) {
         const idOwned =
           e.name === `${storyId}.md` || (e.name === "spec.md" && basename(dir) === storyId);
@@ -79,7 +96,7 @@ export function findFeatureFiles(projectPath: string, storyId: string): string[]
     }
   };
   try {
-    walk(root);
+    walk(root, 0);
   } catch {
     return [];
   }
@@ -176,20 +193,19 @@ export function bulkLiveEpics(projectPath: string, ids: readonly string[]): Map<
   const remaining = new Set(ids);
   const files: Array<{ path: string; name: string; dirName: string }> = [];
   const root = join(projectPath, ".roll", "features");
-  const walk = (dir: string): void => {
+  const walk = (dir: string, depth: number): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
       if (e.isDirectory()) {
-        if (e.name === "notes" || e.name === "evidence" || e.name === "screenshots" || e.name === "latest") continue;
-        if (/^\d{4}-\d{2}-\d{2}T/.test(e.name) || e.name.startsWith("cycle-") || e.name === "pre-evidence-backfill") continue;
-        walk(p);
+        if (isRunArtifactDir(e.name, depth)) continue;
+        walk(p, depth + 1);
       } else if (isMarkdownStoryEntry(p, e)) {
         files.push({ path: p, name: e.name, dirName: basename(dir) });
       }
     }
   };
   try {
-    if (existsSync(root)) walk(root);
+    if (existsSync(root)) walk(root, 0);
   } catch {
     /* unreadable tree → every id resolves null, same as the per-ID walk */
   }
