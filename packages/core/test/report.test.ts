@@ -816,3 +816,59 @@ describe("US-EVID-031 — capture surfaces render every image with provenance (A
     expect(existsSync(fixturePath)).toBe(true);
   });
 });
+
+// US-EVID-033 — delivery-time facts block: the card's own PR/sha, honest states,
+// post-hoc labeling, and deletion-not-placeholder when the fact is absent.
+describe("delivery-time facts block (US-EVID-033)", () => {
+  const verified = {
+    state: "verified" as const,
+    prNumber: 1490,
+    headSha: "aaaabbbbccccdddd",
+    mergeCommit: "32195061fb3e",
+    mergedAt: "2026-07-20T10:00:00.000Z",
+    collectedAt: "2026-07-27T09:00:00.000Z",
+    postHoc: true,
+    checks: [{ name: "test-ts", conclusion: "success" }],
+  };
+
+  it("renders the card's own PR, head sha, merge commit and each check", () => {
+    const html = renderReport({ ...BASE, items: [item({ evidence: [{ kind: "commit", label: "tcr: x" }] })], deliveryCi: verified });
+    expect(html).toContain(bi("Delivery-time facts", "交付时事实"));
+    expect(html).toContain("#1490");
+    expect(html).toContain("aaaabbbbccccdddd");
+    expect(html).toContain("32195061fb3e");
+    expect(html).toContain("test-ts");
+    expect(html).toContain("success");
+  });
+
+  it("labels a post-hoc collection as such, and does not when it is cycle-time", () => {
+    const post = renderReport({ ...BASE, items: [item({})], deliveryCi: verified });
+    expect(post).toContain('data-posthoc="true"');
+    expect(post).toContain("事后重建");
+    const inCycle = renderReport({ ...BASE, items: [item({})], deliveryCi: { ...verified, postHoc: false } });
+    expect(inCycle).toContain('data-posthoc="false"');
+    expect(inCycle).not.toContain("事后重建");
+  });
+
+  it("states red / unknown with the reason instead of softening it", () => {
+    const red = renderReport({
+      ...BASE,
+      items: [item({})],
+      deliveryCi: { ...verified, state: "red", reason: "checks_failed:test-ts", checks: [{ name: "test-ts", conclusion: "failure" }] },
+    });
+    expect(red).toContain("checks_failed:test-ts");
+    expect(red).toContain('data-state="red"');
+    const unknown = renderReport({
+      ...BASE,
+      items: [item({})],
+      deliveryCi: { state: "unknown", reason: "no_delivery_record", collectedAt: "2026-07-27T09:00:00.000Z", postHoc: false, checks: [] },
+    });
+    expect(unknown).toContain("no_delivery_record");
+    expect(unknown).toContain('data-state="unknown"');
+  });
+
+  it("is trimmed entirely when no delivery fact exists (no placeholder)", () => {
+    const html = renderReport({ ...BASE, items: [item({})] });
+    expect(html).not.toContain(bi("Delivery-time facts", "交付时事实"));
+  });
+});

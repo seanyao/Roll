@@ -20,7 +20,8 @@
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import type { CaptureIntentV2, CaptureReceiptV2 } from "@roll/spec";
-import type { EvidenceHealthFact } from "@roll/core";
+import type { DeliveryCheckRun, DeliveryCiFact, DeliveryCiRecord, EvidenceHealthFact } from "@roll/core";
+import { resolveDeliveryCi } from "@roll/core";
 import { gh, ghAvailable } from "./github.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -61,7 +62,18 @@ export interface EvidenceManifest {
   story_id: string;
   collected_at: string;
   tcr_commits: TcrCommit[];
+  /**
+   * LEGACY lane: the repository's most recent workflow run (`gh run list`). It is
+   * NOT this card's CI evidence — kept for back-compat only. US-EVID-033: read
+   * `delivery_ci` for the card-level truth.
+   */
   ci: { available: boolean; url: string; conclusion: string };
+  /**
+   * US-EVID-033 — THIS card's delivery-time CI truth: the checks that ran on its
+   * own PR's head sha before it merged. Additive: legacy readers ignore the key.
+   * Absent only when the collector was given no delivery record to resolve.
+   */
+  delivery_ci?: DeliveryCiFact;
   deploy: { url: string; status: number; ok: boolean } | null;
   test_pass: { present: boolean; age_seconds: number };
   screenshots: string[];
@@ -140,6 +152,15 @@ export interface CollectOptions {
   captureReceipts?: readonly CaptureReceiptFact[];
   /** US-EVID-031 — resolved visual-evidence health per declared surface. */
   evidenceHealth?: readonly EvidenceHealthFact[];
+  /**
+   * US-EVID-033 — this card's delivery record (PR number + merge sha), projected
+   * from the delivery ledger by the caller. Given a PR number, the collector
+   * queries that PR's head-sha checks and freezes the resulting `delivery_ci`
+   * fact. Absent ⇒ the lane is omitted (never faked).
+   */
+  deliveryRecord?: DeliveryCiRecord;
+  /** Owner/repo slug for the checks query; resolved from the remote when absent. */
+  repoSlug?: string;
 }
 
 /**
@@ -203,6 +224,18 @@ export function openEvidenceFrame(opts: OpenEvidenceFrameOptions): EvidenceFrame
   return frame;
 }
 
+/**
+ * US-EVID-033 — owner/repo slug from the git remote, so the checks query targets
+ * the card's own repository. Returns "" when it cannot be determined (→ the lane
+ * degrades to `unknown`, never to a pass).
+ */
+async function resolveRepoSlug(run: EvidenceRun, cwd: string): Promise<string> {
+  const r = await run("git", ["remote", "get-url", "origin"], cwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+  if (r.code !== 0) return "";
+  const m = /github\.com[:/]([^/]+\/[^/\s]+?)(?:\.git)?\s*$/.exec(r.stdout.trim());
+  return m?.[1] ?? "";
+}
+
 /** Sweep all sources; never throws — failures degrade to absent shapes. */
 export async function collectEvidence(opts: CollectOptions): Promise<EvidenceManifest> {
   const run = opts.run ?? defaultRun;
@@ -242,6 +275,68 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
         /* malformed → stays unavailable */
       }
     }
+  }
+
+  // 2b. US-EVID-033 — THIS card's delivery-time CI truth. Only attempted when the
+  //     caller resolved a delivery record; the classification (verified/red/
+  //     unknown+reason) is the pure core resolver's, so a probe failure can never
+  //     be mistaken for a pass.
+  let deliveryCi: DeliveryCiFact | undefined;
+  if (opts.deliveryRecord !== undefined) {
+    let checks: DeliveryCheckRun[] | undefined;
+    let headSha = opts.deliveryRecord.headSha;
+    let mergedAtMs = opts.deliveryRecord.mergedAtMs;
+    const pr = opts.deliveryRecord.prNumber;
+    if (ghOk && pr !== undefined) {
+      const slug = opts.repoSlug ?? (await resolveRepoSlug(run, opts.projectPath));
+      if (slug !== "") {
+        // The PR carries the authoritative head sha the checks ran on (and its
+        // merge time, needed for the honest post-hoc label).
+        const prRes = await run(
+          "gh",
+          ["api", `repos/${slug}/pulls/${pr}`, "--jq", "{head:.head.sha,merged_at:.merged_at}"],
+          opts.projectPath,
+        ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+        if (prRes.code === 0) {
+          try {
+            const parsed = JSON.parse(prRes.stdout) as { head?: string; merged_at?: string | null };
+            if (typeof parsed.head === "string" && parsed.head !== "") headSha = parsed.head;
+            if (typeof parsed.merged_at === "string" && parsed.merged_at !== "") {
+              const t = Date.parse(parsed.merged_at);
+              if (Number.isFinite(t)) mergedAtMs = t;
+            }
+          } catch {
+            /* malformed → headSha/mergedAt stay as recorded */
+          }
+        }
+        if (headSha !== undefined && headSha !== "") {
+          const chRes = await run(
+            "gh",
+            [
+              "api",
+              `repos/${slug}/commits/${headSha}/check-runs`,
+              "--jq",
+              ".check_runs[] | [.name, .conclusion // \"\"] | @tsv",
+            ],
+            opts.projectPath,
+          ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+          if (chRes.code === 0) {
+            checks = [];
+            for (const line of chRes.stdout.split("\n")) {
+              if (line.trim() === "") continue;
+              const [name = "", conclusion = ""] = line.split("\t");
+              if (name !== "") checks.push({ name, conclusion });
+            }
+          }
+        }
+      }
+    }
+    deliveryCi = resolveDeliveryCi({
+      record: { ...opts.deliveryRecord, ...(headSha !== undefined ? { headSha } : {}), ...(mergedAtMs !== undefined ? { mergedAtMs } : {}) },
+      checks,
+      ghAvailable: ghOk,
+      collectedAt: opts.now(),
+    });
   }
 
   // 3. Deploy URL HEAD probe (status code only; 5s budget; never throws).
@@ -287,6 +382,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
     collected_at: opts.now(),
     tcr_commits: tcr,
     ci,
+    ...(deliveryCi !== undefined ? { delivery_ci: deliveryCi } : {}),
     deploy,
     test_pass: testPass,
     screenshots: listDir("screenshots", /\.png$/i),
