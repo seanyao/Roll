@@ -20,7 +20,15 @@
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import type { CaptureIntentV2, CaptureReceiptV2 } from "@roll/spec";
-import type { DeliveryCheckRun, DeliveryCiFact, DeliveryCiRecord, DeliveryPrFacts, EvidenceHealthFact } from "@roll/core";
+import type {
+  DeliveryCheckRun,
+  DeliveryCiFact,
+  DeliveryCiRecord,
+  DeliveryPrFacts,
+  EvidenceHealthFact,
+  RequiredCheck,
+  RequiredChecksSource,
+} from "@roll/core";
 import { isValidCiTarget, resolveDeliveryCi } from "@roll/core";
 import { gh, ghAvailable } from "./github.js";
 import { execFile } from "node:child_process";
@@ -290,8 +298,9 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
     let checksComplete: boolean | undefined;
     let prFacts: DeliveryPrFacts | undefined;
     let baseRef: string | undefined;
-    let requiredChecks: string[] | undefined;
+    let requiredChecks: RequiredCheck[] | undefined;
     let requiredChecksKnown: boolean | undefined;
+    let requiredChecksSource: RequiredChecksSource | undefined;
     const pr = opts.deliveryRecord.prNumber;
     const slug = ghOk && pr !== undefined ? (opts.repoSlug ?? (await resolveRepoSlug(run, opts.projectPath))) : "";
     const targetValid =
@@ -346,7 +355,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
             "--paginate",
             `repos/${slug}/commits/${sha}/check-runs`,
             "--jq",
-            '.check_runs[] | [.name, .conclusion // "", .completed_at // ""] | @tsv',
+            '.check_runs[] | [.name, .conclusion // "", .completed_at // "", ((.app.id // "") | tostring)] | @tsv',
           ],
           opts.projectPath,
         ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -366,8 +375,9 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
         const parseTsv = (stdout: string, mapState: (s: string) => string): void => {
           for (const line of stdout.split("\n")) {
             if (line.trim() === "") continue;
-            const [name = "", raw = "", finishedAt = ""] = line.split("\t");
+            const [name = "", raw = "", finishedAt = "", appId = ""] = line.split("\t");
             if (name === "") continue;
+            const app = appId !== "" ? Number(appId) : NaN;
             // US-EVID-033 (codex r2): the finish time decides whether a green is
             // delivery-time evidence or a post-merge rerun. Unparseable ⇒ omitted,
             // and the resolver then refuses to verify.
@@ -376,6 +386,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
               name,
               conclusion: mapState(raw),
               ...(Number.isFinite(t) ? { completedAtMs: t } : {}),
+              ...(Number.isFinite(app) ? { appId: app } : {}),
             });
           }
         };
@@ -394,24 +405,69 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
       // protected" is a real answer (no required checks); any other failure leaves
       // the required set unknown, and the resolver refuses to verify.
       if (baseRef !== undefined && /^[A-Za-z0-9._\/-]+$/.test(baseRef)) {
+        const parseRequired = (stdout: string): RequiredCheck[] => {
+          const out: RequiredCheck[] = [];
+          for (const line of stdout.split("\n")) {
+            if (line.trim() === "") continue;
+            const [context = "", appId = ""] = line.split("\t");
+            if (context === "") continue;
+            const app = appId !== "" ? Number(appId) : NaN;
+            out.push({ context, ...(Number.isFinite(app) ? { appId: app } : {}) });
+          }
+          // GitHub reports the same requirement in BOTH shapes (`.contexts` without
+          // an app, `.checks[]` with one). Keep one entry per context, preferring the
+          // App-pinned form — the stricter of the two.
+          const byContext = new Map<string, RequiredCheck>();
+          for (const req of out) {
+            const seen = byContext.get(req.context);
+            if (seen === undefined || (seen.appId === undefined && req.appId !== undefined)) {
+              byContext.set(req.context, req);
+            }
+          }
+          return [...byContext.values()];
+        };
         const reqRes = await run(
           "gh",
           [
             "api",
             `repos/${slug}/branches/${baseRef}/protection/required_status_checks`,
             "--jq",
-            '[((.contexts // [])[]), ((.checks // [])[] | .context)] | unique | .[]',
+            // Both shapes: the legacy `.contexts` string list and `.checks[]`, whose
+            // `app_id` PINS which App must produce the check (codex r3).
+            '[((.contexts // [])[] | {context: ., app_id: null}), ((.checks // [])[])] | .[] | [.context, ((.app_id // "") | tostring)] | @tsv',
           ],
           opts.projectPath,
         ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
         if (reqRes.code === 0) {
-          requiredChecks = reqRes.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+          requiredChecks = parseRequired(reqRes.stdout);
           requiredChecksKnown = true;
+          requiredChecksSource = requiredChecks.length > 0 ? "protection" : "none_declared";
         } else if (/not protected/i.test(reqRes.stderr)) {
-          requiredChecks = [];
-          requiredChecksKnown = true;
+          // "Not protected" does NOT mean "nothing required": repository/org RULESETS
+          // can require checks with no branch protection at all (codex r3). Only a
+          // clean ruleset read may conclude "nothing declared".
+          const ruleRes = await run(
+            "gh",
+            [
+              "api",
+              "--paginate",
+              `repos/${slug}/rules/branches/${baseRef}`,
+              "--jq",
+              '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | [.context, ((.integration_id // "") | tostring)] | @tsv',
+            ],
+            opts.projectPath,
+          ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+          if (ruleRes.code === 0) {
+            requiredChecks = parseRequired(ruleRes.stdout);
+            requiredChecksKnown = true;
+            requiredChecksSource = requiredChecks.length > 0 ? "ruleset" : "none_declared";
+          } else {
+            requiredChecksKnown = false;
+            requiredChecksSource = "unknown";
+          }
         } else {
           requiredChecksKnown = false;
+          requiredChecksSource = "unknown";
         }
       }
     }
@@ -422,6 +478,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
       checksComplete,
       ...(requiredChecks !== undefined ? { requiredChecks } : {}),
       requiredChecksKnown,
+      ...(requiredChecksSource !== undefined ? { requiredChecksSource } : {}),
       ghAvailable: ghOk,
       targetValid: ghOk && pr !== undefined ? targetValid : undefined,
       collectedAt: opts.now(),

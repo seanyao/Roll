@@ -28,6 +28,18 @@
  * post-merge rerun could replace a delivery-time red with a green (a green must
  * now demonstrably predate the merge); and verifying only the visible checks let a
  * merged PR pass on one optional green while the REQUIRED check was absent.
+ * Review r3 closed three more: an observed red hidden behind an incomplete list,
+ * an app-pinned required context satisfied by another App's same-named check, and
+ * repository/org RULESETS ignored when branch protection reports "not protected".
+ *
+ * TWO LIMITATIONS ARE RECORDED RATHER THAN HIDDEN (codex r3):
+ *   - GitHub exposes only the CURRENT requirement configuration, so a requirement
+ *     relaxed after the merge cannot be detected; the fact records WHICH surface
+ *     was consulted (`requiredChecksSource`) and never claims it is historical.
+ *   - Merge-queue repositories run required checks on the synthetic merge-group
+ *     sha, not the PR head sha, so such deliveries resolve to `unknown` here. That
+ *     is the safe direction (never a false pass); merge-queue support is not built
+ *     speculatively.
  */
 
 /** One check run's conclusion as reported by the forge (check-runs + statuses). */
@@ -35,6 +47,12 @@ export interface DeliveryCheckRun {
   name: string;
   /** `success` | `failure` | `neutral` | `cancelled` | `skipped` | `timed_out` | `action_required` | `startup_failure` | "" (still running). */
   conclusion: string;
+  /**
+   * The GitHub App that produced this check, when reported. Codex review r3: an
+   * app-pinned required context is only satisfied by a check from THAT app — a
+   * same-named check from another app must not stand in for it.
+   */
+  appId?: number | undefined;
   /**
    * Epoch ms the check finished, when the forge reported it. Codex review r2: the
    * checks endpoint returns the CURRENT run per name, so a post-merge rerun can
@@ -66,6 +84,26 @@ export interface DeliveryPrFacts {
 /** Tri-state: a timing we cannot establish is stated as `unknown`, never as `no`. */
 export type PostHocState = "yes" | "no" | "unknown";
 
+/** A required check context, optionally pinned to the App that must produce it. */
+export interface RequiredCheck {
+  context: string;
+  appId?: number | undefined;
+}
+
+/**
+ * Where the required-check set came from — recorded so a reader can judge the
+ * fact's strength. `protection` / `ruleset` are declared requirements;
+ * `none_declared` means neither surface declares any (every observed check must
+ * then be green); `unknown` means the requirement set could not be read at all.
+ *
+ * KNOWN LIMITATION (codex r3, recorded not hidden): GitHub exposes only the
+ * CURRENT requirement configuration — there is no API for the configuration as it
+ * stood at merge time. A requirement relaxed after the merge is therefore
+ * invisible here. The field lets a reader see which surface was consulted; it does
+ * not claim the configuration is the historical one.
+ */
+export type RequiredChecksSource = "protection" | "ruleset" | "none_declared" | "unknown";
+
 export interface DeliveryCiFact {
   state: "verified" | "red" | "unknown";
   /** Why the state is not `verified` — always present for red/unknown. */
@@ -85,6 +123,10 @@ export interface DeliveryCiFact {
    */
   postHoc: PostHocState;
   checks: DeliveryCheckRun[];
+  /** Which surface declared the required checks (see {@link RequiredChecksSource}). */
+  requiredChecksSource?: RequiredChecksSource;
+  /** The required contexts this verdict was measured against. */
+  requiredChecks?: RequiredCheck[];
 }
 
 /**
@@ -128,11 +170,14 @@ export interface ResolveDeliveryCiInput {
   checksComplete?: boolean | undefined;
   ghAvailable: boolean;
   /**
-   * The base branch's REQUIRED check contexts. Codex review r2: verifying only
-   * the checks that happen to be visible lets a merged PR with one optional green
-   * check (and the required check absent) read as verified.
+   * The base branch's REQUIRED check contexts (branch protection or a ruleset).
+   * Codex review r2: verifying only the checks that happen to be visible lets a
+   * merged PR with one optional green check (and the required check absent) read
+   * as verified.
    */
-  requiredChecks?: readonly string[] | undefined;
+  requiredChecks?: readonly RequiredCheck[] | undefined;
+  /** Which surface the required set came from, recorded into the fact. */
+  requiredChecksSource?: RequiredChecksSource | undefined;
   /**
    * Whether the required-check set is KNOWN. `false` ⇒ the branch protection could
    * not be read, so what "green" even means is unestablished ⇒ unknown. An
@@ -181,17 +226,18 @@ export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact
   // otherwise these checks belong to some other delivery.
   if (!shaAgrees(input.pr.mergeCommitSha, rec.mergeCommit)) return { ...base, reason: "merge_sha_mismatch" };
   if (input.checks === undefined) return { ...base, reason: "checks_unavailable" };
-  if (input.checksComplete === false) return { ...base, reason: "checks_list_incomplete", checks: [...input.checks] };
 
   const checks = [...input.checks];
-  if (checks.length === 0) return { ...base, reason: "no_checks_on_head_sha", checks };
-
-  // A failure is terminal: reported as `red` even when other checks are still
-  // running or the list is otherwise imperfect — a red must never hide.
+  // A failure is terminal and is scanned FIRST — before the completeness and
+  // requirement gates (codex r3). A red that WAS read must never be swallowed by
+  // "the list might be incomplete"; incompleteness can only ever downgrade a
+  // would-be pass, never hide an observed failure.
   const failed = checks.filter((c) => FAILING.has(c.conclusion));
   if (failed.length > 0) {
     return { ...base, state: "red", reason: `checks_failed:${failed.map((c) => c.name).join(",")}`, checks };
   }
+  if (input.checksComplete === false) return { ...base, reason: "checks_list_incomplete", checks };
+  if (checks.length === 0) return { ...base, reason: "no_checks_on_head_sha", checks };
 
   // Without a merge time there is no boundary between delivery-time evidence and
   // a later rerun, so nothing can be verified (codex r2).
@@ -200,19 +246,39 @@ export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact
   }
   // What counts as green is the BRANCH's required set, not whatever happened to
   // be visible. An unreadable protection config leaves that undefined.
-  if (input.requiredChecksKnown !== true) return { ...base, reason: "required_checks_unknown", checks };
+  if (input.requiredChecksKnown !== true) {
+    return { ...base, reason: "required_checks_unknown", checks, requiredChecksSource: "unknown" };
+  }
   const required = [...(input.requiredChecks ?? [])];
-  const byName = new Map(checks.map((c) => [c.name, c]));
-  const missing = required.filter((name) => !PASSING.has(byName.get(name)?.conclusion ?? ""));
-  if (missing.length > 0) return { ...base, reason: `required_missing:${missing.join(",")}`, checks };
+  const provenance = {
+    requiredChecksSource: input.requiredChecksSource ?? (required.length > 0 ? "protection" : "none_declared"),
+    ...(required.length > 0 ? { requiredChecks: required } : {}),
+  } as const;
+  // App-pinned identity (codex r3): a required context is satisfied only by a
+  // successful check with that name AND, when the requirement pins an App, from
+  // that App.
+  const satisfies = (req: RequiredCheck): DeliveryCheckRun | undefined =>
+    checks.find(
+      (c) => c.name === req.context && (req.appId === undefined || c.appId === req.appId) && PASSING.has(c.conclusion),
+    );
+  const missing = required.filter((req) => satisfies(req) === undefined);
+  if (missing.length > 0) {
+    return {
+      ...base,
+      ...provenance,
+      reason: `required_missing:${missing.map((r) => (r.appId !== undefined ? `${r.context}@app${r.appId}` : r.context)).join(",")}`,
+      checks,
+    };
+  }
 
   // Evidence set: the required checks when the branch declares them, otherwise
-  // every observed check (an unprotected branch's best available truth).
-  const evidence = required.length > 0 ? required.map((n) => byName.get(n)!) : checks;
+  // every observed check (nothing declared ⇒ best available truth).
+  const evidence = required.length > 0 ? required.map((req) => satisfies(req)!) : checks;
   const unproven = evidence.filter((c) => !PASSING.has(c.conclusion));
   if (unproven.length > 0) {
     return {
       ...base,
+      ...provenance,
       reason: `checks_inconclusive:${unproven.map((c) => `${c.name}=${c.conclusion === "" ? "running" : c.conclusion}`).join(",")}`,
       checks,
     };
@@ -221,12 +287,14 @@ export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact
   // before the merge. A rerun that turned a red into a green after the merge is
   // not evidence the delivery was ever green.
   const untimed = evidence.filter((c) => c.completedAtMs === undefined || !Number.isFinite(c.completedAtMs));
-  if (untimed.length > 0) return { ...base, reason: `check_time_unknown:${untimed.map((c) => c.name).join(",")}`, checks };
+  if (untimed.length > 0) {
+    return { ...base, ...provenance, reason: `check_time_unknown:${untimed.map((c) => c.name).join(",")}`, checks };
+  }
   const afterMerge = evidence.filter((c) => (c.completedAtMs as number) > mergedAtMs);
   if (afterMerge.length > 0) {
-    return { ...base, reason: `checks_after_merge:${afterMerge.map((c) => c.name).join(",")}`, checks };
+    return { ...base, ...provenance, reason: `checks_after_merge:${afterMerge.map((c) => c.name).join(",")}`, checks };
   }
-  return { ...base, state: "verified", checks };
+  return { ...base, ...provenance, state: "verified", checks };
 }
 
 /** One-line human summary for the report/terminal (bilingual callers wrap it). */

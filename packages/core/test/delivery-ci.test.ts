@@ -22,7 +22,7 @@ const record = { prNumber: 1490, mergeCommit: "32195061" };
 const pr = { merged: true, mergeCommitSha: MERGE_SHA, headSha: "deadbeefcafe1234", mergedAtMs: MERGED_MS };
 const PRE_MERGE_MS = Date.parse("2026-07-20T09:50:00Z"); // 10 min before the merge
 const green = [{ name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS }];
-const REQUIRED = ["test-ts"];
+const REQUIRED = [{ context: "test-ts" }];
 
 /** A fully verifiable input; each test perturbs exactly one dimension. */
 function ok(over: Partial<ResolveDeliveryCiInput> = {}): ResolveDeliveryCiInput {
@@ -109,7 +109,7 @@ describe("resolveDeliveryCi — only a real success verifies", () => {
   it("neutral and skipped are NOT green executions ⇒ unknown, not verified", () => {
     for (const conclusion of ["neutral", "skipped"]) {
       const f = resolveDeliveryCi(
-        ok({ checks: [{ name: "c", conclusion, completedAtMs: PRE_MERGE_MS }], requiredChecks: ["c"] }),
+        ok({ checks: [{ name: "c", conclusion, completedAtMs: PRE_MERGE_MS }], requiredChecks: [{ context: "c" }] }),
       );
       expect(f.state, conclusion).toBe("unknown");
       expect(f.reason, conclusion).toContain("required_missing");
@@ -222,7 +222,7 @@ describe("resolveDeliveryCi — the BRANCH decides what green means (codex r2)",
     const f = resolveDeliveryCi(
       ok({
         checks: [{ name: "optional-lint", conclusion: "success", completedAtMs: PRE_MERGE_MS }],
-        requiredChecks: ["test-ts"],
+        requiredChecks: [{ context: "test-ts" }],
       }),
     );
     expect(f.state).toBe("unknown");
@@ -236,7 +236,7 @@ describe("resolveDeliveryCi — the BRANCH decides what green means (codex r2)",
           { name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS },
           { name: "build", conclusion: "neutral", completedAtMs: PRE_MERGE_MS },
         ],
-        requiredChecks: ["test-ts", "build"],
+        requiredChecks: [{ context: "test-ts" }, { context: "build" }],
       }),
     );
     expect(f.reason).toBe("required_missing:build");
@@ -268,5 +268,55 @@ describe("resolveDeliveryCi — the BRANCH decides what green means (codex r2)",
     );
     expect(f.state).toBe("red");
     expect(f.reason).toBe("checks_failed:extra");
+  });
+});
+
+// Codex review r3 — an observed red outranks incompleteness; App-pinned identity;
+// provenance is recorded on every verdict.
+describe("resolveDeliveryCi — r3 integrity", () => {
+  it("a red already READ is reported red even when the list is incomplete", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [{ name: "test-ts", conclusion: "failure", completedAtMs: PRE_MERGE_MS }],
+        checksComplete: false,
+      }),
+    );
+    expect(f.state).toBe("red");
+    expect(f.reason).toBe("checks_failed:test-ts");
+  });
+
+  it("an app-pinned required context is NOT satisfied by another App's same-named check", () => {
+    const pinned = [{ context: "test-ts", appId: 15368 }];
+    const wrongApp = resolveDeliveryCi(
+      ok({
+        requiredChecks: pinned,
+        checks: [{ name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS, appId: 99 }],
+      }),
+    );
+    expect(wrongApp.state).toBe("unknown");
+    expect(wrongApp.reason).toBe("required_missing:test-ts@app15368");
+    const rightApp = resolveDeliveryCi(
+      ok({
+        requiredChecks: pinned,
+        checks: [{ name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS, appId: 15368 }],
+      }),
+    );
+    expect(rightApp.state).toBe("verified");
+  });
+
+  it("records WHICH surface declared the requirements (never claiming it is historical)", () => {
+    expect(resolveDeliveryCi(ok({ requiredChecksSource: "protection" })).requiredChecksSource).toBe("protection");
+    expect(resolveDeliveryCi(ok({ requiredChecksSource: "ruleset" })).requiredChecksSource).toBe("ruleset");
+    expect(
+      resolveDeliveryCi(ok({ requiredChecks: [], requiredChecksSource: "none_declared" })).requiredChecksSource,
+    ).toBe("none_declared");
+    const unknown = resolveDeliveryCi(ok({ requiredChecksKnown: false }));
+    expect(unknown.requiredChecksSource).toBe("unknown");
+    expect(unknown.state).toBe("unknown");
+  });
+
+  it("carries the measured requirement set into the fact for audit", () => {
+    const f = resolveDeliveryCi(ok());
+    expect(f.requiredChecks).toEqual([{ context: "test-ts" }]);
   });
 });
