@@ -51,7 +51,7 @@ const crossCuttingCases = [
   {
     id: "boundary.fail-closed",
     testFile: "packages/cli/test/workspace-context.critical.e2e.test.ts",
-    testName: "fails closed on duplicate/missing selectors and retired init without mutation",
+    testName: "fails closed on duplicate/missing selectors and removed init without mutation",
     proves: ["create_only", "selector_fail_closed", "zero_mutation"],
   },
   {

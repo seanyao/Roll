@@ -26,10 +26,6 @@ const runtimeSurfaceRoots = [
   "packages/infra/src",
   "packages/spec/src",
 ] as const;
-const legacyEvidenceAllowlist = new Set([
-  "packages/cli/test/fixtures/workspace/us-ws-023-terminal-evidence/transcript.txt",
-]);
-
 function files(path: string): readonly string[] {
   const absolute = join(repoRoot, path);
   if (!existsSync(absolute)) return [];
@@ -48,15 +44,11 @@ function textFiles(paths: readonly string[]): readonly string[] {
 describe("US-WS-023 public create-only surface audit", () => {
   it("keeps help, docs, fixtures and templates free of the retired create-entry init language", () => {
     const offenders = textFiles(publicRoots).flatMap((path) => {
-      if (legacyEvidenceAllowlist.has(path)) return [];
       const text = readFileSync(join(repoRoot, path), "utf8");
       return /roll workspace init|roll\.workspace-init\/v1/u.test(text) ? [path] : [];
     });
 
     expect(offenders).toEqual([]);
-    expect([...legacyEvidenceAllowlist]).toEqual([
-      "packages/cli/test/fixtures/workspace/us-ws-023-terminal-evidence/transcript.txt",
-    ]);
   });
 
   it("records that this repository has no shell-completion source to migrate", () => {
@@ -90,8 +82,8 @@ describe("US-WS-023 public create-only surface audit", () => {
 
     expect(forbidden).toEqual([]);
     expect(retiredFiles).toEqual([]);
-    expect(router).not.toMatch(/subcommand === "init"\)\s*return workspaceCreateCommand/u);
-    expect(router).toMatch(/subcommand === "init"\) \{[\s\S]{0,180}workspace\.error\.legacy_init_subcommand[\s\S]{0,80}return 1;/u);
+    expect(router).not.toMatch(/subcommand === "init"/u);
+    expect(router).not.toContain("legacy_init_subcommand");
   });
 
   it("keeps legacy schema recognition and correction copy on one narrow allowlist", () => {
@@ -102,11 +94,9 @@ describe("US-WS-023 public create-only surface audit", () => {
       .map((entry) => `${entry.path}:${entry.text}`));
 
     expect(legacyLines).toEqual([
-      "packages/cli/src/commands/workspace.ts:process.stderr.write(`${msg(\"workspace.error.legacy_init_subcommand\")}\\n`);",
       "packages/core/src/workspace/create-plan.ts:if (raw.schema === \"roll.workspace-init/v1\") {",
       "packages/core/src/workspace/create-plan.ts:message: \"Legacy Workspace init config must be converted before create\",",
       "packages/core/src/workspace/create-plan.ts:conversions: [{ path: \"schema\", from: \"roll.workspace-init/v1\", to: WORKSPACE_CREATE_CONFIG_V1 }],",
-      "packages/spec/src/i18n/catalog-v3.ts:\"workspace.error.legacy_init_subcommand\": { en: \"Unknown workspace subcommand \\\"init\\\". Use \\\"roll workspace create\\\".\", zh: \"未知工作区子命令“init”。请使用“roll workspace create”。\" },",
       "packages/spec/src/i18n/catalog-v3.ts:\"workspace.create.error.legacy_create_config\": { en: \"Legacy Workspace init config must be converted before create\", zh: \"旧版工作区 init 配置必须转换后才能创建\" },",
     ]);
   });

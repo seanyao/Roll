@@ -291,10 +291,6 @@ export function workspaceCommand(args: string[]): number | Promise<number> {
   }
   const rest = args.slice(1);
   if (subcommand === "create") return workspaceCreateCommand(rest);
-  if (subcommand === "init") {
-    process.stderr.write(`${msg("workspace.error.legacy_init_subcommand")}\n`);
-    return 1;
-  }
   if (subcommand === "issue") return workspaceIssueCommand(rest);
   if (subcommand === "requirement") return workspaceRequirementCommand(rest);
   if (subcommand === "doctor") return workspaceDoctorCommand(rest);

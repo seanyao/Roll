@@ -279,10 +279,6 @@ export function registerAll(): void {
       ...["activate", "pause", "archive"].map((name) =>
         cliSelectorOperation("workspace", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
-    rejectedRoutes: [{
-      route: ["init"],
-      message: "Unknown workspace subcommand \"init\". Use \"roll workspace create\".",
-    }],
   });
   registerPorted("context", contextCommand, {
     help: contextUsage,

@@ -232,7 +232,7 @@ describe("US-WS-023 create-only CLI", () => {
     }
   });
 
-  it("rejects workspace init and ws init before an unreadable config can be opened or state can change", async () => {
+  it("does not register workspace init or ws init and never opens config or changes state", async () => {
     const home = mkdtempSync(join(tmpdir(), "roll-workspace-create-init-reject-"));
     roots.push(home);
     const marker = join(home, "must-not-read.yaml");
@@ -248,7 +248,7 @@ describe("US-WS-023 create-only CLI", () => {
         expect(result, command).toEqual({
           status: 1,
           stdout: "",
-          stderr: "Unknown workspace subcommand \"init\". Use \"roll workspace create\".\n",
+          stderr: "roll workspace: unknown or unregistered route 'init ws-demo'\n",
         });
         expect(result.stderr, command).not.toContain("config_read_failed");
         expect(tree(home), command).toEqual(before);
@@ -331,7 +331,7 @@ describe("US-WS-023 create-only CLI", () => {
     expect(skip.fallback.countsAsScreenshot).toBe(false);
     expect(existsSync(join(evidenceRoot, "screenshots", "terminal.png"))).toBe(false);
     expect(transcript).toContain("Usage: roll workspace create");
-    expect(transcript).toContain("Unknown workspace subcommand \"init\". Use \"roll workspace create\".");
+    expect(transcript).not.toContain("roll workspace init");
     expect(transcript).not.toContain("/Users/");
   });
 });

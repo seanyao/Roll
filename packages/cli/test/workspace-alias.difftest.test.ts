@@ -12,7 +12,6 @@ const WORKSPACE_SUBTREE_CASES: ReadonlyArray<{
   { name: "list", args: ["list", "--json"] },
   { name: "create passthrough", args: ["create", "demo", "--config", "demo.workspace.yaml", "--check", "--json"] },
   { name: "edit passthrough", args: ["edit", "demo", "--display-name", "Demo", "--check", "--json"] },
-  { name: "init", args: ["init", "demo", "--config", "demo.workspace.yaml", "--check", "--json"] },
   { name: "doctor", args: ["doctor", "demo", "--json"] },
   { name: "issue", args: ["issue", "init", "US-WS-022", "--workspace", "roll", "--check", "--json"] },
   { name: "requirement", args: ["requirement", "add", "--workspace", "roll", "--provider", "file", "--ref", "REQ-1"] },

@@ -38,7 +38,7 @@ describe("US-WS-041 Workspace context documentation closure", () => {
   ])("documents the complete user contract in %s", (path, required) => {
     const text = read(path);
     for (const marker of required) expect(text, marker).toContain(marker);
-    expect(text).not.toMatch(/roll workspace init(?![^\n]*(?:reject|拒绝|retired|已移除))/u);
+    expect(text).not.toContain("roll workspace init");
   });
 
   it("links the guide and generated matrix from README", () => {

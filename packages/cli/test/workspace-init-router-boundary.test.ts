@@ -98,14 +98,14 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-describe("US-WS-023 retired init router boundary", () => {
-  it.each(["workspace", "ws"] as const)("rejects %s init before every execution seam", async (command) => {
+describe("US-WS-023 removed init router boundary", () => {
+  it.each(["workspace", "ws"] as const)("does not register %s init and stops before every execution seam", async (command) => {
     const result = await capture([command, "init", "ws-demo", "--config", poison.configPath]);
 
     expect(result).toEqual({
       status: 1,
       stdout: "",
-      stderr: "Unknown workspace subcommand \"init\". Use \"roll workspace create\".\n",
+      stderr: "roll workspace: unknown or unregistered route 'init ws-demo'\n",
     });
     expect(poison.createHandler).toHaveBeenCalledTimes(0);
     expect(poison.targetFsCall).toHaveBeenCalledTimes(0);

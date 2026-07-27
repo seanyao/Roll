@@ -49,7 +49,7 @@ describe("US-WS-040 public Workspace context boundary", () => {
     expect(backlogAlias.stdout).not.toContain("POISON");
   });
 
-  it("fails closed on duplicate/missing selectors and retired init without mutation", () => {
+  it("fails closed on duplicate/missing selectors and removed init without mutation", () => {
     const before = treeDigest(fixture.home);
     const duplicate = run(["backlog", "--workspace", "alpha", "--ws", "beta", "--json"]);
     expect(duplicate.status).toBe(1);
@@ -59,7 +59,7 @@ describe("US-WS-040 public Workspace context boundary", () => {
     expect(missing.stderr).toContain("workspace_selector_missing_value");
     const retired = run(["ws", "init"]);
     expect(retired.status).toBe(1);
-    expect(retired.stderr).toContain("Unknown workspace subcommand \"init\". Use \"roll workspace create\".");
+    expect(retired.stderr).toContain("roll workspace: unknown or unregistered route 'init'");
     expect(treeDigest(fixture.home)).toBe(before);
   });
 });

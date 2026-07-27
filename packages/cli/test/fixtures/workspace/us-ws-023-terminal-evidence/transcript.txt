@@ -19,6 +19,3 @@ $ roll workspace create ws-evidence --config <REPO_ROOT>/packages/cli/test/fixtu
     { "kind": "registry", "target": "ws-evidence", "action": "created" }
   ]
 }
-
-$ roll workspace init ws-evidence --config <REPO_ROOT>/packages/cli/test/fixtures/workspace/us-ws-023-create.yaml
-Unknown workspace subcommand "init". Use "roll workspace create".

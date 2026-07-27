@@ -282,7 +282,6 @@ export const v3Catalog: Catalog = {
   "workspace.requirement.result.context": { en: "Context files: %d", zh: "上下文文件：%d" },
   "workspace.requirement.result.stories": { en: "Linked Stories: %d", zh: "关联 Story：%d" },
   "workspace.requirement.result.path": { en: "Path: %s", zh: "路径：%s" },
-  "workspace.error.legacy_init_subcommand": { en: "Unknown workspace subcommand \"init\". Use \"roll workspace create\".", zh: "未知工作区子命令“init”。请使用“roll workspace create”。" },
   "workspace.create.title": { en: "Workspace %s create (%s): %s", zh: "工作区 %s 创建（%s）：%s" },
   "workspace.create.root": { en: "Root: %s", zh: "根目录：%s" },
   "workspace.create.header": { en: "Decision\tKind\tTarget", zh: "决策\t类型\t目标" },
