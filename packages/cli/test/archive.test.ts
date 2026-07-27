@@ -140,14 +140,38 @@ describe("FIX-1483 — a cycle-* epic is not mistaken for a cycle run directory"
     ]);
   });
 
-  it("isRunArtifactDir: never at the epic level, always for a card's run dirs", () => {
-    for (const name of ["cycle-efficiency", "cycle-42", "latest", "evidence", "2026-07-27T10-00-00"]) {
-      expect(isRunArtifactDir(name, 0), name).toBe(false);
+  // Depth boundary (codex review): epics sit at depth 0, card folders at depth 1,
+  // run artifacts at depth 2+. Gating at depth ≥ 1 would still swallow a legacy
+  // feature-slug folder like `cycle-meta-sync/` that legitimately owns specs.
+  it("isRunArtifactDir: run artifacts only from depth 2 (epic 0, card 1)", () => {
+    const runNames = [
+      "cycle-42",
+      "latest",
+      "notes",
+      "evidence",
+      "screenshots",
+      "pre-evidence-backfill",
+      "2026-07-27T10-00-00",
+    ];
+    for (const name of ["cycle-efficiency", ...runNames]) {
+      expect(isRunArtifactDir(name, 0), `epic level: ${name}`).toBe(false);
+      expect(isRunArtifactDir(name, 1), `card level: ${name}`).toBe(false);
     }
-    for (const name of ["cycle-42", "latest", "notes", "evidence", "screenshots", "pre-evidence-backfill", "2026-07-27T10-00-00"]) {
-      expect(isRunArtifactDir(name, 1), name).toBe(true);
+    for (const name of runNames) {
+      expect(isRunArtifactDir(name, 2), `run level: ${name}`).toBe(true);
+      expect(isRunArtifactDir(name, 3), `nested run level: ${name}`).toBe(true);
     }
-    expect(isRunArtifactDir("US-CYCLE-001", 1)).toBe(false);
+    expect(isRunArtifactDir("US-CYCLE-001", 2)).toBe(false);
+  });
+
+  it("resolves a card under a legacy feature-slug folder named cycle-*", () => {
+    const proj = project(
+      ["| FIX-9001 | x | ✅ Done |"],
+      [["autonomous-evolution/cycle-meta-sync/FIX-9001.md", "# FIX-9001\n"]],
+    );
+    expect(findFeatureFile(proj, "FIX-9001")).toBe(
+      join(proj, ".roll", "features", "autonomous-evolution", "cycle-meta-sync", "FIX-9001.md"),
+    );
   });
 });
 

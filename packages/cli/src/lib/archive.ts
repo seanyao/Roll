@@ -52,9 +52,13 @@ export function isMarkdownStoryEntry(path: string, entry: Dirent): boolean {
  *  `cycle-efficiency` epic from `roll attest` ("story not found"), because that
  *  epic's own name starts with `cycle-`; the whole epic could therefore never
  *  earn an acceptance report. `depth` is the distance below `features/`: epics
- *  sit at depth 0 and are never treated as run artifacts. */
+ *  sit at depth 0, card folders at depth 1, run artifacts at depth 2+ — so the
+ *  heuristic is confined to depth ≥ 2 (codex review: a depth ≥ 1 gate would
+ *  still swallow a legacy feature-slug folder such as `cycle-meta-sync/` that
+ *  legitimately owns specs; measured on the live tree, all 2675 run-shaped
+ *  directories sit at depth 2 and none at depth 1). */
 export function isRunArtifactDir(name: string, depth: number): boolean {
-  if (depth < 1) return false;
+  if (depth < 2) return false;
   if (name === "notes" || name === "evidence" || name === "screenshots" || name === "latest") return true;
   return /^\d{4}-\d{2}-\d{2}T/.test(name) || name.startsWith("cycle-") || name === "pre-evidence-backfill";
 }
