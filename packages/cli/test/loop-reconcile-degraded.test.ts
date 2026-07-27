@@ -219,6 +219,47 @@ describe("US-DELIV-010 — degraded/terminal observable through reconcile", () =
     expect(evs.find((e) => e.type === "loop:error" && String(e["error"]).includes("git plane cannot confirm"))).toBeDefined();
   });
 
+  // US-CYCLE-009 (codex r2): the coherent-fix proof — a gh-merged card that the
+  // git plane cannot yet confirm stays NON-TERMINAL (no delivery:reconciled, so
+  // the reconcile filter re-includes it), then goes TERMINAL + flips on a LATER
+  // tick once the (#N) squash commit lands on main. No infinite defer, no
+  // silent drop.
+  it("deferred gh-merged card stays non-terminal, then is re-reconciled + flips once (#42) lands on main", async () => {
+    const p = project();
+    seed(p); // branch never pushed, no (#42) on main yet → git plane cannot confirm.
+    const backlogPath = join(p, ".roll", "backlog.md");
+    writeFileSync(
+      backlogPath,
+      "## Epic: Test\n\n| ID | Description | Status |\n|----|----|----|\n| US-DELIV-010 | reconcile write-back | 🔨 In Progress |\n",
+    );
+    writeAcceptanceEvidence(p, "US-DELIV-010");
+    const merged = { kind: "merged" as const, mergeCommit: "abc1234def", mergedAt: "2026-07-13T00:00:00Z", checkedAt: "2026-07-13T00:00:00Z" };
+
+    // ── Tick 1: gh says merged, git plane cannot confirm → DEFER (non-terminal).
+    await withoutGitEnvAsync(() => loopReconcileCommand(["--json"], deps(p, fakeProvider({ 42: merged }))));
+    expect(readFileSync(backlogPath, "utf8")).toContain("🔨 In Progress");
+    let evs = readEvents(p);
+    // NON-TERMINAL: no delivery:reconciled means the awaiting_merge projection
+    // survives, so the reconcile filter re-includes the cycle next tick.
+    expect(evs.find((e) => e.type === "delivery:reconciled")).toBeUndefined();
+    expect(evs.find((e) => e.type === "loop:error" && String(e["error"]).includes("git plane cannot confirm"))).toBeDefined();
+
+    // ── The PR's squash commit now lands on main (the git plane can see it).
+    withoutGitEnv(() => {
+      execSync("git checkout -q main", { cwd: p });
+      execSync("git commit -q --allow-empty -m 'squash: US-DELIV-010 reconcile write-back (#42)'", { cwd: p });
+    });
+
+    // ── Tick 2: same gh state, but git plane now confirms via merge_commit →
+    // TERMINAL + flip.
+    await withoutGitEnvAsync(() => loopReconcileCommand(["--json"], deps(p, fakeProvider({ 42: merged }))));
+    expect(readFileSync(backlogPath, "utf8")).toContain("✅ Done");
+    evs = readEvents(p);
+    const reconciled = evs.find((e) => e.type === "delivery:reconciled" && e.cycleId === CYCLE);
+    expect(reconciled).toBeDefined(); // now terminal
+    expect(evs.find((e) => e.type === "delivery:merge_confirmed" && e["signal"] === "merge_commit")).toBeDefined();
+  });
+
   it("draft PR → degraded(draft) with dwell, no merge attempt", async () => {
     const p = project();
     seed(p);

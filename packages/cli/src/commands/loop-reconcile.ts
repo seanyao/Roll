@@ -29,8 +29,6 @@ import {
   reconcileDelivery,
   projectDeliveryState,
   leaseStateFor,
-  siblingCancelEvents,
-  shouldAppendDeliveredCredit,
   shouldAttemptPrMerge,
   classifyEvidenceRepair,
   resolveEvaluatorApproval,
@@ -62,7 +60,7 @@ import {
 // the SAME facts (one truth engine, no parallel probes).
 import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRepoSlug } from "../lib/delivery-facts.js";
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
-import { finalizeDeliveredWriteBack } from "./loop-reconcile-merge.js";
+import { settleDeliveredCycle, gitPlaneVerifier } from "./loop-reconcile-merge.js";
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -638,70 +636,40 @@ export async function runReconcileTick(
     };
     const result = reconcileDelivery(reconcileCycle, facts);
 
-    // Count verdicts (delivered credit may be skipped when already credited).
-    if (result.kind === "delivered") {
-      const freshEvents = readAllEvents(eventsPath);
-      if (shouldAppendDeliveredCredit(freshEvents, cyc.cycleId)) delivered++;
-      else waiting++;
-    } else if (result.kind === "merge_now") mergeNow++;
+    // Count non-delivered verdicts here; a delivered verdict is counted AFTER
+    // the git-plane-gated settle below (a deferred delivered counts as waiting).
+    if (result.kind === "merge_now") mergeNow++;
     else if (result.kind === "ci_failed") ciFailed++;
     else if (result.kind === "degraded") degraded++;
     else if (result.kind === "terminal") terminal++;
-    else waiting++;
+    else if (result.kind !== "delivered") waiting++;
 
     if (result.kind === "delivered") {
-      const freshEvents = readAllEvents(eventsPath);
-      if (shouldAppendDeliveredCredit(freshEvents, cyc.cycleId)) {
-        bus.appendEvent(eventsPath, {
-          type: "delivery:reconciled",
-          cycleId: cyc.cycleId,
-          storyId: cyc.storyId,
-          state: result.via === "runner" ? "delivered" : "delivered_external",
-          mergedBy: result.via,
-          mergeCommit: result.mergeCommit ?? "unknown",
-          signal: result.signal,
-          ts: now,
-        });
-
-        // US-DELIV-005: sibling cancel for same-card fan-out.
-        const siblingLeases: DeliveryLease[] = [];
-        for (const other of cycles) {
-          if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
-          const state = leaseStateFor(other.deliveryState, false);
-          if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
-        }
-        for (const ev of siblingCancelEvents(
-          cyc.storyId,
-          {
-            cycleId: cyc.cycleId,
-            mergeCommit: result.mergeCommit ?? "unknown",
-            signal: result.signal,
-            mergedBy: result.via,
-          },
-          siblingLeases,
-          now,
-        )) {
-          bus.appendEvent(eventsPath, ev);
-        }
+      // US-CYCLE-009 (codex r2): route ALL terminal signals — delivery:reconciled,
+      // sibling-cancel, backlog flip, merge_confirmed — through ONE git-plane gate.
+      // A gh-state-only delivered that the git plane cannot confirm DEFERS (stays
+      // non-terminal, re-included next tick); only a git-plane-confirmed merge
+      // (ancestor / patch-id / (#N) on main) terminalizes + flips.
+      const siblingLeases: DeliveryLease[] = [];
+      for (const other of cycles) {
+        if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
+        const state = leaseStateFor(other.deliveryState, false);
+        if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
       }
-      // US-CYCLE-009: bounded-retry backlog flip + git-plane merge_confirmed
-      // record (replaces the former single-try flip). Idempotent — a re-run does
-      // not double-flip or double-record.
-      await finalizeDeliveredWriteBack({
-        cwd,
-        eventsPath,
-        now,
-        events: readAllEvents(eventsPath),
-        appendEvent: (p, ev) => bus.appendEvent(p, ev),
-        alert: (message) => bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
-        cycleId: cyc.cycleId,
-        storyId: cyc.storyId,
-        branch: cyc.branch,
-        prNumber: cyc.prNumber,
-        result,
-        dossierFacts: gitFacts,
-        ...(result.kind === "delivered" && result.mergeCommit !== undefined ? { mergeCommit: result.mergeCommit } : {}),
-      });
+      const settle = await settleDeliveredCycle(
+        {
+          cwd,
+          eventsPath,
+          now,
+          events: readAllEvents(eventsPath),
+          appendEvent: (p, ev) => bus.appendEvent(p, ev),
+          alert: (message) => bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
+          verify: gitPlaneVerifier({ cwd, branch: cyc.branch, prNumber: cyc.prNumber, storyId: cyc.storyId, dossierFacts: gitFacts }),
+        },
+        { cycleId: cyc.cycleId, storyId: cyc.storyId, branch: cyc.branch, prNumber: cyc.prNumber, result, siblingLeases },
+      );
+      if (settle.credited) delivered++;
+      else waiting++;
     }
     if (result.kind === "terminal") {
       bus.appendEvent(eventsPath, {
@@ -914,67 +882,31 @@ export async function loopReconcileCommand(
       item.signal = result.signal;
       item.mergeCommit = result.mergeCommit;
 
-      // Emit delivery:reconciled event (unless dry run).
+      // US-CYCLE-009 (codex r2): ALL terminal signals (delivery:reconciled,
+      // sibling-cancel, backlog flip, merge_confirmed, branch delete) go through
+      // the ONE git-plane-gated decision point. --dry-run mutates NOTHING:
+      // report only. A gh-state-only delivered that the git plane cannot confirm
+      // DEFERS (no delivery:reconciled → stays awaiting_merge, re-included next
+      // tick); a git-plane-confirmed merge terminalizes + flips.
       if (!dryRun) {
-        const freshEvents = readAllEvents(eventsPath);
-        if (shouldAppendDeliveredCredit(freshEvents, cyc.cycleId)) {
-          deps.bus.appendEvent(eventsPath, {
-            type: "delivery:reconciled",
-            cycleId: cyc.cycleId,
-            storyId: cyc.storyId,
-            state: result.via === "runner" ? "delivered" : "delivered_external",
-            mergedBy: result.via,
-            mergeCommit: result.mergeCommit ?? "unknown",
-            signal: result.signal,
-            ts: now,
-          });
-
-          // US-DELIV-005 (one-card-one-lease): the FIRST merge atomically
-          // supersedes every remaining sibling cycle on this card — race
-          // resolution when --race was opted in, and cleanup of any legacy
-          // same-card fan-out. The winner's event above and the supersede
-          // events below land in ONE reconcile pass (the atomic cancel);
-          // superseded siblings are terminal, so a re-run cancels nothing.
-          const siblingLeases: DeliveryLease[] = [];
-          for (const other of cycles) {
-            if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
-            const state = leaseStateFor(other.deliveryState, false);
-            if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
-          }
-          for (const ev of siblingCancelEvents(
-            cyc.storyId,
-            {
-              cycleId: cyc.cycleId,
-              mergeCommit: result.mergeCommit ?? "unknown",
-              signal: result.signal,
-              mergedBy: result.via,
-            },
-            siblingLeases,
-            now,
-          )) {
-            deps.bus.appendEvent(eventsPath, ev);
-          }
+        const siblingLeases: DeliveryLease[] = [];
+        for (const other of cycles) {
+          if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
+          const state = leaseStateFor(other.deliveryState, false);
+          if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
         }
-      }
-      // US-CYCLE-009: bounded-retry backlog flip + git-plane merge_confirmed
-      // record — GATED on git-plane merge truth. --dry-run mutates NOTHING
-      // (no backlog flip, no branch delete, no event writes): report only.
-      if (!dryRun) {
-        await finalizeDeliveredWriteBack({
-          cwd,
-          eventsPath,
-          now,
-          events: readAllEvents(eventsPath),
-          appendEvent: (p, ev) => deps.bus.appendEvent(p, ev),
-          alert: (message) => deps.bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
-          cycleId: cyc.cycleId,
-          storyId: cyc.storyId,
-          branch: cyc.branch,
-          prNumber: cyc.prNumber,
-          result,
-          dossierFacts: gitFacts,
-          ...(result.kind === "delivered" && result.mergeCommit !== undefined ? { mergeCommit: result.mergeCommit } : {}),
-        });
+        await settleDeliveredCycle(
+          {
+            cwd,
+            eventsPath,
+            now,
+            events: readAllEvents(eventsPath),
+            appendEvent: (p, ev) => deps.bus.appendEvent(p, ev),
+            alert: (message) => deps.bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
+            verify: gitPlaneVerifier({ cwd, branch: cyc.branch, prNumber: cyc.prNumber, storyId: cyc.storyId, dossierFacts: gitFacts }),
+          },
+          { cycleId: cyc.cycleId, storyId: cyc.storyId, branch: cyc.branch, prNumber: cyc.prNumber, result, siblingLeases },
+        );
       }
     }
     if (result.kind === "terminal" && !dryRun) {

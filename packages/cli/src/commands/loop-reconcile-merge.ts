@@ -17,12 +17,14 @@
  * that binds them to git + the event stream + the backlog store.
  */
 import { join } from "node:path";
-import type { RollEvent } from "@roll/spec";
+import type { DeliveryLease, RollEvent } from "@roll/spec";
 import {
   BacklogStore,
   confirmMergeFromGitPlane,
   mayDeleteSourceBranch,
   nextWritebackRetry,
+  shouldAppendDeliveredCredit,
+  siblingCancelEvents,
   DEFAULT_WRITEBACK_MAX_ATTEMPTS,
   type GitPlaneMergeFacts,
   type MergeConfirmation,
@@ -300,66 +302,169 @@ export async function reconcileMergeConfirmed(
   return { confirmation, flipped: flip.ok, deleted };
 }
 
-/**
- * The production write-back binding used by `roll loop reconcile` in place of the
- * former single-try backlog flip. GATED on git-plane merge truth (AC2): the
- * backlog flip + `delivery:merge_confirmed` record fire ONLY when
- * {@link verifyMergeGitPlane} (ancestor / patch-id) confirms the merge — a gh
- * `pr_state` delivered that the git plane cannot corroborate DEFERS the flip and
- * ALERTS instead. No branch delete here — the merge's own `--delete-branch`
- * handles that after GitHub's verified merge. `events` MUST be a fresh read of
- * the stream so the merge_confirmed guard sees prior records. `verify` is
- * injectable for tests; production defaults to the real git-plane check.
- */
-export async function finalizeDeliveredWriteBack(args: {
+// ── The SINGLE git-plane-gated terminalization decision point ─────────────────
+
+/** The real backlog write (BacklogStore markExact against `.roll/backlog.md`). */
+export function defaultBacklogMarkStatus(projectCwd: string, id: string, status: string): void {
+  const backlogPath = join(projectCwd, ".roll", "backlog.md");
+  const store = new BacklogStore();
+  const snapshot = store.readBacklog(backlogPath);
+  store.markExact(backlogPath, snapshot.hash, id, status);
+}
+
+/** A delivered reconcile verdict (carries `via` / `signal` / `mergeCommit`). */
+export type DeliveredResult = Extract<ReconcileResult, { kind: "delivered" }>;
+
+/** Outcome of {@link settleDeliveredCycle} — drives the caller's counts. */
+export interface SettleOutcome {
+  /** The git-plane confirmation that gated everything. */
+  confirmation: MergeConfirmation;
+  /**
+   * Did the cycle become TERMINAL this pass? True IFF the git plane confirmed —
+   * a `delivery:reconciled` credit (and thus the delivered projection) is only
+   * possible when this is true. When false the cycle stays awaiting_merge and is
+   * RE-INCLUDED by the reconcile filter on the next tick (deferred, not dropped).
+   */
+  terminal: boolean;
+  /** A NEW `delivery:reconciled` credit was appended this pass. */
+  credited: boolean;
+  /** The backlog flip landed (only attempted when terminal). */
+  flipped: boolean;
+}
+
+/** IO + policy seams for {@link settleDeliveredCycle} (injectable for tests). */
+export interface SettleDeliveredDeps {
   cwd: string;
   eventsPath: string;
   now: number;
+  /** Fresh event-stream snapshot for the idempotency guards. */
   events: readonly RollEvent[];
   appendEvent(eventsPath: string, event: RollEvent): void;
   alert(message: string): void;
+  /** Backlog write (default: the real BacklogStore markExact); injectable for tests. */
+  markStatus?: (cwd: string, id: string, status: string) => void;
+  /** The git-plane confirmation authority (default: {@link verifyMergeGitPlane}). */
+  verify: () => MergeConfirmation;
+  /** Optional: delete the source branch — only after a verified merge. */
+  deleteSourceBranch?: (branch: string) => void | Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
+  maxAttempts?: number;
+}
+
+/** The delivered cycle being settled. */
+export interface SettleDeliveredCycle {
   cycleId: string;
   storyId: string;
   branch: string;
   prNumber?: number;
-  result: ReconcileResult;
-  mergeCommit?: string;
-  /** Prebuilt dossier snapshot (main's log) reused by the git-plane verify. */
-  dossierFacts?: GitDossierFacts | null;
-  /** Test seam — defaults to the real {@link verifyMergeGitPlane}. */
-  verify?: () => MergeConfirmation;
-}): Promise<void> {
-  const verify =
-    args.verify ??
-    (() =>
-      verifyMergeGitPlane(args.cwd, args.branch, {
-        prNumber: args.prNumber,
-        storyId: args.storyId,
-        dossierFacts: args.dossierFacts,
-      }));
-  await reconcileMergeConfirmed(
-    {
-      cwd: args.cwd,
-      eventsPath: args.eventsPath,
-      now: args.now,
-      events: args.events,
-      appendEvent: args.appendEvent,
-      alert: args.alert,
-      verify,
-      markStatus: (projectCwd, id, status) => {
-        const backlogPath = join(projectCwd, ".roll", "backlog.md");
-        const store = new BacklogStore();
-        const snapshot = store.readBacklog(backlogPath);
-        store.markExact(backlogPath, snapshot.hash, id, status);
+  result: DeliveredResult;
+  /** Same-card sibling leases to cancel on the FIRST confirmed merge (US-DELIV-005). */
+  siblingLeases: DeliveryLease[];
+}
+
+/**
+ * THE single git-plane-gated decision point for a `delivered` reconcile verdict
+ * (US-CYCLE-009, codex r2). EVERY terminal signal — `delivery:reconciled` (the
+ * terminal marker), sibling-cancellation, the backlog flip, the
+ * `delivery:merge_confirmed` record, and the source-branch delete — is emitted
+ * ONLY when {@link verifyMergeGitPlane} (ancestor / patch-id / `(#N)` merge
+ * commit on main) confirms the merge on the GIT PLANE.
+ *
+ * A gh `pr_state`-only delivered verdict that the git plane cannot yet
+ * corroborate is DEFERRED: nothing terminal is emitted (no `delivery:reconciled`,
+ * so the cycle stays awaiting_merge and the reconcile filter RE-INCLUDES it next
+ * tick), the DEFER alert fires, and no sibling is cancelled. This closes the
+ * "credited-but-unflipped, then excluded forever" gap: a genuinely (squash)
+ * merged card is later confirmed via the `merge_commit` signal once the `(#N)`
+ * commit lands on main and DOES go terminal + flip.
+ *
+ * Idempotent: `delivery:reconciled` / sibling-cancel are guarded by
+ * {@link shouldAppendDeliveredCredit}; `delivery:merge_confirmed` by
+ * {@link hasMergeConfirmedEvent}; the flip (markDoneGuarded) is a no-op once Done.
+ */
+export async function settleDeliveredCycle(
+  deps: SettleDeliveredDeps,
+  cyc: SettleDeliveredCycle,
+): Promise<SettleOutcome> {
+  const markStatus = deps.markStatus ?? defaultBacklogMarkStatus;
+  const confirmation = deps.verify();
+
+  let credited = false;
+  if (confirmation.merged && shouldAppendDeliveredCredit(deps.events, cyc.cycleId)) {
+    // Terminal marker — projects the cycle to `delivered` (removes it from the
+    // awaiting_merge filter). Only reached once the git plane confirmed.
+    deps.appendEvent(deps.eventsPath, {
+      type: "delivery:reconciled",
+      cycleId: cyc.cycleId,
+      storyId: cyc.storyId,
+      state: cyc.result.via === "runner" ? "delivered" : "delivered_external",
+      mergedBy: cyc.result.via,
+      mergeCommit: cyc.result.mergeCommit ?? "unknown",
+      signal: cyc.result.signal,
+      ts: deps.now,
+    });
+    // US-DELIV-005: cancel same-card siblings ONLY on a git-plane-confirmed merge.
+    for (const ev of siblingCancelEvents(
+      cyc.storyId,
+      {
+        cycleId: cyc.cycleId,
+        mergeCommit: cyc.result.mergeCommit ?? "unknown",
+        signal: cyc.result.signal,
+        mergedBy: cyc.result.via,
       },
+      cyc.siblingLeases,
+      deps.now,
+    )) {
+      deps.appendEvent(deps.eventsPath, ev);
+    }
+    credited = true;
+  }
+
+  // Write-back (merge_confirmed + flip + delete) OR the DEFER alert — driven by
+  // the SAME confirmation (passed explicitly so there is no second verify).
+  const wb = await reconcileMergeConfirmed(
+    {
+      cwd: deps.cwd,
+      eventsPath: deps.eventsPath,
+      now: deps.now,
+      events: deps.events,
+      appendEvent: deps.appendEvent,
+      alert: deps.alert,
+      markStatus,
+      ...(deps.deleteSourceBranch !== undefined ? { deleteSourceBranch: deps.deleteSourceBranch } : {}),
+      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+      ...(deps.maxAttempts !== undefined ? { maxAttempts: deps.maxAttempts } : {}),
     },
     {
-      cycleId: args.cycleId,
-      storyId: args.storyId,
-      branch: args.branch,
-      ...(args.prNumber !== undefined ? { prNumber: args.prNumber } : {}),
-      result: args.result,
-      ...(args.mergeCommit !== undefined ? { mergeCommit: args.mergeCommit } : {}),
+      cycleId: cyc.cycleId,
+      storyId: cyc.storyId,
+      branch: cyc.branch,
+      ...(cyc.prNumber !== undefined ? { prNumber: cyc.prNumber } : {}),
+      confirmation,
+      result: cyc.result,
+      ...(cyc.result.mergeCommit !== undefined ? { mergeCommit: cyc.result.mergeCommit } : {}),
     },
   );
+
+  return { confirmation, terminal: confirmation.merged, credited, flipped: wb.flipped };
+}
+
+/**
+ * Build the production git-plane `verify` closure for {@link settleDeliveredCycle}
+ * — the real {@link verifyMergeGitPlane} (ancestor / patch-id / `(#N)`-on-main),
+ * reusing a prebuilt dossier snapshot when supplied.
+ */
+export function gitPlaneVerifier(args: {
+  cwd: string;
+  branch: string;
+  prNumber?: number;
+  storyId?: string;
+  dossierFacts?: GitDossierFacts | null;
+}): () => MergeConfirmation {
+  return () =>
+    verifyMergeGitPlane(args.cwd, args.branch, {
+      prNumber: args.prNumber,
+      storyId: args.storyId,
+      dossierFacts: args.dossierFacts,
+    });
 }

@@ -48,6 +48,19 @@ function project(): string {
   }
 }
 
+/** US-CYCLE-009: land a `(#N)` squash commit on main so the git plane confirms
+ *  the merge (gh-state alone defers). */
+function mergeOnMain(p: string, msg: string): void {
+  const gitVars = ["GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_COMMON_DIR", "GIT_INDEX_FILE"];
+  const saved: Record<string, string | undefined> = {};
+  for (const k of gitVars) { saved[k] = process.env[k]; delete process.env[k]; }
+  try {
+    execSync(`git commit -q --allow-empty -m '${msg}'`, { cwd: p });
+  } finally {
+    for (const k of gitVars) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+}
+
 function writeEvents(p: string, events: Record<string, unknown>[]): void {
   writeFileSync(
     join(p, ".roll", "loop", "events.ndjson"),
@@ -153,6 +166,9 @@ describe("US-DELIV-011 — reconcile concurrency", () => {
         ts: TS_MS + 2,
       },
     ]);
+    // The merge is genuine on the git plane (PR #99's squash commit on main),
+    // so the write-back is git-plane-confirmed rather than gh-state-only.
+    mergeOnMain(p, "squash: US-DELIV-011 (#99)");
 
     await runReconcileTick(p, { silent: true, provider: mergedProvider() });
     await runReconcileTick(p, { silent: true, provider: mergedProvider() });

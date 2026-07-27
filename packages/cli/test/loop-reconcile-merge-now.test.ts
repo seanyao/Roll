@@ -260,6 +260,10 @@ describe("US-DELIV-003 — self-driven merge execution", () => {
         { type: "delivery:published", cycleId: CYCLE, storyId: "US-DELIV-003", branch: `loop/${CYCLE}`, prNumber: 42, ts: TS + 1 },
       ]);
       execSync(`git checkout -q -b loop/${CYCLE}`, { cwd: p });
+      // US-CYCLE-009 (codex r2): the merge is genuine on the git plane — PR #42's
+      // squash commit lands on main — so the write-back is git-plane-confirmed.
+      execSync("git checkout -q main", { cwd: p });
+      execSync("git commit -q --allow-empty -m 'squash: US-DELIV-003 (#42)'", { cwd: p });
 
       const d = deps(p, fakeProvider({
         42: { kind: "merged", mergeCommit: "abc1234def", mergedAt: "2026-07-12T22:05:00Z", checkedAt: "2026-07-12T22:05:00Z" },
