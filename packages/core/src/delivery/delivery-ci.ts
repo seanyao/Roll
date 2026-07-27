@@ -197,6 +197,37 @@ export interface ResolveDeliveryCiInput {
   collectedAt: string;
 }
 
+/**
+ * Collapse a check list to the LATEST entry per identity (name + App). The commit
+ * statuses endpoint returns the full HISTORY per context, newest first (codex r5):
+ * without this, an older `success` for a required context could satisfy the
+ * requirement while a newer `pending` for the same context is the real state.
+ * Later timestamp wins; with no timestamps the FIRST occurrence wins (the forge's
+ * newest-first order).
+ */
+export function collapseLatestChecks(checks: readonly DeliveryCheckRun[]): DeliveryCheckRun[] {
+  const latest = new Map<string, DeliveryCheckRun>();
+  for (const c of checks) {
+    const key = `${c.name}\u0000${c.appId ?? ""}`;
+    const seen = latest.get(key);
+    if (seen === undefined) {
+      latest.set(key, c);
+      continue;
+    }
+    const a = seen.completedAtMs;
+    const b = c.completedAtMs;
+    if (a !== undefined && b !== undefined && Number.isFinite(a) && Number.isFinite(b)) {
+      if (b > a) latest.set(key, c);
+    } else if (a === undefined && b !== undefined) {
+      // A timestamped entry is more informative than an untimed one, but it may be
+      // OLDER; keeping the untimed one would claim a state we cannot place in time,
+      // so prefer neither — mark the identity untimed by keeping the first.
+      latest.set(key, { ...seen, conclusion: seen.conclusion });
+    }
+  }
+  return [...latest.values()];
+}
+
 export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact {
   const rec = input.record;
   const mergedAtMs = input.pr?.mergedAtMs ?? rec?.mergedAtMs;
@@ -235,7 +266,10 @@ export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact
   if (input.mergedByQueue === true) return { ...base, reason: "merge_queue_delivery" };
   if (input.checks === undefined) return { ...base, reason: "checks_unavailable" };
 
-  const checks = [...input.checks];
+  // Collapse history to the latest state per identity BEFORE any classification
+  // (codex r5) — an old success must never satisfy a requirement whose current
+  // state is pending.
+  const checks = collapseLatestChecks(input.checks);
   // A failure is terminal and is scanned FIRST — before the completeness and
   // requirement gates (codex r3). A red that WAS read must never be swallowed by
   // "the list might be incomplete"; incompleteness can only ever downgrade a

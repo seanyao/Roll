@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  collapseLatestChecks,
   deliveryCiSummary,
   isValidCiTarget,
   resolveDeliveryCi,
@@ -332,5 +333,68 @@ describe("resolveDeliveryCi — merge-queue deliveries are refused (codex r4)", 
 
   it("a normally-merged PR is unaffected", () => {
     expect(resolveDeliveryCi(ok({ mergedByQueue: false })).state).toBe("verified");
+  });
+});
+
+// Codex r5 — the statuses endpoint returns the full HISTORY per context (newest
+// first). An older success must never satisfy a requirement whose current state is
+// pending or red.
+describe("resolveDeliveryCi — history collapses to the latest state (codex r5)", () => {
+  it("a newer PENDING status beats an older success for the same context", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [
+          { name: "test-ts", conclusion: "", completedAtMs: PRE_MERGE_MS }, // newest
+          { name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS - 60_000 },
+        ],
+      }),
+    );
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("required_missing:test-ts");
+  });
+
+  it("a newer FAILURE beats an older success (still red)", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [
+          { name: "test-ts", conclusion: "failure", completedAtMs: PRE_MERGE_MS },
+          { name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS - 60_000 },
+        ],
+      }),
+    );
+    expect(f.state).toBe("red");
+  });
+
+  it("an older pending does NOT override a newer success", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [
+          { name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS },
+          { name: "test-ts", conclusion: "", completedAtMs: PRE_MERGE_MS - 60_000 },
+        ],
+      }),
+    );
+    expect(f.state).toBe("verified");
+  });
+
+  it("with no timestamps the forge's newest-first order is honoured", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [
+          { name: "test-ts", conclusion: "" }, // newest per the forge's ordering
+          { name: "test-ts", conclusion: "success" },
+        ],
+      }),
+    );
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("required_missing:test-ts");
+  });
+
+  it("distinct Apps reporting the same context stay distinct identities", () => {
+    const collapsed = collapseLatestChecks([
+      { name: "ctx", conclusion: "success", appId: 1, completedAtMs: 10 },
+      { name: "ctx", conclusion: "failure", appId: 2, completedAtMs: 20 },
+    ]);
+    expect(collapsed).toHaveLength(2);
   });
 });

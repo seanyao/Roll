@@ -825,3 +825,45 @@ describe("collectEvidence — delivery_ci union + merge queue (US-EVID-033 r4)",
     expect(m.delivery_ci?.reason).toBe("merge_queue_delivery");
   });
 });
+
+/** Codex r5 — statuses arrive as full history; only the latest state may count. */
+describe("collectEvidence — status history collapses to latest (US-EVID-033 r5)", () => {
+  it("an older successful status cannot satisfy a requirement now pending", async () => {
+    const run: EvidenceRun = (tool, argv) => {
+      const line = `${tool} ${argv.join(" ")}`;
+      if (/^git remote/.test(line)) return Promise.resolve({ code: 0, stdout: "git@github.com:seanyao/roll.git\n", stderr: "" });
+      if (/^git log/.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      if (/^gh run list/.test(line)) return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      if (/pulls\/1490 /.test(line))
+        return Promise.resolve({
+          code: 0,
+          stdout: '{"head":"aaaabbbbccccddddeeeeffff0000111122223333","merged":true,"merge_commit_sha":"32195061fb3ec0f31a26ced91c4c375168ec2dfb","merged_at":"2026-06-01T10:00:00Z","base":"main","merged_by":"seanyao"}',
+          stderr: "",
+        });
+      if (/check-runs/.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      // GitHub returns the history newest-first: pending now, success earlier.
+      if (/\/statuses/.test(line))
+        return Promise.resolve({
+          code: 0,
+          stdout: "deploy\tpending\t2026-06-01T09:59:00Z\t\ndeploy\tsuccess\t2026-06-01T09:50:00Z\t\n",
+          stderr: "",
+        });
+      if (/protection\/required_status_checks/.test(line))
+        return Promise.resolve({ code: 0, stdout: "deploy\t\n", stderr: "" });
+      if (/rules\/branches\//.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      return Promise.resolve({ code: 1, stdout: "", stderr: "" });
+    };
+    const m = await collectEvidence({
+      storyId: "FIX-1475",
+      projectPath: tmp("p"),
+      runDir: tmp("r"),
+      now: () => NOW,
+      run,
+      ghProbe: () => Promise.resolve(true),
+      deliveryRecord: { prNumber: 1490, mergeCommit: "32195061" },
+    });
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("required_missing:deploy");
+    expect(m.delivery_ci?.checks).toHaveLength(1);
+  });
+});
