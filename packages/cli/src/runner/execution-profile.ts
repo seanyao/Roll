@@ -330,15 +330,15 @@ export async function runDesignerStage(
         observeCwd: execCwd,
         run: () =>
           // AC5: the Designer runs READ-ONLY on the product worktree. `readOnly`
-          // makes SANDBOX-CAPABLE adapters (codex → --sandbox read-only;
+          // makes SANDBOX-ENFORCING adapters (codex → --sandbox read-only;
           // reasonix/Seatbelt → allow_write limited to `writableRoots`) OS-refuse
           // product writes; `writableRoots` is JUST the Designer's own artifact
           // dir, so it can emit its design contract but cannot touch product code.
-          // NOTE (codex review): non-sandbox adapters (kimi/agy/claude/pi) have no
-          // OS write jail in roll, so for those the read-only is ADVISORY — the
-          // prompt framing + zero granted product write roots, not a kernel block.
-          // Full OS enforcement across all adapters is a separate infra card
-          // (see FIX in roll-meta backlog). Only the Builder spawn
+          // FIX-1482: read-only is ENFORCED OR REFUSED — a readOnly spawn on a
+          // NON-enforcing adapter (kimi/agy/claude/pi/cursor) is now a fail-loud
+          // refusal at the spawn boundary (assertReadOnlyEnforceable), never a
+          // silent advisory. So a designed cycle only proceeds when the Designer
+          // is cast on codex or reasonix. Only the Builder spawn
           // (spawn-agent-handler) is ever granted product worktree write roots.
           ports.agentSpawn(designerAgent, {
             cwd: execCwd,
@@ -589,7 +589,9 @@ export async function runEvaluatorStage(
     // The evaluator sub-spawn goes through the shared watchdog (evaluator
     // role cap). READ-ONLY on the product worktree; its ONLY writable root is
     // its own artifact dir — it authors the report but cannot touch product
-    // code (advisory for non-sandbox adapters, same note as the Designer).
+    // code. FIX-1482: read-only is ENFORCED OR REFUSED — a readOnly Evaluator
+    // spawn on a non-enforcing adapter fails loud at the spawn boundary, so this
+    // only runs when the Evaluator is cast on codex or reasonix.
     await spawnWatched({
       ports,
       ctx,
