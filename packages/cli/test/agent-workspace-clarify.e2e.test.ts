@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   readlinkSync,
   rmSync,
@@ -26,6 +27,7 @@ import {
   beginAgentWorkspaceClarification,
   continueAgentWorkspaceClarification,
 } from "../src/runner/workspace-clarification.js";
+import { workspaceCommand } from "../src/commands/workspace.js";
 
 const SHA = "a".repeat(64);
 const evidenceDir = fileURLToPath(new URL("./fixtures/workspace/us-ws-029-terminal-evidence", import.meta.url));
@@ -49,6 +51,7 @@ function intent(operation: "read" | "mutation" = "mutation"): WorkspaceIntentV1 
 
 function facts(workspaceId: string, lifecycle: WorkspaceLifecycle): WorkspaceDiscoveryFactsV1 {
   const root = `/workspaces/${workspaceId}`;
+  const repoId = workspaceId === "roll" ? "repo-0546df57f869" : "repo-5dbd8c5f9311";
   return {
     candidate: {
       workspaceId,
@@ -65,7 +68,7 @@ function facts(workspaceId: string, lifecycle: WorkspaceLifecycle): WorkspaceDis
       requirements: [{ provider: "jira", ref: workspaceId === "fields" ? "APE-234" : "IDEA-074" }],
       repositories: [{
         schema: REPOSITORY_BINDING_V1,
-        repoId: `repo-${workspaceId}`,
+        repoId,
         alias: "product",
         remote: `https://example.test/${workspaceId}/product.git`,
         integrationBranch: "main",
@@ -119,6 +122,14 @@ function snapshotAuthorityTree(root: string): readonly string[] {
   return entries;
 }
 
+function snapshotDurableAuthorityTree(root: string): readonly string[] {
+  return snapshotAuthorityTree(root).filter((entry) => (
+    entry !== "directory:.roll/cache" &&
+    !entry.startsWith("directory:.roll/cache/") &&
+    !entry.startsWith("file:.roll/cache/")
+  ));
+}
+
 function isolatedAuthorityFixture(): {
   readonly home: string;
   readonly rollHome: string;
@@ -127,7 +138,7 @@ function isolatedAuthorityFixture(): {
   readonly candidate: (workspaceId: string, lifecycle: WorkspaceLifecycle) => WorkspaceMatchCandidateV1;
   readonly cleanup: () => void;
 } {
-  const home = mkdtempSync(join(tmpdir(), "roll-ws029-zero-mutation-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "roll-ws029-zero-mutation-")));
   const rollHome = join(home, ".roll");
   const workspaceRoot = (workspaceId: string): string => join(home, "workspaces", workspaceId);
   mkdirSync(join(rollHome, "workspace-create"), { recursive: true });
@@ -147,13 +158,11 @@ function isolatedAuthorityFixture(): {
     })),
   }, null, 2)}\n`, "utf8");
   writeFileSync(join(rollHome, "workspace-events.ndjson"), [
-    JSON.stringify({ type: "workspace:registered", workspaceId: "roll", root: workspaceRoot("roll"), ts: 1 }),
-    JSON.stringify({ type: "workspace:activated", workspaceId: "roll", ts: 2 }),
-    JSON.stringify({ type: "workspace:registered", workspaceId: "fields", root: workspaceRoot("fields"), ts: 3 }),
+    JSON.stringify({ schema: "roll.workspace-event/v1", type: "workspace:registered", workspaceId: "roll", ts: 1 }),
+    JSON.stringify({ schema: "roll.workspace-event/v1", type: "workspace:activated", workspaceId: "roll", ts: 2 }),
+    JSON.stringify({ schema: "roll.workspace-event/v1", type: "workspace:registered", workspaceId: "fields", ts: 3 }),
     "",
   ].join("\n"), "utf8");
-  writeFileSync(join(rollHome, "workspace-create", "ws-existing.pending.json"), "{\"status\":\"repair_required\"}\n", "utf8");
-
   return {
     home,
     rollHome,
@@ -175,6 +184,67 @@ function isolatedAuthorityFixture(): {
 }
 
 describe("US-WS-029 agent Workspace clarification host", () => {
+  it("routes the real workspace handoff command through clarification, then emits paired context after selection", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const output: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    process.stdout.write = ((chunk: string | Uint8Array) => (output.push(String(chunk)), true)) as typeof process.stdout.write;
+    try {
+      process.chdir(fixture.home);
+      const before = snapshotDurableAuthorityTree(fixture.home);
+      const stopped = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-design",
+        "--operation", "design",
+        "--requirement", "review the complete workspace feature",
+        "--json",
+      ]);
+      expect(stopped).toBe(0);
+      const clarification = JSON.parse(output.join("")) as {
+        route: string;
+        stopped: boolean;
+        question: { handoff: { allowedActions: string[]; candidates: Array<{ workspaceId: string }> } };
+      };
+      expect(clarification).toMatchObject({ route: "workspace_target", stopped: true });
+      expect(
+        clarification.question.handoff.allowedActions,
+        JSON.stringify(clarification.question.handoff, null, 2),
+      ).toEqual(["select_existing", "create_new"]);
+      expect(clarification.question.handoff.candidates.map((entry) => entry.workspaceId)).toEqual(["fields", "roll"]);
+      expect(snapshotDurableAuthorityTree(fixture.home)).toEqual(before);
+
+      output.length = 0;
+      const selected = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-design",
+        "--operation", "design",
+        "--requirement", "review the complete workspace feature",
+        "--workspace", "roll",
+        "--json",
+      ]);
+      expect(selected).toBe(0);
+      const resolved = JSON.parse(output.join("")) as {
+        route: string;
+        promptContext: string;
+        environmentContext: string;
+        context: { workspace: { workspaceId: string } };
+      };
+      expect(resolved).toMatchObject({ route: "context", context: { workspace: { workspaceId: "roll" } } });
+      expect(resolved.promptContext).toContain("[Roll Workspace skill handoff]");
+      expect(JSON.parse(resolved.environmentContext)).toEqual(resolved.context);
+      expect(snapshotDurableAuthorityTree(fixture.home)).toEqual(before);
+    } finally {
+      process.stdout.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
   it("keeps isolated HOME, ROLL_HOME, registry, events, manifests, and journals byte-identical", () => {
     const fixture = isolatedAuthorityFixture();
     vi.stubEnv("HOME", fixture.home);

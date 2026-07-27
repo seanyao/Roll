@@ -17,6 +17,7 @@ import { workspaceRequirementCommand } from "./workspace-requirement.js";
 import { workspaceDoctorCommand } from "./workspace-doctor.js";
 import { workspaceMigrateCommand } from "./workspace-migrate.js";
 import { workspaceEditCommand } from "./workspace-edit.js";
+import { workspaceSkillHandoffCommand } from "./workspace-skill-handoff.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
 import { canonicalWorkspaceSelectorValue, containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
@@ -296,6 +297,7 @@ export function workspaceCommand(args: string[]): number | Promise<number> {
   if (subcommand === "doctor") return workspaceDoctorCommand(rest);
   if (subcommand === "migrate") return workspaceMigrateCommand(rest);
   if (subcommand === "edit") return workspaceEditCommand(rest);
+  if (subcommand === "handoff") return workspaceSkillHandoffCommand(rest);
   const store = new WorkspaceRegistry({ rollHome: workspaceRollHome() });
   if (subcommand === "list") return listCommand(rest, store);
   if (subcommand === "show") return showCommand(rest, store);

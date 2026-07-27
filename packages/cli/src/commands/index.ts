@@ -245,6 +245,13 @@ export function registerAll(): void {
       cliOperation("workspace", "create", ["create"]),
       cliMatchedSelectorOperation(
         "workspace",
+        "handoff",
+        ["handoff"],
+        withWorkspaceSelector(["handoff", "--skill", "roll-design", "--operation", "design", "--requirement", "Improve backlog", "--json"], "roll"),
+        (args) => args[0] === "handoff",
+      ),
+      cliMatchedSelectorOperation(
+        "workspace",
         "issue.init",
         ["issue", "init"],
         withWorkspaceSelector(["issue", "init", "US-WS-022"], "roll"),
