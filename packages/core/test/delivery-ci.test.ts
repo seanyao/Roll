@@ -1,139 +1,161 @@
 /**
  * US-EVID-033 — card-level delivery-time CI truth: three honest states, no
- * synthesis, and a red check that can never hide behind "incomplete".
+ * synthesis, a red that can never hide, and (codex review r1) a `verified` that
+ * requires a MERGED PR whose merge sha agrees with the ledger, a COMPLETE check
+ * list, and real `success` executions — nothing weaker.
  */
 import { describe, expect, it } from "vitest";
-import { deliveryCiSummary, resolveDeliveryCi } from "../src/delivery/delivery-ci.js";
+import {
+  deliveryCiSummary,
+  isValidCiTarget,
+  resolveDeliveryCi,
+  shaAgrees,
+  type ResolveDeliveryCiInput,
+} from "../src/delivery/delivery-ci.js";
 
+const MERGE_SHA = "32195061fb3ec0f31a26ced91c4c375168ec2dfb";
 const MERGED_MS = Date.parse("2026-07-20T10:00:00Z");
 const AFTER = "2026-07-27T09:00:00Z";
 const BEFORE = "2026-07-20T09:00:00Z";
-const record = { prNumber: 1490, mergeCommit: "32195061fb3e", headSha: "deadbeefcafe", mergedAtMs: MERGED_MS };
 
-describe("resolveDeliveryCi — verified", () => {
-  it("all checks successful ⇒ verified, with the card's own PR/sha bound", () => {
-    const f = resolveDeliveryCi({
-      record,
-      checks: [
-        { name: "test-ts", conclusion: "success" },
-        { name: "lint", conclusion: "skipped" },
-      ],
-      ghAvailable: true,
-      collectedAt: AFTER,
-    });
+const record = { prNumber: 1490, mergeCommit: "32195061" };
+const pr = { merged: true, mergeCommitSha: MERGE_SHA, headSha: "deadbeefcafe1234", mergedAtMs: MERGED_MS };
+const green = [{ name: "test-ts", conclusion: "success" }];
+
+/** A fully verifiable input; each test perturbs exactly one dimension. */
+function ok(over: Partial<ResolveDeliveryCiInput> = {}): ResolveDeliveryCiInput {
+  return { record, pr, checks: green, checksComplete: true, ghAvailable: true, targetValid: true, collectedAt: AFTER, ...over };
+}
+
+describe("resolveDeliveryCi — verified requires every guard to hold", () => {
+  it("merged PR + agreeing merge sha + complete list + all success ⇒ verified", () => {
+    const f = resolveDeliveryCi(ok());
     expect(f.state).toBe("verified");
     expect(f.reason).toBeUndefined();
     expect(f.prNumber).toBe(1490);
-    expect(f.headSha).toBe("deadbeefcafe");
-    expect(f.mergeCommit).toBe("32195061fb3e");
+    expect(f.headSha).toBe("deadbeefcafe1234");
+    expect(f.mergeCommit).toBe("32195061");
     expect(f.mergedAt).toBe("2026-07-20T10:00:00.000Z");
-    expect(f.checks).toHaveLength(2);
+    expect(f.checks).toEqual(green);
   });
 
-  it("labels a collection after the merge as post-hoc, before it as cycle-time", () => {
-    const checks = [{ name: "test-ts", conclusion: "success" }];
-    expect(resolveDeliveryCi({ record, checks, ghAvailable: true, collectedAt: AFTER }).postHoc).toBe(true);
-    expect(resolveDeliveryCi({ record, checks, ghAvailable: true, collectedAt: BEFORE }).postHoc).toBe(false);
-    // No merge time recorded ⇒ we cannot claim post-hoc; stays false.
-    expect(
-      resolveDeliveryCi({ record: { prNumber: 7 }, checks, ghAvailable: true, collectedAt: AFTER }).postHoc,
-    ).toBe(false);
+  it("post-hoc is a tri-state: after merge yes, before merge no, unknowable unknown", () => {
+    expect(resolveDeliveryCi(ok()).postHoc).toBe("yes");
+    expect(resolveDeliveryCi(ok({ collectedAt: BEFORE })).postHoc).toBe("no");
+    // No merge time anywhere ⇒ we must NOT claim cycle-time (codex r1).
+    const noTime = resolveDeliveryCi(ok({ pr: { merged: true, mergeCommitSha: MERGE_SHA, headSha: "abc1234" } }));
+    expect(noTime.postHoc).toBe("unknown");
+    expect(noTime.state).toBe("verified");
   });
 });
 
 describe("resolveDeliveryCi — red is terminal", () => {
   it("a failing check ⇒ red, naming the check", () => {
-    const f = resolveDeliveryCi({
-      record,
-      checks: [
-        { name: "test-ts", conclusion: "failure" },
-        { name: "lint", conclusion: "success" },
-      ],
-      ghAvailable: true,
-      collectedAt: AFTER,
-    });
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "failure" }, ...green] }));
     expect(f.state).toBe("red");
     expect(f.reason).toBe("checks_failed:test-ts");
   });
 
   it("NEVER hides a failure behind an in-flight check", () => {
-    const f = resolveDeliveryCi({
-      record,
-      checks: [
-        { name: "slow", conclusion: "" },
-        { name: "test-ts", conclusion: "timed_out" },
-      ],
-      ghAvailable: true,
-      collectedAt: AFTER,
-    });
+    const f = resolveDeliveryCi(
+      ok({ checks: [{ name: "slow", conclusion: "" }, { name: "test-ts", conclusion: "timed_out" }] }),
+    );
     expect(f.state).toBe("red");
     expect(f.reason).toContain("test-ts");
   });
 
   it("treats cancelled / action_required / startup_failure as red", () => {
     for (const conclusion of ["cancelled", "action_required", "startup_failure"]) {
-      const f = resolveDeliveryCi({
-        record,
-        checks: [{ name: "c", conclusion }],
-        ghAvailable: true,
-        collectedAt: AFTER,
-      });
-      expect(f.state, conclusion).toBe("red");
+      expect(resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion }] })).state, conclusion).toBe("red");
     }
+  });
+
+  it("a red commit STATUS folded in as a failure conclusion is still red", () => {
+    const f = resolveDeliveryCi(ok({ checks: [...green, { name: "legacy/status", conclusion: "failure" }] }));
+    expect(f.state).toBe("red");
+    expect(f.reason).toContain("legacy/status");
   });
 });
 
-describe("resolveDeliveryCi — unknown carries its reason and never a pass", () => {
-  it("no delivery record", () => {
-    const f = resolveDeliveryCi({ ghAvailable: true, collectedAt: AFTER });
+describe("resolveDeliveryCi — only a real success verifies", () => {
+  it("neutral and skipped are NOT green executions ⇒ unknown, not verified", () => {
+    for (const conclusion of ["neutral", "skipped"]) {
+      const f = resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion }] }));
+      expect(f.state, conclusion).toBe("unknown");
+      expect(f.reason, conclusion).toContain("checks_inconclusive");
+    }
+  });
+
+  it("a still-running check leaves the delivery unproven", () => {
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "" }] }));
     expect(f.state).toBe("unknown");
-    expect(f.reason).toBe("no_delivery_record");
-    expect(f.checks).toEqual([]);
+    expect(f.reason).toBe("checks_inconclusive:test-ts=running");
   });
 
-  it("record without a PR number (merge sha only)", () => {
-    const f = resolveDeliveryCi({ record: { mergeCommit: "abc1234" }, ghAvailable: true, collectedAt: AFTER });
+  it("an unrecognised conclusion is unproven, never assumed green", () => {
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion: "something_new" }] }));
     expect(f.state).toBe("unknown");
-    expect(f.reason).toBe("no_delivery_record");
-    expect(f.mergeCommit).toBe("abc1234");
+    expect(f.reason).toContain("something_new");
   });
+});
 
-  it("gh unavailable (offline host) — not a failure, not a pass", () => {
-    const f = resolveDeliveryCi({ record, ghAvailable: false, collectedAt: AFTER });
-    expect(f.state).toBe("unknown");
-    expect(f.reason).toBe("gh_unavailable");
-  });
-
-  it("the checks query could not be made (undefined) vs. no checks exist (empty)", () => {
-    const unqueried = resolveDeliveryCi({ record, ghAvailable: true, collectedAt: AFTER });
-    expect(unqueried.reason).toBe("checks_unavailable");
-    const none = resolveDeliveryCi({ record, checks: [], ghAvailable: true, collectedAt: AFTER });
-    expect(none.state).toBe("unknown");
-    expect(none.reason).toBe("no_checks_on_head_sha");
-  });
-
-  it("checks still running ⇒ unknown, listing them", () => {
-    const f = resolveDeliveryCi({
-      record,
-      checks: [{ name: "test-ts", conclusion: "" }],
-      ghAvailable: true,
-      collectedAt: AFTER,
+describe("resolveDeliveryCi — every doubt resolves to unknown with a reason", () => {
+  const cases: Array<[string, Partial<ResolveDeliveryCiInput>, string]> = [
+    ["no delivery record at all", { record: undefined }, "no_delivery_record"],
+    ["record without a PR number", { record: { mergeCommit: "abc1234" } }, "no_delivery_record"],
+    ["record without a merge commit (in-flight claim)", { record: { prNumber: 7 } }, "no_merge_commit"],
+    ["gh unavailable (offline host)", { ghAvailable: false }, "gh_unavailable"],
+    ["invalid API target", { targetValid: false }, "invalid_target"],
+    ["PR could not be read", { pr: undefined }, "pr_unavailable"],
+    ["PR is still open", { pr: { ...pr, merged: false } }, "pr_not_merged"],
+    ["forge merge sha disagrees with the ledger", { pr: { ...pr, mergeCommitSha: "ffff0000" } }, "merge_sha_mismatch"],
+    ["forge reports no merge sha", { pr: { merged: true, headSha: "abc1234" } }, "merge_sha_mismatch"],
+    ["checks query could not be made", { checks: undefined }, "checks_unavailable"],
+    ["check list is not known complete (pagination)", { checksComplete: false }, "checks_list_incomplete"],
+    ["no checks exist on the sha", { checks: [] }, "no_checks_on_head_sha"],
+  ];
+  for (const [name, over, reason] of cases) {
+    it(name, () => {
+      const f = resolveDeliveryCi(ok(over));
+      expect(f.state).toBe("unknown");
+      expect(f.reason).toBe(reason);
     });
-    expect(f.state).toBe("unknown");
-    expect(f.reason).toBe("checks_incomplete:test-ts");
+  }
+
+  it("an incomplete list still surfaces what was read (for the human reader)", () => {
+    const f = resolveDeliveryCi(ok({ checksComplete: false }));
+    expect(f.checks).toEqual(green);
+  });
+});
+
+describe("target + sha guards", () => {
+  it("isValidCiTarget rejects malformed slug / PR / sha", () => {
+    expect(isValidCiTarget({ repoSlug: "seanyao/roll", prNumber: 1, sha: "abc1234" })).toBe(true);
+    expect(isValidCiTarget({ repoSlug: "seanyao/roll/../other" })).toBe(false);
+    expect(isValidCiTarget({ repoSlug: "no-slash" })).toBe(false);
+    expect(isValidCiTarget({ prNumber: 0 })).toBe(false);
+    expect(isValidCiTarget({ prNumber: -3 })).toBe(false);
+    expect(isValidCiTarget({ prNumber: 1.5 })).toBe(false);
+    expect(isValidCiTarget({ sha: "zzz" })).toBe(false);
+    expect(isValidCiTarget({ sha: "abc" })).toBe(false); // too short
+    expect(isValidCiTarget({ sha: "a".repeat(41) })).toBe(false);
+  });
+
+  it("shaAgrees is prefix-tolerant (ledger shorts) but never matches on emptiness", () => {
+    expect(shaAgrees(MERGE_SHA, "32195061")).toBe(true);
+    expect(shaAgrees("32195061", MERGE_SHA)).toBe(true);
+    expect(shaAgrees(MERGE_SHA, "3219506")).toBe(true);
+    expect(shaAgrees(MERGE_SHA, "ffff0000")).toBe(false);
+    expect(shaAgrees(undefined, "32195061")).toBe(false);
+    expect(shaAgrees("", "")).toBe(false);
   });
 });
 
 describe("deliveryCiSummary", () => {
   it("is a one-line, machine-parseable digest", () => {
-    const f = resolveDeliveryCi({
-      record,
-      checks: [{ name: "test-ts", conclusion: "success" }],
-      ghAvailable: true,
-      collectedAt: AFTER,
-    });
-    expect(deliveryCiSummary(f)).toBe("verified #1490@deadbeef — test-ts=success");
-    const unknown = resolveDeliveryCi({ ghAvailable: false, collectedAt: AFTER });
-    expect(deliveryCiSummary(unknown)).toBe("unknown no PR@no sha (no_delivery_record)");
+    expect(deliveryCiSummary(resolveDeliveryCi(ok()))).toBe("verified #1490@deadbeef — test-ts=success");
+    expect(deliveryCiSummary(resolveDeliveryCi(ok({ record: undefined })))).toBe(
+      "unknown no PR@deadbeef (no_delivery_record)",
+    );
   });
 });

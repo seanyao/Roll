@@ -20,9 +20,10 @@ export function resolveCardDeliveryRecord(projectPath: string, storyId: string):
   }
   if (records.length === 0) return undefined;
   const truth = queryStoryDelivery(storyId, records);
-  if (truth.prNumber === undefined && truth.mergeCommit === undefined) return undefined;
-  return {
-    ...(truth.prNumber !== undefined ? { prNumber: truth.prNumber } : {}),
-    ...(truth.mergeCommit !== undefined ? { mergeCommit: truth.mergeCommit } : {}),
-  };
+  // codex review r1: only a MERGED delivery with a merge commit may be bound. A
+  // card that is merely in flight has no delivery-time CI truth yet, and binding
+  // its open PR's checks would let a green in-flight run read as acceptance.
+  if (!truth.delivered) return undefined;
+  if (truth.prNumber === undefined || truth.mergeCommit === undefined) return undefined;
+  return { prNumber: truth.prNumber, mergeCommit: truth.mergeCommit };
 }

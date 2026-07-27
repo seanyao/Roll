@@ -20,8 +20,8 @@
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import type { CaptureIntentV2, CaptureReceiptV2 } from "@roll/spec";
-import type { DeliveryCheckRun, DeliveryCiFact, DeliveryCiRecord, EvidenceHealthFact } from "@roll/core";
-import { resolveDeliveryCi } from "@roll/core";
+import type { DeliveryCheckRun, DeliveryCiFact, DeliveryCiRecord, DeliveryPrFacts, EvidenceHealthFact } from "@roll/core";
+import { isValidCiTarget, resolveDeliveryCi } from "@roll/core";
 import { gh, ghAvailable } from "./github.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -284,57 +284,106 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
   let deliveryCi: DeliveryCiFact | undefined;
   if (opts.deliveryRecord !== undefined) {
     let checks: DeliveryCheckRun[] | undefined;
-    let headSha = opts.deliveryRecord.headSha;
-    let mergedAtMs = opts.deliveryRecord.mergedAtMs;
+    // Completeness is EARNED: every page of check-runs plus the legacy commit
+    // statuses must read cleanly. Anything short of that and the fact degrades to
+    // unknown, because a red could be hiding outside the window (codex r1).
+    let checksComplete: boolean | undefined;
+    let prFacts: DeliveryPrFacts | undefined;
     const pr = opts.deliveryRecord.prNumber;
-    if (ghOk && pr !== undefined) {
-      const slug = opts.repoSlug ?? (await resolveRepoSlug(run, opts.projectPath));
-      if (slug !== "") {
-        // The PR carries the authoritative head sha the checks ran on (and its
-        // merge time, needed for the honest post-hoc label).
-        const prRes = await run(
+    const slug = ghOk && pr !== undefined ? (opts.repoSlug ?? (await resolveRepoSlug(run, opts.projectPath))) : "";
+    const targetValid =
+      slug !== "" && isValidCiTarget({ repoSlug: slug, ...(pr !== undefined ? { prNumber: pr } : {}) });
+    if (ghOk && pr !== undefined && targetValid) {
+      // The PR carries the authoritative head sha the checks ran on, whether it
+      // merged, which merge commit it produced, and when — all four are needed
+      // before any check can be attributed to this card.
+      const prRes = await run(
+        "gh",
+        [
+          "api",
+          `repos/${slug}/pulls/${pr}`,
+          "--jq",
+          "{head:.head.sha,merged:.merged,merge_commit_sha:.merge_commit_sha,merged_at:.merged_at}",
+        ],
+        opts.projectPath,
+      ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+      if (prRes.code === 0) {
+        try {
+          const parsed = JSON.parse(prRes.stdout) as {
+            head?: string;
+            merged?: boolean;
+            merge_commit_sha?: string | null;
+            merged_at?: string | null;
+          };
+          const mergedAt =
+            typeof parsed.merged_at === "string" && parsed.merged_at !== "" ? Date.parse(parsed.merged_at) : NaN;
+          prFacts = {
+            merged: parsed.merged === true,
+            ...(typeof parsed.head === "string" && parsed.head !== "" ? { headSha: parsed.head } : {}),
+            ...(typeof parsed.merge_commit_sha === "string" && parsed.merge_commit_sha !== ""
+              ? { mergeCommitSha: parsed.merge_commit_sha }
+              : {}),
+            ...(Number.isFinite(mergedAt) ? { mergedAtMs: mergedAt } : {}),
+          };
+        } catch {
+          /* malformed → prFacts stays undefined → unknown:pr_unavailable */
+        }
+      }
+      const sha = prFacts?.headSha ?? opts.deliveryRecord.headSha;
+      if (sha !== undefined && sha !== "" && isValidCiTarget({ sha })) {
+        const collected: DeliveryCheckRun[] = [];
+        // `--paginate` exhausts every page: a red beyond the default 30-item page
+        // can no longer be missed.
+        const chRes = await run(
           "gh",
-          ["api", `repos/${slug}/pulls/${pr}`, "--jq", "{head:.head.sha,merged_at:.merged_at}"],
+          [
+            "api",
+            "--paginate",
+            `repos/${slug}/commits/${sha}/check-runs`,
+            "--jq",
+            '.check_runs[] | [.name, .conclusion // ""] | @tsv',
+          ],
           opts.projectPath,
         ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
-        if (prRes.code === 0) {
-          try {
-            const parsed = JSON.parse(prRes.stdout) as { head?: string; merged_at?: string | null };
-            if (typeof parsed.head === "string" && parsed.head !== "") headSha = parsed.head;
-            if (typeof parsed.merged_at === "string" && parsed.merged_at !== "") {
-              const t = Date.parse(parsed.merged_at);
-              if (Number.isFinite(t)) mergedAtMs = t;
-            }
-          } catch {
-            /* malformed → headSha/mergedAt stay as recorded */
+        // Legacy commit statuses are a SEPARATE surface from check-runs; a red
+        // status would otherwise be invisible here.
+        const stRes = await run(
+          "gh",
+          [
+            "api",
+            "--paginate",
+            `repos/${slug}/commits/${sha}/statuses`,
+            "--jq",
+            '.[] | [.context, .state] | @tsv',
+          ],
+          opts.projectPath,
+        ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+        const parseTsv = (stdout: string, mapState: (s: string) => string): void => {
+          for (const line of stdout.split("\n")) {
+            if (line.trim() === "") continue;
+            const [name = "", raw = ""] = line.split("\t");
+            if (name !== "") collected.push({ name, conclusion: mapState(raw) });
           }
+        };
+        if (chRes.code === 0) parseTsv(chRes.stdout, (s) => s);
+        if (stRes.code === 0) {
+          // Commit-status states → check conclusions: error/failure are red,
+          // success is success, pending stays "" (unproven).
+          parseTsv(stRes.stdout, (s) =>
+            s === "success" ? "success" : s === "failure" || s === "error" ? "failure" : "",
+          );
         }
-        if (headSha !== undefined && headSha !== "") {
-          const chRes = await run(
-            "gh",
-            [
-              "api",
-              `repos/${slug}/commits/${headSha}/check-runs`,
-              "--jq",
-              ".check_runs[] | [.name, .conclusion // \"\"] | @tsv",
-            ],
-            opts.projectPath,
-          ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
-          if (chRes.code === 0) {
-            checks = [];
-            for (const line of chRes.stdout.split("\n")) {
-              if (line.trim() === "") continue;
-              const [name = "", conclusion = ""] = line.split("\t");
-              if (name !== "") checks.push({ name, conclusion });
-            }
-          }
-        }
+        if (chRes.code === 0 || stRes.code === 0) checks = collected;
+        checksComplete = chRes.code === 0 && stRes.code === 0;
       }
     }
     deliveryCi = resolveDeliveryCi({
-      record: { ...opts.deliveryRecord, ...(headSha !== undefined ? { headSha } : {}), ...(mergedAtMs !== undefined ? { mergedAtMs } : {}) },
+      record: opts.deliveryRecord,
+      ...(prFacts !== undefined ? { pr: prFacts } : {}),
       checks,
+      checksComplete,
       ghAvailable: ghOk,
+      targetValid: ghOk && pr !== undefined ? targetValid : undefined,
       collectedAt: opts.now(),
     });
   }

@@ -827,7 +827,7 @@ describe("delivery-time facts block (US-EVID-033)", () => {
     mergeCommit: "32195061fb3e",
     mergedAt: "2026-07-20T10:00:00.000Z",
     collectedAt: "2026-07-27T09:00:00.000Z",
-    postHoc: true,
+    postHoc: "yes" as const,
     checks: [{ name: "test-ts", conclusion: "success" }],
   };
 
@@ -843,11 +843,15 @@ describe("delivery-time facts block (US-EVID-033)", () => {
 
   it("labels a post-hoc collection as such, and does not when it is cycle-time", () => {
     const post = renderReport({ ...BASE, items: [item({})], deliveryCi: verified });
-    expect(post).toContain('data-posthoc="true"');
+    expect(post).toContain('data-posthoc="yes"');
     expect(post).toContain("事后重建");
-    const inCycle = renderReport({ ...BASE, items: [item({})], deliveryCi: { ...verified, postHoc: false } });
-    expect(inCycle).toContain('data-posthoc="false"');
+    const inCycle = renderReport({ ...BASE, items: [item({})], deliveryCi: { ...verified, postHoc: "no" } });
+    expect(inCycle).toContain('data-posthoc="no"');
     expect(inCycle).not.toContain("事后重建");
+    // Unknown timing SAYS so — it never reads as cycle-time evidence (codex r1).
+    const unknownTiming = renderReport({ ...BASE, items: [item({})], deliveryCi: { ...verified, postHoc: "unknown" } });
+    expect(unknownTiming).toContain('data-posthoc="unknown"');
+    expect(unknownTiming).toContain("合并时间未知");
   });
 
   it("states red / unknown with the reason instead of softening it", () => {
@@ -861,7 +865,7 @@ describe("delivery-time facts block (US-EVID-033)", () => {
     const unknown = renderReport({
       ...BASE,
       items: [item({})],
-      deliveryCi: { state: "unknown", reason: "no_delivery_record", collectedAt: "2026-07-27T09:00:00.000Z", postHoc: false, checks: [] },
+      deliveryCi: { state: "unknown", reason: "no_delivery_record", collectedAt: "2026-07-27T09:00:00.000Z", postHoc: "unknown", checks: [] },
     });
     expect(unknown).toContain("no_delivery_record");
     expect(unknown).toContain('data-state="unknown"');

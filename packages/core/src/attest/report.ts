@@ -738,15 +738,23 @@ function deliveryCiBlock(fact: ReportInput["deliveryCi"]): string {
     fact.reason !== undefined
       ? `<p class="note">${bi("reason", "原因")}: <code>${esc(fact.reason)}</code></p>`
       : "";
-  const postHoc = fact.postHoc
-    ? `<p class="note">${bi(
-        "Collected AFTER the merge — this is a post-hoc reconstruction of delivery-time truth, not cycle-time evidence.",
-        "采集时间晚于合并 —— 这是对交付时真相的事后重建，不是周期内证据。",
-      )}</p>`
-    : "";
+  // Tri-state (codex r1): a timing we cannot establish is SAID to be unknown —
+  // never rendered as if the evidence were collected during the cycle.
+  const postHoc =
+    fact.postHoc === "yes"
+      ? `<p class="note">${bi(
+          "Collected AFTER the merge — this is a post-hoc reconstruction of delivery-time truth, not cycle-time evidence.",
+          "采集时间晚于合并 —— 这是对交付时真相的事后重建，不是周期内证据。",
+        )}</p>`
+      : fact.postHoc === "unknown"
+        ? `<p class="note">${bi(
+            "Merge time unknown — whether this was collected during the cycle or reconstructed afterwards cannot be established.",
+            "合并时间未知 —— 无法判定这份证据是周期内采集还是事后重建。",
+          )}</p>`
+        : "";
   // Machine-stable markers so downstream readers (and the release gate) can read
   // the state without parsing prose.
-  return `<section class="delivery-ci" data-state="${fact.state}" data-posthoc="${fact.postHoc ? "true" : "false"}"><h2>${bi("Delivery-time facts", "交付时事实")} ${verdict}</h2>
+  return `<section class="delivery-ci" data-state="${fact.state}" data-posthoc="${fact.postHoc}"><h2>${bi("Delivery-time facts", "交付时事实")} ${verdict}</h2>
 <p class="note">${bi(
     "The checks that ran on this card's own PR, at the sha they ran on.",
     "这张卡自己的 PR 在其 head sha 上跑过的检查。",

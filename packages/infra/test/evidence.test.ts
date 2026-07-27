@@ -207,7 +207,9 @@ describe("openEvidenceFrame", () => {
 /**
  * US-EVID-033 — the card-level delivery-CI lane. Every forge touch goes through
  * the injected runner (argv asserted); the classification itself is the pure core
- * resolver's, so a probe failure can never surface as a pass.
+ * resolver's, so a probe failure can never surface as a pass. Codex review r1
+ * cases are pinned here: full pagination, legacy commit statuses, merged-PR +
+ * merge-sha agreement, and target validation.
  */
 describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
   /** Runner that dispatches on argv, recording every call. */
@@ -222,117 +224,185 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
     return { run, calls };
   }
 
+  const MERGE_SHA = "32195061fb3ec0f31a26ced91c4c375168ec2dfb";
+  const HEAD_SHA = "aaaabbbbccccddddeeeeffff0000111122223333";
   const REMOTE: [RegExp, RunOut] = [
     /^git remote get-url origin$/,
     { code: 0, stdout: "git@github.com:seanyao/roll.git\n", stderr: "" },
   ];
   const LOG: [RegExp, RunOut] = [/^git log /, { code: 0, stdout: "", stderr: "" }];
   const RUN_LIST: [RegExp, RunOut] = [/^gh run list/, { code: 0, stdout: "[]", stderr: "" }];
+  const PR_MERGED: [RegExp, RunOut] = [
+    /^gh api repos\/seanyao\/roll\/pulls\/1490 /,
+    {
+      code: 0,
+      stdout: `{"head":"${HEAD_SHA}","merged":true,"merge_commit_sha":"${MERGE_SHA}","merged_at":"2026-06-01T10:00:00Z"}`,
+      stderr: "",
+    },
+  ];
+  const NO_STATUSES: [RegExp, RunOut] = [/\/statuses/, { code: 0, stdout: "", stderr: "" }];
+  const record = { prNumber: 1490, mergeCommit: "32195061" };
+  const base = (run: EvidenceRun) => ({
+    storyId: "FIX-1475",
+    projectPath: tmp("p"),
+    runDir: tmp("r"),
+    now: () => NOW,
+    run,
+    ghProbe: () => Promise.resolve(true),
+  });
 
-  it("binds THIS card's PR: head sha from the PR, checks from that sha ⇒ verified", async () => {
+  it("binds THIS card's merged PR: head sha from the PR, checks from that sha ⇒ verified", async () => {
     const { run, calls } = forgeRun([
       REMOTE,
       LOG,
       RUN_LIST,
-      [
-        /^gh api repos\/seanyao\/roll\/pulls\/1490 /,
-        { code: 0, stdout: '{"head":"aaaabbbbccccdddd","merged_at":"2026-07-20T10:00:00Z"}', stderr: "" },
-      ],
-      [
-        /^gh api repos\/seanyao\/roll\/commits\/aaaabbbbccccdddd\/check-runs /,
-        { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" },
-      ],
+      PR_MERGED,
+      [new RegExp(`commits/${HEAD_SHA}/check-runs`), { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      NO_STATUSES,
     ]);
-    const m = await collectEvidence({
-      storyId: "FIX-1475",
-      projectPath: tmp("p"),
-      runDir: tmp("r"),
-      now: () => NOW,
-      run,
-      ghProbe: () => Promise.resolve(true),
-      deliveryRecord: { prNumber: 1490, mergeCommit: "32195061", headSha: "stale-recorded-sha" },
-    });
+    const m = await collectEvidence({ ...base(run), deliveryRecord: { ...record, headSha: "1111111stale" } });
     expect(m.delivery_ci?.state).toBe("verified");
     // The PR's head sha WINS over the stale recorded one — checks are queried on
     // the sha they actually ran on.
-    expect(m.delivery_ci?.headSha).toBe("aaaabbbbccccdddd");
+    expect(m.delivery_ci?.headSha).toBe(HEAD_SHA);
     expect(m.delivery_ci?.prNumber).toBe(1490);
-    expect(m.delivery_ci?.mergeCommit).toBe("32195061");
-    expect(m.delivery_ci?.checks).toEqual([{ name: "test-ts", conclusion: "success" }]);
-    expect(calls.some((c) => c.includes("commits/aaaabbbbccccdddd/check-runs"))).toBe(true);
+    expect(m.delivery_ci?.postHoc).toBe("yes");
+    expect(calls.some((c) => c.includes(`--paginate repos/seanyao/roll/commits/${HEAD_SHA}/check-runs`))).toBe(true);
     // The legacy repo-wide lane is untouched by this card's fact.
     expect(m.ci.conclusion).toBe("");
   });
 
+  it("reads EVERY page (--paginate): a red beyond page 1 makes the fact red", async () => {
+    // gh --paginate concatenates pages; a red arriving in the later page must land.
+    const paged = [...Array(30)].map((_, i) => `check-${i}\tsuccess`).concat(["late-check\tfailure"]).join("\n");
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: `${paged}\n`, stderr: "" }],
+      NO_STATUSES,
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(m.delivery_ci?.state).toBe("red");
+    expect(m.delivery_ci?.reason).toBe("checks_failed:late-check");
+    expect(m.delivery_ci?.checks).toHaveLength(31);
+  });
+
+  it("folds in LEGACY commit statuses — a red status is not invisible", async () => {
+    const { run, calls } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [/\/statuses/, { code: 0, stdout: "legacy/deploy\terror\n", stderr: "" }],
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(calls.some((c) => c.includes("/statuses"))).toBe(true);
+    expect(m.delivery_ci?.state).toBe("red");
+    expect(m.delivery_ci?.reason).toContain("legacy/deploy");
+  });
+
+  it("a pending commit status leaves the delivery unproven (not verified)", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [/\/statuses/, { code: 0, stdout: "legacy/deploy\tpending\n", stderr: "" }],
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toContain("legacy/deploy=running");
+  });
+
+  it("a partially-read list is NOT complete ⇒ unknown, never verified", async () => {
+    // check-runs read fine, the statuses call failed → a red could be hiding.
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [/\/statuses/, { code: 1, stdout: "", stderr: "HTTP 500" }],
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("checks_list_incomplete");
+  });
+
+  it("an OPEN PR can never be verified, however green", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      [
+        /pulls\/1490 /,
+        { code: 0, stdout: `{"head":"${HEAD_SHA}","merged":false,"merge_commit_sha":null,"merged_at":null}`, stderr: "" },
+      ],
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      NO_STATUSES,
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("pr_not_merged");
+  });
+
+  it("a PR whose merge sha disagrees with the ledger is refused (wrong delivery)", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      [
+        /pulls\/1490 /,
+        {
+          code: 0,
+          stdout: `{"head":"${HEAD_SHA}","merged":true,"merge_commit_sha":"9999999999999999","merged_at":"2026-06-01T10:00:00Z"}`,
+          stderr: "",
+        },
+      ],
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      NO_STATUSES,
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("merge_sha_mismatch");
+  });
+
+  it("a malformed repo slug is refused before any forge call", async () => {
+    const { run, calls } = forgeRun([
+      [/^git remote get-url origin$/, { code: 0, stdout: "git@github.com:evil/../../roll.git\n", stderr: "" }],
+      LOG,
+      RUN_LIST,
+    ]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("invalid_target");
+    expect(calls.some((c) => c.includes("check-runs"))).toBe(false);
+  });
+
   it("no delivery record ⇒ the lane is omitted entirely (never faked)", async () => {
     const { run, calls } = forgeRun([REMOTE, LOG, RUN_LIST]);
-    const m = await collectEvidence({
-      storyId: "US-NEW-001",
-      projectPath: tmp("p"),
-      runDir: tmp("r"),
-      now: () => NOW,
-      run,
-      ghProbe: () => Promise.resolve(true),
-    });
+    const m = await collectEvidence({ ...base(run), storyId: "US-NEW-001" });
     expect(m.delivery_ci).toBeUndefined();
     expect(calls.some((c) => c.includes("check-runs"))).toBe(false);
   });
 
-  it("a failed checks query degrades to unknown:checks_unavailable — never a pass", async () => {
-    const { run } = forgeRun([
-      REMOTE,
-      LOG,
-      RUN_LIST,
-      [/^gh api repos\/seanyao\/roll\/pulls\/7 /, { code: 0, stdout: '{"head":"sha7","merged_at":null}', stderr: "" }],
-      [/check-runs/, { code: 1, stdout: "", stderr: "HTTP 404" }],
-    ]);
-    const m = await collectEvidence({
-      storyId: "FIX-7",
-      projectPath: tmp("p"),
-      runDir: tmp("r"),
-      now: () => NOW,
-      run,
-      ghProbe: () => Promise.resolve(true),
-      deliveryRecord: { prNumber: 7 },
-    });
+  it("a failed checks query degrades to unknown — never a pass", async () => {
+    const { run } = forgeRun([REMOTE, LOG, RUN_LIST, PR_MERGED, [/check-runs|\/statuses/, { code: 1, stdout: "", stderr: "HTTP 404" }]]);
+    const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("unknown");
     expect(m.delivery_ci?.reason).toBe("checks_unavailable");
-    expect(m.delivery_ci?.headSha).toBe("sha7");
-  });
-
-  it("a red check on the card's own PR is reported red, not softened", async () => {
-    const { run } = forgeRun([
-      REMOTE,
-      LOG,
-      RUN_LIST,
-      [/pulls\/99 /, { code: 0, stdout: '{"head":"shaRed","merged_at":"2026-06-01T00:00:00Z"}', stderr: "" }],
-      [/check-runs/, { code: 0, stdout: "test-ts\tfailure\nlint\tsuccess\n", stderr: "" }],
-    ]);
-    const m = await collectEvidence({
-      storyId: "FIX-99",
-      projectPath: tmp("p"),
-      runDir: tmp("r"),
-      now: () => NOW,
-      run,
-      ghProbe: () => Promise.resolve(true),
-      deliveryRecord: { prNumber: 99 },
-    });
-    expect(m.delivery_ci?.state).toBe("red");
-    expect(m.delivery_ci?.reason).toBe("checks_failed:test-ts");
-    // merged 2026-06-01, collected at the injected NOW (2026-06-06) ⇒ post-hoc.
-    expect(m.delivery_ci?.postHoc).toBe(true);
   });
 
   it("offline host (no gh) ⇒ unknown:gh_unavailable, no forge calls", async () => {
     const { run, calls } = forgeRun([REMOTE, LOG]);
     const m = await collectEvidence({
-      storyId: "FIX-1481",
-      projectPath: tmp("p"),
-      runDir: tmp("r"),
-      now: () => NOW,
-      run,
+      ...base(run),
       ghProbe: () => Promise.resolve(false),
-      deliveryRecord: { prNumber: 1491 },
+      deliveryRecord: record,
     });
     expect(m.delivery_ci?.state).toBe("unknown");
     expect(m.delivery_ci?.reason).toBe("gh_unavailable");
