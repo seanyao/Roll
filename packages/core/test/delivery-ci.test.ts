@@ -20,11 +20,24 @@ const BEFORE = "2026-07-20T09:00:00Z";
 
 const record = { prNumber: 1490, mergeCommit: "32195061" };
 const pr = { merged: true, mergeCommitSha: MERGE_SHA, headSha: "deadbeefcafe1234", mergedAtMs: MERGED_MS };
-const green = [{ name: "test-ts", conclusion: "success" }];
+const PRE_MERGE_MS = Date.parse("2026-07-20T09:50:00Z"); // 10 min before the merge
+const green = [{ name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS }];
+const REQUIRED = ["test-ts"];
 
 /** A fully verifiable input; each test perturbs exactly one dimension. */
 function ok(over: Partial<ResolveDeliveryCiInput> = {}): ResolveDeliveryCiInput {
-  return { record, pr, checks: green, checksComplete: true, ghAvailable: true, targetValid: true, collectedAt: AFTER, ...over };
+  return {
+    record,
+    pr,
+    checks: green,
+    checksComplete: true,
+    requiredChecks: REQUIRED,
+    requiredChecksKnown: true,
+    ghAvailable: true,
+    targetValid: true,
+    collectedAt: AFTER,
+    ...over,
+  };
 }
 
 describe("resolveDeliveryCi — verified requires every guard to hold", () => {
@@ -42,23 +55,33 @@ describe("resolveDeliveryCi — verified requires every guard to hold", () => {
   it("post-hoc is a tri-state: after merge yes, before merge no, unknowable unknown", () => {
     expect(resolveDeliveryCi(ok()).postHoc).toBe("yes");
     expect(resolveDeliveryCi(ok({ collectedAt: BEFORE })).postHoc).toBe("no");
-    // No merge time anywhere ⇒ we must NOT claim cycle-time (codex r1).
+    // No merge time anywhere ⇒ we must NOT claim cycle-time, AND (codex r2) there
+    // is no boundary between delivery-time evidence and a later rerun, so the
+    // fact cannot be verified at all.
     const noTime = resolveDeliveryCi(ok({ pr: { merged: true, mergeCommitSha: MERGE_SHA, headSha: "abc1234" } }));
     expect(noTime.postHoc).toBe("unknown");
-    expect(noTime.state).toBe("verified");
+    expect(noTime.state).toBe("unknown");
+    expect(noTime.reason).toBe("merge_time_unknown");
   });
 });
 
 describe("resolveDeliveryCi — red is terminal", () => {
   it("a failing check ⇒ red, naming the check", () => {
-    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "failure" }, ...green] }));
+    const f = resolveDeliveryCi(
+      ok({ checks: [{ name: "test-ts", conclusion: "failure", completedAtMs: PRE_MERGE_MS }] }),
+    );
     expect(f.state).toBe("red");
     expect(f.reason).toBe("checks_failed:test-ts");
   });
 
   it("NEVER hides a failure behind an in-flight check", () => {
     const f = resolveDeliveryCi(
-      ok({ checks: [{ name: "slow", conclusion: "" }, { name: "test-ts", conclusion: "timed_out" }] }),
+      ok({
+        checks: [
+          { name: "slow", conclusion: "" },
+          { name: "test-ts", conclusion: "timed_out", completedAtMs: PRE_MERGE_MS },
+        ],
+      }),
     );
     expect(f.state).toBe("red");
     expect(f.reason).toContain("test-ts");
@@ -66,12 +89,17 @@ describe("resolveDeliveryCi — red is terminal", () => {
 
   it("treats cancelled / action_required / startup_failure as red", () => {
     for (const conclusion of ["cancelled", "action_required", "startup_failure"]) {
-      expect(resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion }] })).state, conclusion).toBe("red");
+      expect(
+        resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion, completedAtMs: PRE_MERGE_MS }] })).state,
+        conclusion,
+      ).toBe("red");
     }
   });
 
   it("a red commit STATUS folded in as a failure conclusion is still red", () => {
-    const f = resolveDeliveryCi(ok({ checks: [...green, { name: "legacy/status", conclusion: "failure" }] }));
+    const f = resolveDeliveryCi(
+      ok({ checks: [...green, { name: "legacy/status", conclusion: "failure", completedAtMs: PRE_MERGE_MS }] }),
+    );
     expect(f.state).toBe("red");
     expect(f.reason).toContain("legacy/status");
   });
@@ -80,20 +108,28 @@ describe("resolveDeliveryCi — red is terminal", () => {
 describe("resolveDeliveryCi — only a real success verifies", () => {
   it("neutral and skipped are NOT green executions ⇒ unknown, not verified", () => {
     for (const conclusion of ["neutral", "skipped"]) {
-      const f = resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion }] }));
+      const f = resolveDeliveryCi(
+        ok({ checks: [{ name: "c", conclusion, completedAtMs: PRE_MERGE_MS }], requiredChecks: ["c"] }),
+      );
       expect(f.state, conclusion).toBe("unknown");
-      expect(f.reason, conclusion).toContain("checks_inconclusive");
+      expect(f.reason, conclusion).toContain("required_missing");
     }
   });
 
   it("a still-running check leaves the delivery unproven", () => {
-    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "" }] }));
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "", completedAtMs: PRE_MERGE_MS }] }));
     expect(f.state).toBe("unknown");
-    expect(f.reason).toBe("checks_inconclusive:test-ts=running");
+    expect(f.reason).toBe("required_missing:test-ts");
   });
 
   it("an unrecognised conclusion is unproven, never assumed green", () => {
-    const f = resolveDeliveryCi(ok({ checks: [{ name: "c", conclusion: "something_new" }] }));
+    // No required set declared ⇒ every observed check must be a real success.
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [{ name: "c", conclusion: "something_new", completedAtMs: PRE_MERGE_MS }],
+        requiredChecks: [],
+      }),
+    );
     expect(f.state).toBe("unknown");
     expect(f.reason).toContain("something_new");
   });
@@ -157,5 +193,80 @@ describe("deliveryCiSummary", () => {
     expect(deliveryCiSummary(resolveDeliveryCi(ok({ record: undefined })))).toBe(
       "unknown no PR@deadbeef (no_delivery_record)",
     );
+  });
+});
+
+// Codex review r2 — the two remaining ways a `verified` could have been wrong.
+describe("resolveDeliveryCi — a green must be a DELIVERY-TIME green (codex r2)", () => {
+  it("a check that finished AFTER the merge is a rerun, not delivery evidence", () => {
+    const rerun = Date.parse("2026-07-25T00:00:00Z"); // days after the merge
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "success", completedAtMs: rerun }] }));
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("checks_after_merge:test-ts");
+  });
+
+  it("a check with no finish time cannot be placed before the merge ⇒ unknown", () => {
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "success" }] }));
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("check_time_unknown:test-ts");
+  });
+
+  it("a green that finished exactly at the merge instant still counts", () => {
+    const f = resolveDeliveryCi(ok({ checks: [{ name: "test-ts", conclusion: "success", completedAtMs: MERGED_MS }] }));
+    expect(f.state).toBe("verified");
+  });
+});
+
+describe("resolveDeliveryCi — the BRANCH decides what green means (codex r2)", () => {
+  it("an absent REQUIRED check cannot be papered over by an optional green", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [{ name: "optional-lint", conclusion: "success", completedAtMs: PRE_MERGE_MS }],
+        requiredChecks: ["test-ts"],
+      }),
+    );
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("required_missing:test-ts");
+  });
+
+  it("every required check must be present and successful", () => {
+    const f = resolveDeliveryCi(
+      ok({
+        checks: [
+          { name: "test-ts", conclusion: "success", completedAtMs: PRE_MERGE_MS },
+          { name: "build", conclusion: "neutral", completedAtMs: PRE_MERGE_MS },
+        ],
+        requiredChecks: ["test-ts", "build"],
+      }),
+    );
+    expect(f.reason).toBe("required_missing:build");
+  });
+
+  it("an unreadable protection config leaves 'green' undefined ⇒ unknown", () => {
+    const f = resolveDeliveryCi(ok({ requiredChecksKnown: false }));
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("required_checks_unknown");
+  });
+
+  it("an unprotected branch (known, empty) verifies on every observed check", () => {
+    const f = resolveDeliveryCi(ok({ requiredChecks: [], requiredChecksKnown: true }));
+    expect(f.state).toBe("verified");
+    // …but a single non-success among them still blocks it.
+    const blocked = resolveDeliveryCi(
+      ok({
+        requiredChecks: [],
+        checks: [...green, { name: "extra", conclusion: "skipped", completedAtMs: PRE_MERGE_MS }],
+      }),
+    );
+    expect(blocked.state).toBe("unknown");
+    expect(blocked.reason).toContain("extra=skipped");
+  });
+
+  it("an extra red is still red even when every required check is green", () => {
+    const f = resolveDeliveryCi(
+      ok({ checks: [...green, { name: "extra", conclusion: "failure", completedAtMs: PRE_MERGE_MS }] }),
+    );
+    expect(f.state).toBe("red");
+    expect(f.reason).toBe("checks_failed:extra");
   });
 });

@@ -289,6 +289,9 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
     // unknown, because a red could be hiding outside the window (codex r1).
     let checksComplete: boolean | undefined;
     let prFacts: DeliveryPrFacts | undefined;
+    let baseRef: string | undefined;
+    let requiredChecks: string[] | undefined;
+    let requiredChecksKnown: boolean | undefined;
     const pr = opts.deliveryRecord.prNumber;
     const slug = ghOk && pr !== undefined ? (opts.repoSlug ?? (await resolveRepoSlug(run, opts.projectPath))) : "";
     const targetValid =
@@ -303,7 +306,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
           "api",
           `repos/${slug}/pulls/${pr}`,
           "--jq",
-          "{head:.head.sha,merged:.merged,merge_commit_sha:.merge_commit_sha,merged_at:.merged_at}",
+          "{head:.head.sha,merged:.merged,merge_commit_sha:.merge_commit_sha,merged_at:.merged_at,base:.base.ref}",
         ],
         opts.projectPath,
       ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -314,7 +317,9 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
             merged?: boolean;
             merge_commit_sha?: string | null;
             merged_at?: string | null;
+            base?: string | null;
           };
+          if (typeof parsed.base === "string" && parsed.base !== "") baseRef = parsed.base;
           const mergedAt =
             typeof parsed.merged_at === "string" && parsed.merged_at !== "" ? Date.parse(parsed.merged_at) : NaN;
           prFacts = {
@@ -341,7 +346,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
             "--paginate",
             `repos/${slug}/commits/${sha}/check-runs`,
             "--jq",
-            '.check_runs[] | [.name, .conclusion // ""] | @tsv',
+            '.check_runs[] | [.name, .conclusion // "", .completed_at // ""] | @tsv',
           ],
           opts.projectPath,
         ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -354,15 +359,24 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
             "--paginate",
             `repos/${slug}/commits/${sha}/statuses`,
             "--jq",
-            '.[] | [.context, .state] | @tsv',
+            '.[] | [.context, .state, .updated_at // ""] | @tsv',
           ],
           opts.projectPath,
         ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
         const parseTsv = (stdout: string, mapState: (s: string) => string): void => {
           for (const line of stdout.split("\n")) {
             if (line.trim() === "") continue;
-            const [name = "", raw = ""] = line.split("\t");
-            if (name !== "") collected.push({ name, conclusion: mapState(raw) });
+            const [name = "", raw = "", finishedAt = ""] = line.split("\t");
+            if (name === "") continue;
+            // US-EVID-033 (codex r2): the finish time decides whether a green is
+            // delivery-time evidence or a post-merge rerun. Unparseable ⇒ omitted,
+            // and the resolver then refuses to verify.
+            const t = finishedAt !== "" ? Date.parse(finishedAt) : NaN;
+            collected.push({
+              name,
+              conclusion: mapState(raw),
+              ...(Number.isFinite(t) ? { completedAtMs: t } : {}),
+            });
           }
         };
         if (chRes.code === 0) parseTsv(chRes.stdout, (s) => s);
@@ -376,12 +390,38 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
         if (chRes.code === 0 || stRes.code === 0) checks = collected;
         checksComplete = chRes.code === 0 && stRes.code === 0;
       }
+      // The BRANCH decides what green means (codex r2). A 404 "Branch not
+      // protected" is a real answer (no required checks); any other failure leaves
+      // the required set unknown, and the resolver refuses to verify.
+      if (baseRef !== undefined && /^[A-Za-z0-9._\/-]+$/.test(baseRef)) {
+        const reqRes = await run(
+          "gh",
+          [
+            "api",
+            `repos/${slug}/branches/${baseRef}/protection/required_status_checks`,
+            "--jq",
+            '[((.contexts // [])[]), ((.checks // [])[] | .context)] | unique | .[]',
+          ],
+          opts.projectPath,
+        ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+        if (reqRes.code === 0) {
+          requiredChecks = reqRes.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+          requiredChecksKnown = true;
+        } else if (/not protected/i.test(reqRes.stderr)) {
+          requiredChecks = [];
+          requiredChecksKnown = true;
+        } else {
+          requiredChecksKnown = false;
+        }
+      }
     }
     deliveryCi = resolveDeliveryCi({
       record: opts.deliveryRecord,
       ...(prFacts !== undefined ? { pr: prFacts } : {}),
       checks,
       checksComplete,
+      ...(requiredChecks !== undefined ? { requiredChecks } : {}),
+      requiredChecksKnown,
       ghAvailable: ghOk,
       targetValid: ghOk && pr !== undefined ? targetValid : undefined,
       collectedAt: opts.now(),

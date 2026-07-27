@@ -23,7 +23,11 @@
  * Codex review r1 closed five ways a `verified` could have been wrong: an
  * unpaginated check list hiding a red beyond page 1, an open/other PR, `neutral`
  * and `skipped` counted as green executions, a defeatable post-hoc label, and an
- * unvalidated API target able to misattribute another repo's checks.
+ * unvalidated API target able to misattribute another repo's checks. Review r2
+ * closed two more: the checks endpoint reports the CURRENT run per name, so a
+ * post-merge rerun could replace a delivery-time red with a green (a green must
+ * now demonstrably predate the merge); and verifying only the visible checks let a
+ * merged PR pass on one optional green while the REQUIRED check was absent.
  */
 
 /** One check run's conclusion as reported by the forge (check-runs + statuses). */
@@ -31,6 +35,13 @@ export interface DeliveryCheckRun {
   name: string;
   /** `success` | `failure` | `neutral` | `cancelled` | `skipped` | `timed_out` | `action_required` | `startup_failure` | "" (still running). */
   conclusion: string;
+  /**
+   * Epoch ms the check finished, when the forge reported it. Codex review r2: the
+   * checks endpoint returns the CURRENT run per name, so a post-merge rerun can
+   * replace a delivery-time red with a green. A success only counts as
+   * delivery-time evidence when it demonstrably finished BEFORE the merge.
+   */
+  completedAtMs?: number | undefined;
 }
 
 /** The card's delivery record, projected from the delivery ledger. */
@@ -116,6 +127,18 @@ export interface ResolveDeliveryCiInput {
    */
   checksComplete?: boolean | undefined;
   ghAvailable: boolean;
+  /**
+   * The base branch's REQUIRED check contexts. Codex review r2: verifying only
+   * the checks that happen to be visible lets a merged PR with one optional green
+   * check (and the required check absent) read as verified.
+   */
+  requiredChecks?: readonly string[] | undefined;
+  /**
+   * Whether the required-check set is KNOWN. `false` ⇒ the branch protection could
+   * not be read, so what "green" even means is unestablished ⇒ unknown. An
+   * unprotected branch is `true` with an empty set (a real answer, not a failure).
+   */
+  requiredChecksKnown?: boolean | undefined;
   /** Caller-side validation of slug/pr/sha; `false` ⇒ refuse to attribute. */
   targetValid?: boolean | undefined;
   /** ISO timestamp of this collection. */
@@ -169,15 +192,39 @@ export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact
   if (failed.length > 0) {
     return { ...base, state: "red", reason: `checks_failed:${failed.map((c) => c.name).join(",")}`, checks };
   }
-  // Anything that is not a real success (still running, neutral, skipped, an
-  // unrecognised conclusion) leaves the delivery unproven.
-  const unproven = checks.filter((c) => !PASSING.has(c.conclusion));
+
+  // Without a merge time there is no boundary between delivery-time evidence and
+  // a later rerun, so nothing can be verified (codex r2).
+  if (mergedAtMs === undefined || !Number.isFinite(mergedAtMs)) {
+    return { ...base, reason: "merge_time_unknown", checks };
+  }
+  // What counts as green is the BRANCH's required set, not whatever happened to
+  // be visible. An unreadable protection config leaves that undefined.
+  if (input.requiredChecksKnown !== true) return { ...base, reason: "required_checks_unknown", checks };
+  const required = [...(input.requiredChecks ?? [])];
+  const byName = new Map(checks.map((c) => [c.name, c]));
+  const missing = required.filter((name) => !PASSING.has(byName.get(name)?.conclusion ?? ""));
+  if (missing.length > 0) return { ...base, reason: `required_missing:${missing.join(",")}`, checks };
+
+  // Evidence set: the required checks when the branch declares them, otherwise
+  // every observed check (an unprotected branch's best available truth).
+  const evidence = required.length > 0 ? required.map((n) => byName.get(n)!) : checks;
+  const unproven = evidence.filter((c) => !PASSING.has(c.conclusion));
   if (unproven.length > 0) {
     return {
       ...base,
       reason: `checks_inconclusive:${unproven.map((c) => `${c.name}=${c.conclusion === "" ? "running" : c.conclusion}`).join(",")}`,
       checks,
     };
+  }
+  // Each green must be a DELIVERY-TIME green: finished, with a known finish time,
+  // before the merge. A rerun that turned a red into a green after the merge is
+  // not evidence the delivery was ever green.
+  const untimed = evidence.filter((c) => c.completedAtMs === undefined || !Number.isFinite(c.completedAtMs));
+  if (untimed.length > 0) return { ...base, reason: `check_time_unknown:${untimed.map((c) => c.name).join(",")}`, checks };
+  const afterMerge = evidence.filter((c) => (c.completedAtMs as number) > mergedAtMs);
+  if (afterMerge.length > 0) {
+    return { ...base, reason: `checks_after_merge:${afterMerge.map((c) => c.name).join(",")}`, checks };
   }
   return { ...base, state: "verified", checks };
 }

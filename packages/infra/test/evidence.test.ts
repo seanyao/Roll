@@ -236,11 +236,18 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
     /^gh api repos\/seanyao\/roll\/pulls\/1490 /,
     {
       code: 0,
-      stdout: `{"head":"${HEAD_SHA}","merged":true,"merge_commit_sha":"${MERGE_SHA}","merged_at":"2026-06-01T10:00:00Z"}`,
+      stdout: `{"head":"${HEAD_SHA}","merged":true,"merge_commit_sha":"${MERGE_SHA}","merged_at":"2026-06-01T10:00:00Z","base":"main"}`,
       stderr: "",
     },
   ];
   const NO_STATUSES: [RegExp, RunOut] = [/\/statuses/, { code: 0, stdout: "", stderr: "" }];
+  /** The base branch requires `test-ts` (roll's real protection shape). */
+  const REQUIRED: [RegExp, RunOut] = [
+    /protection\/required_status_checks/,
+    { code: 0, stdout: "test-ts\n", stderr: "" },
+  ];
+  /** Every green check finished 5 minutes BEFORE the merge. */
+  const PRE_MERGE = "2026-06-01T09:55:00Z";
   const record = { prNumber: 1490, mergeCommit: "32195061" };
   const base = (run: EvidenceRun) => ({
     storyId: "FIX-1475",
@@ -257,8 +264,9 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
       LOG,
       RUN_LIST,
       PR_MERGED,
-      [new RegExp(`commits/${HEAD_SHA}/check-runs`), { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [new RegExp(`commits/${HEAD_SHA}/check-runs`), { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
       NO_STATUSES,
+      REQUIRED,
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: { ...record, headSha: "1111111stale" } });
     expect(m.delivery_ci?.state).toBe("verified");
@@ -274,7 +282,10 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
 
   it("reads EVERY page (--paginate): a red beyond page 1 makes the fact red", async () => {
     // gh --paginate concatenates pages; a red arriving in the later page must land.
-    const paged = [...Array(30)].map((_, i) => `check-${i}\tsuccess`).concat(["late-check\tfailure"]).join("\n");
+    const paged = [...Array(30)]
+      .map((_, i) => `check-${i}\tsuccess\t${PRE_MERGE}`)
+      .concat([`late-check\tfailure\t${PRE_MERGE}`])
+      .join("\n");
     const { run } = forgeRun([
       REMOTE,
       LOG,
@@ -282,6 +293,7 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
       PR_MERGED,
       [/check-runs/, { code: 0, stdout: `${paged}\n`, stderr: "" }],
       NO_STATUSES,
+      REQUIRED,
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("red");
@@ -295,8 +307,9 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
       LOG,
       RUN_LIST,
       PR_MERGED,
-      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
-      [/\/statuses/, { code: 0, stdout: "legacy/deploy\terror\n", stderr: "" }],
+      [/check-runs/, { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
+      [/\/statuses/, { code: 0, stdout: `legacy/deploy\terror\t${PRE_MERGE}\n`, stderr: "" }],
+      REQUIRED,
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(calls.some((c) => c.includes("/statuses"))).toBe(true);
@@ -304,18 +317,38 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
     expect(m.delivery_ci?.reason).toContain("legacy/deploy");
   });
 
-  it("a pending commit status leaves the delivery unproven (not verified)", async () => {
+  it("a pending REQUIRED status leaves the delivery unproven (an optional one does not)", async () => {
     const { run } = forgeRun([
       REMOTE,
       LOG,
       RUN_LIST,
       PR_MERGED,
-      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
-      [/\/statuses/, { code: 0, stdout: "legacy/deploy\tpending\n", stderr: "" }],
+      [/check-runs/, { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
+      [/\/statuses/, { code: 0, stdout: `legacy/deploy\tpending\t${PRE_MERGE}\n`, stderr: "" }],
+      // `legacy/deploy` IS required here, so its pending state blocks.
+      [/protection\/required_status_checks/, { code: 0, stdout: "test-ts\nlegacy/deploy\n", stderr: "" }],
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("unknown");
-    expect(m.delivery_ci?.reason).toContain("legacy/deploy=running");
+    expect(m.delivery_ci?.reason).toBe("required_missing:legacy/deploy");
+  });
+
+  it("a pending OPTIONAL status does not block, but a failing one still reds", async () => {
+    const mk = (state: string): EvidenceRun =>
+      forgeRun([
+        REMOTE,
+        LOG,
+        RUN_LIST,
+        PR_MERGED,
+        [/check-runs/, { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
+        [/\/statuses/, { code: 0, stdout: `optional/deploy\t${state}\t${PRE_MERGE}\n`, stderr: "" }],
+        REQUIRED,
+      ]).run;
+    const pending = await collectEvidence({ ...base(mk("pending")), deliveryRecord: record });
+    expect(pending.delivery_ci?.state).toBe("verified");
+    const failing = await collectEvidence({ ...base(mk("failure")), deliveryRecord: record });
+    expect(failing.delivery_ci?.state).toBe("red");
+    expect(failing.delivery_ci?.reason).toBe("checks_failed:optional/deploy");
   });
 
   it("a partially-read list is NOT complete ⇒ unknown, never verified", async () => {
@@ -325,8 +358,9 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
       LOG,
       RUN_LIST,
       PR_MERGED,
-      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [/check-runs/, { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
       [/\/statuses/, { code: 1, stdout: "", stderr: "HTTP 500" }],
+      REQUIRED,
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("unknown");
@@ -342,8 +376,9 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
         /pulls\/1490 /,
         { code: 0, stdout: `{"head":"${HEAD_SHA}","merged":false,"merge_commit_sha":null,"merged_at":null}`, stderr: "" },
       ],
-      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [/check-runs/, { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
       NO_STATUSES,
+      REQUIRED,
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("unknown");
@@ -363,8 +398,9 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
           stderr: "",
         },
       ],
-      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }],
+      [/check-runs/, { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\n`, stderr: "" }],
       NO_STATUSES,
+      REQUIRED,
     ]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("unknown");
@@ -391,7 +427,7 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
   });
 
   it("a failed checks query degrades to unknown — never a pass", async () => {
-    const { run } = forgeRun([REMOTE, LOG, RUN_LIST, PR_MERGED, [/check-runs|\/statuses/, { code: 1, stdout: "", stderr: "HTTP 404" }]]);
+    const { run } = forgeRun([REMOTE, LOG, RUN_LIST, PR_MERGED, [/check-runs|\/statuses/, { code: 1, stdout: "", stderr: "HTTP 404" }], REQUIRED]);
     const m = await collectEvidence({ ...base(run), deliveryRecord: record });
     expect(m.delivery_ci?.state).toBe("unknown");
     expect(m.delivery_ci?.reason).toBe("checks_unavailable");
@@ -407,5 +443,136 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
     expect(m.delivery_ci?.state).toBe("unknown");
     expect(m.delivery_ci?.reason).toBe("gh_unavailable");
     expect(calls.some((c) => c.startsWith("gh "))).toBe(false);
+  });
+});
+
+/** Codex review r2 — required-check set and the delivery-time boundary, live wiring. */
+describe("collectEvidence — delivery_ci required checks + merge boundary (US-EVID-033 r2)", () => {
+  function forgeRun(handlers: Array<[RegExp, RunOut]>): { run: EvidenceRun; calls: string[] } {
+    const calls: string[] = [];
+    const run: EvidenceRun = (tool, argv) => {
+      const line = `${tool} ${argv.join(" ")}`;
+      calls.push(line);
+      for (const [pattern, out] of handlers) if (pattern.test(line)) return Promise.resolve(out);
+      return Promise.resolve({ code: 1, stdout: "", stderr: "" });
+    };
+    return { run, calls };
+  }
+  const MERGE_SHA = "32195061fb3ec0f31a26ced91c4c375168ec2dfb";
+  const HEAD_SHA = "aaaabbbbccccddddeeeeffff0000111122223333";
+  const REMOTE: [RegExp, RunOut] = [
+    /^git remote get-url origin$/,
+    { code: 0, stdout: "git@github.com:seanyao/roll.git\n", stderr: "" },
+  ];
+  const LOG: [RegExp, RunOut] = [/^git log /, { code: 0, stdout: "", stderr: "" }];
+  const RUN_LIST: [RegExp, RunOut] = [/^gh run list/, { code: 0, stdout: "[]", stderr: "" }];
+  const PR_MERGED: [RegExp, RunOut] = [
+    /pulls\/1490 /,
+    {
+      code: 0,
+      stdout: `{"head":"${HEAD_SHA}","merged":true,"merge_commit_sha":"${MERGE_SHA}","merged_at":"2026-06-01T10:00:00Z","base":"main"}`,
+      stderr: "",
+    },
+  ];
+  const NO_STATUSES: [RegExp, RunOut] = [/\/statuses/, { code: 0, stdout: "", stderr: "" }];
+  const record = { prNumber: 1490, mergeCommit: "32195061" };
+  const base = (run: EvidenceRun) => ({
+    storyId: "FIX-1475",
+    projectPath: tmp("p"),
+    runDir: tmp("r"),
+    now: () => NOW,
+    run,
+    ghProbe: () => Promise.resolve(true),
+    deliveryRecord: record,
+  });
+
+  it("reads the base branch's required contexts (both .contexts and .checks shapes)", async () => {
+    const { run, calls } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\t2026-06-01T09:55:00Z\n", stderr: "" }],
+      NO_STATUSES,
+      [/protection\/required_status_checks/, { code: 0, stdout: "test-ts\n", stderr: "" }],
+    ]);
+    const m = await collectEvidence(base(run));
+    expect(calls.some((c) => c.includes("repos/seanyao/roll/branches/main/protection/required_status_checks"))).toBe(true);
+    expect(m.delivery_ci?.state).toBe("verified");
+  });
+
+  it("a green produced by a POST-MERGE rerun cannot verify the delivery", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      // Rerun finished days after the merge — the delivery-time result is gone.
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\t2026-06-05T00:00:00Z\n", stderr: "" }],
+      NO_STATUSES,
+      [/protection\/required_status_checks/, { code: 0, stdout: "test-ts\n", stderr: "" }],
+    ]);
+    const m = await collectEvidence(base(run));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("checks_after_merge:test-ts");
+  });
+
+  it("an absent REQUIRED check is not covered by an optional green", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "optional-lint\tsuccess\t2026-06-01T09:55:00Z\n", stderr: "" }],
+      NO_STATUSES,
+      [/protection\/required_status_checks/, { code: 0, stdout: "test-ts\n", stderr: "" }],
+    ]);
+    const m = await collectEvidence(base(run));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("required_missing:test-ts");
+  });
+
+  it("'Branch not protected' is a real answer (no required checks), not a failure", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\t2026-06-01T09:55:00Z\n", stderr: "" }],
+      NO_STATUSES,
+      [/protection\/required_status_checks/, { code: 1, stdout: "", stderr: "gh: Branch not protected (HTTP 404)" }],
+    ]);
+    const m = await collectEvidence(base(run));
+    expect(m.delivery_ci?.state).toBe("verified");
+  });
+
+  it("any OTHER protection-read failure leaves 'green' undefined ⇒ unknown", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\t2026-06-01T09:55:00Z\n", stderr: "" }],
+      NO_STATUSES,
+      [/protection\/required_status_checks/, { code: 1, stdout: "", stderr: "HTTP 403: Resource not accessible" }],
+    ]);
+    const m = await collectEvidence(base(run));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("required_checks_unknown");
+  });
+
+  it("a check with no reported finish time cannot be placed before the merge", async () => {
+    const { run } = forgeRun([
+      REMOTE,
+      LOG,
+      RUN_LIST,
+      PR_MERGED,
+      [/check-runs/, { code: 0, stdout: "test-ts\tsuccess\t\n", stderr: "" }],
+      NO_STATUSES,
+      [/protection\/required_status_checks/, { code: 0, stdout: "test-ts\n", stderr: "" }],
+    ]);
+    const m = await collectEvidence(base(run));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("check_time_unknown:test-ts");
   });
 });
