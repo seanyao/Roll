@@ -103,6 +103,11 @@ function seedRace(p: string): void {
     { type: "cycle:start", cycleId: OTHER, storyId: "US-OTHER-9", ts: TS },
     { type: "delivery:published", cycleId: OTHER, storyId: "US-OTHER-9", branch: `loop/${OTHER}`, prNumber: 53, prUrl: "u", ts: TS + 1 },
   ]);
+  // US-CYCLE-009 (codex r2): the winner is a GENUINE git-plane merge — PR #51's
+  // squash commit is on main — so the write-back is confirmed on the git plane
+  // (siblings 52/53 stay open, so they are never confirmed). Without this the
+  // gh-state-only merge would (correctly) defer and cancel no siblings.
+  withoutGitEnv(() => execSync("git commit -q --allow-empty -m 'squash: US-RACE-001 winner (#51)'", { cwd: p }));
 }
 
 describe("US-DELIV-005 — first merge atomically cancels siblings", () => {

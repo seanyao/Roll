@@ -22,15 +22,14 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveLang, parseEventLine } from "@roll/spec";
-import type { DeliveryLease, RollEvent, DeliveryState } from "@roll/spec";
+import { resolveLang, parseEventLine, classifyStatus } from "@roll/spec";
+import type { DeliveryLease, RollEvent, DeliveryState, StoryStatus } from "@roll/spec";
 import {
   EventBus,
+  parseBacklog,
   reconcileDelivery,
   projectDeliveryState,
   leaseStateFor,
-  siblingCancelEvents,
-  shouldAppendDeliveredCredit,
   shouldAttemptPrMerge,
   classifyEvidenceRepair,
   resolveEvaluatorApproval,
@@ -62,7 +61,7 @@ import {
 // the SAME facts (one truth engine, no parallel probes).
 import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRepoSlug } from "../lib/delivery-facts.js";
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
-import { finalizeDeliveredWriteBack } from "./loop-reconcile-merge.js";
+import { settleDeliveredCycle, gitPlaneVerifier, hasMergeConfirmedEvent } from "./loop-reconcile-merge.js";
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -206,6 +205,34 @@ interface CycleSnapshot {
 }
 
 /**
+ * US-CYCLE-009 (codex r3/final, migration recovery): map each story id to the
+ * PARSED canonical status of its backlog row ({@link classifyStatus}). A row that
+ * does not classify (unknown / malformed status cell) maps to `null`; a story
+ * with no row is simply absent from the map. Returns `null` for the WHOLE map
+ * when the backlog cannot be read — the caller then DISABLES recovery that pass
+ * (fail-closed: a transient read blip can never re-process delivery history).
+ */
+function readStoryStatuses(cwd: string): Map<string, StoryStatus | null> | null {
+  try {
+    const backlog = readFileSync(join(cwd, ".roll", "backlog.md"), "utf8");
+    const statuses = new Map<string, StoryStatus | null>();
+    for (const item of parseBacklog(backlog)) {
+      statuses.set(item.id, classifyStatus(item.status));
+    }
+    return statuses;
+  } catch {
+    return null;
+  }
+}
+
+/** Recovery is scoped to genuine IN-FLIGHT rows — present, parseable, non-Done
+ *  (and non-Cut). A missing row, an unparseable/unknown status, Done, or Cut all
+ *  DISABLE recovery for the cycle (fail-closed: never re-process history). */
+function isInFlightStatus(status: StoryStatus | null | undefined): boolean {
+  return status === "todo" || status === "in_progress" || status === "hold";
+}
+
+/**
  * Read events.ndjson and extract cycle delivery snapshots.
  * Returns published cycles that are awaiting_merge (or ci_failed). A cycle
  * without a delivery:published event has no PR or branch claim to reconcile;
@@ -251,10 +278,15 @@ function readAwaitingCycles(cwd: string, includeDelivered = false): CycleSnapsho
     }
   }
 
+  // US-CYCLE-009 (codex r3): Done story ids — for the migration recovery scope
+  // (null ⇒ backlog unreadable ⇒ recovery disabled this pass, fail-closed).
+  const storyStatuses = readStoryStatuses(cwd);
+
   // Project each cycle and filter to awaiting_merge.
   const snapshots: CycleSnapshot[] = [];
   for (const [cycleId, events] of cycleEvents) {
     const state = projectDeliveryState(events, cycleId);
+    const meta = cycleMeta.get(cycleId) ?? { storyId: "", branch: `loop/${cycleId}` };
     // Only a published PR cycle has strong delivery evidence to reconcile.
     // `ci_failed` retains its published metadata and is eligible for recovery.
     // The periodic tick skips delivered rows after writing them back; the
@@ -262,10 +294,40 @@ function readAwaitingCycles(cwd: string, includeDelivered = false): CycleSnapsho
     // repair an interrupted backlog status flip.
     const deliveredTerminal =
       state === "delivered" || state === "delivered_external" || state === "delivered_local";
-    if (state !== "awaiting_merge" && state !== "ci_failed" && !(includeDelivered && deliveredTerminal)) {
+    // ── Migration recovery (codex r3/final) ───────────────────────────────────
+    // The r1 version (live on main ~3 days) emitted delivery:reconciled for
+    // gh-merged-but-not-git-plane-confirmed cards WITHOUT the git-plane gate, so
+    // they project `delivered` and this tick filter would exclude them → stuck
+    // delivered-but-unflipped. RE-INCLUDE such a card IFF ALL of:
+    //   (a) it is a REMOTE delivery (delivered / delivered_external) — a local
+    //       landing has no PR/(#N) to git-plane-confirm;
+    //   (b) the backlog was READABLE (else recovery disabled — fail-closed);
+    //   (c) it carries NO delivery:merge_confirmed (the git-plane terminal marker
+    //       a properly settled cycle always has → those stay excluded);
+    //   (d) its story's backlog row EXISTS and parses to a genuine IN-FLIGHT
+    //       status (📋 Todo / 🔨 In Progress / 🚫 Hold). A MISSING row, an
+    //       unparseable/unknown status, ✅ Done, or 🗑️ Cut all EXCLUDE it —
+    //       fail-closed, so an archived/deleted/corrupted historical row can
+    //       never be re-processed.
+    // This admits ONLY the r1-window leftovers; no delivery history is
+    // re-processed. On re-inclusion the cycle flows through settleDeliveredCycle:
+    // its (#N) is on main by now → it emits the missing merge_confirmed + flips +
+    // settles terminal (idempotent: once Done + merge_confirmed it is excluded).
+    const deliveredRemote = state === "delivered" || state === "delivered_external";
+    const stuckR1Leftover =
+      deliveredRemote &&
+      storyStatuses !== null &&
+      !hasMergeConfirmedEvent(events, cycleId) &&
+      meta.storyId !== "" &&
+      isInFlightStatus(storyStatuses.get(meta.storyId));
+    if (
+      state !== "awaiting_merge" &&
+      state !== "ci_failed" &&
+      !(includeDelivered && deliveredTerminal) &&
+      !stuckR1Leftover
+    ) {
       continue;
     }
-    const meta = cycleMeta.get(cycleId) ?? { storyId: "", branch: `loop/${cycleId}` };
     if (meta.prNumber === undefined || meta.awaitingSinceMs === undefined) continue;
     snapshots.push({
       cycleId,
@@ -638,70 +700,40 @@ export async function runReconcileTick(
     };
     const result = reconcileDelivery(reconcileCycle, facts);
 
-    // Count verdicts (delivered credit may be skipped when already credited).
-    if (result.kind === "delivered") {
-      const freshEvents = readAllEvents(eventsPath);
-      if (shouldAppendDeliveredCredit(freshEvents, cyc.cycleId)) delivered++;
-      else waiting++;
-    } else if (result.kind === "merge_now") mergeNow++;
+    // Count non-delivered verdicts here; a delivered verdict is counted AFTER
+    // the git-plane-gated settle below (a deferred delivered counts as waiting).
+    if (result.kind === "merge_now") mergeNow++;
     else if (result.kind === "ci_failed") ciFailed++;
     else if (result.kind === "degraded") degraded++;
     else if (result.kind === "terminal") terminal++;
-    else waiting++;
+    else if (result.kind !== "delivered") waiting++;
 
     if (result.kind === "delivered") {
-      const freshEvents = readAllEvents(eventsPath);
-      if (shouldAppendDeliveredCredit(freshEvents, cyc.cycleId)) {
-        bus.appendEvent(eventsPath, {
-          type: "delivery:reconciled",
-          cycleId: cyc.cycleId,
-          storyId: cyc.storyId,
-          state: result.via === "runner" ? "delivered" : "delivered_external",
-          mergedBy: result.via,
-          mergeCommit: result.mergeCommit ?? "unknown",
-          signal: result.signal,
-          ts: now,
-        });
-
-        // US-DELIV-005: sibling cancel for same-card fan-out.
-        const siblingLeases: DeliveryLease[] = [];
-        for (const other of cycles) {
-          if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
-          const state = leaseStateFor(other.deliveryState, false);
-          if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
-        }
-        for (const ev of siblingCancelEvents(
-          cyc.storyId,
-          {
-            cycleId: cyc.cycleId,
-            mergeCommit: result.mergeCommit ?? "unknown",
-            signal: result.signal,
-            mergedBy: result.via,
-          },
-          siblingLeases,
-          now,
-        )) {
-          bus.appendEvent(eventsPath, ev);
-        }
+      // US-CYCLE-009 (codex r2): route ALL terminal signals — delivery:reconciled,
+      // sibling-cancel, backlog flip, merge_confirmed — through ONE git-plane gate.
+      // A gh-state-only delivered that the git plane cannot confirm DEFERS (stays
+      // non-terminal, re-included next tick); only a git-plane-confirmed merge
+      // (ancestor / patch-id / (#N) on main) terminalizes + flips.
+      const siblingLeases: DeliveryLease[] = [];
+      for (const other of cycles) {
+        if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
+        const state = leaseStateFor(other.deliveryState, false);
+        if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
       }
-      // US-CYCLE-009: bounded-retry backlog flip + git-plane merge_confirmed
-      // record (replaces the former single-try flip). Idempotent — a re-run does
-      // not double-flip or double-record.
-      await finalizeDeliveredWriteBack({
-        cwd,
-        eventsPath,
-        now,
-        events: readAllEvents(eventsPath),
-        appendEvent: (p, ev) => bus.appendEvent(p, ev),
-        alert: (message) => bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
-        cycleId: cyc.cycleId,
-        storyId: cyc.storyId,
-        branch: cyc.branch,
-        prNumber: cyc.prNumber,
-        result,
-        dossierFacts: gitFacts,
-        ...(result.kind === "delivered" && result.mergeCommit !== undefined ? { mergeCommit: result.mergeCommit } : {}),
-      });
+      const settle = await settleDeliveredCycle(
+        {
+          cwd,
+          eventsPath,
+          now,
+          events: readAllEvents(eventsPath),
+          appendEvent: (p, ev) => bus.appendEvent(p, ev),
+          alert: (message) => bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
+          verify: gitPlaneVerifier({ cwd, branch: cyc.branch, prNumber: cyc.prNumber, storyId: cyc.storyId, dossierFacts: gitFacts }),
+        },
+        { cycleId: cyc.cycleId, storyId: cyc.storyId, branch: cyc.branch, prNumber: cyc.prNumber, result, siblingLeases },
+      );
+      if (settle.credited) delivered++;
+      else waiting++;
     }
     if (result.kind === "terminal") {
       bus.appendEvent(eventsPath, {
@@ -914,67 +946,31 @@ export async function loopReconcileCommand(
       item.signal = result.signal;
       item.mergeCommit = result.mergeCommit;
 
-      // Emit delivery:reconciled event (unless dry run).
+      // US-CYCLE-009 (codex r2): ALL terminal signals (delivery:reconciled,
+      // sibling-cancel, backlog flip, merge_confirmed, branch delete) go through
+      // the ONE git-plane-gated decision point. --dry-run mutates NOTHING:
+      // report only. A gh-state-only delivered that the git plane cannot confirm
+      // DEFERS (no delivery:reconciled → stays awaiting_merge, re-included next
+      // tick); a git-plane-confirmed merge terminalizes + flips.
       if (!dryRun) {
-        const freshEvents = readAllEvents(eventsPath);
-        if (shouldAppendDeliveredCredit(freshEvents, cyc.cycleId)) {
-          deps.bus.appendEvent(eventsPath, {
-            type: "delivery:reconciled",
-            cycleId: cyc.cycleId,
-            storyId: cyc.storyId,
-            state: result.via === "runner" ? "delivered" : "delivered_external",
-            mergedBy: result.via,
-            mergeCommit: result.mergeCommit ?? "unknown",
-            signal: result.signal,
-            ts: now,
-          });
-
-          // US-DELIV-005 (one-card-one-lease): the FIRST merge atomically
-          // supersedes every remaining sibling cycle on this card — race
-          // resolution when --race was opted in, and cleanup of any legacy
-          // same-card fan-out. The winner's event above and the supersede
-          // events below land in ONE reconcile pass (the atomic cancel);
-          // superseded siblings are terminal, so a re-run cancels nothing.
-          const siblingLeases: DeliveryLease[] = [];
-          for (const other of cycles) {
-            if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
-            const state = leaseStateFor(other.deliveryState, false);
-            if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
-          }
-          for (const ev of siblingCancelEvents(
-            cyc.storyId,
-            {
-              cycleId: cyc.cycleId,
-              mergeCommit: result.mergeCommit ?? "unknown",
-              signal: result.signal,
-              mergedBy: result.via,
-            },
-            siblingLeases,
-            now,
-          )) {
-            deps.bus.appendEvent(eventsPath, ev);
-          }
+        const siblingLeases: DeliveryLease[] = [];
+        for (const other of cycles) {
+          if (other.cycleId === cyc.cycleId || other.storyId === "" || other.storyId !== cyc.storyId) continue;
+          const state = leaseStateFor(other.deliveryState, false);
+          if (state !== undefined) siblingLeases.push({ storyId: other.storyId, cycleId: other.cycleId, state });
         }
-      }
-      // US-CYCLE-009: bounded-retry backlog flip + git-plane merge_confirmed
-      // record — GATED on git-plane merge truth. --dry-run mutates NOTHING
-      // (no backlog flip, no branch delete, no event writes): report only.
-      if (!dryRun) {
-        await finalizeDeliveredWriteBack({
-          cwd,
-          eventsPath,
-          now,
-          events: readAllEvents(eventsPath),
-          appendEvent: (p, ev) => deps.bus.appendEvent(p, ev),
-          alert: (message) => deps.bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
-          cycleId: cyc.cycleId,
-          storyId: cyc.storyId,
-          branch: cyc.branch,
-          prNumber: cyc.prNumber,
-          result,
-          dossierFacts: gitFacts,
-          ...(result.kind === "delivered" && result.mergeCommit !== undefined ? { mergeCommit: result.mergeCommit } : {}),
-        });
+        await settleDeliveredCycle(
+          {
+            cwd,
+            eventsPath,
+            now,
+            events: readAllEvents(eventsPath),
+            appendEvent: (p, ev) => deps.bus.appendEvent(p, ev),
+            alert: (message) => deps.bus.appendEvent(eventsPath, { type: "loop:error", loop: "main", error: message, ts: now }),
+            verify: gitPlaneVerifier({ cwd, branch: cyc.branch, prNumber: cyc.prNumber, storyId: cyc.storyId, dossierFacts: gitFacts }),
+          },
+          { cycleId: cyc.cycleId, storyId: cyc.storyId, branch: cyc.branch, prNumber: cyc.prNumber, result, siblingLeases },
+        );
       }
     }
     if (result.kind === "terminal" && !dryRun) {
