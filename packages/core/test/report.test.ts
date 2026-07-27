@@ -816,3 +816,100 @@ describe("US-EVID-031 — capture surfaces render every image with provenance (A
     expect(existsSync(fixturePath)).toBe(true);
   });
 });
+
+// US-EVID-033 — delivery-time facts block: the card's own PR/sha, honest states,
+// post-hoc labeling, and deletion-not-placeholder when the fact is absent.
+describe("delivery-time facts block (US-EVID-033)", () => {
+  const verified = {
+    state: "verified" as const,
+    prNumber: 1490,
+    headSha: "aaaabbbbccccdddd",
+    mergeCommit: "32195061fb3e",
+    mergedAt: "2026-07-20T10:00:00.000Z",
+    collectedAt: "2026-07-27T09:00:00.000Z",
+    postHoc: "yes" as const,
+    checks: [{ name: "test-ts", conclusion: "success" }],
+  };
+
+  it("renders the card's own PR, head sha, merge commit and each check", () => {
+    const html = renderReport({ ...BASE, items: [item({ evidence: [{ kind: "commit", label: "tcr: x" }] })], deliveryCi: verified });
+    expect(html).toContain(bi("Delivery-time facts", "交付时事实"));
+    expect(html).toContain("#1490");
+    expect(html).toContain("aaaabbbbccccdddd");
+    expect(html).toContain("32195061fb3e");
+    expect(html).toContain("test-ts");
+    expect(html).toContain("success");
+  });
+
+  it("labels a post-hoc collection as such, and does not when it is cycle-time", () => {
+    const post = renderReport({ ...BASE, items: [item({})], deliveryCi: verified });
+    expect(post).toContain('data-posthoc="yes"');
+    expect(post).toContain("事后重建");
+    const inCycle = renderReport({ ...BASE, items: [item({})], deliveryCi: { ...verified, postHoc: "no" } });
+    expect(inCycle).toContain('data-posthoc="no"');
+    expect(inCycle).not.toContain("事后重建");
+    // Unknown timing SAYS so — it never reads as cycle-time evidence (codex r1).
+    const unknownTiming = renderReport({ ...BASE, items: [item({})], deliveryCi: { ...verified, postHoc: "unknown" } });
+    expect(unknownTiming).toContain('data-posthoc="unknown"');
+    expect(unknownTiming).toContain("合并时间未知");
+  });
+
+  it("states red / unknown with the reason instead of softening it", () => {
+    const red = renderReport({
+      ...BASE,
+      items: [item({})],
+      deliveryCi: { ...verified, state: "red", reason: "checks_failed:test-ts", checks: [{ name: "test-ts", conclusion: "failure" }] },
+    });
+    expect(red).toContain("checks_failed:test-ts");
+    expect(red).toContain('data-state="red"');
+    const unknown = renderReport({
+      ...BASE,
+      items: [item({})],
+      deliveryCi: { state: "unknown", reason: "no_delivery_record", collectedAt: "2026-07-27T09:00:00.000Z", postHoc: "unknown", checks: [] },
+    });
+    expect(unknown).toContain("no_delivery_record");
+    expect(unknown).toContain('data-state="unknown"');
+  });
+
+  it("is trimmed entirely when no delivery fact exists (no placeholder)", () => {
+    const html = renderReport({ ...BASE, items: [item({})] });
+    expect(html).not.toContain(bi("Delivery-time facts", "交付时事实"));
+  });
+});
+
+// Codex r4 — the requirement set, its source, and the current-configuration caveat
+// must be visible to a human reading the report, not only in the JSON manifest.
+describe("delivery-time facts — requirement provenance is rendered (US-EVID-033 r4)", () => {
+  const fact = {
+    state: "verified" as const,
+    prNumber: 1495,
+    headSha: "e4978feb585a1124025a02aa5056a937483a81e5",
+    mergeCommit: "963a7404",
+    mergedAt: "2026-07-24T07:43:21.000Z",
+    collectedAt: "2026-07-27T09:00:00.000Z",
+    postHoc: "yes" as const,
+    checks: [{ name: "test-ts", conclusion: "success" }],
+    requiredChecksSource: "protection+ruleset" as const,
+    requiredChecks: [{ context: "test-ts", appId: 15368 }],
+  };
+
+  it("renders each required context (with its App pin) and the declaring surface", () => {
+    const html = renderReport({ ...BASE, items: [item({})], deliveryCi: fact });
+    expect(html).toContain("test-ts@app15368");
+    expect(html).toContain("protection+ruleset");
+  });
+
+  it("states the current-configuration caveat", () => {
+    const html = renderReport({ ...BASE, items: [item({})], deliveryCi: fact });
+    expect(html).toContain("GitHub 不提供历史视图");
+  });
+
+  it("says so plainly when nothing is declared", () => {
+    const html = renderReport({
+      ...BASE,
+      items: [item({})],
+      deliveryCi: { ...fact, requiredChecksSource: "none_declared", requiredChecks: [] },
+    });
+    expect(html).toContain(bi("none declared", "未声明"));
+  });
+});

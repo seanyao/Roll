@@ -55,6 +55,8 @@ import {
   type CaptureSurfaceImage,
   type CardContext,
   type DeclaredSurface,
+  type DeliveryCiFact,
+  type DeliveryCiRecord,
   type DocGapWarning,
   type EvidenceHealthFact,
   type EvidenceRef,
@@ -123,6 +125,7 @@ import { currentLang } from "./agent-list.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
 import { collectRollCaptureReadiness, type RollCaptureReadiness } from "../lib/roll-capture-readiness.js";
 import { designContractDeliveredEvidence } from "../runner/attest-gate.js";
+import { resolveCardDeliveryRecord } from "../lib/delivery-record.js";
 import { readReviewScoreTrend, readStoryReviewScores } from "../lib/review-score.js";
 import { collectToolEvidenceFromEventsPath, formatToolCostSummary } from "../lib/tool-display.js";
 import { attestAuditCommand } from "./attest-audit.js";
@@ -1676,6 +1679,14 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
     captures: captureFacts,
     captureCommand: commandFact,
     ...(captureReceiptFacts.length > 0 ? { captureReceipts: captureReceiptFacts } : {}),
+    // US-EVID-033: bind THIS card's delivery-time CI truth (its own PR's checks
+    // at the sha they ran on) instead of leaving `ci` — the repo's most recent
+    // run — as the card's only CI evidence. Cache-only lookup; absent record ⇒
+    // the lane degrades to unknown with a reason.
+    ...((): { deliveryRecord?: DeliveryCiRecord } => {
+      const rec = resolveCardDeliveryRecord(projectPath, storyId);
+      return rec !== undefined ? { deliveryRecord: rec } : {};
+    })(),
   });
   // US-EVID-031 — `evidence_health` is folded into the manifest below, AFTER the
   // per-AC items resolve the delivery verdict, so the write is deferred to keep
@@ -1871,6 +1882,8 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
     generatedAt: now.toISOString(),
     items,
     facts: { tcrCount: manifest.tcr_commits.length, ciConclusion: manifest.ci.conclusion, testPassAge: age },
+    // US-EVID-033 — the card-level delivery-time CI fact leads the closing section.
+    ...(manifest.delivery_ci !== undefined ? { deliveryCi: manifest.delivery_ci } : {}),
     ...(context !== undefined ? { context } : {}),
     ...(beforeAfter.length > 0 ? { beforeAfter } : {}),
     ...(afterOnly.length > 0 ? { afterOnly: afterOnly.map((a) => a.shot) } : {}),
