@@ -130,8 +130,9 @@ export function workspaceSkillHandoffCommand(args: readonly string[]): number {
       stopped: false,
       skill: parsed.skill,
       operation: parsed.operation,
-      promptContext: prepared.skillBody.trimEnd(),
+      promptContext: environmentContext,
       environmentContext,
+      promptBlock: prepared.skillBody.trimEnd(),
       context: loaded.context,
     }, parsed.json, prepared.skillBody.trimEnd());
   }

@@ -228,10 +228,13 @@ function repositoryExecution(
   for (const target of issue.manifest.repositories) {
     const pinned = boundFacts.get(target.alias);
     const expectedWorktree = join(issue.issueRoot, target.alias);
+    const workBranch = target.access === "write" ? (target.workBranch ?? pinned?.workBranch ?? undefined) : undefined;
     if (
       pinned === undefined || pinned.workspaceId !== issue.manifest.workspaceId ||
       pinned.storyId !== issue.manifest.storyId || pinned.repoId !== target.repoId ||
-      pinned.access !== target.access || pinned.path !== expectedWorktree
+      pinned.access !== target.access || pinned.path !== expectedWorktree ||
+      (target.access === "write" && (workBranch === undefined || pinned.workBranch !== workBranch)) ||
+      (target.access === "read" && pinned.workBranch !== null)
     ) {
       fail("repository_context_mismatch", `Repository facts do not match Issue target ${target.alias}`);
     }
@@ -242,6 +245,7 @@ function repositoryExecution(
       access: target.access,
       requiredDelivery: target.requiredDelivery,
       ...(target.access === "write" ? { noChangePolicy: target.noChangePolicy } : {}),
+      ...(workBranch === undefined ? {} : { workBranch }),
       ...(target.dependsOnRepo === undefined ? {} : { dependsOnRepo: target.dependsOnRepo }),
       worktreePath: expectedWorktree,
       baseSha: pinned.baseSha,
@@ -307,6 +311,16 @@ export function loadWorkspaceExecutionContext(
             workspaceId: facts.candidate.workspaceId,
             issueRoot: issue.issueRoot,
             repositories: repositories ?? {},
+            ...(issue.manifest.integrationAcceptance === undefined ? {} : {
+              integrationAcceptance: {
+                command: issue.manifest.integrationAcceptance.command,
+                cwdRepoId: (issue.manifest.integrationAcceptance.cwd === undefined
+                  ? issue.manifest.repositories.filter((target) => target.access === "write").length === 1
+                    ? issue.manifest.repositories.find((target) => target.access === "write")
+                    : undefined
+                  : issue.manifest.repositories.find((target) => target.alias === issue.manifest.integrationAcceptance?.cwd))?.repoId ?? "",
+              },
+            }),
           },
         },
       }),

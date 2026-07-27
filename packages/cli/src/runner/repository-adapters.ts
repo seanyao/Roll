@@ -98,7 +98,7 @@ interface RepositoryToolRuntime {
   headSha(repository: RepositoryExecutionContext): Promise<string>;
   push(repository: RepositoryExecutionContext, branch: string): Promise<{ code: number }>;
   runRepository(repository: RepositoryExecutionContext, command: readonly string[], env: Readonly<Record<string, string>>): Promise<{ exitCode: number; stdout: string; stderr: string }>;
-  runIntegration(execution: CycleRepositoryExecutionContext, command: readonly string[], env: Readonly<Record<string, string>>): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  runIntegration(execution: CycleRepositoryExecutionContext, cwdRepoId: string, command: readonly string[], env: Readonly<Record<string, string>>): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 type GitQueryOperation = "commits_ahead" | "tcr_count" | "recent_commits" | "head_sha";
@@ -254,12 +254,12 @@ function createRepositoryToolRuntime(ctx: CycleContext): RepositoryToolRuntime {
       return { code: result.output.code };
     },
     runRepository,
-    async runIntegration(boundExecution, command, env) {
-      const writable = Object.values(boundExecution.repositories).filter((repository) => repository.access === "write");
-      if (writable.length !== 1 || writable[0] === undefined) {
-        throw new Error("missing_execution_context: integration verification requires a unique writable repository");
+    async runIntegration(boundExecution, cwdRepoId, command, env) {
+      const repository = boundExecution.repositories[cwdRepoId];
+      if (repository === undefined || repository.access !== "write") {
+        throw new Error("missing_execution_context: integration verification requires its declared writable cwd repository");
       }
-      return runRepository(writable[0], command, env);
+      return runRepository(repository, command, env);
     },
   };
 }
@@ -288,7 +288,13 @@ export function defaultRepositoryAdapters(ctx?: CycleContext): RepositoryPortAda
     },
     verification: {
       runRepository: tools?.runRepository ?? ((repository, command, env) => runRepositoryCommand(repository.worktreePath, command, env)),
-      runIntegration: tools?.runIntegration ?? ((execution, command, env) => runRepositoryCommand(execution.issueRoot, command, env)),
+      runIntegration: tools?.runIntegration ?? ((execution, cwdRepoId, command, env) => {
+        const repository = execution.repositories[cwdRepoId];
+        if (repository === undefined || repository.access !== "write") {
+          throw new Error("missing_execution_context: integration verification requires its declared writable cwd repository");
+        }
+        return runRepositoryCommand(repository.worktreePath, command, env);
+      }),
     },
     provider: {
       async repoSlug(repository) { return ghRepoSlug(await remoteUrl(repository.worktreePath)); },

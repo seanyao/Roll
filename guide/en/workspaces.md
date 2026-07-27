@@ -205,6 +205,20 @@ explicit cwd that matches a declared Issue worktree. Missing or ambiguous
 repository context returns `missing_execution_context` rather than using the
 process cwd.
 
+Cross-repository integration acceptance uses an argv array and explicitly names
+the writable repository alias that owns the command cwd:
+
+```yaml
+integration_acceptance:
+  command: [pnpm, test:integration]
+  cwd: roll
+```
+
+Issue init freezes each new write target's actual `workBranch` into
+`manifest.json`; publish planning consumes that value and never re-derives it
+from a Workspace pattern. A legacy v1 manifest without the field may only fall
+back to its already-frozen Issue repository-bound fact.
+
 ## One Story, independent repository facts
 
 Story and Issue are the unified delivery unit. Roll does not introduce a
@@ -237,7 +251,23 @@ alias over the same fold, not a second parser.
 
 ## Local-only campaign gate
 
-For a campaign that must finish local acceptance before any external mutation,
+An ordinary Requirement still terminates at each repository binding's
+integration branch, normally `main`. Only when the owner explicitly makes a
+campaign branch terminal and forbids a main merge, capture that authority with:
+
+```bash
+roll workspace requirement add ... \
+  --campaign-branch idea-074-workspace \
+  --main-merge forbidden
+```
+
+Roll persists `deliveryTarget: { terminal: campaign_branch, branch:
+idea-074-workspace, mainMerge: forbidden }` and copies the same immutable target
+into each initialized Issue. Conflicting linked Requirement targets fail loud.
+This declaration does not change the Workspace or other Stories' default main
+semantics.
+
+For a campaign that must also finish local acceptance before any external mutation,
 configure the dedicated integration branch with `publish_mode: local`. This
 mode runs the same local evidence gate and lands commits on the configured local
 integration branch; it does not push branches or open a PR. Keep the gate in

@@ -171,6 +171,63 @@ describe("inspectIssueInit", () => {
     expect(report.targets["sot3"]?.workBranch).toBeNull();
   });
 
+  it("keeps a legacy Issue compatible when workBranch was event-frozen and its Requirement later gains a campaign target", async () => {
+    const f = fixture();
+    const requirement: RequirementSourceManifest = {
+      schema: "roll.requirement-source/v1",
+      requirementId: "req-legacy",
+      provider: "user_input",
+      ref: "IDEA-074",
+      revision: "owner-1",
+      capturedAt: "2026-07-27T00:00:00.000Z",
+      previousRevisions: [],
+      requirement: { bytes: 1, sha256: "a".repeat(64) },
+      context: [],
+      stories: [f.contract.storyId],
+      attest: {
+        schema: "roll.requirement-attest-projection/v1",
+        mode: "generated_aggregate",
+        evidenceAuthority: "issue",
+      },
+    };
+    await applyIssueInit({
+      workspaceId: "ws-demo",
+      rollHome: f.rollHome,
+      workspaceRoot: f.workspaceRoot,
+      issueRoot: f.issueRoot,
+      contract: f.contract,
+      bindings: f.bindings,
+      requirementManifests: [requirement],
+    });
+
+    const manifestPath = join(f.issueRoot, "manifest.json");
+    const legacy = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      repositories: Array<Record<string, unknown>>;
+    };
+    for (const target of legacy.repositories) delete target["workBranch"];
+    writeFileSync(manifestPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+    const report = await inspectIssueInit({
+      workspaceId: "ws-demo",
+      rollHome: f.rollHome,
+      workspaceRoot: f.workspaceRoot,
+      issueRoot: f.issueRoot,
+      contract: f.contract,
+      bindings: f.bindings,
+      requirementManifests: [{
+        ...requirement,
+        deliveryTarget: {
+          terminal: "campaign_branch",
+          branch: "idea-074-workspace",
+          mainMerge: "forbidden",
+        },
+      }],
+    });
+
+    expect(report.manifest.state).toBe("compatible");
+    expect(JSON.parse(readFileSync(manifestPath, "utf8"))).not.toHaveProperty("deliveryTarget");
+  });
+
   it("reports conflict (never silently omits) a target whose alias has no matching Workspace repository binding", async () => {
     const f = fixture();
     // The Story Contract declares "sot4", but no binding for it exists —
@@ -421,7 +478,11 @@ describe("applyIssueInit", () => {
     // The immutable manifest never carries runtime SHA/path/branch.
     expect(JSON.stringify(manifest)).not.toContain("baseSha");
     expect(JSON.stringify(manifest)).not.toContain("worktreePath");
-    expect(JSON.stringify(manifest)).not.toContain("workBranch");
+    expect(manifest.repositories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ alias: "sot1", workBranch: "roll/ws-demo/US-XX1/sot1" }),
+      expect.objectContaining({ alias: "sot2", workBranch: "roll/ws-demo/US-XX1/sot2" }),
+    ]));
+    expect(manifest.repositories.find((target) => target.alias === "sot3")).not.toHaveProperty("workBranch");
 
     const events = readFileSync(join(f.issueRoot, "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(events).toHaveLength(3);

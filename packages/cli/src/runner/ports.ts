@@ -165,6 +165,7 @@ export interface RepositoryPortAdapters {
     ): Promise<RepositoryCommandResult>;
     runIntegration(
       execution: CycleRepositoryExecutionContext,
+      cwdRepoId: string,
       command: readonly string[],
       env: Readonly<Record<string, string>>,
     ): Promise<RepositoryCommandResult>;
@@ -202,6 +203,7 @@ export interface BoundRepositoryPorts {
       env?: Readonly<Record<string, string>>,
     ): Promise<RepositoryCommandResult>;
     runIntegration(
+      cwdRepoId: string,
       command: readonly string[],
       env?: Readonly<Record<string, string>>,
     ): Promise<RepositoryCommandResult>;

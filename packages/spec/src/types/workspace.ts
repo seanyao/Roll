@@ -723,6 +723,12 @@ export interface RequirementAttestProjectionContract {
   readonly evidenceAuthority: "issue";
 }
 
+export interface CampaignDeliveryTarget {
+  readonly terminal: "campaign_branch";
+  readonly branch: string;
+  readonly mainMerge: "forbidden";
+}
+
 export interface RequirementSourceManifest {
   readonly schema: typeof REQUIREMENT_SOURCE_V1;
   readonly requirementId: string;
@@ -735,6 +741,7 @@ export interface RequirementSourceManifest {
   readonly context: readonly RequirementContextDescriptor[];
   readonly stories: readonly string[];
   readonly attest: RequirementAttestProjectionContract;
+  readonly deliveryTarget?: CampaignDeliveryTarget;
 }
 
 export type RequirementArchiveFindingCode =
@@ -954,6 +961,8 @@ export interface WriteIssueRepositoryTarget extends IssueRepositoryTargetBase {
   readonly access: "write";
   readonly requiredDelivery: boolean;
   readonly noChangePolicy: NoChangePolicy;
+  /** Immutable governed branch resolved when the Issue is initialized. */
+  readonly workBranch?: string;
 }
 
 export type IssueRepositoryTarget = ReadIssueRepositoryTarget | WriteIssueRepositoryTarget;
@@ -973,6 +982,7 @@ export interface RepositoryExecutionContext {
   readonly access: RepositoryAccess;
   readonly requiredDelivery: boolean;
   readonly noChangePolicy?: NoChangePolicy;
+  readonly workBranch?: string;
   readonly dependsOnRepo?: string;
   readonly worktreePath: string;
   readonly baseSha: string;
@@ -988,6 +998,10 @@ export type RepositoryExecutionMap = Readonly<Record<string, RepositoryExecution
 export interface CycleRepositoryExecutionContext extends WorkspaceIdentity {
   readonly issueRoot: string;
   readonly repositories: RepositoryExecutionMap;
+  readonly integrationAcceptance?: {
+    readonly command: readonly string[];
+    readonly cwdRepoId: string;
+  };
 }
 
 export interface IssueManifest {
@@ -998,7 +1012,9 @@ export interface IssueManifest {
   readonly repositories: readonly IssueRepositoryTarget[];
   readonly integrationAcceptance?: {
     readonly command: readonly string[];
+    readonly cwd?: string;
   };
+  readonly deliveryTarget?: CampaignDeliveryTarget;
 }
 
 export interface IssueManifestExpectations {
@@ -1163,6 +1179,7 @@ const issueRepositoryTargetSchema: JsonSchema = {
         ...issueTargetCommonProperties,
         access: { const: "write" },
         noChangePolicy: { type: "string", enum: ["changes_required", "no_change_allowed"] },
+        workBranch: stringSchema,
       },
       ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy"],
     ),
@@ -1177,8 +1194,12 @@ export const issueManifestV1Schema: JsonSchema = objectSchema(
     requirements: { type: "array", items: requirementSourceSchema },
     repositories: { type: "array", items: issueRepositoryTargetSchema, minItems: 1 },
     integrationAcceptance: objectSchema(
-      { command: { type: "array", items: stringSchema, minItems: 1 } },
+      { command: { type: "array", items: stringSchema, minItems: 1 }, cwd: stringSchema },
       ["command"],
+    ),
+    deliveryTarget: objectSchema(
+      { terminal: { const: "campaign_branch" }, branch: stringSchema, mainMerge: { const: "forbidden" } },
+      ["terminal", "branch", "mainMerge"],
     ),
   },
     ["schema", "workspaceId", "storyId", "requirements", "repositories"],
@@ -1217,6 +1238,10 @@ export const requirementSourceV1Schema: JsonSchema = objectSchema(
         evidenceAuthority: { const: "issue" },
       },
       ["schema", "mode", "evidenceAuthority"],
+    ),
+    deliveryTarget: objectSchema(
+      { terminal: { const: "campaign_branch" }, branch: stringSchema, mainMerge: { const: "forbidden" } },
+      ["terminal", "branch", "mainMerge"],
     ),
   },
   [
@@ -1584,6 +1609,33 @@ function parseRequirementAttest(
     : undefined;
 }
 
+function parseCampaignDeliveryTarget(
+  value: unknown,
+  path: string,
+  errors: ContractError[],
+): CampaignDeliveryTarget | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    errors.push({ code: "invalid_type", path, message: "campaign delivery target must be an object" });
+    return undefined;
+  }
+  errors.push(...unknownFieldErrors(value, ["terminal", "branch", "mainMerge"], path));
+  const branch = requiredString(value, "branch", `${path}.`, errors);
+  if (value["terminal"] !== "campaign_branch") {
+    errors.push({ code: "invalid_value", path: `${path}.terminal`, message: "campaign delivery terminal must be campaign_branch" });
+  }
+  if (value["mainMerge"] !== "forbidden") {
+    errors.push({ code: "invalid_value", path: `${path}.mainMerge`, message: "campaign delivery must explicitly forbid main merge" });
+  }
+  if (branch !== undefined && !isSafeGitRef(branch)) {
+    errors.push({ code: "invalid_value", path: `${path}.branch`, message: "campaign branch is not a safe Git ref" });
+  }
+  return branch !== undefined && isSafeGitRef(branch) &&
+      value["terminal"] === "campaign_branch" && value["mainMerge"] === "forbidden"
+    ? { terminal: "campaign_branch", branch, mainMerge: "forbidden" }
+    : undefined;
+}
+
 function safeRequirementReference(value: string): boolean {
   return value === value.trim() && !/[\x00-\x1f\x7f]/u.test(value) && !/:\/\//u.test(value) &&
     !/(?:^|[?&;#\s_-])(?:access|api)?[_-]?(?:token|key)=/iu.test(value) &&
@@ -1608,6 +1660,7 @@ export function parseRequirementSourceManifest(value: unknown): ContractResult<R
     "context",
     "stories",
     "attest",
+    "deliveryTarget",
   ], "");
   if (value["schema"] !== REQUIREMENT_SOURCE_V1) {
     errors.push({ code: "unknown_version", path: "schema", message: `expected ${REQUIREMENT_SOURCE_V1}` });
@@ -1644,6 +1697,7 @@ export function parseRequirementSourceManifest(value: unknown): ContractResult<R
     errors.push({ code: "invalid_value", path: "stories", message: "Story IDs must use safe identifiers" });
   }
   const attest = parseRequirementAttest(value["attest"], errors);
+  const deliveryTarget = parseCampaignDeliveryTarget(value["deliveryTarget"], "deliveryTarget", errors);
   if (
     errors.length > 0 || requirementId === undefined || ref === undefined || revision === undefined ||
     capturedAt === undefined || (provider !== "jira" && provider !== "github_issue" && provider !== "local_file" && provider !== "user_input") ||
@@ -1665,6 +1719,7 @@ export function parseRequirementSourceManifest(value: unknown): ContractResult<R
       context,
       stories,
       attest,
+      ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
     },
   };
 }
@@ -1832,7 +1887,7 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
   }
   errors.push(...unknownFieldErrors(
     value,
-    ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy", "pathScope", "dependsOnRepo"],
+    ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy", "workBranch", "pathScope", "dependsOnRepo"],
     path,
   ));
   const repoId = requiredString(value, "repoId", `${path}.`, errors);
@@ -1844,11 +1899,18 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
   }
 
   const noChangePolicy = value["noChangePolicy"];
+  const workBranch = value["workBranch"];
   if (access === "write" && noChangePolicy !== "changes_required" && noChangePolicy !== "no_change_allowed") {
     errors.push({ code: "invalid_value", path: `${path}.noChangePolicy`, message: "write target requires an explicit no-change policy" });
   }
   if (access === "read" && noChangePolicy !== undefined) {
     errors.push({ code: "invalid_value", path: `${path}.noChangePolicy`, message: "read target must not declare a no-change policy" });
+  }
+  if (access === "read" && workBranch !== undefined) {
+    errors.push({ code: "invalid_value", path: `${path}.workBranch`, message: "read target must not declare a work branch" });
+  }
+  if (access === "write" && workBranch !== undefined && (typeof workBranch !== "string" || !isSafeGitRef(workBranch))) {
+    errors.push({ code: "invalid_value", path: `${path}.workBranch`, message: "work branch must be a safe governed Git ref" });
   }
   if (access === "read" && requiredDelivery === true) {
     errors.push({ code: "invalid_value", path: `${path}.requiredDelivery`, message: "read target cannot require delivery" });
@@ -1884,7 +1946,15 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
     return { repoId, alias, access, requiredDelivery, ...optionalFields };
   }
   if (noChangePolicy !== "changes_required" && noChangePolicy !== "no_change_allowed") return undefined;
-  return { repoId, alias, access, requiredDelivery, noChangePolicy, ...optionalFields };
+  return {
+    repoId,
+    alias,
+    access,
+    requiredDelivery,
+    noChangePolicy,
+    ...(typeof workBranch === "string" ? { workBranch } : {}),
+    ...optionalFields,
+  };
 }
 
 function duplicateTargetErrors(targets: readonly IssueRepositoryTarget[]): ContractError[] {
@@ -1948,7 +2018,7 @@ export function parseIssueManifest(
   if (!isRecord(value)) return fail("invalid_type", "issue", "Issue manifest must be an object");
   const errors = unknownFieldErrors(
     value,
-    ["schema", "workspaceId", "storyId", "requirements", "repositories", "integrationAcceptance"],
+    ["schema", "workspaceId", "storyId", "requirements", "repositories", "integrationAcceptance", "deliveryTarget"],
     "",
   );
   if (value["schema"] !== ISSUE_MANIFEST_V1) {
@@ -1999,17 +2069,28 @@ export function parseIssueManifest(
     if (!isRecord(rawIntegration)) {
       errors.push({ code: "invalid_type", path: "integrationAcceptance", message: "integration acceptance must be an object" });
     } else {
-      errors.push(...unknownFieldErrors(rawIntegration, ["command"], "integrationAcceptance"));
+      errors.push(...unknownFieldErrors(rawIntegration, ["command", "cwd"], "integrationAcceptance"));
       const command = parseStringArray(rawIntegration["command"], "integrationAcceptance.command", errors);
+      const cwd = optionalString(rawIntegration, "cwd", "integrationAcceptance.", errors);
       if (command !== undefined) {
         if (command.length === 0) {
           errors.push({ code: "invalid_value", path: "integrationAcceptance.command", message: "integration command must not be empty" });
-        } else {
-          integrationAcceptance = { command };
+        } else if (cwd === undefined || isSafeAlias(cwd)) {
+          integrationAcceptance = { command, ...(cwd === undefined ? {} : { cwd }) };
         }
+      }
+      if (cwd !== undefined && !isSafeAlias(cwd)) {
+        errors.push({ code: "invalid_value", path: "integrationAcceptance.cwd", message: "integration cwd must name a safe repository alias" });
       }
     }
   }
+  if (integrationAcceptance?.cwd !== undefined) {
+    const cwdTarget = targetsByAlias.get(integrationAcceptance.cwd);
+    if (cwdTarget === undefined || cwdTarget.access !== "write") {
+      errors.push({ code: "invalid_value", path: "integrationAcceptance.cwd", message: "integration cwd must name a writable Issue repository" });
+    }
+  }
+  const deliveryTarget = parseCampaignDeliveryTarget(value["deliveryTarget"], "deliveryTarget", errors);
 
   if (workspaceId !== undefined && !isSafeIdentifier(workspaceId)) {
     errors.push({ code: "invalid_value", path: "workspaceId", message: "Workspace ID contains unsafe characters" });
@@ -2035,6 +2116,7 @@ export function parseIssueManifest(
       requirements,
       repositories: targets,
       ...(integrationAcceptance === undefined ? {} : { integrationAcceptance }),
+      ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
     },
   };
 }

@@ -69,22 +69,6 @@ function resolveRepositoryTestCommand(repository: RepositoryExecutionContext): R
   };
 }
 
-function uniqueIntegrationCommand(repositories: readonly RepositoryExecutionContext[]): {
-  readonly command?: readonly string[];
-  readonly declared: boolean;
-  readonly diagnostic?: string;
-} {
-  const commands = repositories
-    .map((repository) => repository.commands.integration)
-    .filter((command) => command.length > 0);
-  if (commands.length === 0) return { declared: false };
-  const unique = new Map(commands.map((command) => [JSON.stringify(command), command] as const));
-  if (unique.size !== 1) {
-    return { declared: true, diagnostic: "inconsistent_integration_commands" };
-  }
-  return { declared: true, command: [...unique.values()][0] };
-}
-
 function outputHasNoTests(stdout: string, stderr: string): boolean {
   return isNoTestsFoundOutput(`${stdout}\n${stderr}`);
 }
@@ -211,18 +195,22 @@ export async function verifyRepositoryCapture(
     });
   }
 
-  const integrationCommand = uniqueIntegrationCommand(writable);
+  const integrationAcceptance = execution.integrationAcceptance;
   let integration: IntegrationFacts = { ran: false };
   const headsComplete = writable.every((repository) => currentHeads[repository.repoId] !== undefined);
-  if (integrationCommand.command !== undefined && headsComplete) {
+  if (integrationAcceptance !== undefined && headsComplete) {
     const env = { ROLL_INTEGRATION_INPUTS: JSON.stringify(currentHeads) };
     try {
-      const result = await repositories.verification.runIntegration(integrationCommand.command, env);
+      const result = await repositories.verification.runIntegration(
+        integrationAcceptance.cwdRepoId,
+        integrationAcceptance.command,
+        env,
+      );
       integration = { ran: true, exitCode: result.exitCode, inputHeads: currentHeads };
       repositories.events.appendIssue({
         type: "issue:integration_acceptance_recorded",
         status: result.exitCode === 0 ? "pass" : "fail",
-        command: integrationCommand.command,
+        command: integrationAcceptance.command,
         exitCode: result.exitCode,
         inputHeads: currentHeads,
         ts: now(),
@@ -232,26 +220,26 @@ export async function verifyRepositoryCapture(
       repositories.events.appendIssue({
         type: "issue:integration_acceptance_recorded",
         status: "fail",
-        command: integrationCommand.command,
+        command: integrationAcceptance.command,
         exitCode: 127,
         diagnostic: "command_execution_failed",
         inputHeads: currentHeads,
         ts: now(),
       });
     }
-  } else if (integrationCommand.declared || writable.length > 1) {
+  } else if (integrationAcceptance !== undefined || writable.length > 1) {
     repositories.events.appendIssue({
       type: "issue:integration_acceptance_recorded",
       status: "not_run",
       command: [],
       inputHeads: currentHeads,
-      diagnostic: headsComplete ? (integrationCommand.diagnostic ?? "integration_command_missing") : "integration_heads_incomplete",
+      diagnostic: headsComplete ? "integration_command_missing" : "integration_heads_incomplete",
       ts: now(),
     });
   }
 
   const verdict = storyVerification(legFacts, integration, {
-    integrationDeclared: integrationCommand.declared,
+    integrationDeclared: integrationAcceptance !== undefined,
   });
   if (!verdict.ok) return { blocked: true, reason: verdict.code };
 
@@ -262,10 +250,10 @@ export async function verifyRepositoryCapture(
         repoId: leg.repoId,
         alias: leg.alias,
         changed: leg.changed,
+        workBranch: repositories.context(leg.repoId).workBranch ?? "",
         ...(dependency === undefined ? {} : { dependsOnRepo: dependency }),
       };
     }),
-    { workspaceId: execution.workspaceId, storyId },
   );
   if (!plan.ok) return { blocked: true, reason: plan.code };
   for (const entry of plan.entries) {

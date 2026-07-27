@@ -20,7 +20,10 @@ export interface IssueStoryContractTarget {
 export interface IssueStoryContract {
   readonly storyId: string;
   readonly repositories: readonly IssueStoryContractTarget[];
-  readonly integrationCommand?: readonly string[];
+  readonly integrationAcceptance?: {
+    readonly command: readonly string[];
+    readonly cwd: string;
+  };
 }
 
 export interface IssueStoryContractError {
@@ -218,19 +221,32 @@ export function parseIssueStoryContract(
     }
     aliases.add(repository.alias);
   }
-  let integrationCommand: readonly string[] | undefined;
+  let integrationAcceptance: IssueStoryContract["integrationAcceptance"];
   const rawIntegration = raw["integration_acceptance"];
   if (rawIntegration !== undefined) {
     if (!isRecord(rawIntegration)) {
       errors.push({ code: "invalid_type", path: "integration_acceptance", message: "integration acceptance must be an object" });
     } else {
-      const unknown = exactKeys(rawIntegration, ["command"]);
+      const unknown = exactKeys(rawIntegration, ["command", "cwd"]);
       if (unknown.length > 0) {
         errors.push({ code: "unknown_field", path: `integration_acceptance.${unknown[0]}`, message: "unknown integration acceptance field" });
-      } else if (!nonEmptyString(rawIntegration["command"])) {
-        errors.push({ code: "invalid_value", path: "integration_acceptance.command", message: "integration command is required" });
       } else {
-        integrationCommand = [rawIntegration["command"]];
+        const command = rawIntegration["command"];
+        const cwd = rawIntegration["cwd"];
+        if (!Array.isArray(command) || command.length === 0 || !command.every(nonEmptyString)) {
+          errors.push({ code: "invalid_value", path: "integration_acceptance.command", message: "integration command must be a non-empty argv array" });
+        }
+        if (!nonEmptyString(cwd)) {
+          errors.push({ code: "invalid_value", path: "integration_acceptance.cwd", message: "integration cwd repository alias is required" });
+        } else {
+          const target = repositories.find((repository) => repository.alias === cwd);
+          if (target === undefined || target.access !== "write") {
+            errors.push({ code: "invalid_value", path: "integration_acceptance.cwd", message: "integration cwd must name a writable repository target" });
+          }
+        }
+        if (Array.isArray(command) && command.length > 0 && command.every(nonEmptyString) && nonEmptyString(cwd)) {
+          integrationAcceptance = { command, cwd };
+        }
       }
     }
   }
@@ -240,7 +256,7 @@ export function parseIssueStoryContract(
     value: {
       storyId: options.storyId,
       repositories,
-      ...(integrationCommand === undefined ? {} : { integrationCommand }),
+      ...(integrationAcceptance === undefined ? {} : { integrationAcceptance }),
     },
   };
 }
@@ -344,6 +360,13 @@ export function resolveIssueInitPlan(
       });
       continue;
     }
+    const workBranch = declared.access === "write"
+      ? renderBranchPattern(binding.workflow.branchPattern, {
+        workspaceId: input.workspaceId,
+        storyId: input.contract.storyId,
+        repoAlias: declared.alias,
+      })
+      : null;
     repositories.push(
       declared.access === "read"
         ? { repoId: binding.repoId, alias: declared.alias, access: "read", requiredDelivery: false, ...(declared.dependsOnRepo === undefined ? {} : { dependsOnRepo: declared.dependsOnRepo }) }
@@ -353,6 +376,7 @@ export function resolveIssueInitPlan(
           access: "write",
           requiredDelivery: declared.requiredDelivery,
           noChangePolicy: declared.requiredDelivery ? "changes_required" : "no_change_allowed",
+          workBranch: workBranch as string,
           ...(declared.dependsOnRepo === undefined ? {} : { dependsOnRepo: declared.dependsOnRepo }),
         },
     );
@@ -362,13 +386,7 @@ export function resolveIssueInitPlan(
       access: declared.access,
       action,
       worktreePath: join("issues", input.contract.storyId, declared.alias),
-      workBranch: declared.access === "write"
-        ? renderBranchPattern(binding.workflow.branchPattern, {
-          workspaceId: input.workspaceId,
-          storyId: input.contract.storyId,
-          repoAlias: declared.alias,
-        })
-        : null,
+      workBranch,
     });
   }
   if (errors.length > 0) return { ok: false, errors };
@@ -380,19 +398,29 @@ export function resolveIssueInitPlan(
       : targets.some((target) => target.action === "created")
         ? "created"
         : "reused";
-  const requirements: readonly RequirementSourceReference[] = resolveRequirementSourcesForStory(
+  const linkedRequirements = resolveRequirementSourcesForStory(
     input.requirementManifests,
     input.contract.storyId,
-  ).map((manifest) => ({ provider: manifest.provider, ref: manifest.ref }));
+  );
+  const requirements: readonly RequirementSourceReference[] = linkedRequirements
+    .map((manifest) => ({ provider: manifest.provider, ref: manifest.ref }));
+  const deliveryTargets = new Map(linkedRequirements.flatMap((manifest) =>
+    manifest.deliveryTarget === undefined ? [] : [[JSON.stringify(manifest.deliveryTarget), manifest.deliveryTarget] as const]
+  ));
+  if (deliveryTargets.size > 1) {
+    return { ok: false, errors: [{ code: "invalid_value", path: "requirements.deliveryTarget", message: "Linked Requirements declare conflicting campaign delivery targets" }] };
+  }
+  const deliveryTarget = [...deliveryTargets.values()][0];
   const manifest: IssueManifest = {
     schema: ISSUE_MANIFEST_V1,
     workspaceId: input.workspaceId,
     storyId: input.contract.storyId,
     requirements,
     repositories,
-    ...(input.contract.integrationCommand === undefined
+    ...(input.contract.integrationAcceptance === undefined
       ? {}
-      : { integrationAcceptance: { command: input.contract.integrationCommand } }),
+      : { integrationAcceptance: input.contract.integrationAcceptance }),
+    ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
   };
   const rollbackOrder = targets
     .filter((target) => target.action === "created")

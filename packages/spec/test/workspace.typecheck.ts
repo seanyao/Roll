@@ -173,6 +173,7 @@ const write: IssueRepositoryTarget = {
   access: "write",
   requiredDelivery: true,
   noChangePolicy: "changes_required",
+  workBranch: "roll/ws/US-1/product",
 };
 
 // @ts-expect-error read targets cannot require delivery

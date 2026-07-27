@@ -177,6 +177,18 @@ binding，绝不选择“第一个”仓库。只有恰好一个 writable worktr
 filesystem 写入必须留在 writable binding 内；Git 仍要求显式 cwd，且必须匹配 Issue 声明的
 worktree。Repository context 缺失或歧义时返回 `missing_execution_context`，不使用 process cwd。
 
+跨仓 integration acceptance 使用 argv 数组并显式指定 writable repository alias 作为 cwd：
+
+```yaml
+integration_acceptance:
+  command: [pnpm, test:integration]
+  cwd: roll
+```
+
+Issue init 会把每个新 write target 的实际 `workBranch` 固化到 `manifest.json`；后续 publish
+plan 只消费该值，不再从 Workspace pattern 二次推导。Legacy v1 manifest 缺少该字段时，读取
+只能从已冻结的 Issue repository-bound fact 回退。
+
 ## 一个 Story，多个独立 repository 事实
 
 Story/Issue 本身就是统一交付单元。Roll 不引入 Delivery Set、Workspace-level codebase
@@ -206,7 +218,20 @@ projection，再更新 backlog projection；它绝不把 backlog Markdown 当成
 
 ## Local-only campaign gate
 
-如果 campaign 要求所有本地验收完成后才能产生外部变更，请在专用 integration branch 上配置
+普通 Requirement 仍以 repository binding 的 integration branch（通常是 `main`）为终态。只有
+owner 明确要求 campaign branch 成为终态且禁止 main merge 时，才在 Requirement capture 中写入：
+
+```bash
+roll workspace requirement add ... \
+  --campaign-branch idea-074-workspace \
+  --main-merge forbidden
+```
+
+Roll 会持久化 `deliveryTarget: { terminal: campaign_branch, branch: idea-074-workspace,
+mainMerge: forbidden }`，并在 Issue init 时继承同一不可变目标；多个关联 Requirement 的目标冲突会
+fail loud。这个声明不会改变 Workspace 或其他 Story 的默认 main 语义。
+
+如果 campaign 还要求所有本地验收完成后才能产生外部变更，请在专用 integration branch 上配置
 `publish_mode: local`。该模式运行同一套本地 evidence gate，并把 commit 落到配置的本地
 integration branch；它不会 push 分支，也不会创建 PR。所有依赖 Story 与 requirement-level
 critical flow 必须先在同一个精确 integration-branch SHA 上通过。改回 `remote` 是另一个需要

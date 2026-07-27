@@ -29,6 +29,7 @@ import {
 import {
   parseRequirementSourceManifest,
   parseWorkspaceManifest,
+  type CampaignDeliveryTarget,
   type RequirementContextDescriptor,
   type RequirementSourceManifest,
   type WorkspaceManifest,
@@ -70,6 +71,7 @@ export interface RequirementSourceCaptureInput {
   readonly contextRoot?: string;
   readonly contextPaths: readonly string[];
   readonly storyIds: readonly string[];
+  readonly deliveryTarget?: CampaignDeliveryTarget;
 }
 
 export interface RequirementSourceCaptureResult {
@@ -871,6 +873,7 @@ function captureRequirementSourceUnlocked(
       requirement: { bytes: body.bytes, sha256: body.sha256 },
       context: descriptors,
       stories: input.storyIds,
+      ...(input.deliveryTarget === undefined ? {} : { deliveryTarget: input.deliveryTarget }),
     }, existing);
     if (!planned.ok) {
       const first = planned.errors[0];

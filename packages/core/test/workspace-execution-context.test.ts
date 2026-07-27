@@ -50,6 +50,7 @@ function issueManifest(bindings: readonly RepositoryBinding[]): IssueManifest {
           access: "write" as const,
           requiredDelivery: true,
           noChangePolicy: "changes_required" as const,
+          workBranch: `roll/ws-demo/US-WS-031/${entry.alias}`,
         }
       : {
           repoId: entry.repoId,
@@ -57,7 +58,7 @@ function issueManifest(bindings: readonly RepositoryBinding[]): IssueManifest {
           access: "read" as const,
           requiredDelivery: false,
         }),
-    integrationAcceptance: { command: ["pnpm", "test:integration"] },
+    integrationAcceptance: { command: ["pnpm", "test:integration"], cwd: bindings[0]?.alias ?? "product" },
   };
 }
 
@@ -73,7 +74,7 @@ function execution(root: string, manifest: IssueManifest): CycleRepositoryExecut
         alias: target.alias,
         access: target.access,
         requiredDelivery: target.requiredDelivery,
-        ...(target.access === "write" ? { noChangePolicy: target.noChangePolicy } : {}),
+        ...(target.access === "write" ? { noChangePolicy: target.noChangePolicy, workBranch: target.workBranch } : {}),
         ...(target.dependsOnRepo === undefined ? {} : { dependsOnRepo: target.dependsOnRepo }),
         worktreePath: join(issueRoot, target.alias),
         baseSha: sha(String(index + 1)),
@@ -81,6 +82,12 @@ function execution(root: string, manifest: IssueManifest): CycleRepositoryExecut
         commands: { test: ["pnpm", "test"], integration: ["pnpm", "test:integration"] },
       },
     ])),
+    ...(manifest.integrationAcceptance === undefined ? {} : {
+      integrationAcceptance: {
+        command: manifest.integrationAcceptance.command,
+        cwdRepoId: manifest.repositories.find((target) => target.alias === manifest.integrationAcceptance?.cwd)?.repoId ?? "",
+      },
+    }),
   };
 }
 

@@ -146,8 +146,10 @@ function validateIssue(
       repository.access !== target.access || repository.requiredDelivery !== target.requiredDelivery ||
       repository.dependsOnRepo !== target.dependsOnRepo ||
       (target.access === "write"
-        ? repository.noChangePolicy !== target.noChangePolicy
-        : repository.noChangePolicy !== undefined) ||
+        ? repository.noChangePolicy !== target.noChangePolicy ||
+          repository.workBranch === undefined ||
+          (target.workBranch !== undefined && repository.workBranch !== target.workBranch)
+        : repository.noChangePolicy !== undefined || repository.workBranch !== undefined) ||
       !canonicalAbsolute(repository.worktreePath) ||
       repository.worktreePath !== join(issueRoot, target.alias) ||
       !contained(issueRoot, repository.worktreePath) ||
@@ -155,6 +157,25 @@ function validateIssue(
       !Array.isArray(repository.commands.test) || !Array.isArray(repository.commands.integration)
     ) {
       return { code: "repository_context_mismatch", message: `Repository execution facts do not match Issue target ${target.alias}` };
+    }
+  }
+  const integration = issue.manifest.integrationAcceptance;
+  const executionIntegration = issue.execution.integrationAcceptance;
+  if (integration === undefined) {
+    if (executionIntegration !== undefined) {
+      return { code: "repository_context_mismatch", message: "Unexpected integration acceptance execution context" };
+    }
+  } else {
+    const writableTargets = targets.filter((target) => target.access === "write");
+    const cwdTarget = integration.cwd === undefined
+      ? (writableTargets.length === 1 ? writableTargets[0] : undefined)
+      : targets.find((target) => target.alias === integration.cwd);
+    if (
+      cwdTarget === undefined || cwdTarget.access !== "write" || executionIntegration === undefined ||
+      executionIntegration.cwdRepoId !== cwdTarget.repoId ||
+      JSON.stringify(executionIntegration.command) !== JSON.stringify(integration.command)
+    ) {
+      return { code: "repository_context_mismatch", message: "Integration acceptance execution context does not match the Issue manifest" };
     }
   }
   return undefined;
@@ -290,7 +311,7 @@ function validIssueTarget(value: unknown): boolean {
   if (!exactRecord(
     value,
     ["repoId", "alias", "access", "requiredDelivery"],
-    ["noChangePolicy", "pathScope", "dependsOnRepo"],
+    ["noChangePolicy", "workBranch", "pathScope", "dependsOnRepo"],
   )) return false;
   if (
     !nonEmptyString(value["repoId"]) || !nonEmptyString(value["alias"]) ||
@@ -300,15 +321,16 @@ function validIssueTarget(value: unknown): boolean {
     (value["dependsOnRepo"] !== undefined && !nonEmptyString(value["dependsOnRepo"]))
   ) return false;
   return value["access"] === "read"
-    ? value["requiredDelivery"] === false && value["noChangePolicy"] === undefined
-    : ["changes_required", "no_change_allowed"].includes(String(value["noChangePolicy"]));
+    ? value["requiredDelivery"] === false && value["noChangePolicy"] === undefined && value["workBranch"] === undefined
+    : ["changes_required", "no_change_allowed"].includes(String(value["noChangePolicy"])) &&
+      (value["workBranch"] === undefined || nonEmptyString(value["workBranch"]));
 }
 
 function runtimeIssueManifest(value: unknown): IssueManifest | undefined {
   if (!exactRecord(
     value,
     ["schema", "workspaceId", "storyId", "requirements", "repositories"],
-    ["integrationAcceptance"],
+    ["integrationAcceptance", "deliveryTarget"],
   )) return undefined;
   const repositories = value["repositories"];
   if (
@@ -320,9 +342,16 @@ function runtimeIssueManifest(value: unknown): IssueManifest | undefined {
   const integrationAcceptance = value["integrationAcceptance"];
   if (
     integrationAcceptance !== undefined &&
-    (!exactRecord(integrationAcceptance, ["command"]) ||
-      !stringArray(integrationAcceptance["command"]) || integrationAcceptance["command"].length === 0)
+    (!exactRecord(integrationAcceptance, ["command"], ["cwd"]) ||
+      !stringArray(integrationAcceptance["command"]) || integrationAcceptance["command"].length === 0 ||
+      (integrationAcceptance["cwd"] !== undefined && !nonEmptyString(integrationAcceptance["cwd"])))
   ) return undefined;
+  const deliveryTarget = value["deliveryTarget"];
+  if (deliveryTarget !== undefined && (
+    !exactRecord(deliveryTarget, ["terminal", "branch", "mainMerge"]) ||
+    deliveryTarget["terminal"] !== "campaign_branch" || !nonEmptyString(deliveryTarget["branch"]) ||
+    deliveryTarget["mainMerge"] !== "forbidden"
+  )) return undefined;
   const repoIds = new Set<string>();
   const aliases = new Set<string>();
   for (const repository of repositories) {
@@ -379,7 +408,7 @@ function validateContextSnapshot(
     return { code: "invalid_execution_context", message: "Workspace execution context Issue has an invalid or open shape" };
   }
   const execution = issue["execution"];
-  if (!exactRecord(execution, ["workspaceId", "issueRoot", "repositories"])) {
+  if (!exactRecord(execution, ["workspaceId", "issueRoot", "repositories"], ["integrationAcceptance"])) {
     return { code: "invalid_execution_context", message: "Workspace execution context Issue execution has an invalid or open shape" };
   }
   if (!nonEmptyString(issue["storyId"]) || !nonEmptyString(issue["manifestPath"]) ||
@@ -408,7 +437,7 @@ function validateContextSnapshot(
       "baseSha",
       "headSha",
       "commands",
-    ], ["noChangePolicy", "dependsOnRepo"])) {
+    ], ["noChangePolicy", "workBranch", "dependsOnRepo"])) {
       return { code: "repository_context_mismatch", message: `Workspace execution context repository ${repoId} has an invalid or open shape` };
     }
     const commands = repository["commands"];
@@ -423,8 +452,11 @@ function validateContextSnapshot(
       !nonEmptyString(repository["alias"]) ||
       (repository["access"] !== "read" && repository["access"] !== "write") ||
       typeof repository["requiredDelivery"] !== "boolean" ||
-      (repository["access"] === "read" && (repository["requiredDelivery"] || repository["noChangePolicy"] !== undefined)) ||
-      (repository["access"] === "write" && !["changes_required", "no_change_allowed"].includes(String(repository["noChangePolicy"]))) ||
+      (repository["access"] === "read" && (repository["requiredDelivery"] || repository["noChangePolicy"] !== undefined || repository["workBranch"] !== undefined)) ||
+      (repository["access"] === "write" && (
+        !["changes_required", "no_change_allowed"].includes(String(repository["noChangePolicy"])) ||
+        !nonEmptyString(repository["workBranch"])
+      )) ||
       (repository["dependsOnRepo"] !== undefined && !nonEmptyString(repository["dependsOnRepo"])) ||
       !nonEmptyString(repository["worktreePath"]) || repository["worktreePath"] !== join(issueRoot, repository["alias"]) ||
       !contained(issueRoot, repository["worktreePath"]) ||
@@ -433,6 +465,15 @@ function validateContextSnapshot(
     ) {
       return { code: "repository_context_mismatch", message: `Workspace execution context repository ${repoId} is invalid` };
     }
+  }
+  const executionIntegration = execution["integrationAcceptance"];
+  if (executionIntegration !== undefined && (
+    !exactRecord(executionIntegration, ["command", "cwdRepoId"]) ||
+    !stringArray(executionIntegration["command"]) || executionIntegration["command"].length === 0 ||
+    !nonEmptyString(executionIntegration["cwdRepoId"]) ||
+    !Object.hasOwn(repositories, executionIntegration["cwdRepoId"])
+  )) {
+    return { code: "repository_context_mismatch", message: "Workspace execution context integration acceptance is invalid" };
   }
   return undefined;
 }
@@ -507,7 +548,7 @@ function validateRuntimeBuildInput(value: unknown): RuntimeBuildInputResult {
     }
     const execution = rawIssue["execution"];
     if (
-      !exactRecord(execution, ["workspaceId", "issueRoot", "repositories"]) ||
+      !exactRecord(execution, ["workspaceId", "issueRoot", "repositories"], ["integrationAcceptance"]) ||
       !nonEmptyString(execution["workspaceId"]) || !nonEmptyString(execution["issueRoot"]) ||
       !isRecord(execution["repositories"])
     ) {

@@ -21,7 +21,8 @@ repositories:
   - alias: sot3
     access: read
 integration_acceptance:
-  command: ./verify-sot-contract.sh
+  command: [pnpm, test:integration]
+  cwd: sot1
 ---
 
 # US-XX1 body mentions repositories: should never be parsed
@@ -70,6 +71,7 @@ const requirementManifests: readonly RequirementSourceManifest[] = [
     context: [],
     stories: ["US-XX1"],
     attest: { schema: "roll.requirement-attest-projection/v1", mode: "generated_aggregate", evidenceAuthority: "issue" },
+    deliveryTarget: { terminal: "campaign_branch", branch: "idea-074-workspace", mainMerge: "forbidden" },
   },
 ];
 
@@ -157,7 +159,7 @@ describe("parseIssueStoryContract", () => {
           { alias: "sot2", access: "write", requiredDelivery: true, dependsOnRepo: "sot1" },
           { alias: "sot3", access: "read", requiredDelivery: false },
         ],
-        integrationCommand: ["./verify-sot-contract.sh"],
+        integrationAcceptance: { command: ["pnpm", "test:integration"], cwd: "sot1" },
       },
     });
   });
@@ -193,11 +195,12 @@ describe("resolveIssueInitPlan", () => {
           storyId: "US-XX1",
           requirements: [{ provider: "jira", ref: "SOT-15499" }],
           repositories: [
-            { repoId: "repo-sot1", alias: "sot1", access: "write" },
-            { repoId: "repo-sot2", alias: "sot2", access: "write", dependsOnRepo: "sot1" },
+            { repoId: "repo-sot1", alias: "sot1", access: "write", workBranch: "roll/ws-demo/US-XX1/sot1" },
+            { repoId: "repo-sot2", alias: "sot2", access: "write", workBranch: "roll/ws-demo/US-XX1/sot2", dependsOnRepo: "sot1" },
             { repoId: "repo-sot3", alias: "sot3", access: "read" },
           ],
-          integrationAcceptance: { command: ["./verify-sot-contract.sh"] },
+          integrationAcceptance: { command: ["pnpm", "test:integration"], cwd: "sot1" },
+          deliveryTarget: { terminal: "campaign_branch", branch: "idea-074-workspace", mainMerge: "forbidden" },
         },
         outcome: "created",
         targets: [
@@ -232,6 +235,26 @@ describe("resolveIssueInitPlan", () => {
     if (!result.ok) throw new Error("expected plan");
     const readTarget = result.value.targets.find((target) => target.alias === "sot3");
     expect(readTarget?.workBranch).toBeNull();
+  });
+
+  it("fails loud when linked Requirements disagree on the campaign terminal", () => {
+    const conflicting = {
+      ...requirementManifests[0]!,
+      requirementId: "req-2",
+      provider: "user_input" as const,
+      ref: "owner-campaign",
+      deliveryTarget: { terminal: "campaign_branch" as const, branch: "other-campaign", mainMerge: "forbidden" as const },
+    };
+    const result = resolveIssueInitPlan({
+      workspaceId: "ws-demo",
+      contract: contract.value,
+      bindings,
+      requirementManifests: [...requirementManifests, conflicting],
+    }, probe());
+    expect(result).toMatchObject({
+      ok: false,
+      errors: [expect.objectContaining({ path: "requirements.deliveryTarget" })],
+    });
   });
 
   it("fails loud when a declared alias has no matching Workspace binding", () => {

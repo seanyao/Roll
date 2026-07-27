@@ -511,7 +511,7 @@ describe("IssueManifest repository targets", () => {
     expect(issueManifestV1Schema).toMatchObject({ type: "object", additionalProperties: false });
   });
 
-  it("round-trips immutable repository target declarations", () => {
+  it("keeps legacy v1 Issue manifests without workBranch or integration cwd readable", () => {
     const parsed = parseIssueManifest(issue(), {
       workspaceId: "ws-sot-platform",
       storyId: "US-WS-001",
@@ -524,6 +524,19 @@ describe("IssueManifest repository targets", () => {
       ...issue(),
       integrationAcceptance: { command: ["./verify-sot-contract.sh"] },
     };
+    expect(parseIssueManifest(manifest, {})).toEqual({ ok: true, value: manifest });
+  });
+
+  it("round-trips new governed branches, explicit integration cwd, and campaign terminal", () => {
+    const manifest = {
+      ...issue(),
+      repositories: [
+        { ...issue().repositories[0], workBranch: "roll/ws-sot-platform/US-WS-001/product" },
+        issue().repositories[1],
+      ],
+      integrationAcceptance: { command: ["pnpm", "test:integration"], cwd: "product" },
+      deliveryTarget: { terminal: "campaign_branch", branch: "idea-074-workspace", mainMerge: "forbidden" },
+    } as const;
     expect(parseIssueManifest(manifest, {})).toEqual({ ok: true, value: manifest });
   });
 
@@ -550,6 +563,7 @@ describe("IssueManifest repository targets", () => {
     ["delivery type", { requiredDelivery: "yes" }, "invalid_type", "repositories[0].requiredDelivery"],
     ["repo ID", { repoId: "repo-not-a-hash" }, "invalid_value", "repositories[0].repoId"],
     ["alias", { alias: "Unsafe_Alias" }, "invalid_value", "repositories[0].alias"],
+    ["work branch", { workBranch: "../unsafe" }, "invalid_value", "repositories[0].workBranch"],
   ])("rejects malformed target field %s", (_label, targetOverride, code, path) => {
     const parsed = parseIssueManifest({
       ...issue(),

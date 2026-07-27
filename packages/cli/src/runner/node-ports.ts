@@ -176,8 +176,8 @@ export function createRepositoryPorts(
       runRepository: async (repoId, command, env = {}) =>
         (selectedAdapters.verification ?? defaults.verification)?.runRepository(writable(repoId, "verify"), command, env)
           ?? Promise.reject(new Error("missing_repository_verification_adapter")),
-      runIntegration: async (command, env = {}) =>
-        (selectedAdapters.verification ?? defaults.verification)?.runIntegration(execution, command, env)
+      runIntegration: async (cwdRepoId, command, env = {}) =>
+        (selectedAdapters.verification ?? defaults.verification)?.runIntegration(execution, cwdRepoId, command, env)
           ?? Promise.reject(new Error("missing_repository_verification_adapter")),
     },
     provider: {

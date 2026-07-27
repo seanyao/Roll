@@ -16,7 +16,7 @@
  * dependency order) — provider side effects belong to later stories.
  */
 
-import type { RepositoryAccess } from "@roll/spec";
+import { isSafeGitRef, type RepositoryAccess } from "@roll/spec";
 
 /** Observed facts for one repository leg of a Story Cycle (all injected). */
 export interface RepositoryLegFacts {
@@ -141,6 +141,8 @@ export interface PublishLegInput {
   readonly repoId: string;
   readonly alias: string;
   readonly changed: boolean;
+  /** Immutable branch carried from the Issue manifest. */
+  readonly workBranch: string;
   readonly dependsOnRepo?: string;
 }
 
@@ -155,7 +157,7 @@ export interface RepositoryPublishEntry {
 
 export type RepositoryPublishPlan =
   | { readonly ok: true; readonly entries: readonly RepositoryPublishEntry[] }
-  | { readonly ok: false; readonly code: "dependency_cycle" | "unknown_dependency"; readonly detail: string };
+  | { readonly ok: false; readonly code: "dependency_cycle" | "unknown_dependency" | "invalid_work_branch"; readonly detail: string };
 
 /**
  * Plan one branch/PR publish per CHANGED writable repository, topologically
@@ -166,11 +168,15 @@ export type RepositoryPublishPlan =
  */
 export function planRepositoryPublish(
   legs: readonly PublishLegInput[],
-  identity: { readonly workspaceId: string; readonly storyId: string },
 ): RepositoryPublishPlan {
   const changed = legs.filter((leg) => leg.changed);
   const changedIds = new Set(changed.map((leg) => leg.repoId));
   const known = new Set(legs.map((leg) => leg.repoId));
+
+  const invalidBranch = changed.find((leg) => !isSafeGitRef(leg.workBranch));
+  if (invalidBranch !== undefined) {
+    return { ok: false, code: "invalid_work_branch", detail: `${invalidBranch.repoId} has no safe Issue work branch` };
+  }
 
   for (const leg of changed) {
     if (leg.dependsOnRepo === undefined) continue;
@@ -197,7 +203,7 @@ export function planRepositoryPublish(
       ordered.push({
         repoId: leg.repoId,
         alias: leg.alias,
-        branch: `roll/${identity.workspaceId}/${identity.storyId}`,
+        branch: leg.workBranch,
         dependsOn: leg.dependsOnRepo !== undefined && changedIds.has(leg.dependsOnRepo) ? [leg.dependsOnRepo] : [],
       });
     }

@@ -7,7 +7,7 @@ import {
   captureRequirementSource,
   type InspectedWorkspace,
 } from "@roll/infra";
-import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
+import { isSafeGitRef, parseWorkspaceManifest, resolveLang, t, v3Catalog, type CampaignDeliveryTarget, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
 import { canonicalWorkspaceSelectorValue, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
@@ -24,6 +24,7 @@ interface RequirementArgs {
   readonly contextRoot?: string;
   readonly contextPaths: readonly string[];
   readonly storyIds: readonly string[];
+  readonly deliveryTarget?: CampaignDeliveryTarget;
   readonly json: boolean;
 }
 
@@ -70,7 +71,7 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
   const contextPaths: string[] = [];
   const storyIds: string[] = [];
   let json = false;
-  const scalarFlags = new Set(["--provider", "--ref", "--revision", "--body-file", "--context-root"]);
+  const scalarFlags = new Set(["--provider", "--ref", "--revision", "--body-file", "--context-root", "--campaign-branch", "--main-merge"]);
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
@@ -99,7 +100,11 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
   if (provider === undefined || ref === undefined || revision === undefined || bodyFile === undefined || storyIds.length === 0) return undefined;
   const workspace = canonicalWorkspaceSelectorValue(args);
   const contextRoot = scalar.get("--context-root");
+  const campaignBranch = scalar.get("--campaign-branch");
+  const mainMerge = scalar.get("--main-merge");
   if (contextPaths.length > 0 && contextRoot === undefined) return undefined;
+  if ((campaignBranch === undefined) !== (mainMerge === undefined)) return undefined;
+  if (campaignBranch !== undefined && (!isSafeGitRef(campaignBranch) || mainMerge !== "forbidden")) return undefined;
   return {
     ...(workspace === undefined ? {} : { workspace }),
     provider,
@@ -109,6 +114,9 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
     ...(contextRoot === undefined ? {} : { contextRoot: resolve(contextRoot) }),
     contextPaths,
     storyIds,
+    ...(campaignBranch === undefined
+      ? {}
+      : { deliveryTarget: { terminal: "campaign_branch", branch: campaignBranch, mainMerge: "forbidden" } }),
     json,
   };
 }
@@ -205,6 +213,7 @@ export function workspaceRequirementCommand(args: string[], deps: RequirementCom
       ...(parsed.contextRoot === undefined ? {} : { contextRoot: parsed.contextRoot }),
       contextPaths: parsed.contextPaths,
       storyIds: parsed.storyIds,
+      ...(parsed.deliveryTarget === undefined ? {} : { deliveryTarget: parsed.deliveryTarget }),
     }), parsed.json);
   } catch (error) {
     if (error instanceof RequirementSourceStoreError) return emitError(error.code, parsed.json);

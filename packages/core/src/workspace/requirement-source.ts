@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import {
   REQUIREMENT_ATTEST_PROJECTION_V1,
   REQUIREMENT_SOURCE_V1,
+  isSafeGitRef,
   type RequirementContextDescriptor,
+  type CampaignDeliveryTarget,
   type RequirementEvidenceDescriptor,
   type RequirementPreviousRevision,
   type RequirementProvider,
@@ -21,6 +23,7 @@ export interface RequirementCaptureFacts {
   readonly requirement: RequirementEvidenceDescriptor;
   readonly context: readonly RequirementContextDescriptor[];
   readonly stories: readonly string[];
+  readonly deliveryTarget?: CampaignDeliveryTarget;
 }
 
 export type RequirementCaptureOutcome = "created" | "reused" | "linked" | "updated";
@@ -235,8 +238,16 @@ export function planRequirementCapture(
   }
   const context = normalizeContext(facts.context, errors);
   const stories = normalizeStories(facts.stories, errors);
+  if (facts.deliveryTarget !== undefined && (
+    facts.deliveryTarget.terminal !== "campaign_branch" ||
+    facts.deliveryTarget.mainMerge !== "forbidden" ||
+    !isSafeGitRef(facts.deliveryTarget.branch)
+  )) {
+    errors.push({ code: "invalid_value", path: "deliveryTarget", message: "Campaign delivery target must name a safe branch and forbid main merge" });
+  }
   if (!source.ok || errors.length > 0) return { ok: false, errors };
 
+  const deliveryTarget = facts.deliveryTarget ?? existing?.deliveryTarget;
   const manifest: RequirementSourceManifest = {
     schema: REQUIREMENT_SOURCE_V1,
     requirementId: source.value.requirementId,
@@ -253,6 +264,7 @@ export function planRequirementCapture(
       mode: "generated_aggregate",
       evidenceAuthority: "issue",
     },
+    ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
   };
   if (existing === undefined) return { ok: true, value: { outcome: "created", historyRevision: null, manifest } };
   if (!sameIdentity(existing, manifest)) {
@@ -264,12 +276,27 @@ export function planRequirementCapture(
     if (!evidenceEqual(existing, manifest)) {
       return { ok: false, errors: [{ code: "revision_conflict", path: "revision", message: "The same revision cannot replace different evidence" }] };
     }
-    if (JSON.stringify(linkedStories) === JSON.stringify(existing.stories)) {
+    if (
+      existing.deliveryTarget !== undefined && facts.deliveryTarget !== undefined &&
+      JSON.stringify(existing.deliveryTarget) !== JSON.stringify(facts.deliveryTarget)
+    ) {
+      return { ok: false, errors: [{ code: "revision_conflict", path: "deliveryTarget", message: "An existing campaign delivery target cannot be replaced at the same revision" }] };
+    }
+    const deliveryTargetChanged = JSON.stringify(existing.deliveryTarget) !== JSON.stringify(manifest.deliveryTarget);
+    if (JSON.stringify(linkedStories) === JSON.stringify(existing.stories) && !deliveryTargetChanged) {
       return { ok: true, value: { outcome: "reused", historyRevision: null, manifest: existing } };
     }
     return {
       ok: true,
-      value: { outcome: "linked", historyRevision: null, manifest: { ...existing, stories: linkedStories } },
+      value: {
+        outcome: "linked",
+        historyRevision: null,
+        manifest: {
+          ...existing,
+          stories: linkedStories,
+          ...(manifest.deliveryTarget === undefined ? {} : { deliveryTarget: manifest.deliveryTarget }),
+        },
+      },
     };
   }
 

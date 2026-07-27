@@ -231,11 +231,14 @@ describe("US-WS-029 agent Workspace clarification host", () => {
         route: string;
         promptContext: string;
         environmentContext: string;
+        promptBlock: string;
         context: { workspace: { workspaceId: string } };
       };
       expect(resolved).toMatchObject({ route: "context", context: { workspace: { workspaceId: "roll" } } });
-      expect(resolved.promptContext).toContain("[Roll Workspace skill handoff]");
+      expect(resolved.promptContext).toBe(resolved.environmentContext);
+      expect(JSON.parse(resolved.promptContext)).toEqual(resolved.context);
       expect(JSON.parse(resolved.environmentContext)).toEqual(resolved.context);
+      expect(resolved.promptBlock).toContain("[Roll Workspace skill handoff]");
       expect(snapshotDurableAuthorityTree(fixture.home)).toEqual(before);
     } finally {
       process.stdout.write = originalWrite;
