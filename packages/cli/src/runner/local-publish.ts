@@ -15,12 +15,14 @@
  *     record `delivery:reconciled{delivered_local}` + a done DeliveryRecord.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
   acBlockPresentInSpec,
   appendDelivery,
   BrowserOperationLedger,
   captureLinksFromBrowserEvents,
+  evaluateFullVerify,
   evidenceGateBeforePush,
   nodeDeliveryStore,
   type CycleCommand,
@@ -40,6 +42,30 @@ import { eventTs } from "./runner-time.js";
  * `delivery:evidence_gate` event (earned/blocked) and, on a block, the fail-loud
  * ALERT. Returns `true` when the gate is EARNED (proceed), `false` when BLOCKED.
  */
+/** Default proof read: `<worktree>/.roll/last-test-pass`; unreadable ⇒ undefined (fail-closed). */
+function defaultReadProofBody(worktreePath: string): string | undefined {
+  try {
+    return readFileSync(join(worktreePath, ".roll", "last-test-pass"), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Default delivered-tree hash: `git write-tree` in the worktree — the SAME
+ * computation the proof-writer (`roll test` / test-ts.sh) records, so a clean,
+ * fully-committed cycle reproduces the proof's tree exactly. Any git error ⇒ `""`
+ * ⇒ {@link evaluateFullVerify} fails closed (never a fabricated match).
+ */
+function defaultReadHeadTree(worktreePath: string): string {
+  try {
+    const r = spawnSync("git", ["write-tree"], { cwd: worktreePath, encoding: "utf8" });
+    return r.status === 0 && typeof r.stdout === "string" ? r.stdout.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 export function evaluateEvidenceGate(ports: Ports, ctx: CycleContext, gateStoryId: string): boolean {
   // FIX-1256: share the "does this story owe an acceptance report?" decision
   // with the attest gate. A card without an `**AC:**` block owes neither report
@@ -62,9 +88,30 @@ export function evaluateEvidenceGate(ports: Ports, ctx: CycleContext, gateStoryI
   const unverified = acceptanceReportRequired
     ? unverifiedAcceptanceCriteria(acMapCandidates(ports.paths.worktreePath, gateStoryId, ports.repoCwd))
     : [];
-  const gate = evidenceGate.ok && unverified.length === 0
-    ? evidenceGate
-    : { ok: false as const, reasons: [...(evidenceGate.ok ? [] : evidenceGate.reasons), ...unverified] };
+  // US-CYCLE-011 — round-tail / pre-PR full-verify gate, layered ON TOP of the
+  // acceptance-evidence checks and INDEPENDENT of acceptanceReportRequired: even a
+  // no-AC code change must carry a FRESH full-suite proof (`mode:"full"`) whose
+  // tree equals the delivered tree before a PR/publish is allowed. Doc-only and
+  // story-less publishes never reach here (both call sites guard docOnly / empty
+  // storyId), so the per-commit --changed gate stays untouched and honest doc PRs
+  // are unaffected. FAIL-CLOSED: a missing / malformed / changed-mode / stale /
+  // tree-mismatched proof BLOCKS — the AC4 backstop no `--changed` selection can
+  // bypass (a wrongly-empty affected set never mints a full-mode proof).
+  const readProofBody = ports.fullVerify?.proofBody ?? defaultReadProofBody;
+  const readHeadTree = ports.fullVerify?.deliveredTree ?? defaultReadHeadTree;
+  const fullVerify = evaluateFullVerify(
+    readProofBody(ports.paths.worktreePath),
+    readHeadTree(ports.paths.worktreePath),
+    ports.clock(),
+  );
+  const evidenceReasons = [
+    ...(evidenceGate.ok ? [] : evidenceGate.reasons),
+    ...unverified,
+    ...(fullVerify.ok ? [] : [`full-verify (US-CYCLE-011): ${fullVerify.reason}`]),
+  ];
+  const gate = evidenceReasons.length === 0
+    ? ({ ok: true as const })
+    : { ok: false as const, reasons: evidenceReasons };
   // Best-effort like every other appendEvent in this handler: an events-file
   // write blip is observability loss, never a publish block.
   try {

@@ -1022,6 +1022,10 @@ function fakePorts(over: Partial<Ports> = {}): { ports: Ports; calls: Record<str
     },
     skillBody: "work",
     clock: () => 42,
+    // US-CYCLE-011: satisfy the round-tail full-verify half of the evidence gate
+    // (fresh mode:"full" proof matching the delivered tree) over the faked
+    // worktree; the publish-dispatch assertions here predate that gate.
+    fullVerify: { proofBody: () => '{"ts":42,"tree":"T","mode":"full"}', deliveredTree: () => "T" },
     // FIX-343: default to NO installed agents so the now-mandatory score stage is
     // hermetic (no real-env scorer spawns). Tests that exercise the peer gate /
     // scorer pool pin their own installedAgents.
