@@ -113,6 +113,15 @@ describe("appendRoundEntry / readRoundEntries", () => {
     expect(() => formatRoundReadout(aggregateRounds(dir))).not.toThrow();
     expect(aggregateRounds(dir).byEra[0]?.era).toBe("unknown");
   });
+
+  it("US-CYCLE-011: keeps a canonical gateMode and drops a corrupt one", () => {
+    const dir = cardDir();
+    const row = (gateMode: unknown): string =>
+      JSON.stringify({ schemaVersion: 1, card: "US-X-1", role: "builder", start: 1, durMs: 5, outcome: "delivered", gateTimeMs: 10, gateMode }) + "\n";
+    appendFileSync(join(dir, "round-journal.jsonl"), row("full") + row("changed") + row("bogus"), "utf8");
+    const { entries } = readRoundEntries(dir);
+    expect(entries.map((e) => e.gateMode)).toEqual(["full", "changed", undefined]);
+  });
 });
 
 describe("appendRoundEntryAsync (non-blocking hot-path append) + deriveRounds", () => {

@@ -309,6 +309,18 @@ export interface Ports {
    * de-duplication when the GitHub PR title/branch does not carry the story id.
    */
   pendingMergeDelivery?: (storyId: string) => { prNumber?: number } | undefined;
+  /**
+   * US-CYCLE-011 — SYNC readers for the round-tail / pre-PR full-verify fact that
+   * {@link evaluateEvidenceGate} enforces: the `.roll/last-test-pass` proof body
+   * and the delivered tree hash (`git write-tree`). Optional: absent ⇒ the gate
+   * falls back to the REAL fail-closed defaults (a real file read + a real
+   * `git write-tree` in the worktree), so production enforces without any wiring.
+   * A test double supplies these to drive the gate over a faked worktree.
+   */
+  fullVerify?: {
+    proofBody(worktreePath: string): string | undefined;
+    deliveredTree(worktreePath: string): string;
+  };
   clock: ProcessClock;
   /** Runtime paths the executor writes to. */
   paths: RunnerPaths;

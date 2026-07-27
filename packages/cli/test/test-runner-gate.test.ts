@@ -363,6 +363,44 @@ describe("FIX-1274 roll test gate — wrapper parity + diagnostics", () => {
   });
 });
 
+describe("US-CYCLE-011 roll test --full — round-tail full verify", () => {
+  it("runs the WHOLE suite (no --changed/--affected) and mints a mode:full proof", () => {
+    const fx = fixture({ testScript: "vitest run", vitestVersion: "3.2.7", npmShim: VITEST_SHIM });
+    const r = runRollTest(fx, ["--full"]);
+
+    expect(r.status).toBe(0);
+    const npmArgs = readFileSync(fx.npmLog, "utf8");
+    expect(npmArgs).not.toContain("--changed"); // full scope, not the per-commit subset
+    expect(npmArgs).not.toContain("--affected");
+
+    const proof = readProof(fx.proj);
+    expect(proof.mode).toBe("full"); // the stamp the delivery full-verify gate requires
+    expect(proof.command).toBe("npm test");
+    expect(proof.tree).toBe(gitTree(fx.proj));
+  });
+
+  it("`--full` is stripped from the passthrough and never leaks to npm", () => {
+    const fx = fixture({ testScript: "vitest run", vitestVersion: "3.2.7", npmShim: VITEST_SHIM });
+    runRollTest(fx, ["--full"]);
+    expect(readFileSync(fx.npmLog, "utf8")).not.toContain("--full");
+  });
+
+  it("the per-commit gate still mints mode:changed (full is opt-in, AC1 unbroken)", () => {
+    const fx = fixture({ testScript: "vitest run", vitestVersion: "3.2.7", npmShim: VITEST_SHIM });
+    runRollTest(fx); // no --full
+    expect(readProof(fx.proj).mode).toBe("changed");
+  });
+
+  it("`--full` combined with a `-- <args>` passthrough is REJECTED (footgun guard)", () => {
+    const fx = fixture({ testScript: "vitest run", vitestVersion: "3.2.7", npmShim: VITEST_SHIM });
+    const r = runRollTest(fx, ["--full", "--", "--affected"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("cannot be combined with");
+    expect(existsSync(proofPath(fx.proj))).toBe(false); // no proof minted from the rejected run
+    expect(existsSync(fx.npmLog)).toBe(false); // npm never invoked
+  });
+});
+
 describe("FIX-1274 premise — the real installed Vitest rejects --affected", () => {
   it("`vitest run --affected` errors with an unknown-option before running tests", () => {
     const vitestBin = join(dirname(require.resolve("vitest/package.json")), "vitest.mjs");

@@ -98,6 +98,9 @@ function makePorts(
       worktreePath: join(repoCwd, "wt"),
     },
     clock: () => 42,
+    // US-CYCLE-011: satisfy the round-tail full-verify half of the evidence gate
+    // so these auto-merge-attach assertions (which predate it) still publish.
+    fullVerify: { proofBody: () => '{"ts":42,"tree":"T","mode":"full"}', deliveredTree: () => "T" },
     skillBody: "work",
     github: {
       repoSlug: vi.fn(async () => "o/r"),

@@ -44,6 +44,15 @@ export interface RoundJournalEntry {
   outcome: string;
   /** Gate (local test/lint/CI-precheck) time attributed to this turn, ms. */
   gateTimeMs?: number;
+  /**
+   * US-CYCLE-011 — which gate SCOPE this turn's gate time (and its last
+   * `.roll/last-test-pass` proof) belongs to: `"changed"` = the per-commit
+   * affected/`--changed` subset, `"full"` = the round-tail whole-suite verify. So
+   * a readout can bucket gate time `--changed` vs `full` and reconcile it against
+   * the total ({@link gateTimeByMode}). Optional + forward-tolerant: older rows
+   * carry none; a value other than `changed`/`full` is dropped by the reader.
+   */
+  gateMode?: "changed" | "full";
   /** Comparison window label (e.g. a dogfood era) so baselines don't drift. */
   era?: string;
   /** Owning cycle id, when known. */
@@ -219,6 +228,9 @@ export function readRoundEntries(cardDir: string): ReadResult {
         if (!Array.isArray(raw["panel"]) || !(raw["panel"] as unknown[]).every((p) => typeof p === "string")) {
           delete (norm as { panel?: unknown }).panel;
         }
+        // US-CYCLE-011: drop a hand-corrupted gateMode so the gate-time buckets
+        // can never crash on an unexpected value.
+        if (raw["gateMode"] !== "changed" && raw["gateMode"] !== "full") delete (norm as { gateMode?: unknown }).gateMode;
         entries.push(norm);
       } else {
         skipped += 1;
@@ -273,6 +285,38 @@ function statsFor(entries: readonly RoundJournalEntry[]): RoundStats {
     p90Ms: percentile(durs, 90),
     gateShare: sum > 0 ? totalGate / sum : 0,
   };
+}
+
+/**
+ * US-CYCLE-011 — bucket gate time by gate mode so the local-gate budget line
+ * ("5–8 min --changed, full verify at round tail") can be audited. `changed` +
+ * `full` + `untagged` (rows with gate time but no `gateMode`) ALWAYS reconcile
+ * to `total` — the books can be checked exactly. Only rows carrying a finite
+ * positive-or-zero `gateTimeMs` contribute; a row without gate time is ignored
+ * (it spent no gate time to bucket).
+ */
+export interface GateTimeByMode {
+  changedMs: number;
+  fullMs: number;
+  untaggedMs: number;
+  totalMs: number;
+}
+
+export function gateTimeByMode(entries: readonly RoundJournalEntry[]): GateTimeByMode {
+  let changedMs = 0;
+  let fullMs = 0;
+  let untaggedMs = 0;
+  for (const e of entries) {
+    const g = e.gateTimeMs;
+    // Only positive-or-zero gate time contributes; a negative value is corrupt
+    // (a real turn never spends negative time) and is dropped so the buckets and
+    // the reconciled total stay honest.
+    if (!Number.isFinite(g) || g === undefined || g < 0) continue;
+    if (e.gateMode === "changed") changedMs += g;
+    else if (e.gateMode === "full") fullMs += g;
+    else untaggedMs += g;
+  }
+  return { changedMs, fullMs, untaggedMs, totalMs: changedMs + fullMs + untaggedMs };
 }
 
 /** Aggregate a card's entries overall and split by `era` window. */

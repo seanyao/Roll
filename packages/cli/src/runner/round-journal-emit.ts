@@ -4,10 +4,10 @@
  * manual step. NEVER throws and NEVER blocks the cycle's critical path — a
  * journal write is pure observability.
  */
-import { appendRoundEntryAsync, EVENTS_FILE, serializeEvent } from "@roll/core";
+import { appendRoundEntryAsync, EVENTS_FILE, parseTestPassProof, serializeEvent } from "@roll/core";
 import type { CycleContext } from "@roll/core";
 import type { RollEvent } from "@roll/spec";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardArchiveDir } from "../lib/archive.js";
 import { maybeWriteSplitAdvice } from "../lib/split-advice.js";
@@ -25,12 +25,31 @@ export interface RoundTurn {
   outcome: string;
   /** Gate (local test/lint) time attributed to this turn, ms. */
   gateTimeMs?: number;
+  /** US-CYCLE-011 — the gate scope this turn's gate time / proof belongs to. */
+  gateMode?: "changed" | "full";
   /** Override the model (defaults to ctx.model). */
   model?: string;
   /** US-CYCLE-008 — the DECLARED evaluation risk tier for an evaluator turn. */
   tier?: "low" | "high";
   /** US-CYCLE-008 — the ACTUAL evaluator panel composition for this turn. */
   panel?: string[];
+}
+
+/**
+ * US-CYCLE-011 — read the gate SCOPE the builder's LAST gate ran at, from the
+ * `.roll/last-test-pass` proof it left in the worktree, so the round-journal can
+ * bucket gate time `--changed` vs `full`. Best-effort: any absent/unreadable/
+ * malformed proof, or a non-canonical mode, yields `undefined` (untagged).
+ */
+export function readGateMode(worktreePath: string): "changed" | "full" | undefined {
+  try {
+    const proof = parseTestPassProof(readFileSync(join(worktreePath, ".roll", "last-test-pass"), "utf8"));
+    if (proof?.mode === "full") return "full";
+    if (proof?.mode === "changed") return "changed";
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The comparison-window label (dogfood era) — from env, else "unknown". */
@@ -76,6 +95,7 @@ export function recordSpawnRound(ports: Ports, ctx: CycleContext, turn: RoundTur
       durMs: turn.durMs,
       outcome: turn.outcome,
       ...(turn.gateTimeMs !== undefined ? { gateTimeMs: turn.gateTimeMs } : {}),
+      ...(turn.gateMode !== undefined ? { gateMode: turn.gateMode } : {}),
       ...(turn.tier !== undefined ? { tier: turn.tier } : {}),
       ...(turn.panel !== undefined ? { panel: turn.panel } : {}),
       era: resolveEra(),

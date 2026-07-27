@@ -70,6 +70,9 @@ function makePorts(runtimeDir: string, repoCwd: string): { ports: Ports; events:
       worktreePath: join(repoCwd, "wt"),
     },
     clock: () => 42,
+    // US-CYCLE-011: satisfy the round-tail full-verify half of the evidence gate
+    // so the degraded-publish hand-off assertion (which predates it) still runs.
+    fullVerify: { proofBody: () => '{"ts":42,"tree":"T","mode":"full"}', deliveredTree: () => "T" },
     skillBody: "work",
     github: {
       repoSlug: vi.fn(async () => "o/r"),

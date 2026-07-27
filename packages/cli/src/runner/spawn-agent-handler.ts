@@ -18,7 +18,7 @@ import { eventTs, guardRuntimeDir } from "./runner-time.js";
 import { readSkillBody } from "./skill-body.js";
 import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktree.js";
 import { resolveIntegrationBranch } from "@roll/infra";
-import { recordSpawnRound } from "./round-journal-emit.js";
+import { readGateMode, recordSpawnRound } from "./round-journal-emit.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 
 type SpawnAgentCommand = Extract<CycleCommand, { kind: "spawn_agent" }>;
@@ -353,11 +353,16 @@ export async function executeSpawnAgentCommand(
       // US-CYCLE-004: record this builder turn in the per-card round-journal.
       // Best-effort + guaranteed non-blocking (recordSpawnRound never throws) —
       // this is the auto-write for the spawn path, no manual step.
+      // US-CYCLE-011: tag the turn with the gate SCOPE its last `roll test` ran at
+      // (from the worktree proof) so the round-journal buckets gate time
+      // --changed vs full. Best-effort; undefined ⇒ untagged.
+      const builderGateMode = readGateMode(ports.paths.worktreePath);
       recordSpawnRound(ports, ctx, {
         role: "builder",
         start: roundStart,
         durMs: Date.now() - roundStart,
         outcome: res.timedOut ? "timeout" : res.exitCode === 0 ? "delivered" : "failed",
+        ...(builderGateMode !== undefined ? { gateMode: builderGateMode } : {}),
       });
 
       // FIX-1237: heal-at-every-boundary — repair core.worktree contamination
