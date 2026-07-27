@@ -22,8 +22,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveLang, parseEventLine, STATUS_MARKER } from "@roll/spec";
-import type { DeliveryLease, RollEvent, DeliveryState } from "@roll/spec";
+import { resolveLang, parseEventLine, classifyStatus } from "@roll/spec";
+import type { DeliveryLease, RollEvent, DeliveryState, StoryStatus } from "@roll/spec";
 import {
   EventBus,
   parseBacklog,
@@ -205,23 +205,31 @@ interface CycleSnapshot {
 }
 
 /**
- * US-CYCLE-009 (codex r3, migration recovery): the set of story ids whose
- * backlog row is ✅ Done (matches `✅ Done` and `✅ Done · <suffix>`). Returns
- * `null` when the backlog cannot be read — the caller then DISABLES recovery
- * that pass (fail-closed: never re-include on an unknown Done-state, so a
- * transient read blip can never re-process delivery history).
+ * US-CYCLE-009 (codex r3/final, migration recovery): map each story id to the
+ * PARSED canonical status of its backlog row ({@link classifyStatus}). A row that
+ * does not classify (unknown / malformed status cell) maps to `null`; a story
+ * with no row is simply absent from the map. Returns `null` for the WHOLE map
+ * when the backlog cannot be read — the caller then DISABLES recovery that pass
+ * (fail-closed: a transient read blip can never re-process delivery history).
  */
-function readDoneStoryIds(cwd: string): Set<string> | null {
+function readStoryStatuses(cwd: string): Map<string, StoryStatus | null> | null {
   try {
     const backlog = readFileSync(join(cwd, ".roll", "backlog.md"), "utf8");
-    const done = new Set<string>();
+    const statuses = new Map<string, StoryStatus | null>();
     for (const item of parseBacklog(backlog)) {
-      if (item.status.includes(STATUS_MARKER.done)) done.add(item.id);
+      statuses.set(item.id, classifyStatus(item.status));
     }
-    return done;
+    return statuses;
   } catch {
     return null;
   }
+}
+
+/** Recovery is scoped to genuine IN-FLIGHT rows — present, parseable, non-Done
+ *  (and non-Cut). A missing row, an unparseable/unknown status, Done, or Cut all
+ *  DISABLE recovery for the cycle (fail-closed: never re-process history). */
+function isInFlightStatus(status: StoryStatus | null | undefined): boolean {
+  return status === "todo" || status === "in_progress" || status === "hold";
 }
 
 /**
@@ -272,7 +280,7 @@ function readAwaitingCycles(cwd: string, includeDelivered = false): CycleSnapsho
 
   // US-CYCLE-009 (codex r3): Done story ids — for the migration recovery scope
   // (null ⇒ backlog unreadable ⇒ recovery disabled this pass, fail-closed).
-  const doneStoryIds = readDoneStoryIds(cwd);
+  const storyStatuses = readStoryStatuses(cwd);
 
   // Project each cycle and filter to awaiting_merge.
   const snapshots: CycleSnapshot[] = [];
@@ -286,28 +294,32 @@ function readAwaitingCycles(cwd: string, includeDelivered = false): CycleSnapsho
     // repair an interrupted backlog status flip.
     const deliveredTerminal =
       state === "delivered" || state === "delivered_external" || state === "delivered_local";
-    // ── Migration recovery (codex r3) ─────────────────────────────────────────
+    // ── Migration recovery (codex r3/final) ───────────────────────────────────
     // The r1 version (live on main ~3 days) emitted delivery:reconciled for
     // gh-merged-but-not-git-plane-confirmed cards WITHOUT the git-plane gate, so
     // they project `delivered` and this tick filter would exclude them → stuck
-    // delivered-but-unflipped. RE-INCLUDE such a card IFF BOTH:
-    //   (a) it carries NO delivery:merge_confirmed (the git-plane terminal marker
-    //       a properly settled cycle always has → those stay excluded), AND
-    //   (b) its story's backlog row is NOT ✅ Done (the write-back never landed →
-    //       a legitimately-delivered historical card is already Done → excluded).
-    // Scoped to REMOTE deliveries (delivered / delivered_external) — a local
-    // landing has no PR/(#N) to git-plane-confirm. This admits ONLY the r1-window
-    // leftovers; no delivery history is re-processed. On re-inclusion the cycle
-    // flows through settleDeliveredCycle: its (#N) is on main by now → it emits
-    // the missing merge_confirmed + flips + settles terminal (idempotent: once
-    // Done + merge_confirmed it is excluded again).
+    // delivered-but-unflipped. RE-INCLUDE such a card IFF ALL of:
+    //   (a) it is a REMOTE delivery (delivered / delivered_external) — a local
+    //       landing has no PR/(#N) to git-plane-confirm;
+    //   (b) the backlog was READABLE (else recovery disabled — fail-closed);
+    //   (c) it carries NO delivery:merge_confirmed (the git-plane terminal marker
+    //       a properly settled cycle always has → those stay excluded);
+    //   (d) its story's backlog row EXISTS and parses to a genuine IN-FLIGHT
+    //       status (📋 Todo / 🔨 In Progress / 🚫 Hold). A MISSING row, an
+    //       unparseable/unknown status, ✅ Done, or 🗑️ Cut all EXCLUDE it —
+    //       fail-closed, so an archived/deleted/corrupted historical row can
+    //       never be re-processed.
+    // This admits ONLY the r1-window leftovers; no delivery history is
+    // re-processed. On re-inclusion the cycle flows through settleDeliveredCycle:
+    // its (#N) is on main by now → it emits the missing merge_confirmed + flips +
+    // settles terminal (idempotent: once Done + merge_confirmed it is excluded).
     const deliveredRemote = state === "delivered" || state === "delivered_external";
     const stuckR1Leftover =
       deliveredRemote &&
-      doneStoryIds !== null &&
+      storyStatuses !== null &&
       !hasMergeConfirmedEvent(events, cycleId) &&
       meta.storyId !== "" &&
-      !doneStoryIds.has(meta.storyId);
+      isInFlightStatus(storyStatuses.get(meta.storyId));
     if (
       state !== "awaiting_merge" &&
       state !== "ci_failed" &&

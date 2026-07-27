@@ -57,7 +57,7 @@ const MERGED: PrCloudState = { kind: "merged", mergeCommit: "abc1234def", merged
  *  and whose event stream carries the r1-leftover shape:
  *  delivery:published + delivery:reconciled, but NO delivery:merge_confirmed.
  *  `extraEvents` / `backlogStatus` let each test shape the control conditions. */
-function r1LeftoverProject(opts: { backlogStatus: string; withMergeConfirmed?: boolean; landMergeCommit?: boolean }): string {
+function r1LeftoverProject(opts: { backlogStatus: string | null; withMergeConfirmed?: boolean; landMergeCommit?: boolean }): string {
   return withoutGitEnv(() => {
     const p = realpathSync(mkdtempSync(join(tmpdir(), "roll-uscycle009-recov-")));
     dirs.push(p);
@@ -72,10 +72,14 @@ function r1LeftoverProject(opts: { backlogStatus: string; withMergeConfirmed?: b
       // The PR's squash commit is on main (the git plane can confirm it).
       git(p, `commit -q --allow-empty -m 'squash: ${STORY} recovery (#${PR})'`);
     }
-    // backlog row (NOT Done for the recovery case; Done for the control).
+    // backlog row: an explicit status for STORY, or (null) NO row for STORY at
+    // all (an unrelated row keeps the backlog readable) to exercise fail-closed.
+    const row = opts.backlogStatus === null
+      ? "| US-OTHER-1 | unrelated | 🔨 In Progress |"
+      : `| ${STORY} | async merge | ${opts.backlogStatus} |`;
     writeFileSync(
       join(p, ".roll", "backlog.md"),
-      `## Epic: Test\n\n| ID | Description | Status |\n|----|----|----|\n| ${STORY} | async merge | ${opts.backlogStatus} |\n`,
+      `## Epic: Test\n\n| ID | Description | Status |\n|----|----|----|\n${row}\n`,
     );
     // acceptance evidence so the flip lands as plain Done.
     const cardDir = join(p, ".roll", "features", "test", STORY);
@@ -135,5 +139,24 @@ describe("US-CYCLE-009 (codex r3) — migration recovery of r1-window leftovers"
     expect(events(p).filter((e) => e.type === "delivery:merge_confirmed")).toHaveLength(1);
     // backlog untouched (stays In Progress — the properly-settled marker excludes it).
     expect(backlog(p)).toContain("🔨 In Progress");
+  });
+
+  // codex final: fail-closed on a MISSING backlog row for the story.
+  it("control: a remote-delivered card whose story has NO backlog row is NOT re-included", async () => {
+    const p = r1LeftoverProject({ backlogStatus: null }); // backlog readable, but no row for STORY
+    const r = await withoutGitEnvAsync(() => runReconcileTick(p, { silent: true, provider: fakeProvider(MERGED) }));
+    expect(r.cyclesProcessed).toBe(0);
+    expect(events(p).find((e) => e.type === "delivery:merge_confirmed")).toBeUndefined();
+    // no flip attempted on the absent row.
+    expect(backlog(p)).not.toContain("✅ Done");
+  });
+
+  // codex final: fail-closed on an UNPARSEABLE / unknown status cell.
+  it("control: a remote-delivered card whose backlog status is unparseable is NOT re-included", async () => {
+    const p = r1LeftoverProject({ backlogStatus: "❓ mystery" }); // classifyStatus → null
+    const r = await withoutGitEnvAsync(() => runReconcileTick(p, { silent: true, provider: fakeProvider(MERGED) }));
+    expect(r.cyclesProcessed).toBe(0);
+    expect(events(p).find((e) => e.type === "delivery:merge_confirmed")).toBeUndefined();
+    expect(backlog(p)).toContain("❓ mystery"); // untouched
   });
 });
