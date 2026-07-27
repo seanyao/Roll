@@ -37,9 +37,9 @@
  *     relaxed after the merge cannot be detected; the fact records WHICH surface
  *     was consulted (`requiredChecksSource`) and never claims it is historical.
  *   - Merge-queue repositories run required checks on the synthetic merge-group
- *     sha, not the PR head sha, so such deliveries resolve to `unknown` here. That
- *     is the safe direction (never a false pass); merge-queue support is not built
- *     speculatively.
+ *     sha, not the PR head sha. Such deliveries are DETECTED (the queue bot is the
+ *     merger) and resolve to `unknown:merge_queue_delivery` — the safe direction;
+ *     reading merge-group checks is not built speculatively.
  */
 
 /** One check run's conclusion as reported by the forge (check-runs + statuses). */
@@ -102,7 +102,7 @@ export interface RequiredCheck {
  * invisible here. The field lets a reader see which surface was consulted; it does
  * not claim the configuration is the historical one.
  */
-export type RequiredChecksSource = "protection" | "ruleset" | "none_declared" | "unknown";
+export type RequiredChecksSource = "protection" | "ruleset" | "protection+ruleset" | "none_declared" | "unknown";
 
 export interface DeliveryCiFact {
   state: "verified" | "red" | "unknown";
@@ -184,6 +184,13 @@ export interface ResolveDeliveryCiInput {
    * unprotected branch is `true` with an empty set (a real answer, not a failure).
    */
   requiredChecksKnown?: boolean | undefined;
+  /**
+   * True when the PR was merged by the merge queue. Codex review r4: a queue
+   * delivery runs its required checks on the synthetic merge-group sha, not this
+   * PR's head, so the head's checks are NOT the delivery's checks — refuse rather
+   * than verify against the wrong sha.
+   */
+  mergedByQueue?: boolean | undefined;
   /** Caller-side validation of slug/pr/sha; `false` ⇒ refuse to attribute. */
   targetValid?: boolean | undefined;
   /** ISO timestamp of this collection. */
@@ -225,6 +232,7 @@ export function resolveDeliveryCi(input: ResolveDeliveryCiInput): DeliveryCiFact
   // The forge's merge sha must be the one the ledger credits to this card;
   // otherwise these checks belong to some other delivery.
   if (!shaAgrees(input.pr.mergeCommitSha, rec.mergeCommit)) return { ...base, reason: "merge_sha_mismatch" };
+  if (input.mergedByQueue === true) return { ...base, reason: "merge_queue_delivery" };
   if (input.checks === undefined) return { ...base, reason: "checks_unavailable" };
 
   const checks = [...input.checks];

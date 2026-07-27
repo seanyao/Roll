@@ -301,6 +301,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
     let requiredChecks: RequiredCheck[] | undefined;
     let requiredChecksKnown: boolean | undefined;
     let requiredChecksSource: RequiredChecksSource | undefined;
+    let mergedByQueue = false;
     const pr = opts.deliveryRecord.prNumber;
     const slug = ghOk && pr !== undefined ? (opts.repoSlug ?? (await resolveRepoSlug(run, opts.projectPath))) : "";
     const targetValid =
@@ -315,7 +316,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
           "api",
           `repos/${slug}/pulls/${pr}`,
           "--jq",
-          "{head:.head.sha,merged:.merged,merge_commit_sha:.merge_commit_sha,merged_at:.merged_at,base:.base.ref}",
+          "{head:.head.sha,merged:.merged,merge_commit_sha:.merge_commit_sha,merged_at:.merged_at,base:.base.ref,merged_by:(.merged_by.login // \"\")}",
         ],
         opts.projectPath,
       ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -327,8 +328,14 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
             merge_commit_sha?: string | null;
             merged_at?: string | null;
             base?: string | null;
+            merged_by?: string | null;
           };
           if (typeof parsed.base === "string" && parsed.base !== "") baseRef = parsed.base;
+          // Codex r4: a merge-queue delivery ran its required checks on the
+          // synthetic merge-group sha, NOT this PR's head — so the head's checks
+          // are not the delivery's required checks. Detected (not merely
+          // documented) and refused.
+          mergedByQueue = typeof parsed.merged_by === "string" && /^github-merge-queue/i.test(parsed.merged_by);
           const mergedAt =
             typeof parsed.merged_at === "string" && parsed.merged_at !== "" ? Date.parse(parsed.merged_at) : NaN;
           prFacts = {
@@ -438,33 +445,41 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
           ],
           opts.projectPath,
         ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
-        if (reqRes.code === 0) {
-          requiredChecks = parseRequired(reqRes.stdout);
+        // Rulesets LAYER on top of branch protection (codex r4) — they are not an
+        // either/or. Both surfaces are read every time and the requirement sets are
+        // UNIONed; if either read fails for a reason other than "not protected",
+        // the requirement set is unknown.
+        const ruleRes = await run(
+          "gh",
+          [
+            "api",
+            "--paginate",
+            `repos/${slug}/rules/branches/${baseRef}`,
+            "--jq",
+            '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | [.context, ((.integration_id // "") | tostring)] | @tsv',
+          ],
+          opts.projectPath,
+        ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+        const protectionOk = reqRes.code === 0;
+        const notProtected = reqRes.code !== 0 && /not protected/i.test(reqRes.stderr);
+        const rulesOk = ruleRes.code === 0;
+        if ((protectionOk || notProtected) && rulesOk) {
+          const fromProtection = protectionOk ? parseRequired(reqRes.stdout) : [];
+          const fromRules = parseRequired(ruleRes.stdout);
+          requiredChecks = parseRequired(
+            [...fromProtection, ...fromRules]
+              .map((r) => `${r.context}\t${r.appId ?? ""}`)
+              .join("\n"),
+          );
           requiredChecksKnown = true;
-          requiredChecksSource = requiredChecks.length > 0 ? "protection" : "none_declared";
-        } else if (/not protected/i.test(reqRes.stderr)) {
-          // "Not protected" does NOT mean "nothing required": repository/org RULESETS
-          // can require checks with no branch protection at all (codex r3). Only a
-          // clean ruleset read may conclude "nothing declared".
-          const ruleRes = await run(
-            "gh",
-            [
-              "api",
-              "--paginate",
-              `repos/${slug}/rules/branches/${baseRef}`,
-              "--jq",
-              '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | [.context, ((.integration_id // "") | tostring)] | @tsv',
-            ],
-            opts.projectPath,
-          ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
-          if (ruleRes.code === 0) {
-            requiredChecks = parseRequired(ruleRes.stdout);
-            requiredChecksKnown = true;
-            requiredChecksSource = requiredChecks.length > 0 ? "ruleset" : "none_declared";
-          } else {
-            requiredChecksKnown = false;
-            requiredChecksSource = "unknown";
-          }
+          requiredChecksSource =
+            requiredChecks.length === 0
+              ? "none_declared"
+              : fromProtection.length > 0 && fromRules.length > 0
+                ? "protection+ruleset"
+                : fromRules.length > 0
+                  ? "ruleset"
+                  : "protection";
         } else {
           requiredChecksKnown = false;
           requiredChecksSource = "unknown";
@@ -476,6 +491,7 @@ export async function collectEvidence(opts: CollectOptions): Promise<EvidenceMan
       ...(prFacts !== undefined ? { pr: prFacts } : {}),
       checks,
       checksComplete,
+      mergedByQueue,
       ...(requiredChecks !== undefined ? { requiredChecks } : {}),
       requiredChecksKnown,
       ...(requiredChecksSource !== undefined ? { requiredChecksSource } : {}),

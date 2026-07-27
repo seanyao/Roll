@@ -876,3 +876,40 @@ describe("delivery-time facts block (US-EVID-033)", () => {
     expect(html).not.toContain(bi("Delivery-time facts", "交付时事实"));
   });
 });
+
+// Codex r4 — the requirement set, its source, and the current-configuration caveat
+// must be visible to a human reading the report, not only in the JSON manifest.
+describe("delivery-time facts — requirement provenance is rendered (US-EVID-033 r4)", () => {
+  const fact = {
+    state: "verified" as const,
+    prNumber: 1495,
+    headSha: "e4978feb585a1124025a02aa5056a937483a81e5",
+    mergeCommit: "963a7404",
+    mergedAt: "2026-07-24T07:43:21.000Z",
+    collectedAt: "2026-07-27T09:00:00.000Z",
+    postHoc: "yes" as const,
+    checks: [{ name: "test-ts", conclusion: "success" }],
+    requiredChecksSource: "protection+ruleset" as const,
+    requiredChecks: [{ context: "test-ts", appId: 15368 }],
+  };
+
+  it("renders each required context (with its App pin) and the declaring surface", () => {
+    const html = renderReport({ ...BASE, items: [item({})], deliveryCi: fact });
+    expect(html).toContain("test-ts@app15368");
+    expect(html).toContain("protection+ruleset");
+  });
+
+  it("states the current-configuration caveat", () => {
+    const html = renderReport({ ...BASE, items: [item({})], deliveryCi: fact });
+    expect(html).toContain("GitHub 不提供历史视图");
+  });
+
+  it("says so plainly when nothing is declared", () => {
+    const html = renderReport({
+      ...BASE,
+      items: [item({})],
+      deliveryCi: { ...fact, requiredChecksSource: "none_declared", requiredChecks: [] },
+    });
+    expect(html).toContain(bi("none declared", "未声明"));
+  });
+});

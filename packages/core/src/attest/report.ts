@@ -738,6 +738,23 @@ function deliveryCiBlock(fact: ReportInput["deliveryCi"]): string {
     fact.reason !== undefined
       ? `<p class="note">${bi("reason", "原因")}: <code>${esc(fact.reason)}</code></p>`
       : "";
+  // Codex r4: the requirement set this verdict was measured against, WHICH surface
+  // declared it, and the honest caveat that GitHub only exposes the CURRENT
+  // configuration — all surfaced to the human reader, not just the JSON.
+  const requirements =
+    fact.requiredChecksSource !== undefined
+      ? `<p class="note">${bi("required checks", "必需检查")}: ${
+          fact.requiredChecks !== undefined && fact.requiredChecks.length > 0
+            ? fact.requiredChecks
+                .map((r) => `<code>${esc(r.context)}${r.appId !== undefined ? `@app${r.appId}` : ""}</code>`)
+                .join(" ")
+            : `<em>${bi("none declared", "未声明")}</em>`
+        } · ${bi("source", "来源")} <code>${esc(fact.requiredChecksSource)}</code></p>
+<p class="note">${bi(
+          "Requirements reflect the CURRENT branch configuration — GitHub exposes no historical view, so a requirement relaxed after the merge cannot be detected here.",
+          "必需检查取自分支的当前配置 —— GitHub 不提供历史视图，因此合并之后被放宽的要求在这里无法察觉。",
+        )}</p>`
+      : "";
   // Tri-state (codex r1): a timing we cannot establish is SAID to be unknown —
   // never rendered as if the evidence were collected during the cycle.
   const postHoc =
@@ -761,7 +778,7 @@ function deliveryCiBlock(fact: ReportInput["deliveryCi"]): string {
   )}</p>
 ${rows.length > 0 ? `<ul>${rows.join("\n")}</ul>` : ""}
 ${checks}
-${reason}${postHoc}
+${requirements}${reason}${postHoc}
 <p class="note">${bi("collected at", "采集时间")} <code>${esc(fact.collectedAt)}</code></p>
 </section>`;
 }

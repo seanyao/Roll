@@ -320,3 +320,17 @@ describe("resolveDeliveryCi — r3 integrity", () => {
     expect(f.requiredChecks).toEqual([{ context: "test-ts" }]);
   });
 });
+
+// Codex r4 — a merge-queue delivery's required checks ran on the merge-group sha,
+// so this PR head's checks are not the delivery's checks.
+describe("resolveDeliveryCi — merge-queue deliveries are refused (codex r4)", () => {
+  it("a queue-merged PR resolves to unknown even with a green pre-merge head check", () => {
+    const f = resolveDeliveryCi(ok({ mergedByQueue: true }));
+    expect(f.state).toBe("unknown");
+    expect(f.reason).toBe("merge_queue_delivery");
+  });
+
+  it("a normally-merged PR is unaffected", () => {
+    expect(resolveDeliveryCi(ok({ mergedByQueue: false })).state).toBe("verified");
+  });
+});

@@ -219,6 +219,9 @@ describe("collectEvidence — delivery_ci (US-EVID-033)", () => {
       const line = `${tool} ${argv.join(" ")}`;
       calls.push(line);
       for (const [pattern, out] of handlers) if (pattern.test(line)) return Promise.resolve(out);
+      // Default: this repo declares no rulesets — a clean empty read (US-EVID-033 r4
+      // unions rulesets with branch protection, so the query always happens).
+      if (/rules\/branches\//.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
       return Promise.resolve({ code: 1, stdout: "", stderr: "" });
     };
     return { run, calls };
@@ -454,6 +457,9 @@ describe("collectEvidence — delivery_ci required checks + merge boundary (US-E
       const line = `${tool} ${argv.join(" ")}`;
       calls.push(line);
       for (const [pattern, out] of handlers) if (pattern.test(line)) return Promise.resolve(out);
+      // Default: this repo declares no rulesets — a clean empty read (US-EVID-033 r4
+      // unions rulesets with branch protection, so the query always happens).
+      if (/rules\/branches\//.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
       return Promise.resolve({ code: 1, stdout: "", stderr: "" });
     };
     return { run, calls };
@@ -588,6 +594,9 @@ describe("collectEvidence — delivery_ci rulesets + app pinning (US-EVID-033 r3
       const line = `${tool} ${argv.join(" ")}`;
       calls.push(line);
       for (const [pattern, out] of handlers) if (pattern.test(line)) return Promise.resolve(out);
+      // Default: this repo declares no rulesets — a clean empty read (US-EVID-033 r4
+      // unions rulesets with branch protection, so the query always happens).
+      if (/rules\/branches\//.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
       return Promise.resolve({ code: 1, stdout: "", stderr: "" });
     };
     return { run, calls };
@@ -728,6 +737,7 @@ describe("collectEvidence — required-check dedupe (US-EVID-033)", () => {
       if (/protection\/required_status_checks/.test(line))
         // Both shapes for the SAME requirement, as GitHub really returns it.
         return Promise.resolve({ code: 0, stdout: "test-ts\t\ntest-ts\t15368\n", stderr: "" });
+      if (/rules\/branches\//.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
       return Promise.resolve({ code: 1, stdout: "", stderr: "" });
     };
     const m = await collectEvidence({
@@ -741,5 +751,77 @@ describe("collectEvidence — required-check dedupe (US-EVID-033)", () => {
     });
     expect(m.delivery_ci?.requiredChecks).toEqual([{ context: "test-ts", appId: 15368 }]);
     expect(m.delivery_ci?.state).toBe("verified");
+  });
+});
+
+/** Codex r4 — rulesets UNION with protection; merge-queue deliveries refused. */
+describe("collectEvidence — delivery_ci union + merge queue (US-EVID-033 r4)", () => {
+  const HEAD_SHA = "aaaabbbbccccddddeeeeffff0000111122223333";
+  const MERGE_SHA = "32195061fb3ec0f31a26ced91c4c375168ec2dfb";
+  const PRE_MERGE = "2026-06-01T09:55:00Z";
+  function forge(over: { mergedBy?: string; protection?: RunOut; rules?: RunOut; checks?: RunOut }): EvidenceRun {
+    return (tool, argv) => {
+      const line = `${tool} ${argv.join(" ")}`;
+      if (/^git remote/.test(line)) return Promise.resolve({ code: 0, stdout: "git@github.com:seanyao/roll.git\n", stderr: "" });
+      if (/^git log/.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      if (/^gh run list/.test(line)) return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      if (/pulls\/1490 /.test(line))
+        return Promise.resolve({
+          code: 0,
+          stdout: `{"head":"${HEAD_SHA}","merged":true,"merge_commit_sha":"${MERGE_SHA}","merged_at":"2026-06-01T10:00:00Z","base":"main","merged_by":"${over.mergedBy ?? "seanyao"}"}`,
+          stderr: "",
+        });
+      if (/check-runs/.test(line))
+        return Promise.resolve(over.checks ?? { code: 0, stdout: `test-ts\tsuccess\t${PRE_MERGE}\t\n`, stderr: "" });
+      if (/\/statuses/.test(line)) return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      if (/protection\/required_status_checks/.test(line))
+        return Promise.resolve(over.protection ?? { code: 0, stdout: "test-ts\t\n", stderr: "" });
+      if (/rules\/branches\/main/.test(line)) return Promise.resolve(over.rules ?? { code: 0, stdout: "", stderr: "" });
+      return Promise.resolve({ code: 1, stdout: "", stderr: "" });
+    };
+  }
+  const collect = (run: EvidenceRun) =>
+    collectEvidence({
+      storyId: "FIX-1475",
+      projectPath: tmp("p"),
+      runDir: tmp("r"),
+      now: () => NOW,
+      run,
+      ghProbe: () => Promise.resolve(true),
+      deliveryRecord: { prNumber: 1490, mergeCommit: "32195061" },
+    });
+
+  it("a RULESET requirement is honoured even when branch protection is green", async () => {
+    const m = await collect(forge({ rules: { code: 0, stdout: "ruleset-only\t\n", stderr: "" } }));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("required_missing:ruleset-only");
+    expect(m.delivery_ci?.requiredChecksSource).toBe("protection+ruleset");
+  });
+
+  it("both surfaces green ⇒ verified, source records the union", async () => {
+    const m = await collect(
+      forge({
+        rules: { code: 0, stdout: "ruleset-check\t\n", stderr: "" },
+        checks: {
+          code: 0,
+          stdout: `test-ts\tsuccess\t${PRE_MERGE}\t\nruleset-check\tsuccess\t${PRE_MERGE}\t\n`,
+          stderr: "",
+        },
+      }),
+    );
+    expect(m.delivery_ci?.state).toBe("verified");
+    expect(m.delivery_ci?.requiredChecksSource).toBe("protection+ruleset");
+  });
+
+  it("an unreadable ruleset query is unknown even when protection read fine", async () => {
+    const m = await collect(forge({ rules: { code: 1, stdout: "", stderr: "HTTP 403" } }));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("required_checks_unknown");
+  });
+
+  it("a merge-queue delivery is refused (its checks ran on the merge-group sha)", async () => {
+    const m = await collect(forge({ mergedBy: "github-merge-queue[bot]" }));
+    expect(m.delivery_ci?.state).toBe("unknown");
+    expect(m.delivery_ci?.reason).toBe("merge_queue_delivery");
   });
 });
