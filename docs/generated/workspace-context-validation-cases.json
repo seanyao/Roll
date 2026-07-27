@@ -1268,6 +1268,17 @@
       ]
     },
     {
+      "id": "operation:cli:workspace:handoff",
+      "policyKey": "cli:workspace:handoff",
+      "surface": "cli",
+      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
+      "testName": "executes registered CLI probe for cli:workspace:handoff",
+      "proves": [
+        "operation_policy",
+        "cli_registration_probe"
+      ]
+    },
+    {
       "id": "operation:cli:workspace:issue.init",
       "policyKey": "cli:workspace:issue.init",
       "surface": "cli",
@@ -2344,6 +2355,10 @@
     {
       "policyKey": "cli:workspace:edit",
       "caseId": "operation:cli:workspace:edit"
+    },
+    {
+      "policyKey": "cli:workspace:handoff",
+      "caseId": "operation:cli:workspace:handoff"
     },
     {
       "policyKey": "cli:workspace:issue.init",

@@ -5,6 +5,7 @@ export * from "./i18n/catalog-v3.js";
 export * from "./project.js";
 export * from "./types/events.js";
 export * from "./types/workspace.js";
+export * from "./types/context-binding.js";
 export * from "./types/context.js";
 export * from "./types/json-schema.js";
 export * from "./types/tool.js";

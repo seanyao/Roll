@@ -4,6 +4,7 @@ import {
   REPOSITORY_BINDING_V1,
   WORKSPACE_EXECUTION_CONTEXT_V1,
   WORKSPACE_MANIFEST_V1,
+  parseWorkspaceContexts,
   type CycleRepositoryExecutionContext,
   type IssueManifest,
   type RepositoryBinding,
@@ -264,18 +265,23 @@ function validRequirementSource(value: unknown): boolean {
     nonEmptyString(value["provider"]) && nonEmptyString(value["ref"]);
 }
 
+function validWorkspaceContexts(value: unknown): boolean {
+  return parseWorkspaceContexts(value).ok;
+}
+
 function runtimeWorkspaceManifest(value: unknown): WorkspaceManifest | undefined {
   if (!exactRecord(
     value,
     ["schema", "workspaceId", "displayName", "requirements", "repositories"],
-    ["createdAt"],
+    ["createdAt", "contexts"],
   )) return undefined;
   if (
     value["schema"] !== WORKSPACE_MANIFEST_V1 || !nonEmptyString(value["workspaceId"]) ||
     !nonEmptyString(value["displayName"]) ||
     (value["createdAt"] !== undefined && !nonEmptyString(value["createdAt"])) ||
     !Array.isArray(value["requirements"]) || !value["requirements"].every(validRequirementSource) ||
-    runtimeBindingIndex(value["repositories"]) === undefined
+    runtimeBindingIndex(value["repositories"]) === undefined ||
+    (value["contexts"] !== undefined && !validWorkspaceContexts(value["contexts"]))
   ) return undefined;
   return value as unknown as WorkspaceManifest;
 }

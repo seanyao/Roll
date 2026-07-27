@@ -173,6 +173,31 @@ function buildRepositoryRecord(input: JsonRecord): { readonly repositories: Json
 }
 
 describe("buildWorkspaceExecutionContext", () => {
+  it("accepts a valid Workspace context-provider binding in manifest facts", () => {
+    const input = facts({ includeIssue: false });
+    const result = buildWorkspaceExecutionContext({
+      facts: {
+        ...input,
+        manifest: {
+          ...input.manifest,
+          contexts: {
+            enabled: true,
+            bindings: [{
+              providerId: "ape-context",
+              enabled: true,
+              required: true,
+              entrypoints: ["wiki/index.md"],
+            }],
+          },
+        },
+      },
+      source: "explicit",
+      evidence,
+    });
+
+    expect(result).toMatchObject({ ok: true, context: { workspace: { workspaceId: "ws-demo" } } });
+  });
+
   it("builds one frozen serializable authority snapshot without retaining mutable inputs", () => {
     const input = facts();
     const result = buildWorkspaceExecutionContext({ facts: input, source: "explicit", evidence });

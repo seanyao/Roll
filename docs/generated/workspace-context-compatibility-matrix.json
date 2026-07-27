@@ -2,7 +2,7 @@
   "schema": "roll.workspace-context-compatibility-matrix/v1",
   "summary": {
     "cliFamilies": 24,
-    "cliOperations": 123,
+    "cliOperations": 124,
     "skillFamilies": 22,
     "skillOperations": 32,
     "toolAdapters": 8,
@@ -1059,6 +1059,16 @@
       "allowsAmbientCwd": false,
       "allowsLegacyRollPath": false,
       "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "handoff",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
     },
     {
       "surface": "cli",
