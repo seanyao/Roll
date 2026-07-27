@@ -22,10 +22,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveLang, parseEventLine } from "@roll/spec";
+import { resolveLang, parseEventLine, STATUS_MARKER } from "@roll/spec";
 import type { DeliveryLease, RollEvent, DeliveryState } from "@roll/spec";
 import {
   EventBus,
+  parseBacklog,
   reconcileDelivery,
   projectDeliveryState,
   leaseStateFor,
@@ -60,7 +61,7 @@ import {
 // the SAME facts (one truth engine, no parallel probes).
 import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRepoSlug } from "../lib/delivery-facts.js";
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
-import { settleDeliveredCycle, gitPlaneVerifier } from "./loop-reconcile-merge.js";
+import { settleDeliveredCycle, gitPlaneVerifier, hasMergeConfirmedEvent } from "./loop-reconcile-merge.js";
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -204,6 +205,26 @@ interface CycleSnapshot {
 }
 
 /**
+ * US-CYCLE-009 (codex r3, migration recovery): the set of story ids whose
+ * backlog row is ✅ Done (matches `✅ Done` and `✅ Done · <suffix>`). Returns
+ * `null` when the backlog cannot be read — the caller then DISABLES recovery
+ * that pass (fail-closed: never re-include on an unknown Done-state, so a
+ * transient read blip can never re-process delivery history).
+ */
+function readDoneStoryIds(cwd: string): Set<string> | null {
+  try {
+    const backlog = readFileSync(join(cwd, ".roll", "backlog.md"), "utf8");
+    const done = new Set<string>();
+    for (const item of parseBacklog(backlog)) {
+      if (item.status.includes(STATUS_MARKER.done)) done.add(item.id);
+    }
+    return done;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Read events.ndjson and extract cycle delivery snapshots.
  * Returns published cycles that are awaiting_merge (or ci_failed). A cycle
  * without a delivery:published event has no PR or branch claim to reconcile;
@@ -249,10 +270,15 @@ function readAwaitingCycles(cwd: string, includeDelivered = false): CycleSnapsho
     }
   }
 
+  // US-CYCLE-009 (codex r3): Done story ids — for the migration recovery scope
+  // (null ⇒ backlog unreadable ⇒ recovery disabled this pass, fail-closed).
+  const doneStoryIds = readDoneStoryIds(cwd);
+
   // Project each cycle and filter to awaiting_merge.
   const snapshots: CycleSnapshot[] = [];
   for (const [cycleId, events] of cycleEvents) {
     const state = projectDeliveryState(events, cycleId);
+    const meta = cycleMeta.get(cycleId) ?? { storyId: "", branch: `loop/${cycleId}` };
     // Only a published PR cycle has strong delivery evidence to reconcile.
     // `ci_failed` retains its published metadata and is eligible for recovery.
     // The periodic tick skips delivered rows after writing them back; the
@@ -260,10 +286,36 @@ function readAwaitingCycles(cwd: string, includeDelivered = false): CycleSnapsho
     // repair an interrupted backlog status flip.
     const deliveredTerminal =
       state === "delivered" || state === "delivered_external" || state === "delivered_local";
-    if (state !== "awaiting_merge" && state !== "ci_failed" && !(includeDelivered && deliveredTerminal)) {
+    // ── Migration recovery (codex r3) ─────────────────────────────────────────
+    // The r1 version (live on main ~3 days) emitted delivery:reconciled for
+    // gh-merged-but-not-git-plane-confirmed cards WITHOUT the git-plane gate, so
+    // they project `delivered` and this tick filter would exclude them → stuck
+    // delivered-but-unflipped. RE-INCLUDE such a card IFF BOTH:
+    //   (a) it carries NO delivery:merge_confirmed (the git-plane terminal marker
+    //       a properly settled cycle always has → those stay excluded), AND
+    //   (b) its story's backlog row is NOT ✅ Done (the write-back never landed →
+    //       a legitimately-delivered historical card is already Done → excluded).
+    // Scoped to REMOTE deliveries (delivered / delivered_external) — a local
+    // landing has no PR/(#N) to git-plane-confirm. This admits ONLY the r1-window
+    // leftovers; no delivery history is re-processed. On re-inclusion the cycle
+    // flows through settleDeliveredCycle: its (#N) is on main by now → it emits
+    // the missing merge_confirmed + flips + settles terminal (idempotent: once
+    // Done + merge_confirmed it is excluded again).
+    const deliveredRemote = state === "delivered" || state === "delivered_external";
+    const stuckR1Leftover =
+      deliveredRemote &&
+      doneStoryIds !== null &&
+      !hasMergeConfirmedEvent(events, cycleId) &&
+      meta.storyId !== "" &&
+      !doneStoryIds.has(meta.storyId);
+    if (
+      state !== "awaiting_merge" &&
+      state !== "ci_failed" &&
+      !(includeDelivered && deliveredTerminal) &&
+      !stuckR1Leftover
+    ) {
       continue;
     }
-    const meta = cycleMeta.get(cycleId) ?? { storyId: "", branch: `loop/${cycleId}` };
     if (meta.prNumber === undefined || meta.awaitingSinceMs === undefined) continue;
     snapshots.push({
       cycleId,
