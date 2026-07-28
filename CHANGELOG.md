@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v4.728.1 — 2026-07-28
+
 ### Delta Team(把一张卡分给设计/建造/评审三个角色跑)
 - 新增 `roll delta` 一组命令:`prepare` 领一次委托并原子占位、`status` 看这次委托每个角色走到哪一步(能认出崩溃留下的孤儿并恢复)、`validate` 校验角色之间的交接产物、`conclude` 收口。角色用什么模型由本机预设文件 `~/.roll/delta-team/presets.yaml` 决定(不放进项目配置,免得跟着仓库到处跑):可以钉死某个模型、要求角色之间模型必须不同、设成本上限和排除项;凑不出符合条件的模型就明确拒绝,不会随便找一个顶上。主机引导模式下的花费本机看不到,如实显示 `?` 而不是编一个数字(US-DELTA-001/002/003)[delta]
 - `roll delta validate` 现在对每个角色的交接产物做实质校验,而不只是检查文件存在:核对每个产物的 SHA-256 摘要与实际内容一致、产物路径不越出委托证据目录、角色的读写权限正确(只有 Builder 能写工作区)、host-native 角色带完整的 host attestation、Evaluator 的会话/角色实例令牌与 Builder 不相同、以及 Builder/Evaluator 证据文档的必要小节齐全。任一不符即 fail-closed 阻断并记录具体原因(digest 不符/路径越界/越权写/attestation 缺失/身份撞车)。历史 v1/占位 manifest 仍可解析但不能满足新的 Delta run(US-DELTA-004)[delta]
