@@ -814,6 +814,17 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   const id = await projectIdentity(identityRoot);
   const cycleId = makeCycleId();
 
+  // codex r15: this disclosure used to live on the IDLE path only, so a leftover
+  // lane that actually picked and built a card said nothing — the loudest case was
+  // the silent one. Say it up front, before the outcome is known, so it is stated
+  // exactly once per invocation regardless of how the cycle ends.
+  if (leftoverLoopLaneLabel(id.slug)) {
+    process.stdout.write(
+      "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
+        "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n",
+    );
+  }
+
   // FIX-1209: identity assertion — if the resolved project path contains a cycle
   // worktree marker, identity has drifted despite the preflight guard. Refuse
   // execution with an explicit error (never silently idle/paused).
@@ -1210,14 +1221,6 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
     // `com.roll.loop.*` lane, and that lane invokes THIS command. Without dormancy
     // it would keep logging idle rows unattended, so say so on the way out and name
     // the disarm path rather than letting it accumulate silently.
-    if (leftoverLoopLaneLabel(id.slug)) {
-      process.stdout.write(
-        "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
-          "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n" +
-          "loop run-once: 本次由旧版残留的 launchd lane 触发——Roll 不再安装定时器。\n" +
-          "  卸载方法:roll doctor(列出全部 com.roll.* lane 与卸载命令)\n",
-      );
-    }
     return 0;
   }
 
