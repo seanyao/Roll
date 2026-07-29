@@ -21,10 +21,14 @@ import type {
 
 // ── Visible-mode projection ───────────────────────────────────────────────────
 
-/** Derive the user-visible delivery mode from trigger + topology. */
-export function visibleMode(trigger: DelegationTrigger, topology: DeliveryTopology): VisibleDeliveryMode {
-  if (trigger === "loop-autonomous") return "autonomous-loop";
-  // host-guided
+/**
+ * Derive the user-visible delivery mode from the delivery shape.
+ *
+ * US-LOOP-110: the trigger axis collapsed to a single value, so it no longer
+ * discriminates — topology alone determines the visible mode. The parameter is
+ * retained for call-site stability and historical-shape reads.
+ */
+export function visibleMode(_trigger: DelegationTrigger, topology: DeliveryTopology): VisibleDeliveryMode {
   switch (topology) {
     case "solo":
       return "solo-skill";
@@ -203,10 +207,10 @@ export function projectDelegationStatus(
 
 /**
  * Build a lightweight fixture view suitable for snapshot testing.
- * Returns the four visible modes plus unknown/blocked, with stable fake IDs.
+ * Returns every visible mode plus unknown/blocked, with stable fake IDs.
  */
 export function buildStatusFixture(
-  scenario: "autonomous-loop" | "full-delta-team" | "delta-team" | "solo-skill" | "unknown" | "blocked",
+  scenario: "full-delta-team" | "delta-team" | "solo-skill" | "unknown" | "blocked",
 ): DelegationStatusView {
   switch (scenario) {
     case "unknown":
@@ -220,20 +224,6 @@ export function buildStatusFixture(
         qualityProfile: null,
         roles: [],
         totalCost: HOST_UNOBSERVABLE_COST,
-      };
-    case "autonomous-loop":
-      return {
-        delegationId: "deleg-loop-001",
-        storyId: "US-LOOP-1",
-        status: "in_progress",
-        visibleMode: "autonomous-loop",
-        trigger: "loop-autonomous",
-        topology: "solo",
-        qualityProfile: "standard",
-        roles: [
-          { role: "builder", status: "artifact_published", hostId: "adapter", modelId: "model-adapter-1", identityProvenance: "adapter-observed", cost: "? (usage_authority_unavailable)" },
-        ],
-        totalCost: "? (usage_authority_unavailable)",
       };
     case "full-delta-team":
       return {

@@ -9,9 +9,39 @@
 
 // ── Orthogonal dimensions ────────────────────────────────────────────────────
 
-/** How a delivery request originates. */
-export const DELEGATION_TRIGGERS = ["host-guided", "loop-autonomous"] as const;
+/**
+ * How a delivery request originates.
+ *
+ * US-LOOP-110: this was a `host-guided | loop-autonomous` binary whose second
+ * value described a daemon tick with no coding-agent main session. That premise
+ * was wrong — a loop is not a timer. A `roll loop go` chain runs INSIDE a host
+ * session, so it has an implicit Supervisor and full sub-agent capability like
+ * any other delegation. With the daemon lanes retired, no trigger can lack a
+ * host, so the axis collapses to a single value.
+ *
+ * The FIELD is kept (not deleted from the schema) so historical v2 manifests and
+ * events stay parseable — {@link isKnownHistoricalTrigger} recognises the retired
+ * literal on the read side without admitting it as a live value.
+ */
+export const DELEGATION_TRIGGERS = ["host-guided"] as const;
 export type DelegationTrigger = (typeof DELEGATION_TRIGGERS)[number];
+
+/** The retired trigger literal, kept for read-side compatibility only. */
+export const RETIRED_DELEGATION_TRIGGERS = ["loop-autonomous"] as const;
+
+/**
+ * Read-side guard: does this string name a trigger Roll has ever written?
+ * Accepts both live and retired literals so historical artifacts remain
+ * readable. Never use it to admit a live delegation — that is what
+ * {@link DELEGATION_TRIGGERS} is for.
+ */
+export function isKnownHistoricalTrigger(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return (
+    (DELEGATION_TRIGGERS as readonly string[]).includes(value) ||
+    (RETIRED_DELEGATION_TRIGGERS as readonly string[]).includes(value)
+  );
+}
 
 /** Delivery actor shape, independent of trigger and quality profile. */
 export const DELIVERY_TOPOLOGIES = ["solo", "delta-team", "full-delta-team"] as const;
@@ -28,12 +58,27 @@ export type QualityProfile = (typeof QUALITY_PROFILES)[number];
  * fourth state — it is always computed from the orthogonal shape.
  */
 export const VISIBLE_DELIVERY_MODES = [
-  "autonomous-loop",
   "full-delta-team",
   "delta-team",
   "solo-skill",
 ] as const;
 export type VisibleDeliveryMode = (typeof VISIBLE_DELIVERY_MODES)[number];
+
+/**
+ * US-LOOP-110: `autonomous-loop` was the visible mode of the retired
+ * `loop-autonomous` trigger. No live trigger maps to it, so it is no longer
+ * produced. Kept here for read-side recognition of historical projections.
+ */
+export const RETIRED_VISIBLE_DELIVERY_MODES = ["autonomous-loop"] as const;
+
+/** Read-side guard: has Roll ever rendered this visible mode? */
+export function isKnownHistoricalVisibleMode(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return (
+    (VISIBLE_DELIVERY_MODES as readonly string[]).includes(value) ||
+    (RETIRED_VISIBLE_DELIVERY_MODES as readonly string[]).includes(value)
+  );
+}
 
 // ── Delivery shape ────────────────────────────────────────────────────────────
 
@@ -159,7 +204,6 @@ export interface DeltaArtifactManifest {
 // ── Block reasons ────────────────────────────────────────────────────────────
 
 export const DELTA_BLOCK_REASONS = [
-  "host_supervisor_required",
   "model_unavailable",
   "invalid_preset",
   "invalid_resolution",
@@ -174,6 +218,23 @@ export const DELTA_BLOCK_REASONS = [
   "uncommitted_delegation_frame",
 ] as const;
 export type DeltaBlockReason = (typeof DELTA_BLOCK_REASONS)[number];
+
+/**
+ * US-LOOP-110: `host_supervisor_required` blocked `loop-autonomous + delta-team`
+ * on the premise that a loop has no host session. That premise was wrong and the
+ * trigger it guarded is gone, so the reason is unreachable and no longer emitted.
+ * Kept for read-side recognition of historical `delta:blocked` events.
+ */
+export const RETIRED_DELTA_BLOCK_REASONS = ["host_supervisor_required"] as const;
+
+/** Read-side guard: has Roll ever emitted this block reason? */
+export function isKnownHistoricalBlockReason(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return (
+    (DELTA_BLOCK_REASONS as readonly string[]).includes(value) ||
+    (RETIRED_DELTA_BLOCK_REASONS as readonly string[]).includes(value)
+  );
+}
 
 // ── Terminal outcome ─────────────────────────────────────────────────────────
 

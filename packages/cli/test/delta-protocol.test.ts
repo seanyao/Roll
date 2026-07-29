@@ -881,7 +881,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
         qualityProfile: input.qualityProfile,
         frameDir: input.frameDir,
       };
-      return { ok: false, reason: "host_supervisor_required", detail: "test injected block", role: input.stage };
+      return { ok: false, reason: "artifact_invalid", detail: "test injected block", role: input.stage };
     });
 
     try {
@@ -909,7 +909,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
       const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
       const lastEvent = JSON.parse(events[events.length - 1]!);
       expect(lastEvent.type).toBe("delta:blocked");
-      expect(lastEvent.reason).toBe("host_supervisor_required");
+      expect(lastEvent.reason).toBe("artifact_invalid");
     } finally {
       injectValidator(null);
     }
@@ -3710,14 +3710,17 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
       ], dir);
       expect(r2.code).toBe(1);
       const err = JSON.parse(r2.stderr);
-      expect(err.error).toBe("host_supervisor_required");
+      // US-LOOP-110: the ORIGINAL block reason is propagated. This used to report
+      // `host_supervisor_required`, which was never what happened — the delegation
+      // was blocked by `artifact_invalid` and this check only refuses to advance.
+      expect(err.error).toBe("artifact_invalid");
 
       // Exactly one new delta:blocked event appended
       const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
       expect(eventsAfter.length).toBe(eventsBefore.length + 1);
       const blockEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
       expect(blockEvent.type).toBe("delta:blocked");
-      expect(blockEvent.reason).toBe("host_supervisor_required");
+      expect(blockEvent.reason).toBe("artifact_invalid");
       expect(blockEvent.role).toBe("evaluator");
     } finally {
       injectValidator(null);

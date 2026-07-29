@@ -16,6 +16,7 @@ import {
   type DeliveryTopology,
   type QualityProfile,
   type DeltaRole,
+  type DeltaBlockReason,
 } from "@roll/spec";
 import {
   prepareDelegation,
@@ -698,23 +699,29 @@ function validateCommand(args: string[]): number {
     return 1;
   }
 
-  // Admission check 2: delegation must not be blocked
+  // Admission check 2: delegation must not be blocked.
+  // US-LOOP-110: this used to re-emit `host_supervisor_required`, which was never
+  // what happened here — the delegation was blocked for its OWN reason and this
+  // check only refuses to advance past it. The original reason is now PROPAGATED
+  // (never replaced by an unrelated one, never invented when unparseable).
   const blockedEvent = delegationEvents.find((e) => e.type === "delta:blocked");
   if (blockedEvent) {
     const blocked = blockedEvent as Record<string, unknown>;
+    const originalReason = typeof blocked.reason === "string" ? blocked.reason : "unknown";
+    const detail = `Delegation ${delegationId} is blocked (${originalReason}); cannot validate further stages`;
     bus.appendEvent(eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
       role: stage,
-      reason: "host_supervisor_required",
-      detail: `Delegation ${delegationId} is blocked (${blocked.reason as string ?? "unknown"}); cannot validate further stages`,
+      reason: originalReason as DeltaBlockReason,
+      detail,
       ts: now,
     });
     if (json) {
-      process.stderr.write(JSON.stringify({ ok: false, error: "host_supervisor_required", detail: `Delegation is blocked`, role: stage }) + "\n");
+      process.stderr.write(JSON.stringify({ ok: false, error: originalReason, detail: `Delegation is blocked`, role: stage }) + "\n");
     } else {
-      process.stderr.write(`Delegation ${delegationId} is blocked` + "\n");
+      process.stderr.write(`Delegation ${delegationId} is blocked (${originalReason})` + "\n");
     }
     return 1;
   }

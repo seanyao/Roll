@@ -13,9 +13,15 @@ import {
 import type { RollEvent, DeliveryShape } from "@roll/spec";
 
 describe("US-DELTA-001 AC2 — VisibleDeliveryMode projection", () => {
-  it("loop-autonomous → autonomous-loop (regardless of topology)", () => {
-    expect(visibleMode("loop-autonomous", "solo")).toBe("autonomous-loop");
-    expect(visibleMode("loop-autonomous", "full-delta-team")).toBe("autonomous-loop");
+  it("topology alone determines the mode — the trigger no longer discriminates (US-LOOP-110)", () => {
+    // The retired `loop-autonomous` trigger used to short-circuit to
+    // `autonomous-loop`. With the axis collapsed, even a historical trigger value
+    // projects purely from topology; no branch can resurrect the retired mode.
+    for (const t of ["host-guided", "loop-autonomous"] as unknown as readonly ["host-guided"]) {
+      expect(visibleMode(t, "solo")).toBe("solo-skill");
+      expect(visibleMode(t, "delta-team")).toBe("delta-team");
+      expect(visibleMode(t, "full-delta-team")).toBe("full-delta-team");
+    }
   });
 
   it("host-guided + solo → solo-skill", () => {
@@ -39,21 +45,20 @@ describe("US-DELTA-001 AC2 — VisibleDeliveryMode projection", () => {
     expect(visibleModeFromShape(shape)).toBe("delta-team");
   });
 
-  it("four projection rules cover all trigger×topology combos", () => {
+  it("three projection rules cover every live combo (US-LOOP-110)", () => {
     const results = new Set<string>();
-    for (const trigger of ["host-guided", "loop-autonomous"] as const) {
+    for (const trigger of ["host-guided"] as const) {
       for (const topology of ["solo", "delta-team", "full-delta-team"] as const) {
         results.add(visibleMode(trigger, topology));
       }
     }
-    // Only four distinct visible modes should ever be produced
-    expect(results.size).toBeLessThanOrEqual(4);
+    expect(results.size).toBe(3);
     expect([...results].sort()).toEqual([
-      "autonomous-loop",
       "delta-team",
       "full-delta-team",
       "solo-skill",
     ]);
+    expect(results.has("autonomous-loop")).toBe(false);
   });
 });
 
@@ -364,7 +369,7 @@ describe("US-DELTA-001 AC9 — Deterministic status projection", () => {
         delegationId: "d2",
         runId: "delta-d2",
         storyId: "US-TEST-2",
-        trigger: "loop-autonomous",
+        trigger: "loop-autonomous", // historical value — read-side compat (US-LOOP-110)
         topology: "full-delta-team",
         qualityProfile: "designed",
         presetId: "p2",
@@ -408,13 +413,15 @@ describe("US-DELTA-001 AC9 — Status fixtures cover all modes", () => {
     expect(f.trigger).toBeNull();
   });
 
-  it("autonomous-loop fixture", () => {
-    const f = buildStatusFixture("autonomous-loop");
-    expect(f.status).toBe("in_progress");
-    expect(f.visibleMode).toBe("autonomous-loop");
-    expect(f.trigger).toBe("loop-autonomous");
-    expect(f.roles[0].identityProvenance).toBe("adapter-observed");
-    expect(f.totalCost).toBe("? (usage_authority_unavailable)");
+  it("no fixture can produce the retired autonomous-loop mode (US-LOOP-110)", () => {
+    // The `autonomous-loop` scenario is gone from the fixture builder entirely —
+    // asking for it is a type error, and no surviving scenario yields that mode.
+    const scenarios = ["full-delta-team", "delta-team", "solo-skill", "unknown", "blocked"] as const;
+    for (const s of scenarios) {
+      const f = buildStatusFixture(s);
+      expect(f.visibleMode, s).not.toBe("autonomous-loop");
+      expect(f.trigger, s).not.toBe("loop-autonomous");
+    }
   });
 
   it("full-delta-team fixture", () => {
@@ -453,7 +460,7 @@ describe("US-DELTA-001 AC9 — Status fixtures cover all modes", () => {
   });
 
   it("all six fixtures produce distinct statuses", () => {
-    const scenarios = ["autonomous-loop", "full-delta-team", "delta-team", "solo-skill", "unknown", "blocked"] as const;
+    const scenarios = ["full-delta-team", "delta-team", "solo-skill", "unknown", "blocked"] as const;
     const fixtures = scenarios.map((s) => buildStatusFixture(s));
     const statuses = fixtures.map((f) => f.status);
     // Each fixture should have a distinct status or mode combination
@@ -462,7 +469,7 @@ describe("US-DELTA-001 AC9 — Status fixtures cover all modes", () => {
   });
 
   it("all fixtures use opaque model IDs, no real provider/model names", () => {
-    const scenarios = ["autonomous-loop", "full-delta-team", "delta-team", "solo-skill", "blocked"] as const;
+    const scenarios = ["full-delta-team", "delta-team", "solo-skill", "blocked"] as const;
     const realModelPatterns = /^(claude|sonnet|opus|gpt-4|gpt-3\.5|gemini|llama|mistral|openai|anthropic|google|meta|deepseek|command|nova|titan|inflection)/i;
     for (const scenario of scenarios) {
       const f = buildStatusFixture(scenario);
@@ -602,7 +609,7 @@ describe("US-DELTA-001 — Idempotent replay of projectDelegationStatus", () => 
         delegationId: "d2",
         runId: "delta-d2",
         storyId: "US-LOOP-1",
-        trigger: "loop-autonomous",
+        trigger: "loop-autonomous", // historical value — read-side compat (US-LOOP-110)
         topology: "solo",
         qualityProfile: "standard",
         presetId: "p1",
@@ -715,7 +722,7 @@ describe("US-DELTA-001 — Cost label consistency", () => {
         delegationId: "d2",
         runId: "delta-d2",
         storyId: "US-COST-2",
-        trigger: "loop-autonomous",
+        trigger: "loop-autonomous", // historical value — read-side compat (US-LOOP-110)
         topology: "solo",
         qualityProfile: "standard",
         presetId: "p1",
@@ -766,7 +773,7 @@ describe("US-DELTA-001 — Cost label consistency", () => {
         delegationId: "d3",
         runId: "delta-d3",
         storyId: "US-COST-3",
-        trigger: "loop-autonomous",
+        trigger: "loop-autonomous", // historical value — read-side compat (US-LOOP-110)
         topology: "full-delta-team",
         qualityProfile: "designed",
         presetId: "p1",
