@@ -134,7 +134,11 @@ export function configGetCommand(args: string[]): number {
       const resolved = configResolve(k);
       if (resolved === null) continue;
       const [v, src] = resolved;
-      out.push(`  ${padEndW(k, 30)} = ${padEndW(v, 8)} (${src})`);
+      // codex r10: --list is the THIRD read path. Marking it here too means all
+      // three (single read, --list, write) agree; a row without the marker is a key
+      // something actually reads.
+      const dead = INACTIVE_KEYS.has(k) ? "  [inactive]" : "";
+      out.push(`  ${padEndW(k, 30)} = ${padEndW(v, 8)} (${src})${dead}`);
     }
     process.stdout.write(out.join("\n") + "\n");
     return 0;

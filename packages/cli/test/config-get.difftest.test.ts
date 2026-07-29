@@ -130,12 +130,12 @@ describe("frozen: roll config (read) render", () => {
       {
         "status": 0,
         "stderr": "",
-        "stdout": "  loop_active_start              = 9        (.roll/local.yaml)
-        loop_active_end                = 24       (default)
-        loop_schedule.period_minutes   = 30       (.roll/local.yaml)
-        loop_schedule.offset_minute    = 0        (default)
-        loop_dream_hour                = 5        (<HOME>/.roll/config.yaml)
-        loop_dream_minute              = -        (default)
+        "stdout": "  loop_active_start              = 9        (.roll/local.yaml)  [inactive]
+        loop_active_end                = 24       (default)  [inactive]
+        loop_schedule.period_minutes   = 30       (.roll/local.yaml)  [inactive]
+        loop_schedule.offset_minute    = 0        (default)  [inactive]
+        loop_dream_hour                = 5        (<HOME>/.roll/config.yaml)  [inactive]
+        loop_dream_minute              = -        (default)  [inactive]
         integration_branch             = origin/main (default)
         publish_mode                   = remote   (default)
         default_submodule              =          (default)
