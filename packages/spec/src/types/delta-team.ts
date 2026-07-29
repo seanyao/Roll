@@ -28,6 +28,8 @@ export type DelegationTrigger = (typeof DELEGATION_TRIGGERS)[number];
 
 /** The retired trigger literal, kept for read-side compatibility only. */
 export const RETIRED_DELEGATION_TRIGGERS = ["loop-autonomous"] as const;
+/** A trigger Roll no longer accepts but must still read back from history. */
+export type HistoricalDelegationTrigger = (typeof RETIRED_DELEGATION_TRIGGERS)[number];
 
 /**
  * Read-side guard: does this string name a trigger Roll has ever written?
@@ -228,6 +230,8 @@ export type DeltaBlockReason = (typeof DELTA_BLOCK_REASONS)[number];
  * Kept for read-side recognition of historical `delta:blocked` events.
  */
 export const RETIRED_DELTA_BLOCK_REASONS = ["host_supervisor_required"] as const;
+/** A reason Roll no longer emits but must still read back from history. */
+export type HistoricalDeltaBlockReason = (typeof RETIRED_DELTA_BLOCK_REASONS)[number];
 
 /** Read-side guard: has Roll ever emitted this block reason? */
 export function isKnownHistoricalBlockReason(value: unknown): boolean {

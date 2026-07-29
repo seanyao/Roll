@@ -15,6 +15,7 @@ import type {
   DeliveryTopology,
   VisibleDeliveryMode,
   DeliveryShape,
+  HistoricalDelegationTrigger,
   HistoricalVisibleDeliveryMode,
   IdentityProvenance,
   RollEvent,
@@ -98,8 +99,15 @@ export interface DelegationStatusView {
   readonly delegationId: string;
   readonly storyId: string;
   readonly status: DelegationStatus;
-  readonly visibleMode: VisibleDeliveryMode | null;
-  readonly trigger: DelegationTrigger | null;
+  /**
+   * codex review r2: a status view is a READ of the event ledger, so these two
+   * fields must be typed as widely as the ledger can hold — a delegation prepared
+   * under the retired trigger reads back its historical trigger and the historical
+   * mode it was rendered as. Typing them live-only forced a cast and left
+   * historical consumers unable to read the returned values safely.
+   */
+  readonly visibleMode: VisibleDeliveryMode | HistoricalVisibleDeliveryMode | null;
+  readonly trigger: DelegationTrigger | HistoricalDelegationTrigger | null;
   readonly topology: DeliveryTopology | null;
   readonly qualityProfile: string | null;
   readonly blockReason?: string;
@@ -124,7 +132,7 @@ export function projectDelegationStatus(
     storyId: "",
     status: "unknown" as DelegationStatus,
     visibleMode: null as VisibleDeliveryMode | HistoricalVisibleDeliveryMode | null,
-    trigger: null as DelegationTrigger | null,
+    trigger: null as DelegationTrigger | HistoricalDelegationTrigger | null,
     topology: null as DeliveryTopology | null,
     qualityProfile: null as string | null,
     blockReason: undefined as string | undefined,

@@ -12,6 +12,7 @@ import {
   DELIVERY_TOPOLOGIES,
   QUALITY_PROFILES,
   DELTA_ROLES,
+  DELTA_BLOCK_REASONS,
   type DelegationTrigger,
   type DeliveryTopology,
   type QualityProfile,
@@ -709,17 +710,22 @@ function validateCommand(args: string[]): number {
   if (blockedEvent) {
     const blocked = blockedEvent as Record<string, unknown>;
     const rawReason = blocked.reason;
-    // codex review r1: never cast an arbitrary string into DeltaBlockReason — that
-    // would append an INVALID event to an append-only ledger. Only a reason Roll
-    // has ever legitimately written (live or retired) may be propagated; anything
-    // else falls back to a valid live reason and says so in the detail, so the
-    // ledger stays schema-clean and the malformed input stays visible.
-    const propagated = isKnownHistoricalBlockReason(rawReason)
-      ? (rawReason as DeltaBlockReason)
-      : "artifact_invalid";
-    const originalNote = isKnownHistoricalBlockReason(rawReason)
-      ? String(rawReason)
-      : `unrecognised prior reason ${JSON.stringify(rawReason)}`;
+    // A NEW event may only carry a LIVE reason — the ledger is append-only, so
+    // writing a retired or arbitrary literal would make this fresh record
+    // schema-invalid (codex review r1 + r2). Two distinct things therefore:
+    //   - `propagated` is what the new event carries: the prior reason when it is
+    //     still live, otherwise the honest live fallback;
+    //   - `originalNote` is what the DETAIL says the prior reason actually was,
+    //     verbatim, including a retired or malformed value.
+    // Nothing is invented and nothing is hidden.
+    const isLiveReason =
+      typeof rawReason === "string" && (DELTA_BLOCK_REASONS as readonly string[]).includes(rawReason);
+    const propagated: DeltaBlockReason = isLiveReason ? (rawReason as DeltaBlockReason) : "artifact_invalid";
+    const originalNote = isLiveReason
+      ? rawReason
+      : isKnownHistoricalBlockReason(rawReason)
+        ? `retired prior reason ${String(rawReason)}`
+        : `unrecognised prior reason ${JSON.stringify(rawReason)}`;
     const detail = `Delegation ${delegationId} is blocked (${originalNote}); cannot validate further stages`;
     bus.appendEvent(eventsPath, {
       type: "delta:blocked",

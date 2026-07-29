@@ -121,3 +121,40 @@ describe("the admission gate is gone", () => {
     expect(core["admitShape"]).toBeUndefined();
   });
 });
+
+describe("a NEW event never carries a non-live reason (codex r2)", () => {
+  it("the live enum is the only thing a fresh delta:blocked may carry", () => {
+    // The ledger is append-only: a fresh record written with a retired or
+    // arbitrary literal would be schema-invalid forever. `delta validate`
+    // therefore propagates only live reasons and states the prior one in `detail`.
+    expect((DELTA_BLOCK_REASONS as readonly string[]).includes("host_supervisor_required")).toBe(false);
+    expect(isKnownHistoricalBlockReason("host_supervisor_required")).toBe(true);
+  });
+});
+
+describe("the status view can hold what the ledger holds (codex r2)", () => {
+  it("types historical trigger + mode without a lying cast", () => {
+    const events = [
+      {
+        type: "delta:prepared",
+        delegationId: "d-hist-4",
+        runId: "r4",
+        storyId: "US-OLD-4",
+        trigger: "loop-autonomous",
+        topology: "full-delta-team",
+        qualityProfile: "verified",
+        presetId: "p",
+        presetSha256: "c".repeat(64),
+        hostId: "adapter",
+        ts: 20,
+      },
+    ] as unknown as Parameters<typeof projectDelegationStatus>[1];
+    const view = projectDelegationStatus("d-hist-4", events);
+    // Both fields are declared wide enough to hold these values, so a historical
+    // consumer can read them directly — no narrowing cast, no silent restatement.
+    const trigger: string | null = view.trigger;
+    const mode: string | null = view.visibleMode;
+    expect(trigger).toBe("loop-autonomous");
+    expect(mode).toBe("autonomous-loop");
+  });
+});
