@@ -34,7 +34,6 @@ import { readSkipState, writeSkipState } from "../runner/skip-cards.js";
 import { resolveBinaryStalenessReadout } from "../runner/binary-staleness.js";
 import { detectMainCheckoutWriteProtectionResidue, recoverMainCheckoutWriteProtectionResidue } from "../runner/main-checkout-guard.js";
 import { rollVersion } from "./version.js";
-import { decideBackend, readFallbackHealthForProject, type SchedulerBackendName } from "./loop-sched.js";
 
 interface Palette {
   GREEN: string;
@@ -498,56 +497,39 @@ function sameRealPath(a: string, b: string): boolean {
 }
 
 /**
- * Report which scheduler backend actually holds for THIS project —
- * launchd | process-fallback | none — plus fallback PID/heartbeat and its
- * reboot/login limitation. A stale/dead fallback lease is reported as STALE and
- * NEVER as an active backend (decideBackend gates on liveness). Stays silent
- * when the project has no lease and no armed launchd lane, so idle projects are
- * not nagged on every `roll doctor`.
+ * US-LOOP-116: there is no scheduler backend to report — Roll installs no timers
+ * and the process fallback is deleted. What still matters is whether a LEFTOVER
+ * launchd lane points at this project, because such a lane can still invoke
+ * `roll loop run-once` unattended. Silent when the project has none.
  */
-function schedulerBackendSection(lang: Lang, probe: LaneProbe): void {
+function leftoverLaneSection(lang: Lang, probe: LaneProbe): void {
   const root = process.cwd();
-  const fb = readFallbackHealthForProject(root);
-
-  let launchdArmed = false;
-  if (process.platform === "darwin") {
-    const dir = process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
-    try {
-      for (const name of readdirSync(dir)) {
-        if (!/^com\.roll\.loop\..+\.plist$/.test(name)) continue;
-        const wd = readWorkingDirectory(join(dir, name));
-        if (wd === "" || !sameRealPath(wd, root)) continue;
-        launchdArmed = probe.lastExit(name.replace(/\.plist$/, "")) !== null;
-        break;
-      }
-    } catch {
-      /* no launchd dir */
+  if (process.platform !== "darwin") return;
+  const dir = process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
+  const hits: string[] = [];
+  try {
+    for (const name of readdirSync(dir)) {
+      // codex review r1: ANY com.roll.* lane is resident work, not just loop —
+      // dream was installed by the same retired command.
+      if (!/^com\.roll\..+\.plist$/.test(name)) continue;
+      const wd = readWorkingDirectory(join(dir, name));
+      if (wd === "" || !sameRealPath(wd, root)) continue;
+      hits.push(name.replace(/\.plist$/, ""));
     }
+  } catch {
+    return; // no launchd dir
   }
-
-  if (fb === null && !launchdArmed) return;
-
-  const health = fb?.health ?? { status: "unknown" as const, reason: "no fallback lease", lease: null, alive: false };
-  const backend: SchedulerBackendName = decideBackend(launchdArmed, health);
+  if (hits.length === 0) return;
 
   emit("");
-  emit(lang === "zh" ? "排程后端(本项目)" : "Scheduler backend (this project)");
+  emit(lang === "zh" ? "旧版残留的 launchd lane(本项目)" : "Leftover launchd lane (this project)");
   emit("");
-  const dot = backend === "launchd" ? "●" : backend === "process-fallback" ? "⚠" : "○";
-  emit(`  ${dot} backend: ${backend}`);
-  emit(launchdArmed ? "    launchd: armed" : "    launchd: unarmed");
-  if (health.lease !== null) {
-    if (health.alive) {
-      emit(`    process-fallback: armed (owner-confirmed) · pid ${health.lease.pid} · heartbeat ${health.lease.heartbeatAt}`);
-      emit(lang === "zh" ? "    限制:重启/登出后不等价于 launchd" : "    limitation: not a launchd replacement across reboot/login");
-    } else {
-      emit(`    process-fallback: STALE — not active (${health.reason})`);
-      emit("    recover: roll loop fallback start --confirm");
-    }
+  for (const label of hits) {
+    const loaded = probe.lastExit(label) !== null;
+    emit(`  ⚠ ${label}${loaded ? " · loaded" : " · not loaded"}`);
   }
-  if (backend === "none") {
-    emit(lang === "zh" ? "    排程未激活 — 不会运行任何自主任务" : "    unarmed — no autonomous work will run");
-  }
+  emit(lang === "zh" ? "    Roll 不再安装定时器。逐个卸载:" : "    Roll no longer installs timers. Disarm each:");
+  emit("    launchctl bootout gui/$(id -u)/<label>; rm -f ~/Library/LaunchAgents/<label>.plist");
 }
 
 function mainCheckoutProtectionRuntimeDir(root: string): string {
@@ -801,7 +783,7 @@ export function doctorCommand(args: string[], deps: DoctorDeps = {}): number {
     gitignoreOwnershipSection(lang);
     lanesSection(lang, realLaneProbe());
     launchdStaleSection(lang);
-    schedulerBackendSection(lang, realLaneProbe());
+    leftoverLaneSection(lang, realLaneProbe());
     mainCheckoutWriteProtectionSection(lang);
     launchdProxySection(lang);
     binaryStalenessSection(lang);

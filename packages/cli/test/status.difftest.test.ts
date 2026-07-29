@@ -119,7 +119,7 @@ describe("frozen: roll status render", () => {
         + .roll/features/  23 feature docs
         ● loop · launchd enabled
         ○ dream · launchd not installed
-        ● backend · launchd
+        ◆ driver · session
 
       "
     `);
@@ -231,7 +231,7 @@ describe("frozen: roll status render", () => {
         + .roll/features/  2 feature docs
         ○ loop · launchd not installed
         ○ dream · launchd not installed
-        ○ backend · none  unarmed — no autonomous work will run
+        ◆ driver · session
 
       "
     `);

@@ -28,9 +28,6 @@
  */
 import {
   type Scheduler,
-  type ProcessFallbackIntent,
-  type ProcessFallbackStartResult,
-  ProcessFallbackScheduler,
   createScheduler,
   configResolve,
   launchdLabel,
@@ -38,16 +35,7 @@ import {
   plistContent,
   projectIdentity,
 } from "@roll/infra";
-import type { FallbackHealth } from "@roll/spec";
-import {
-  EventBus,
-  computeFallbackCommandDigest,
-  evaluateFallbackLiveness,
-  fallbackHeartbeatPath,
-  fallbackLeasePath,
-  readFallbackLease,
-  type FallbackRunnerConfig,
-} from "@roll/core";
+import { EventBus } from "@roll/core";
 import { GOAL_SCHEMA_VERSION, parseGoalYaml, renderGoalYaml, resolveLang, t, transitionGoal, v3Catalog } from "@roll/spec";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -704,205 +692,24 @@ function restoreDormantClaim(waking: string, dormant: string): void {
 }
 
 /** `roll loop on` — generate v3 runners + plists, (re)load loop & pr. */
-export async function loopOnCommand(_args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
-  const id = await deps.identity();
-  const shared = deps.sharedRoot();
-  const ld = deps.launchdDir();
-  const uid = deps.uid();
-  mkdirSync(ld, { recursive: true });
-
-  // US-LOOP-115: the lightweight "wake from dormant" path is gone with DORMANT.
-  // It re-armed the loop lane when a marker or an orphan .waking file was present.
-
-  // loop period from project local.yaml (live default: 30).
-  let period = 30;
-  const localYaml = join(id.path, ".roll", "local.yaml");
-  if (existsSync(localYaml)) {
-    try {
-      period = parseLoopPeriodMinutes(readFileSync(localYaml, "utf8"));
-    } catch {
-      /* default */
-    }
-  }
-
-  // 1. loop service — the v3 heart.
-  const loopRunner = join(shared, "loop", `run-${id.slug}.sh`);
-  const rollBinOverride = (process.env["ROLL_RUNNER_ROLL_BIN"] ?? "").trim();
-  writeExecutable(
-    loopRunner,
-    buildLoopRunnerScript({
-      projectPath: id.path,
-      slug: id.slug,
-      activeStart: 0,
-      activeEnd: 24,
-      ...(rollBinOverride !== "" ? { rollBin: rollBinOverride } : {}),
-    }),
-  );
-  const loopLabel = launchdLabel("loop", id.slug);
-  const loopPlist = launchdPlistPath("loop", id.slug, ld);
-  writeFileSync(
-    loopPlist,
-    plistContent({
-      label: loopLabel,
-      runnerScript: loopRunner,
-      projectPath: id.path,
-      pathValue: pathValue(),
-      schedule: { kind: "interval", periodMinutes: period },
-    }),
-  );
-  const loopMount = await mountService(deps, loopLabel, loopPlist);
-
-  // 2. dream service — the v3 nightly scan heart (roll dream run-once), daily
-  //    (US-PORT-008). Retires the v2 bash zombie runner: the generated script is
-  //    self-contained and the plist uses the daily schedule (infra scheduleXml).
-  const dream = dreamScheduleFor(id.path);
-  const dreamRunner = join(shared, "dream", `run-${id.slug}.sh`);
-  writeExecutable(
-    dreamRunner,
-    buildDreamRunnerScript({
-      projectPath: id.path,
-      slug: id.slug,
-      ...(rollBinOverride !== "" ? { rollBin: rollBinOverride } : {}),
-    }),
-  );
-  const dreamLabel = launchdLabel("dream", id.slug);
-  const dreamPlist = launchdPlistPath("dream", id.slug, ld);
-  writeFileSync(
-    dreamPlist,
-    plistContent({
-      label: dreamLabel,
-      runnerScript: dreamRunner,
-      projectPath: id.path,
-      pathValue: pathValue(),
-      schedule: { kind: "daily", hour: dream.hour, minute: dream.minute, calendar: dream.calendar },
-    }),
-  );
-  const dreamMount = await mountService(deps, dreamLabel, dreamPlist);
-
-  // FIX-212: a silent mount failure is the bug. If any job did not actually
-  // land in launchd (even after the retry), fail LOUD — name the label, echo
-  // the launchctl evidence, and exit non-zero so `loop on` can never report a
-  // green that the scheduler will not honor.
-  const failed = [
-    { label: loopLabel, plist: loopPlist, m: loopMount },
-    { label: dreamLabel, plist: dreamPlist, m: dreamMount },
-  ].filter((s) => !s.m.ok);
-  if (failed.length > 0) {
-    process.stderr.write(mountFailureMessage(uid, failed));
-    return 1;
-  }
-
-  process.stdout.write(
-    [
-      `Loop enabled — cycle heart: roll loop run-once (v3)`,
-      `Loop 已启用 — 周期心脏:roll loop run-once(v3)`,
-      `  • roll-loop  every ${period}min  /  每 ${period} 分钟`,
-      `  • dream      daily (roll dream run-once)  /  每日(roll dream run-once)`,
-      `  • observe    tmux attach -t roll-loop-${id.slug}  /  观测窗`,
-      // FIX-212: evidence the jobs are actually mounted (launchctl print exit 0),
-      // not merely that bootstrap was issued.
-      `  • verified mounted / 已验证挂载: ${loopLabel}, ${dreamLabel}`,
-      `  • mode: autonomous — scheduler can pick eligible Todo within pause/budget/route/evidence/Evaluator/release gates`,
-      ``,
-    ].join("\n"),
-  );
-  return 0;
-}
-
-/** `roll loop off` — boot out every roll service for this project. */
-export async function loopOffCommand(
-  args: string[],
-  deps: LoopSchedDeps = realDeps(),
-  fbBackend: FallbackBackend = defaultFallbackBackend(),
-): Promise<number> {
-  if (args.includes("--all")) return loopOffAllCommand(deps);
-
-  const id = await deps.identity();
-  for (const svc of LOOP_SERVICES) {
-    const label = launchdLabel(svc, id.slug);
-    await deps.scheduler.dormant(label);
-    try {
-      rmSync(join(launchAgentsDir(), `${label}.plist`), { force: true });
-    } catch {
-      /* best-effort */
-    }
-  }
-  // FIX-234 AC2: off owns the FULL lane set — retired shapes (ci/alert/brief
-  // from older versions) left zombie jobs pointing at deleted engines; sweep
-  // every com.roll.*.<slug> plist, not just the three we install.
-  for (const label of listRollLaneLabels(id.slug)) {
-    if (LOOP_SERVICES.some((svc) => label === launchdLabel(svc, id.slug))) continue;
-    await deps.scheduler.dormant(label);
-    try {
-      rmSync(join(launchAgentsDir(), `${label}.plist`), { force: true });
-    } catch {
-      /* best-effort */
-    }
-    process.stdout.write(`  swept zombie lane: ${label}\n`);
-  }
-  const cleanup = await deps.cleanupHelpers?.(id.path, id.slug);
-  if (cleanup !== undefined && (cleanup.processCount > 0 || cleanup.tmuxSessionKilled)) {
-    const parts = [
-      cleanup.tmuxSessionKilled ? `tmux session roll-loop-${id.slug}` : undefined,
-      cleanup.processCount > 0 ? `${cleanup.processCount} helper process(es)` : undefined,
-    ].filter((part): part is string => part !== undefined);
-    process.stdout.write(`  stopped ${parts.join(" and ")}\n`);
-  }
-
-  // US-LOOP-108 AC4: `off` owns the fallback backend too. Stop an active/leased
-  // process fallback, then VERIFY no scheduler tick remains possible — launchd
-  // is booted out above and the fallback lease is gone or being torn down.
-  const config = resolveFallbackConfig(id.path, id.slug);
-  const fbHealth = await fbBackend.health(config);
-  let fallbackStillLive = false;
-  if (fbHealth.lease !== null) {
-    const stopped = await fbBackend.stop(config);
-    const after = await fbBackend.health(config);
-    fallbackStillLive = after.alive;
-    process.stdout.write(
-      stopped
-        ? `  stopped process fallback (pid ${fbHealth.lease.pid}); lease removed on exit\n`
-        : `  cleared stale process-fallback lease (pid ${fbHealth.lease.pid})\n`,
-    );
-  }
-
-  const launchdArmed = await deps.scheduler.isArmed(launchdLabel("loop", id.slug));
-  const noTick = !launchdArmed && !fallbackStillLive;
-  process.stdout.write(
-    `Loop disabled (loop/dream/pr booted out)\n` +
-    `Loop 已停用(loop/dream/pr 均已卸载)\n` +
-    (noTick
-      ? `verified: no further scheduler tick is possible (launchd unarmed, fallback stopped)\n`
-      : `warning: a scheduler backend may still be shutting down — re-run \`roll loop status\` to confirm\n`) +
-    `mode: guided — scheduler disabled; owner drives \`roll supervisor next\` or explicit \`roll loop go\`\n`,
-  );
-  return 0;
-}
-
-/** `roll loop off --all` — machine emergency stop for every Roll launchd lane. */
-async function loopOffAllCommand(deps: LoopSchedDeps): Promise<number> {
-  const labels = listAllRollLaneLabels();
-  for (const label of labels) {
-    await deps.scheduler.dormant(label);
-    try {
-      rmSync(join(launchAgentsDir(), `${label}.plist`), { force: true });
-    } catch {
-      /* best-effort */
-    }
-  }
-  process.stdout.write(
-    `Loop disabled for all projects (${labels.length} Roll launchd job(s) removed)\n` +
-    `已停用全部项目的 Roll 排程(${labels.length} 个 launchd 任务已移除)\n` +
-    `mode: guided — scheduler disabled machine-wide; owner drives explicit work\n`,
-  );
-  return 0;
-}
-
-/** The user LaunchAgents dir (test override via _LAUNCHD_DIR). */
+/**
+ * The user LaunchAgents dir (test override via `_LAUNCHD_DIR`).
+ *
+ * US-LOOP-116: Roll no longer WRITES here — it installs no timers. The path is
+ * still needed on the READ side, to notice a lane an older install left behind.
+ */
 export function launchAgentsDir(): string {
   return process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
 }
 
+/**
+ * Every `com.roll.*` launchd lane label on this machine, optionally scoped to a
+ * project slug.
+ *
+ * US-LOOP-116: Roll installs no lanes, so any hit is a LEFTOVER from an older
+ * install. These stay as read-side inventory — `roll doctor` lists them and prints
+ * the disarm command; nothing here ever writes to LaunchAgents.
+ */
 function listRollLaneLabelsByFilter(filter: (name: string) => boolean): string[] {
   try {
     return readdirSync(launchAgentsDir())
@@ -915,311 +722,29 @@ function listRollLaneLabelsByFilter(filter: (name: string) => boolean): string[]
   }
 }
 
-/** All com.roll.* lane labels for a slug found on disk (FIX-234). */
+/** Leftover lane labels belonging to one project slug. */
 export function listRollLaneLabels(slug: string): string[] {
   return listRollLaneLabelsByFilter((n) => n.endsWith(`.${slug}.plist`));
 }
 
-/** Every com.roll.* launchd lane label found on this machine. */
+/** Every leftover com.roll.* lane label found on this machine. */
 export function listAllRollLaneLabels(): string[] {
   return listRollLaneLabelsByFilter(() => true);
 }
 
-// ─── Owner-confirmed process fallback surface (US-LOOP-108) ──────────────────
-//
-// The launchd backend is the only autonomous scheduler; when its bootstrap
-// fails on macOS `roll loop on` ends UNARMED (see mountFailureMessage). This
-// surface lets the owner EXPLICITLY opt into the US-LOOP-107 process fallback —
-// Roll never selects it automatically. Every command below reaches the real
-// lease/liveness state (readFallbackLease + evaluateFallbackLiveness); nothing
-// here is a cosmetic message.
+// ─── US-LOOP-116: `loop on` / `loop off` are gone ───────────────────────────
+// Their entry points were cut in US-LOOP-113 and nothing routes to them, so the
+// implementations were dead code. `loop off` in particular still printed
+// "verified: no further scheduler tick is possible" — a claim it could no longer
+// substantiate once the fallback it also stopped was deleted (codex review r1).
 
-export type SchedulerBackendName = "launchd" | "process-fallback" | "none";
+// ─── US-LOOP-116: the process fallback is gone ──────────────────────────────
+// US-LOOP-107 added a `detached` self-running process as a fallback for when
+// launchd bootstrap failed. It was a SECOND resident scheduler: deleting the plist
+// layer alone would have left it running under a different name. With no resident
+// scheduling at all there is no backend to choose, so SchedulerBackendName,
+// the lease/heartbeat/liveness probes and `roll loop fallback` are all deleted.
 
-/** The subset of ProcessFallbackScheduler the CLI surface uses (test seam). */
-export interface FallbackBackend {
-  start(config: FallbackRunnerConfig, intent: ProcessFallbackIntent): Promise<ProcessFallbackStartResult>;
-  stop(config: FallbackRunnerConfig): Promise<boolean>;
-  health(config: FallbackRunnerConfig): Promise<FallbackHealth>;
-}
-
-export interface LoopFallbackDeps {
-  identity: () => Promise<{ path: string; slug: string }>;
-  /** Resolve the frozen fallback runner config (period + roll binary). */
-  resolveConfig: (projectPath: string, slug: string) => FallbackRunnerConfig;
-  backend: FallbackBackend;
-  /** launchd arm probe — so status reports which backend actually holds. */
-  launchdArmed: (slug: string) => Promise<boolean>;
-}
-
-/**
- * Freeze the fallback runner identity. periodMinutes + rollBin feed the command
- * digest, so this MUST be deterministic across start/stop/status invocations or
- * a live lease would read back as stale (digest drift).
- */
-export function resolveFallbackConfig(projectPath: string, slug: string): FallbackRunnerConfig {
-  let period = 30;
-  const localYaml = join(projectPath, ".roll", "local.yaml");
-  if (existsSync(localYaml)) {
-    try {
-      period = parseLoopPeriodMinutes(readFileSync(localYaml, "utf8"));
-    } catch {
-      /* default */
-    }
-  }
-  const rollBin = (process.env["ROLL_RUNNER_ROLL_BIN"] ?? "").trim() || "roll";
-  return { projectPath, slug, periodMinutes: period, rollBin };
-}
-
-function defaultFallbackBackend(): FallbackBackend {
-  const scheduler = new ProcessFallbackScheduler();
-  return {
-    start: (c, i) => scheduler.start(c, i),
-    stop: (c) => scheduler.stop(c),
-    health: (c) => scheduler.health(c),
-  };
-}
-
-function realFallbackDeps(): LoopFallbackDeps {
-  const uid = process.getuid?.() ?? 501;
-  const launchd = createScheduler(process.platform, { uid });
-  return {
-    identity: () => projectIdentity(),
-    resolveConfig: resolveFallbackConfig,
-    backend: defaultFallbackBackend(),
-    launchdArmed: (slug) => launchd.isArmed(launchdLabel("loop", slug)),
-  };
-}
-
-/** Synchronous fallback-liveness read for the sync status/doctor renderers. */
-export function readFallbackHealthSync(projectPath: string, slug: string): FallbackHealth {
-  const config = resolveFallbackConfig(projectPath, slug);
-  return evaluateFallbackLiveness({
-    lease: readFallbackLease(fallbackLeasePath(projectPath, slug)),
-    heartbeatPath: fallbackHeartbeatPath(projectPath, slug),
-    expectedDigest: computeFallbackCommandDigest(config),
-  });
-}
-
-/**
- * Locate + evaluate a project's fallback lease WITHOUT the caller knowing its
- * slug — the lease directory name (`fallback-lease-<slug>`) carries it. Used by
- * `roll doctor`, which is synchronous and has no async project identity.
- */
-export function readFallbackHealthForProject(
-  projectPath: string,
-): { slug: string; health: FallbackHealth } | null {
-  const rt = join(projectPath, ".roll", "loop");
-  let entries: string[];
-  try {
-    entries = readdirSync(rt);
-  } catch {
-    return null;
-  }
-  const leaseDir = entries.find((n) => n.startsWith("fallback-lease-"));
-  if (leaseDir === undefined) return null;
-  const slug = leaseDir.slice("fallback-lease-".length);
-  return { slug, health: readFallbackHealthSync(projectPath, slug) };
-}
-
-export interface SchedulerBackendView {
-  backend: SchedulerBackendName;
-  launchdArmed: boolean;
-  fallback: FallbackHealth;
-}
-
-/**
- * Decide the effective scheduler backend. launchd wins when armed; otherwise a
- * LIVE fallback holds; otherwise `none`. A stale/dead fallback is never the
- * active backend (AC3) — `fallback.alive` gates the process-fallback branch.
- */
-export function decideBackend(launchdArmed: boolean, fallback: FallbackHealth): SchedulerBackendName {
-  if (launchdArmed) return "launchd";
-  if (fallback.alive) return "process-fallback";
-  return "none";
-}
-
-export async function resolveSchedulerBackend(deps: LoopFallbackDeps): Promise<SchedulerBackendView> {
-  const id = await deps.identity();
-  const config = deps.resolveConfig(id.path, id.slug);
-  const [launchdArmed, fallback] = await Promise.all([
-    deps.launchdArmed(id.slug),
-    deps.backend.health(config),
-  ]);
-  return { backend: decideBackend(launchdArmed, fallback), launchdArmed, fallback };
-}
-
-function fbLang(): "en" | "zh" {
-  return resolveLang({
-    rollLang: process.env["ROLL_LANG"],
-    lcAll: process.env["LC_ALL"],
-    lang: process.env["LANG"],
-  }) === "zh"
-    ? "zh"
-    : "en";
-}
-
-const pick = (lang: "en" | "zh", en: string, zh: string): string => (lang === "zh" ? zh : en);
-
-const FALLBACK_LIMITATION = {
-  en: "limitation: not a launchd replacement — does not survive reboot/login",
-  zh: "限制:不是 launchd 的等价替代 — 重启/登出后不保留",
-} as const;
-
-/**
- * Render the effective backend, health, PID/heartbeat and limitations for
- * `roll loop status` / `roll loop fallback status`. A stale lease is reported
- * as stale + NOT active, never as a running backend.
- */
-export function renderBackendStatusLines(view: SchedulerBackendView, lang: "en" | "zh"): string[] {
-  const lines: string[] = [];
-  lines.push(pick(lang, `scheduler backend: ${view.backend}`, `排程后端:${view.backend}`));
-  lines.push(
-    view.launchdArmed
-      ? pick(lang, "  launchd: armed — autonomous scheduling active", "  launchd:已激活 — 自主排程运行中")
-      : pick(lang, "  launchd: unarmed", "  launchd:未激活"),
-  );
-
-  const fb = view.fallback;
-  const lease = fb.lease;
-  if (fb.alive && lease !== null) {
-    lines.push(
-      pick(lang, "  process-fallback: armed (owner-confirmed)", "  process-fallback:已激活(owner 已确认)"),
-      `    pid: ${lease.pid}  heartbeat: ${lease.heartbeatAt}`,
-      pick(lang, `    owner-confirmed: ${lease.ownerConfirmedAt}`, `    owner 确认于:${lease.ownerConfirmedAt}`),
-      `    ${pick(lang, FALLBACK_LIMITATION.en, FALLBACK_LIMITATION.zh)}`,
-    );
-  } else if (lease !== null) {
-    lines.push(
-      pick(
-        lang,
-        `  process-fallback: stale — NOT active (${fb.reason})`,
-        `  process-fallback:已失效 — 未运行(${fb.reason})`,
-      ),
-      pick(lang, `    last known pid: ${lease.pid}`, `    最后已知 pid:${lease.pid}`),
-      pick(lang, "    recover: roll loop fallback start --confirm", "    恢复:roll loop fallback start --confirm"),
-    );
-  } else {
-    lines.push(pick(lang, "  process-fallback: none", "  process-fallback:无"));
-  }
-
-  if (view.backend === "none") {
-    lines.push(
-      pick(lang, "  scheduler: unarmed — no autonomous work will run", "  排程:未激活 — 不会运行任何自主任务"),
-      pick(lang, "  repair launchd, or: roll loop fallback start --confirm", "  修复 launchd,或执行:roll loop fallback start --confirm"),
-    );
-  }
-  return lines;
-}
-
-/** `roll loop status` — read-only effective scheduler backend + health. */
-export async function loopStatusCommand(
-  _args: string[],
-  deps: LoopFallbackDeps = realFallbackDeps(),
-): Promise<number> {
-  const view = await resolveSchedulerBackend(deps);
-  process.stdout.write(renderBackendStatusLines(view, fbLang()).join("\n") + "\n");
-  return 0;
-}
-
-/** `roll loop fallback <start|stop|status>` — owner-confirmed process fallback. */
-export async function loopFallbackCommand(
-  args: string[],
-  deps: LoopFallbackDeps = realFallbackDeps(),
-): Promise<number> {
-  const sub = args[0];
-  const lang = fbLang();
-  if (sub === "status" || sub === undefined) {
-    return loopStatusCommand([], deps);
-  }
-  if (sub === "start") {
-    const confirmed = args.includes("--confirm");
-    const id = await deps.identity();
-    const config = deps.resolveConfig(id.path, id.slug);
-    if (!confirmed) {
-      // AC2: start without --confirm refuses WITHOUT spawning anything.
-      process.stderr.write(
-        [
-          pick(lang, "loop fallback start: refused — owner confirmation required", "loop fallback start:已拒绝 — 需要 owner 明示确认"),
-          pick(
-            lang,
-            "  the process fallback runs unattended cycles; confirm with:",
-            "  进程 fallback 会无人值守地运行周期;请确认:",
-          ),
-          "    roll loop fallback start --confirm",
-          pick(lang, `  ${FALLBACK_LIMITATION.en}`, `  ${FALLBACK_LIMITATION.zh}`),
-          "",
-        ].join("\n"),
-      );
-      return 1;
-    }
-    const result = await deps.backend.start(config, { ownerConfirmed: true });
-    if (!result.started) {
-      process.stderr.write(
-        [
-          pick(lang, `loop fallback start: not started — ${result.reason}`, `loop fallback start:未启动 — ${result.reason}`),
-          ...(result.pid !== undefined
-            ? [pick(lang, `  holder pid: ${result.pid}`, `  持有者 pid:${result.pid}`)]
-            : []),
-          "",
-        ].join("\n"),
-      );
-      return 1;
-    }
-    const health = await deps.backend.health(config);
-    process.stdout.write(
-      [
-        pick(lang, "Process fallback armed (owner-confirmed)", "进程 fallback 已激活(owner 已确认)"),
-        `  pid: ${result.pid}`,
-        ...(health.lease !== null ? [`  heartbeat: ${health.lease.heartbeatAt}`] : []),
-        pick(lang, `  ${FALLBACK_LIMITATION.en}`, `  ${FALLBACK_LIMITATION.zh}`),
-        pick(lang, "  stop with: roll loop fallback stop", "  停止:roll loop fallback stop"),
-        "",
-      ].join("\n"),
-    );
-    return 0;
-  }
-  if (sub === "stop") {
-    const id = await deps.identity();
-    const config = deps.resolveConfig(id.path, id.slug);
-    const before = await deps.backend.health(config);
-    if (before.lease === null) {
-      process.stdout.write(
-        pick(lang, "Process fallback: nothing to stop (no lease)\n", "进程 fallback:无需停止(无 lease)\n"),
-      );
-      return 0;
-    }
-    const stopped = await deps.backend.stop(config);
-    if (!stopped) {
-      process.stderr.write(
-        pick(
-          lang,
-          "loop fallback stop: no live runner to stop (lease was already stale)\n",
-          "loop fallback stop:没有存活的运行器可停(lease 已失效)\n",
-        ),
-      );
-      return before.alive ? 1 : 0;
-    }
-    process.stdout.write(
-      [
-        pick(lang, "Process fallback stop signaled — runner is shutting down", "已发出进程 fallback 停止信号 — 运行器正在退出"),
-        pick(lang, "  the lease is removed on exit; no further tick will run", "  lease 会在退出时移除;不会再有新的周期"),
-        "",
-      ].join("\n"),
-    );
-    return 0;
-  }
-  process.stderr.write(
-    pick(
-      lang,
-      `loop fallback: unknown subcommand '${sub}' (use start --confirm | stop | status)\n`,
-      `loop fallback:未知子命令 '${sub}'(可用 start --confirm | stop | status)\n`,
-    ),
-  );
-  return 1;
-}
-
-/** `roll loop pause` — write the PAUSE marker the runner honors. */
 export async function loopPauseCommand(_args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
   const id = await deps.identity();
   const marker = pauseMarkerPath(id.path, id.slug);
@@ -1230,10 +755,13 @@ export async function loopPauseCommand(_args: string[], deps: LoopSchedDeps = re
   process.stdout.write(
     already
       ? `Loop already paused\nLoop 已处于暂停\n`
-      : `Loop paused — next scheduled cycles will skip\nLoop 已暂停 — 后续排程周期将跳过\n`,
+      : `Loop paused — no card will be picked autonomously\nLoop 已暂停 — 不再自动摘取卡片\n`,
   );
+  // US-LOOP-116 (codex review r2): there is no scheduler to describe. Pause stops
+  // AUTONOMOUS card selection by the session; it does not stop a session that names
+  // its card explicitly (below).
   process.stdout.write(
-    "mode: guided — scheduler will not start long-running Story execution until `roll loop resume`\n",
+    "a session driving `roll loop go` will stop at the next cycle boundary until `roll loop resume`\n",
   );
   // FIX-1472: pause stops AUTONOMOUS scheduling only. A supervisor can still run
   // one explicitly-scoped card without resuming (which would re-enable
@@ -1325,11 +853,13 @@ export async function loopResumeCommand(_args: string[], deps: LoopSchedDeps = r
 
   process.stdout.write(
     existed
-      ? `Loop resumed — scheduling active again\nLoop 已恢复 — 排程重新生效\n`
+      ? `Loop resumed — autonomous card selection re-enabled\nLoop 已恢复 — 重新允许自动摘取卡片\n`
       : `Loop was not paused\nLoop 本就未暂停\n`,
   );
+  // US-LOOP-116: nothing starts on its own. Resume only clears the gate; a session
+  // still has to drive, and every other gate still applies.
   process.stdout.write(
-    "mode: autonomous — scheduler can pick eligible Todo within pause/budget/route/evidence/Evaluator/release gates\n",
+    "`roll loop go` can now pick eligible Todo within budget/route/evidence/Evaluator/release gates\n",
   );
   return 0;
 }
@@ -1347,107 +877,7 @@ function readPauseMarker(marker: string): string {
   }
 }
 
-// ─── FIX-197: loop now + legacy-runner self-heal ──────────────────────────────
+// ─── US-LOOP-116: `loop now` and its legacy self-heal are gone ──────────────
+// `now` meant "fire what the timer would fire". There is no timer, the entry
+// point was cut in US-LOOP-113, and nothing routed here.
 
-/**
- * A v2-generation outer runner: it bare-calls bash-engine functions that were
- * never sourced into it (`_loop_migrate_legacy_paths` & co.) — `command not
- * found` on every manual run, and its PAUSE check silently no-ops. Any runner
- * that does not delegate to `loop run-once` is treated as legacy.
- */
-export function isLegacyRunner(text: string): boolean {
-  if (/_loop_migrate_legacy_paths|_loop_runtime_dir/.test(text)) return true;
-  if (!text.includes("loop run-once")) return true;
-  // FIX-204E: a v3 runner generated before the observation window lacks the
-  // tmux self-wrap — regenerate so cycles detach from the invoking session.
-  return !text.includes("ROLL_TMUX_WRAPPED");
-}
-
-function parseNowCards(args: string[]): string[] | undefined {
-  const cards: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i] ?? "";
-    if (arg === "--cards") {
-      cards.push(...parseCardList(args[++i] ?? ""));
-    } else if (arg.startsWith("--cards=")) {
-      cards.push(...parseCardList(arg.slice("--cards=".length)));
-    }
-  }
-  return cards.length === 0 ? undefined : [...new Set(cards)];
-}
-
-function parseCardList(raw: string): string[] {
-  return raw
-    .split(/[,\s]+/)
-    .map((card) => card.trim())
-    .filter((card) => card !== "");
-}
-
-/**
- * `roll loop now` — force one cycle immediately (FIX-197 self-heal included):
- * a missing or v2-legacy runner is regenerated via `loop on` first (with a
- * note), then the v3 runner executes synchronously with ROLL_LOOP_FORCE=1.
- * DELIBERATE divergence from v2: no tmux popup — output streams inline and the
- * cycle transcript lands in .roll/loop/cron.log (same whitelist as US-LOOP-009).
- */
-export async function loopNowCommand(args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
-  const id = await deps.identity();
-  const allowedCards = parseNowCards(args);
-  const runner = join(deps.sharedRoot(), "loop", `run-${id.slug}.sh`);
-  const readout = loopControlRunnerReadout(id.path);
-  process.stdout.write(`roll loop now: runner ${readout.bin} v${readout.runningVersion}\n`);
-  if (readout.projectNewer) {
-    process.stderr.write(staleLoopRunnerMessage("roll loop now", readout));
-    return 1;
-  }
-
-  let legacy = false;
-  if (existsSync(runner)) {
-    try {
-      legacy = isLegacyRunner(readFileSync(runner, "utf8"));
-    } catch {
-      legacy = true;
-    }
-  }
-  if (!existsSync(runner) || legacy) {
-    process.stdout.write(
-      legacy
-        ? `Legacy v2 runner detected — regenerating templates (FIX-197)\n检测到 v2 旧版 runner — 正在再生成模板（FIX-197）\n`
-        : `No runner yet — generating templates\n尚无 runner — 正在生成模板\n`,
-    );
-    const rc = await loopOnCommand([], deps);
-    if (rc !== 0) return rc;
-  }
-
-  // FIX-204E: the runner wraps the cycle into tmux (detached — survives this
-  // session); `loop now` then tails live.log inline until the cycle releases
-  // the inner lock. Ctrl-C stops the OBSERVATION only, never the cycle.
-  const useTmux =
-    (deps.hasTmux?.() ?? false) && (process.env["ROLL_LOOP_NO_TMUX"] ?? "").trim() === "";
-  const sess = `roll-loop-${id.slug}`;
-  process.stdout.write(
-    useTmux
-      ? `Starting one loop cycle in tmux — attach anytime: tmux attach -t ${sess}\n` +
-        `强制启动一个 loop 周期(tmux 内) — 随时观察:tmux attach -t ${sess}\n` +
-        `live transcript below — Ctrl-C stops watching, never the cycle\n` +
-        `实时转录如下 — Ctrl-C 只退出观察,不影响周期\n\n`
-      : `Starting one loop cycle (no tmux — runs inline)\n强制启动一个 loop 周期(无 tmux — 内联运行)\n\n`,
-  );
-  if (allowedCards !== undefined) {
-    process.stdout.write(`scope: cards ${allowedCards.join(", ")}\n`);
-  }
-  const exec = deps.execRunner;
-  if (exec === undefined) {
-    process.stderr.write("loop now: no runner executor available\n");
-    return 1;
-  }
-  const rc = await exec(runner, allowedCards === undefined ? undefined : { allowedCards });
-  if (rc === 0 && useTmux && deps.observe !== undefined) {
-    await deps.observe(join(id.path, ".roll", "loop"));
-    process.stdout.write(
-      `\ncycle finished — logs: .roll/loop/cron.log · .roll/loop/cycle-logs/\n` +
-        `周期结束 — 日志: .roll/loop/cron.log · .roll/loop/cycle-logs/\n`,
-    );
-  }
-  return rc;
-}
