@@ -13,7 +13,7 @@
 你启动的运行会活过窗口(detached tmux),按自己的范围结束;但两次运行之间不会有任何推进。
 
 **消失的命令(六个):** `roll loop on`、`roll loop off`、`roll loop now`、
-`roll loop fallback`、`roll loop test`,以及 `roll loop off --all`。跑它们会提示该用什么。
+`roll loop fallback`、`roll loop test`,以及 `roll loop off --all`。跑它们会说这个子命令不存在并指向 `roll loop --help`(不会替你猜该用哪条)。
 `roll loop pause` / `resume` 保留 —— 它们管的是"停自主推进",跟定时器无关;熔断器也仍会
 自动暂停。显式指定卡片的一次性运行在暂停状态下照样能跑,那是你当场的决定。
 
@@ -22,7 +22,7 @@
 这两个门面会在后续版本里去掉。
 
 **旧机器上的残留:** 跑过旧版本的机器上可能还留着 `com.roll.*` 的 launchd 文件。它们已经
-不可能启动 cycle(指向的脚本已不存在),但属于该清掉的垃圾。`roll doctor` 会列出每一个并
+仍加载着的那种还会触发并调用 `roll loop run-once` —— 那条路径会如实说明这是残留 lane 在跑,但这属于你没要求过的活,该清掉。`roll doctor` 会列出每一个并
 给出卸载命令;Roll 有意不替你删 —— 那是你机器上的任务。清理步骤见
 [roll loop 指南](guide/en/loop.md#leftover-launchd-lanes)。
 
