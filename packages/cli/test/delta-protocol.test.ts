@@ -5,6 +5,7 @@
  * conclude, status. Uses real filesystem with temp dirs, no external engines.
  */
 import { describe, expect, it, afterEach, beforeAll } from "vitest";
+import { DELTA_BLOCK_REASONS } from "@roll/spec";
 import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -4226,3 +4227,51 @@ function readdirRecursive(root: string): string[] {
   walk(root);
   return result.sort();
 }
+
+// US-LOOP-110 (codex r4) — the validator seam is typed `reason?: string`, so it can
+// hand back an absent, retired, or foreign literal. A NEW ledger record must still
+// carry a LIVE reason: the event gets a valid one, the detail keeps what the
+// validator actually said.
+describe("US-LOOP-110 — a validator's non-live reason never lands in the ledger", () => {
+  for (const [label, injected] of [
+    ["retired literal", "host_supervisor_required"],
+    ["foreign literal", "totally_made_up"],
+    ["absent reason", undefined],
+  ] as const) {
+    it(`${label} → event carries a live reason, detail keeps the original`, () => {
+      const dir = setupMinimalProject("US-DELTA-LIVE-RSN", "delta-team");
+      const resPath = writeResolutionTemplate(dir, "US-DELTA-LIVE-RSN", "local-preset");
+      const r1 = tsRunCwd([
+        "prepare", "US-DELTA-LIVE-RSN",
+        "--trigger", "host-guided", "--topology", "delta-team",
+        "--profile", "standard", "--preset", "local-preset",
+        "--resolution", resPath, "--json",
+      ], dir);
+      expect(r1.code).toBe(0);
+      const delegationId = JSON.parse(r1.stdout).delegationId;
+
+      injectValidator((input) => ({
+        ok: false,
+        ...(injected === undefined ? {} : { reason: injected }),
+        detail: "validator said no",
+        role: input.stage,
+      }));
+      try {
+        const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+        expect(r2.code).toBe(1);
+        const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+        const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter((l) => l.trim());
+        const last = JSON.parse(events[events.length - 1]!);
+        expect(last.type).toBe("delta:blocked");
+        // The appended reason is always a LIVE enum member.
+        expect(DELTA_BLOCK_REASONS as readonly string[]).toContain(last.reason);
+        expect(last.reason).toBe("artifact_invalid");
+        // …and the validator's own word is preserved rather than dropped.
+        expect(last.detail).toContain("validator said no");
+        if (injected !== undefined) expect(last.detail).toContain(injected);
+      } finally {
+        injectValidator(null);
+      }
+    });
+  }
+});

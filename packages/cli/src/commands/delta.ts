@@ -818,14 +818,28 @@ function validateCommand(args: string[]): number {
   const result = validator(validationInput);
 
   if (!result.ok) {
-    // Block: append delta:blocked event, return non-zero
+    // Block: append delta:blocked event, return non-zero.
+    // codex review r4: the validator seam is typed `reason?: string`, so it can
+    // hand back an absent, retired, or foreign literal. A new ledger record may
+    // carry a LIVE reason only — otherwise this fresh event is permanently
+    // schema-invalid. Same split as the already-blocked path: the event gets a
+    // live reason, the detail keeps the validator's own words verbatim.
+    const validatorReason = result.reason;
+    const liveReason: import("@roll/spec").DeltaBlockReason =
+      typeof validatorReason === "string" && (DELTA_BLOCK_REASONS as readonly string[]).includes(validatorReason)
+        ? (validatorReason as import("@roll/spec").DeltaBlockReason)
+        : "artifact_invalid";
+    const blockDetail =
+      liveReason === validatorReason || validatorReason === undefined
+        ? (result.detail ?? "")
+        : `${result.detail ?? ""}${result.detail !== undefined && result.detail !== "" ? " " : ""}(validator reported ${JSON.stringify(validatorReason)})`;
     bus.appendEvent(eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
       role: stage,
-      reason: result.reason as import("@roll/spec").DeltaBlockReason,
-      detail: result.detail ?? "",
+      reason: liveReason,
+      detail: blockDetail,
       ts: now,
     });
 

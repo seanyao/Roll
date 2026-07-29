@@ -79,7 +79,8 @@ describe("historical delta events remain parseable", () => {
         detail: "historical",
         ts: 11,
       },
-    ] as unknown as Parameters<typeof projectDelegationStatus>[1];
+      // codex r4: no cast — the event union itself holds historical values.
+    ] as Parameters<typeof projectDelegationStatus>[1];
     const view = projectDelegationStatus("d-hist-3", events);
     expect(view).not.toBeNull();
     // The retired trigger is READ back verbatim — never rewritten or dropped.
@@ -148,7 +149,7 @@ describe("the status view can hold what the ledger holds (codex r2)", () => {
         hostId: "adapter",
         ts: 20,
       },
-    ] as unknown as Parameters<typeof projectDelegationStatus>[1];
+    ] as Parameters<typeof projectDelegationStatus>[1];
     const view = projectDelegationStatus("d-hist-4", events);
     // Both fields are declared wide enough to hold these values, so a historical
     // consumer can read them directly — no narrowing cast, no silent restatement.
