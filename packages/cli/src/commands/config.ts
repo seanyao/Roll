@@ -35,12 +35,16 @@ import { INACTIVE_KEYS } from "./config-get.js";
  * not that both are shown.
  */
 function inactiveNote(en: string, zh: string): void {
-  // codex r13: selecting by locale here produced a WORSE mix — the `ok()` success
-  // line above is English-only (pre-existing), so a zh user got an English line then
-  // a Chinese note: adjacent bilingual output, which is exactly the rule this was
-  // meant to respect. The note annotates that line, so it matches that line's
-  // language. Localising the pair properly means localising `ok()` too, which is a
-  // wider change than this card owns.
+  // Deliberately English, and NOT locale-selected (codex raised this in r13 and r18).
+  //
+  // The `ok("✓ set …")` line this annotates is English-only hardcoded, in all six
+  // places. Making the note Chinese under a zh locale therefore produces "English
+  // success line + Chinese note" — adjacent bilingual output, the exact rule this was
+  // meant to respect. Keeping it English makes the command's output CONSISTENTLY
+  // English for a zh user: not localised, but not lying and not mixed.
+  //
+  // The real fix is to localise `ok()` itself along with the frozen values that
+  // capture it, which is wider than a docs card. Tracked as FIX-1485 item 5.
   void zh;
   void resolveCurrent;
   process.stdout.write(`${en}\n`);

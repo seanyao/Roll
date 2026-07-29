@@ -49,6 +49,7 @@ import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { resolveLang, t, v3Catalog } from "@roll/spec";
+import { resolveCurrent } from "./lang.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
   "loop run-once: delivery published — PR open, awaiting reconciliation (Delivery Reconciler advances merge and credits main evidence)\n" +
@@ -827,11 +828,11 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   // So it no longer claims provenance at all. It states the fact it can actually
   // verify — a leftover lane exists — and leaves causation unasserted.
   if (leftoverLoopLaneLabel(id.slug)) {
-    const noteLang = resolveLang({
-      rollLang: process.env["ROLL_LANG"],
-      lcAll: process.env["LC_ALL"],
-      lang: process.env["LANG"],
-    });
+    // codex r18: `resolveCurrent()` (not a hand-rolled resolveLang call) — it also
+    // consults the SAVED `roll config lang`, so a user configured to zh without
+    // ROLL_LANG set gets Chinese. The other resolveLang sites in this file omit that
+    // too; they are pre-existing and out of this card's scope.
+    const noteLang = resolveCurrent();
     process.stdout.write(
       noteLang === "zh"
         ? "loop run-once: 本项目还留着旧版的 launchd lane —— Roll 不再安装定时器。\n" +
