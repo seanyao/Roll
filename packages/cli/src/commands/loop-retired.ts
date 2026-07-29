@@ -1,7 +1,7 @@
 /**
  * Retirement stubs for the v2 tmux-popup loop commands `monitor` / `attach`
  * (US-PORT-007). The v3 self-contained runner already streams every cycle into
- * the tmux session `roll-loop-<slug>` (see loop-sched.ts), so the old
+ * the tmux session `roll-loop-<slug>` (see loop-state.ts), so the old
  * auto-refresh dashboard popup (`monitor`) has no object, and attaching is a
  * plain `tmux attach`. Each stub prints a single-language redirect (follows
  * ROLL_LANG) and exits 0 — informational, never the v2 tmux behaviour.

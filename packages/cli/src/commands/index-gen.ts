@@ -36,7 +36,7 @@ import { collectToolPanel } from "../lib/tool-panel.js"; // US-TOOL-016
 import { collectLoopHeartbeat, defaultHeartbeatDeps } from "../lib/loop-heartbeat.js";
 import { collectCasting, defaultCastingDeps, type CastingVM } from "../lib/casting.js";
 import { collectGitHooks, defaultGitHooksDeps, type GitHooksVM } from "../lib/git-hooks.js";
-import { launchAgentsDir } from "./loop-sched.js";
+import { launchAgentsDir } from "./loop-state.js";
 import { projectSlug } from "./dashboard.js";
 import { formatStream } from "./loop-fmt.js";
 import { loopDigestHref } from "../lib/morning-report.js";

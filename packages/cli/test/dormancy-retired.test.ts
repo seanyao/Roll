@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseEventLine, TERMINAL_OUTCOMES } from "@roll/spec";
-import { resolveLoopRunState } from "../src/commands/loop-sched.js";
+import { resolveLoopRunState } from "../src/commands/loop-state.js";
 
 function project(): string {
   const d = mkdtempSync(join(tmpdir(), "roll-l115-"));
@@ -53,7 +53,7 @@ describe("US-LOOP-115 — the run state is two-valued", () => {
     // without typechecking and `tsc` excludes `test/`, so the assertion silently
     // degraded to `"DORMANT" === "DORMANT"`. Read the declaration instead: this
     // fails loudly if anyone widens the union again.
-    const src = readFileSync(new URL("../src/commands/loop-sched.ts", import.meta.url), "utf8");
+    const src = readFileSync(new URL("../src/commands/loop-state.ts", import.meta.url), "utf8");
     const decl = /export type LoopRunState = ([^;]+);/.exec(src);
     expect(decl, "LoopRunState declaration must exist").not.toBeNull();
     const values = (decl?.[1] ?? "")

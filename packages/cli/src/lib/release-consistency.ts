@@ -610,6 +610,21 @@ export function checkDocs(projectDir: string): DimResult {
 }
 
 // ─── site dimension: check_site ──────────────────────────────────────────────
+/**
+ * Epics that legitimately have no landing-page presence (internal plumbing).
+ *
+ * US-LOOP-119: the card asked me to verify whether the `loop-scheduling` entry
+ * still has an object. It does not — no such epic exists under `.roll/features/`,
+ * so the entry is dropped below.
+ *
+ * VERIFYING THAT ALSO TURNED UP SOMETHING LARGER, recorded here rather than
+ * silently fixed: this whole set is keyed on `### Feature:` headings, and the v3
+ * backlog has none — `readDoneFeatures()` returns empty, so `check_site`
+ * short-circuits before ever consulting this list. Every entry is therefore
+ * currently inert, not just the one removed. That is a defect in the site
+ * dimension itself (it silently passes), out of scope for a scheduling-retirement
+ * card; see FIX-1485.
+ */
 const SITE_INTERNAL_FEATURES = new Set([
   "cycle-meta-sync", "loop-log-locality", "invoke-stream-visibility",
   "loop-done-semantics", "loop-status-reader-path", "loop-result-eval",
@@ -619,7 +634,7 @@ const SITE_INTERNAL_FEATURES = new Set([
   "convention-management", "github-actions", "pr-lifecycle",
   "loop-lifecycle-ownership", "loop-ci-self-heal",
   "cycle-log-archive", "agent-aware-execution",
-  "manual-only-retirement", "loop-scheduling",
+  "manual-only-retirement",
   "context-feed-budget", "documentation", "github-issues-sync",
   "notifications", "cycle-event-stream", "phase-tracing",
   "loop-write-integrity", "cross-machine-sync", "remote-monitoring",

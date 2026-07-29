@@ -26,8 +26,9 @@ import {
   resolveLoopRunState,
   type LoopSchedDeps,
   type LoopRunState,
-} from "../src/commands/loop-sched.js";
+} from "../src/commands/loop-state.js";
 import { recordRootCauseFailure } from "../src/runner/failure-attribution.js";
+import { GOAL_GUIDED_ENV } from "../src/lib/goal-progress.js";
 import { parseGoalYaml } from "@roll/spec";
 
 const dirs: string[] = [];
@@ -330,6 +331,45 @@ updatedAt: 2026-06-11T08:00:00Z
 // The marker/resolver describes and the `loop on during DORMANT` lightweight-wake
 // describes are gone with the machinery. `resolveLoopRunState` is now two-valued;
 // dormancy-retired.test.ts covers it and pins the inert-leftover-marker behaviour.
+
+/**
+ * US-LOOP-119 — PAUSE means "stop AUTONOMOUS progress", not "stop the timer".
+ *
+ * The marker predates this epic, when it stopped a launchd lane from picking cards.
+ * With no lane, the meaning it actually has is the one that survived: autonomous
+ * selection stops, while an explicitly-scoped guided one-shot still runs (FIX-1472).
+ * Both halves are asserted here from the resolver's side; the gate that enforces the
+ * guided bypass is covered end-to-end in loop-run-once.test.ts and loop-go.test.ts.
+ */
+describe("US-LOOP-119 — PAUSE semantics", () => {
+  it("PAUSED comes from the marker alone, and is per-slug", () => {
+    const project = tmp("l119-pause");
+    const rt = join(project, ".roll", "loop");
+    mkdirSync(rt, { recursive: true });
+    expect(resolveLoopRunState(project, "slug-a")).toBe("ACTIVE");
+
+    writeFileSync(join(rt, "PAUSE-slug-a"), "paused by owner\n");
+    expect(resolveLoopRunState(project, "slug-a")).toBe("PAUSED");
+    // Another project's pause never pauses this one.
+    expect(resolveLoopRunState(project, "slug-b")).toBe("ACTIVE");
+  });
+
+  it("a leftover DORMANT marker does not pause anything (US-LOOP-115 inertness)", () => {
+    const project = tmp("l119-dormant");
+    const rt = join(project, ".roll", "loop");
+    mkdirSync(rt, { recursive: true });
+    writeFileSync(join(rt, "DORMANT-slug-a"), "idle 6h\n");
+    expect(resolveLoopRunState(project, "slug-a")).toBe("ACTIVE");
+  });
+
+  it("FIX-1472 stays reachable: the gate reads the guided env, not the run state", () => {
+    // The guided bypass cannot be expressed as a run-state value — PAUSED is PAUSED.
+    // What makes `--cards` work is the explicit guided flag the go driver sets, so
+    // the resolver must NOT be the thing consulted for that decision. Assert the
+    // seam exists and is env-based, so a future "resolver decides" refactor fails here.
+    expect(GOAL_GUIDED_ENV).toBe("ROLL_LOOP_GO_GUIDED");
+  });
+});
 
 // ─── US-LOOP-116: the fallback CLI surface is gone ──────────────────────────
 // Its describes and the fake-backend helper went with the machinery; the

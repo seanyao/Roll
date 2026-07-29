@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
-import { resolveLoopRunState } from "./loop-sched.js";
+import { resolveLoopRunState } from "./loop-state.js";
 import {
   COLS,
   c,

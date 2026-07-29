@@ -68,7 +68,7 @@ import { loopReviewResizeCommand } from "./loop-review-resize.js";
 import { loopExhaustionSplitCommand } from "./loop-exhaustion-split.js";
 import { loopRunOnceCommand } from "./loop-run-once.js";
 import { loopSelfDowngradeCommand } from "./loop-self-downgrade.js";
-import { loopPauseCommand, loopResumeCommand } from "./loop-sched.js";
+import { loopPauseCommand, loopResumeCommand } from "./loop-state.js";
 import { offboardCommand } from "./offboard.js";
 import { pricesCommand } from "./prices.js";
 import { pulseCommand } from "./pulse.js";
