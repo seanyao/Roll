@@ -35,7 +35,7 @@ Roll 在启动时解析三个环境变量。在运行 `roll` 之前覆盖任意�
 ```bash
 export ROLL_HOME="$PWD/.roll-sandbox"
 roll setup
-roll loop now
+roll loop go --max-cycles 1
 ```
 
 不动 `~/.roll`，用另一套约定运行 roll：

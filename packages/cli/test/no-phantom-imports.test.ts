@@ -117,15 +117,30 @@ function resolveSpec(fromFile: string, spec: string): string | undefined {
  * whole brace body for the name.
  */
 export function exportClauseNames(src: string): string[] {
-  const out: string[] = [];
-  for (const m of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/g)) {
+  return exportClauses(src).map((c) => c.published);
+}
+
+/**
+ * Every `export { … }` clause, with the local name it forwards and the module it
+ * forwards FROM when the clause is a re-export.
+ *
+ * codex r5: a bare `export { X } from "./leaf.js"` was accepted on the spot, so a
+ * deleted leaf export still passed. Re-exports must be followed to the leaf like
+ * `export *` already is; the only difference is which name to look for there.
+ */
+function exportClauses(src: string): Array<{ published: string; local: string; from?: string }> {
+  const out: Array<{ published: string; local: string; from?: string }> = [];
+  for (const m of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s*["']([^"']+)["'])?/g)) {
+    const from = m[2];
     for (const raw of (m[1] ?? "").split(",")) {
       const clause = raw.trim().replace(/^type\s+/, "");
       if (clause === "") continue;
-      const parts = clause.split(/\s+as\s+/);
-      // `a as b` publishes b; a bare `a` publishes a.
-      const published = (parts.length > 1 ? parts[parts.length - 1] : parts[0])!.trim();
-      if (published !== "") out.push(published);
+      const parts = clause.split(/\s+as\s+/).map((p) => p.trim());
+      // `a as b` publishes b and forwards a; a bare `a` does both as a.
+      const local = parts[0]!;
+      const published = (parts.length > 1 ? parts[parts.length - 1] : parts[0])!;
+      if (published === "") continue;
+      out.push(from === undefined ? { published, local } : { published, local, from });
     }
   }
   return out;
@@ -170,7 +185,15 @@ function exportsName(file: string, name: string, seen = new Set<string>()): bool
   // `export { a, b as c }` — only the EXPORTED side counts. codex r3: matching
   // the whole brace body accepted `local as public`, so importing the local name
   // (which is NOT exported) passed.
-  if (exportClauseNames(src).includes(name)) return true;
+  for (const clause of exportClauses(src)) {
+    if (clause.published !== name) continue;
+    // A local clause publishes it here and now.
+    if (clause.from === undefined) return true;
+    // A re-export only publishes it if the leaf really has it (codex r5).
+    const leaf = resolveSpec(file, clause.from);
+    if (leaf === undefined) return true; // unresolvable hop: do not accuse
+    if (exportsName(leaf, clause.local, seen)) return true;
+  }
   for (const spec of starReexports(src)) {
     const target = resolveSpec(file, spec);
     if (target === undefined) return true; // unresolvable hop: do not accuse
@@ -243,6 +266,35 @@ describe("US-LOOP-117 — no test imports a phantom export", () => {
       // `localOnly` is NOT importable — accepting it was the r3 finding.
       expect(exportsName(f, "localOnly")).toBe(false);
       expect(exportClauseNames("export { a, b as c, type D as E };")).toEqual(["a", "c", "E"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("follows a named re-export to the leaf (codex r5)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-reexport-"));
+    try {
+      writeFileSync(join(dir, "leaf.ts"), "export function stillThere(): void {}\n");
+      // One name really exists in the leaf; the other was deleted from it.
+      writeFileSync(join(dir, "idx.ts"), 'export { stillThere, alreadyDeleted } from "./leaf.js";\n');
+      const idx = join(dir, "idx.ts");
+      expect(exportsName(idx, "stillThere")).toBe(true);
+      // Accepting this on sight was the r5 finding.
+      expect(exportsName(idx, "alreadyDeleted")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a re-export ALIAS is followed under its local name (codex r5)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-reexport-alias-"));
+    try {
+      writeFileSync(join(dir, "leaf.ts"), "export function innerName(): void {}\n");
+      writeFileSync(join(dir, "idx.ts"), 'export { innerName as outerName } from "./leaf.js";\n');
+      const idx = join(dir, "idx.ts");
+      expect(exportsName(idx, "outerName")).toBe(true);
+      // `innerName` is not importable from the barrel, only from the leaf.
+      expect(exportsName(idx, "innerName")).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

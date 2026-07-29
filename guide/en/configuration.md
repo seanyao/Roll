@@ -37,7 +37,7 @@ isolated experimentation):
 ```bash
 export ROLL_HOME="$PWD/.roll-sandbox"
 roll setup
-roll loop now
+roll loop go --max-cycles 1
 ```
 
 Run roll against an alternate convention set without touching `~/.roll`:
