@@ -160,10 +160,15 @@ export async function dispatch(
         const net = await gate(gateName);
         if (!net.ok) return { status: 1 };
       }
-      // US-LOOP-079i: wake-on-roll-command hook — after help short-circuit
-      // (FIX-238) but before the handler runs. Only fires when production
-      // deps are wired (tests skip).
-      if (wakeDeps) await tryWakeOnRoll(argv, wakeDeps);
+      // US-LOOP-113 (codex review r4): the wake-on-roll-command hook is DISARMED.
+      // It existed to re-arm a launchd lane when a DORMANT project got new work.
+      // With `roll loop off` removed, leaving it live would be a one-way trap: an
+      // ordinary command could arm a timer that the CLI no longer offers any way to
+      // disarm — the exact opposite of "nothing runs on its own". The hook and its
+      // DORMANT machinery are deleted outright by US-LOOP-114/115; cutting the call
+      // here keeps every intermediate commit safe to ship.
+      void tryWakeOnRoll;
+      void wakeDeps;
       return { status: await handler(rest) };
     }
   }

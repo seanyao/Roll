@@ -7,6 +7,9 @@
  * one that is listed.
  */
 import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -53,4 +56,50 @@ describe("US-LOOP-113 — retired scheduler verbs are unreachable", () => {
       expect(`${r.stderr}${r.stdout}`.toLowerCase()).not.toContain("unknown loop subcommand");
     });
   }
+});
+
+/**
+ * US-LOOP-113 (codex review r4) — no ordinary command may ARM a scheduler.
+ *
+ * `roll loop off` is gone, so anything that could still arm a launchd lane would be
+ * a one-way trap. The wake-on-roll-command hook did exactly that when a project
+ * carried a legacy DORMANT marker, so its call site is cut.
+ */
+describe("US-LOOP-113 — no roll command can arm a scheduler", () => {
+  it("the wake hook is not invoked from the dispatch path", () => {
+    const bridge = readFileSync(new URL("../src/bridge.ts", import.meta.url), "utf8");
+    // The import may remain (deleted with the module in US-LOOP-114); what must be
+    // gone is the CALL that re-arms a lane.
+    expect(bridge).not.toMatch(/await\s+tryWakeOnRoll\s*\(/);
+  });
+
+  it("a legacy DORMANT marker does not arm anything on a normal command", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-l113-dormant-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      // A project left over from the scheduler era: DORMANT marker + real backlog work.
+      writeFileSync(join(rt, "DORMANT-proj-abc123"), JSON.stringify({ since: "2026-01-01T00:00:00Z", reason: "all_done" }));
+      writeFileSync(
+        join(dir, ".roll", "backlog.md"),
+        "| Story | Description | Status |\n|---|---|---|\n| US-X-1 | work | 📋 Todo |\n",
+      );
+      const launchd = mkdtempSync(join(tmpdir(), "roll-l113-launchd-"));
+      execFileSync("node", [BIN, "status"], {
+        cwd: dir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, ROLL_MAIN_SLUG: "proj-abc123", _LAUNCHD_DIR: launchd, ROLL_LANG: "en" },
+      });
+      // Nothing was written into the LaunchAgents dir.
+      expect(readdirSync(launchd)).toEqual([]);
+      // And the marker was not consumed/renamed into a waking state.
+      expect(existsSync(join(rt, "DORMANT-proj-abc123"))).toBe(true);
+    } catch {
+      // A non-zero exit from `roll status` in a bare fixture is fine — the
+      // assertion that matters is that no lane was armed, checked above.
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

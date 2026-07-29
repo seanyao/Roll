@@ -1,20 +1,15 @@
 # roll loop — 自主 BACKLOG 执行器
 
-> **正在重写（US-LOOP-113 → US-LOOP-120）。** 常驻调度已退役：`roll loop on` /
-> `off` / `now` / `fallback` 不再存在，也没有任何东西按定时器运行。交付由跑
-> `roll loop go` 的那个 agent 会话驱动，那个会话就是 Supervisor。
-> `roll loop pause` / `resume` 仍然把守自主推进。
-> 下文中关于安装、修复或唤醒调度器的段落均已过时，由 US-LOOP-120 重写；
-> 在此期间以 `roll loop --help` 的命令清单为准。
+> **常驻调度已退役（US-LOOP-113）。** `roll loop on` / `off` / `now` / `fallback`
+> 不再存在，也没有任何东西按定时器运行。交付由跑 `roll loop go` 的那个 agent 会话
+> 驱动，那个会话就是 Supervisor。`roll loop pause` / `resume` 仍然把守自主推进。
 
-`roll loop` 负责调度和管理 BACKLOG 故事的自主执行。
-开启后，loop 按可配置的频次（在活跃窗口内）醒来，摘取最高优先级的待办故事，
-通过 TCR 微提交完成代码交付。
+`roll loop` 执行 BACKLOG 故事：摘取最高优先级的待办故事，通过 TCR 微提交完成代码
+交付 —— 只要驱动它的那个会话还在跑。
 
-`roll loop on` 是显式切入 **autonomous** 模式；`roll loop off` 或
-`roll loop pause` 回到 **guided**，此时 owner 通过 `roll supervisor next/why`
-判断下一步，并显式启动任何长时间 Story 工作。`roll loop resume` 会切回
-autonomous，不改变 agent binding。
+由你驱动：在 agent 会话里跑 `roll loop go`，它会连续执行 cycle 直到范围内的
+backlog 做完、被暂停或达到上限。`roll loop pause` 让卡不再被摘取，
+`roll loop resume` 解除；owner 通过 `roll supervisor next/why` 判断该驱动什么。
 
 ## 工作原理
 
@@ -92,178 +87,29 @@ Builder 执行期间，主 checkout 会被物理写保护。Builder 在自己的
 按 manifest 认领隔离的 dirty 内容。被书签的 ahead commits 仍留在 `main`
 （以及对应的 `rescue/leaked-*` ref）上——先检查，确实不要了再自行 reset。
 
-## 调度配置
+## 如何驱动
 
-Loop 通过 **launchd**（macOS）调度。默认每小时在一个根据项目路径推导出的分钟触发
-（不同项目自动错开，避免碰撞）。
-
-```
-活跃窗口：0–24（默认全天开启；用 `roll config loop-window 10-18` 收窄到上午 10 点 — 下午 6 点）
-```
-
-活跃窗口之外，loop 静默退出，不执行任何操作。默认 `0-24` 意味着任何时刻触发都会执行；只有显式收窄窗口后，窗口外的触发才会静默退出。
-
-调度器已经安装时也可以安全地再次运行 `roll loop on`。命令会重写当前 runner
-和 plist，依次执行 `launchctl bootout`、`launchctl bootstrap`，并在报告成功前
-验证任务确实存活。如果 launchd 仍拒绝任务，命令会以非零码退出，并打印准确的
-域、标签、plist 路径和可直接执行的诊断命令；bootstrap 失败不会再伪装成已启用。
-
-### 从 launchd bootstrap 失败中恢复
-
-`roll loop on` 失败后，排程处于**未激活**状态。`~/Library/LaunchAgents/`
-里的 plist 文件存在并**不**代表自主排程已启用——只有 `launchctl list`
-显示对应 label 已加载，loop 才是真正就绪的。请用 `roll loop status` 查看
-当前生效后端（`launchd`、`process-fallback` 或 `none`）。
-
-**优先修复 launchd。** 错误输出已经打印了精确命令，通用形式使用
-`launchctl list` 返回的 label：
+没有任何东西按定时器运行。`roll loop go` 的连续 cycle 跑在你启动它的那个 agent
+会话里，那个会话就是 Supervisor。关掉会话，推进就停 —— 这就是全部约定。
 
 ```bash
-UID=$(id -u)
-LABEL=$(launchctl list | awk '$3 ~ /^com\.roll\.loop\./ {print $3; exit}')
-# 如果 launchctl list 没有输出，请使用 roll loop on 错误信息里的精确 label。
-launchctl bootout gui/$UID/$LABEL
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist
-launchctl print gui/$UID/$LABEL
-roll loop status
+roll loop go                      # 推进整个待办 backlog
+roll loop go --epic <name>        # 限定到一个史诗
+roll loop go --cards US-X-1       # 指定单卡（paused 下也会跑）
+roll loop go --max-cycles 1       # 只跑一个 cycle，试一下流程
 ```
 
-如果 `launchctl bootstrap` 成功且 `print` 显示任务存活，再次运行
-`roll loop on` 以重新生成当前 runner 并确认调度。
-
-**如果 launchd 实在无法修复**，Roll 提供一个需要 owner 明示确认的进程
-fallback，只有显式确认时才会启动：
-
-```bash
-roll loop fallback start --confirm
-roll loop fallback status
-roll loop fallback stop        # 不再需要时停止
-```
-
-该 fallback **不是** launchd 的等价替代：它不会跨过重启或登出会话。
-重启或重新登录后，必须先停止旧 lease 再重新确认：
-
-```bash
-roll loop fallback stop
-roll loop fallback start --confirm
-```
-
-优先修复 launchd；仅在 launchd 不可用时使用 fallback。
-
-#### macOS 现场验证流程（Bootstrap failed: 5）
-
-当 `roll loop on` 报 `Bootstrap failed: 5: Input/output error` 这类错误时，
-记录一份已脱敏、无需 root 的诊断包：
-
-```bash
-mkdir -p .roll/loop
-TS=$(date +%Y%m%d-%H%M%S)
-OUT=.roll/loop/launchd-verify-$TS.log
-{
-  echo "roll version: $(roll version)"
-  echo "uid: $(id -u)"
-  echo "---"
-  echo "roll loop status:"
-  roll loop status
-  echo "---"
-  echo "launchctl list（roll lane）:"
-  launchctl list | grep com.roll\. || true
-  echo "---"
-  echo "磁盘上的 plist:"
-  ls -1 ~/Library/LaunchAgents/com.roll.loop.*.plist 2>/dev/null || true
-} > "$OUT"
-# 分享前脱敏：把真实 home 路径替换为 ~。
-sed -i.bak "s|$HOME|~|g" "$OUT" && rm -f "$OUT".bak
-```
-
-该流程只使用用户级（`gui/<uid>`）launchctl 命令，不需要 `sudo`，也不依赖
-`launchctl dumpstate` 等仅限 root 的诊断。
-
-## 配置调度（Configuring the schedule）
-
-不用再手工编辑 `~/.roll/config.yaml` 和 `.roll/local.yaml` 再祈祷 launchd plist 能 reload 上。改用 `roll config` 命令族：每次写入都落到正确的 yaml 文件，**并且**自动重生 runner、重 bootstrap launchd plist、立刻在 `roll loop status` 反映——没有手工 reload 这一步。
-
-| 命令 | 设置的内容 |
-|------|-----------|
-| `roll config loop-window <start>-<end>` | loop 活跃窗口小时（`loop_active_start` + `loop_active_end`） |
-| `roll config loop-schedule <period>[/<offset>]` | 触发间隔（`loop_schedule.period_minutes` + `offset_minute`） |
-| `roll config dream-time <HH:MM>` | dream 每日触发时刻（`loop_dream_hour` + `loop_dream_minute`） |
-
-```bash
-roll config loop-window 9-18        # 活跃 9 点 – 18 点；start < end，均在 [0,24]
-roll config loop-schedule 30        # 每 30 分钟触发（period 在 [1,1440]）
-roll config loop-schedule 30/7      # 每 30 分钟，偏移 :07（offset 在 [0, period-1]）
-roll config dream-time 03:20        # dream 精确 03:20 触发；HH 在 [0,23]，MM 在 [0,59]
-```
-
-**读当前值（Reading the current value）。** 任何 facade 不带值跑一次，就打印当前生效组合和来源：
-
-```bash
-roll config loop-window             # loop-window: 0-24 (from default)
-roll config dream-time              # dream-time: 03:20 (from ~/.roll/config.yaml)
-```
-
-**范围校验。** 超界或非数字输入会被拒绝，并按当前语言返回错误，退出码为 2。
-例如 `ROLL_LANG=zh roll config loop-window 9-25` 会打印
-`loop-window 结束时间必须 ≤ 24`。
-
-**`--global` vs `--project`。** 写入默认 `--project`（`.roll/local.yaml`，仅当前项目）。加 `--global` 写 `~/.roll/config.yaml`，作为所有没有项目级覆盖的项目的默认值。
-
-```bash
-roll config dream-time 03:20             # 当前项目（.roll/local.yaml）
-roll config dream-time 03:20 --global    # 所有项目（~/.roll/config.yaml）
-```
-
-**自动 reload（Auto-reload）。** 写完调度 key 后，`roll config` 自动重装 loop / pr / dream 的 launchd plist，下个窗口即生效。reload 失败时（如沙箱里）yaml 仍是真相——跑 `roll loop on` 手工补刀。完整 key 列表与范围见 `roll config --help`。
-
-### 项目级触发频次
-
-一行命令设触发间隔：
-
-```bash
-roll config loop-schedule 30        # 每 30 分钟（period 1–1440，任意间隔）
-roll config loop-schedule 45        # 每 45 分钟（不再限制为 60 的约数）
-```
-
-这会向 `.roll/local.yaml` 写入 `loop_schedule` 块：
-
-```yaml
-loop_schedule:
-  period_minutes: 30   # 1-1440（任意分钟间隔）
-  offset_minute: 7     # 0–(period-1)（已废弃，仅向后兼容）
-```
-
-- `period_minutes` — loop 触发间隔。任意值 1–1440。
-- `offset_minute` — （US-LOOP-032 起已废弃）不再影响触发时刻，保留用于向后兼容。
-
-如果没有 `.roll/local.yaml` 或没有 `loop_schedule` 配置，Roll 回退到全局值
-（用 `roll config loop-schedule … --global` 设置），或者根据项目路径哈希推导默认值。
-
-`roll loop status` 和 `roll loop on` 直接显示实际频次，一眼可确认生效。
-非法值（如 `period_minutes: 0` 或 `1441`）在写入时即被拒绝，退出码 2。
-
-### 全局默认（向后兼容）
-
-若所有项目使用同一个全局默认，用 `--global` 写入：
-
-```bash
-roll config loop-window 10-18 --global   # 所有项目的活跃窗口
-roll config loop-schedule 60 --global    # 所有项目的默认间隔
-```
-
-（agent 选择不再是全局配置项，而是从 Machine Scope 与 Project Scope 的 agent 文件解析。
-见 [自主角色解析](#自主角色解析)。）
-
-项目级 `.roll/local.yaml` 始终优先于全局默认。
+`roll loop pause` 让卡不再被摘取，`roll loop resume` 解除。纠错熔断器在反复失败后
+也会自动 pause，所以 `resume` 是回到运行态的正规出口。显式 `--cards` 一次性在
+paused 下仍可跑（FIX-1472）。
 
 ## 子命令参考
 
 ```bash
-roll loop on          # 安装 launchd 调度器（loop + pr + dream 三个服务）
-roll loop off         # 卸载 launchd 调度器
-
-roll loop now         # 立即执行一次循环（与 launchd 触发的流程完全一致）
-roll loop now --cards US-1,FIX-2  # 立即执行一次循环，但只允许指定卡片
+roll loop go          # 在本会话推进 backlog
+roll loop go --epic <name>        # 限定到一个史诗
+roll loop go --cards US-1,FIX-2   # 限定到指定卡片（paused 下也会跑）
+roll loop go --max-cycles 1       # 只跑一个 cycle，试一下流程
 roll loop test        # 快速冒烟测试：验证 tmux/弹窗/流式输出链路是否正常
 
 roll loop status      # 显示调度器状态和当前 loop 状态
@@ -345,7 +191,7 @@ Hold、Cut、未满足依赖、skip-list、open PR、已合并交付和 pending-
 `roll loop go` 是手动 goal session，不是 launchd 定时 tick。运行期间 Roll 会持有
 `.roll/loop/go.lock`；定时 tick 看到该锁就让路，记录 `goal:tick_skipped`，不会再启动
 另一个 `roll loop run-once`。
-`roll loop now --cards <ids>` 对它触发的单次 runner 使用同一份卡片 allow-list，
+`roll loop go --cards <ids>` 对它触发的单次 runner 使用同一份卡片 allow-list，
 所以手动 tick 不能静默改选其他 backlog 卡。
 
 goal mode 在 scheduler off 时也能运行，因为它自己启动会话，不依赖 launchd。loop 处于
@@ -392,7 +238,7 @@ unknown，这类行仍按保守侧停止，不当作 0。用量闸检查 5 小�
 绕过开关。泛泛的 `.roll/**` 路径或很长的 status 列表都无法让闸变宽松；凡是 runner 没有
 记录且当前哈希不匹配的，一律 fail closed。
 
-在 Roll 仓自身里，`roll loop go`、`roll loop resume` 和 `roll loop now`
+在 Roll 仓自身里，`roll loop go` 与 `roll loop resume`
 开工前都会打印当前 runner 的 binary 与版本。repo-local `@seanyao/roll`
 包版本高于正在运行的 runner 时，它们会以 `runner_stale_for_repo`
 fail-loud；先安装或发布本地构建，再恢复自治施工。
@@ -881,8 +727,8 @@ tmux session 是长寿命的，但 cycle 的**网络环境永远跟随调用方*
 "session 在代理时代创建、代理关了之后每个 agent 都 ~45 秒超时 `Connection error`"
 （FIX-230），env-only 的 agent 密钥也不再依赖陈旧 tmux session。每个 cycle 还会把
 生效的代理变量记成一行 `env:` 进 `.roll/loop/cron.log`，环境型故障从日志直读。其它
-变量仍来自 `roll loop on` 时创建的 session；若你轮换了别的关键变量，
-`roll loop off && roll loop on` 可重建一个干净 session。
+变量仍来自那个 tmux session 创建时的环境；若你轮换了别的关键变量，
+杀掉该 session，下一次 `roll loop go` 会重建一个干净的。
 
 ### Edit 折叠
 
@@ -976,7 +822,7 @@ ANSI colour is only emitted on a real terminal; pipes, redirects and captured ou
 ANSI 颜色仅在真实终端启用；管道 / 重定向 / capture 时输出纯文本。在 TTY 上强制关闭颜色用 `NO_COLOR=1`（遵循 [no-color.org](https://no-color.org)）：
 
 ```bash
-NO_COLOR=1 roll loop now
+NO_COLOR=1 roll loop go --max-cycles 1
 ```
 
 ### 排障：没有摘要出现（no summary appears）
@@ -1372,15 +1218,8 @@ Since Phase 2.0, loop state lives inside the project at `<project>/.roll/loop/`.
   macOS 上套伪终端运行，输出逐行流入观察窗，不再憋到进程退出；claude 走
   自己的流式协议，行为不变。
 
-## Launchd lanes(任务清单)
+## launchd 残留 lane
 
-每个项目 slug 下 Roll 只拥有三个 launchd 任务:`com.roll.loop.<slug>`(周期调度)、
-`com.roll.dream.<slug>`(夜间扫描)、`com.roll.pr.<slug>`(PR 收件)。`roll loop on`
-安装它们;`roll loop off` 卸载它们**并清扫**发现的任何其它 `com.roll.*.<slug>`
-plist——旧版本退役的形态(ci/alert/brief)曾以僵尸身份指着已删除的引擎存活数周。
-`roll doctor` 列出本机全部 `com.roll.*` 任务及其目标目录与加载状态;目标目录
-已不存在的 lane 标红 STALE。
-
-bootstrap 失败后留在磁盘上的 plist，或者手动 `bootout` 后残留的 plist，
-**不**等于 loop 已激活。请始终依据 `roll loop status`（有效后端）和
-`launchctl list` 来判断，而不是仅看 `.plist` 文件是否存在。
+Roll 不再安装或持有任何 launchd 任务。跑过旧版本的机器上可能还留着
+`com.roll.*` plist;`roll doctor` 会把找到的每一个连同目标目录与加载状态列出,
+并给出逐个卸载的命令。Roll 内部没有任何东西会重新武装它们。
