@@ -573,7 +573,7 @@ The key distinction lies in the shift of execution subject: these methodologies 
 
 The three-loop architecture (Loop A → B → C) describes how an owner works *with* Roll one story at a time. The continuous-run layer is a **separate, optional overlay**: the owner opens an agent session and starts `roll loop go`, and for as long as that run lasts the loop keeps pulling pending BACKLOG items and reflecting on code health, keeping the delivery truth surface current.
 
-The boundary is explicit: **nothing advances unless a run is open.** There is no timer, no background service, and no wake-on-command hook. Close the session and delivery stops exactly where the last cycle left it. The agent session that runs `roll loop go` *is* the Supervisor; it may delegate implementation to a Delta Team.
+The boundary is explicit: **nothing advances between runs, and no run starts that you did not start.** There is no timer, no scheduled service, and no wake-on-command hook. A run you started does outlive your window — it is a detached tmux worker — and ends on its own scope: cards finishing, `--max-cycles` / `--for`, the dead-loop breaker, or `roll loop pause`. The agent session that runs `roll loop go` *is* the Supervisor; it may delegate implementation to a Delta Team.
 
 ```
 ┌─────────────────────────────────────────────────────────┐

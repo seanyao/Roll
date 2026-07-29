@@ -78,7 +78,7 @@ my-new-project/                       ← Roll 原生项目，从 day 1 就是 .
 2. `roll init` 生成 `.roll/` 骨架 + `AGENTS.md`
 3. **写第一版 specs**：用 `$roll-design` 或手写，在 `.roll/specs/` 完成 PRD / Architecture / DDD
 4. **拆解 Story**：用 `$roll-design` 把 specs 拆成 INVEST-compliant Story 写入 `.roll/backlog.md`
-5. **跑 loop**：打开一个 agent 会话，执行 `roll loop go`（先试一轮用 `roll loop go --max-cycles 1`）。这个会话就是 Supervisor；会话结束交付就停 —— 不打开会话就没有任何进展
+5. **跑 loop**：打开一个 agent 会话，执行 `roll loop go`（先试一轮用 `roll loop go --max-cycles 1`）。这个会话就是 Supervisor;它启动的运行会活过你的窗口(detached tmux),直到范围做完、`--max-cycles`/`--for` 到点、熔断跳闸或被暂停 —— 但你不启动,就不会有任何运行
 6. 创始人持续校对、调整 specs，下一次 `roll loop go` 按新 backlog 推进
 
 ## 创始人的两种姿态

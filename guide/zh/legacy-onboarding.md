@@ -129,7 +129,7 @@ roll loop go --max-cycles 1
 
 这个 agent 会话就是 Supervisor：它从 backlog 拉一条 `📋 Todo`，跑 `$roll-build` / `$roll-fix`，也可以把活派给 Delta Team。去掉 `--max-cycles 1` 就会继续往下啃 backlog；也可以用 `--epic <名称>`、`--cards <id,...>`、`--for <时长>` 限定范围。
 
-会话结束，工作就停。后台没有任何东西在跑 —— 没有 agent 会话就没有进展。用 `roll loop pause` 暂时不让项目再跑周期，用 `roll loop resume` 放开。
+你启动的运行会活过窗口(detached tmux),直到范围做完、`--max-cycles`/`--for` 到点、熔断跳闸或被暂停;两次运行之间不会有任何推进,也不会有你没启动过的运行。用 `roll loop pause` 暂时不让项目再跑周期，用 `roll loop resume` 放开。
 
 ## Graft 的边界
 

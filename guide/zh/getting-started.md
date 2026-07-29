@@ -70,7 +70,7 @@ roll loop go
 ```
 
 这个 agent 会话就是 Supervisor：它挑下一张 `📋 Todo` 卡、跑 build/fix 周期，
-也可以把活派给 Delta Team。会话结束，工作就停。Roll 不会自己往前跑 —— 你不打开
+也可以把活派给 Delta Team。你启动的运行会活过窗口(detached tmux),直到范围做完或到达上限;但 Roll 不会自己开始跑 —— 你不打开
 agent 会话跑 `roll loop go`，就什么都不会发生。
 
 想先只跑一轮：

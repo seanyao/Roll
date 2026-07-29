@@ -97,9 +97,15 @@ const UNATTENDED_CLAIM = [
   // codex r4/r5: the OPPOSITE error — overstating the boundary. `go` detaches a
   // tmux worker, so "close the session and progress stops" is false, and a budget
   // gate no longer exists. Both shipped in my own first draft.
-  /close the session and progress stops/i,
-  /关掉会话[,，]?\s*推进就停/,
+  // codex r6: this overclaim propagated into every file the delegated sweeps
+  // touched, because the brief I gave them carried it. Match the shapes, not one
+  // sentence.
+  /close(ing)? (the|your) (session|window|terminal)[^.]{0,40}(stops|停)/i,
+  /when (the|that) session ends[^.]{0,40}stops/i,
+  /session ends, (work|progress|delivery) stops/i,
   /when it ends, progress stops/i,
+  /(关掉|关闭|结束)(会话|窗口|终端)[^。]{0,20}(就停|停止|会停)/,
+  /会话(一)?(关|结束)[,，]?\s*(推进|交付|工作)就停/,
   /budget (runs out|in force)/i,
   /预算(用尽|生效)/,
 ];

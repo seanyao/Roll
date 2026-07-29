@@ -131,7 +131,7 @@ roll loop go --max-cycles 1
 
 That agent session is the Supervisor: it picks a `📋 Todo` item from the backlog, runs `$roll-build` / `$roll-fix` on it, and can delegate to a Delta Team. Drop `--max-cycles 1` to keep going through the backlog, or scope the run with `--epic <name>`, `--cards <id,...>`, or `--for <duration>`.
 
-When the session ends, work stops. Nothing runs in the background — no agent session means no progress. Use `roll loop pause` to hold the project against further cycles and `roll loop resume` to release it.
+The run keeps going after you close your window (it is a detached tmux worker); what ends it is the scope finishing, `--max-cycles` / `--for`, the dead-loop breaker, or `roll loop pause`. Between runs nothing happens, and no run starts that you did not start. Use `roll loop pause` to hold the project against further cycles and `roll loop resume` to release it.
 
 ## The graft boundary
 
