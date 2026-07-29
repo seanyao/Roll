@@ -34,7 +34,7 @@ You set goals, review PRs, and run releases. Everything in between is Roll.
 One way: you open an agent session and run `roll loop go`. That session is the
 Supervisor, and it keeps taking the next eligible card — within the same backlog,
 route profile, evidence, Evaluator, and release gates — until the scope is done, the
-budget runs out, or the session ends. **Nothing advances while no session is driving.**
+the run hits `--max-cycles` / `--for`, the dead-loop breaker trips, or you pause it. **Nothing advances between runs, and no run starts that you did not start.**
 
 Scope it as tightly as you like: `roll loop go --epic <name>`, `--cards <id,...>`,
 `--max-cycles N`, `--for <duration>`. Ask `roll supervisor status/next/why` first if

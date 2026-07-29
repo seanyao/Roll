@@ -110,9 +110,10 @@ yourself only if you want them gone.
 
 ## How work is driven
 
-Nothing runs on a timer. A `roll loop go` chain runs inside the agent session you
-started it in, and that session is the Supervisor. Close the session and progress
-stops; that is the whole contract.
+Nothing runs on a timer. A `roll loop go` chain exists because you started it, and
+the session that started it is the Supervisor. Closing your window does not stop the
+run — see the note at the top of this guide for what does. The contract is: no work
+between runs, and no run you did not start.
 
 ```bash
 roll loop go                      # drive the whole Todo backlog

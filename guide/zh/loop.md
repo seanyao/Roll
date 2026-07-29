@@ -95,8 +95,9 @@ Builder 执行期间，主 checkout 会被物理写保护。Builder 在自己的
 
 ## 如何驱动
 
-没有任何东西按定时器运行。`roll loop go` 的连续 cycle 跑在你启动它的那个 agent
-会话里，那个会话就是 Supervisor。关掉会话，推进就停 —— 这就是全部约定。
+没有任何东西按定时器运行。`roll loop go` 的连续 cycle 之所以存在,是因为你启动了它;
+启动它的那个会话就是 Supervisor。关掉你的窗口**并不会**停止这次运行 —— 什么才会,
+见本文开头那段。约定是:两次运行之间没有活动,也不会有你没启动过的运行。
 
 ```bash
 roll loop go                      # 推进整个待办 backlog

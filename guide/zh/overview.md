@@ -33,7 +33,7 @@ Roll 以 V4 Supervisor 执行系统运行：
 
 只有一种方式:你打开一个 agent 会话,在里面跑 `roll loop go`。那个会话就是 Supervisor,
 它会在同一套 backlog、路由剖面、证据、Evaluator 和发布闸之内,一张接一张地领合格的卡,
-直到范围做完、预算用尽,或者会话结束。**没有会话在驱动时,什么都不会推进。**
+直到范围做完、`--max-cycles`/`--for` 到点、死循环熔断跳闸,或被暂停。**两次运行之间不会有任何推进,也不会有你没启动过的运行。**
 
 范围可以收得很紧:`roll loop go --epic <name>`、`--cards <id,...>`、`--max-cycles N`、
 `--for <duration>`。想先看清理由再定范围,就先问 `roll supervisor status/next/why`。

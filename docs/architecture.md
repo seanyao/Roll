@@ -75,7 +75,7 @@ web          站点与静态展示（当前不是活体 Supervisor 控制台）
 
 ### BC2 · Loop 编排
 
-这是系统的引擎。一个 Loop 是 agent 会话里的一段连续交付：会话跑 `roll loop go`，逐个 Cycle 推进，直到范围做完、预算用尽或会话结束。没有会话在驱动时，什么都不会发生。
+这是系统的引擎。一个 Loop 是 agent 会话里的一段连续交付：会话跑 `roll loop go`，逐个 Cycle 推进，直到范围做完、`--max-cycles`/`--for` 到点、死循环熔断跳闸,或被暂停。没有会话在驱动时，什么都不会发生。
 
 **Cycle 生命周期**：选故事（先查租约 `deliveryLease`）→ 路由 agent → 创建隔离工作区 → agent 执行（TCR 循环）→ attest 硬闸 → 送交 PR → AWAITING_MERGE 挂起并释放 loop → pick 下一张卡。交付推进由 Delivery Reconciler 在任意 `roll` 调用时机会性对账完成——不依赖独立 daemon。
 

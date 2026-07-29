@@ -94,6 +94,14 @@ const UNATTENDED_CLAIM = [
   // a scheduler. Match only the marketing shape: "runs/works unattended".
   /无人值守(地)?(跑|运行|执行|交付)/,
   /executes? autonomously/i,
+  // codex r4/r5: the OPPOSITE error — overstating the boundary. `go` detaches a
+  // tmux worker, so "close the session and progress stops" is false, and a budget
+  // gate no longer exists. Both shipped in my own first draft.
+  /close the session and progress stops/i,
+  /关掉会话[,，]?\s*推进就停/,
+  /when it ends, progress stops/i,
+  /budget (runs out|in force)/i,
+  /预算(用尽|生效)/,
 ];
 
 describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
@@ -145,11 +153,16 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     expect(loopEn).toMatch(/detached tmux/i);
     expect(loopEn).not.toMatch(/when it ends, progress stops/i);
 
+    // codex r5: the earlier wording here ("nothing advances while no session is
+    // driving") was the same overstatement as the banner — a detached run keeps
+    // going after your window closes. The accurate pair is between-runs quiet plus
+    // no-unstarted-runs.
     const overviewEn = readFileSync(join(ROOT, "guide/en/overview.md"), "utf8");
-    expect(overviewEn).toMatch(/nothing advances while no session is driving/i);
+    expect(overviewEn).toMatch(/nothing advances between runs/i);
+    expect(overviewEn).toMatch(/no run starts that you did not start/i);
 
     const overviewZh = readFileSync(join(ROOT, "guide/zh/overview.md"), "utf8");
-    expect(overviewZh).toContain("没有会话在驱动时");
+    expect(overviewZh).toContain("两次运行之间不会有任何推进");
   });
 
   it("the one-time launchd cleanup guide is present and actionable", () => {
