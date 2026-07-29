@@ -1786,13 +1786,14 @@ function render(
   } else {
     const installState = detectInstallState();
     if (installState === "not-installed") {
+      // US-LOOP-113: there is nothing to "install" — a session drives delivery.
       ebL =
-        c("muted", "○ not installed", { bold: true }) +
+        c("muted", "◆ session-driven", { bold: true }) +
         c("muted", "   ") +
         c("dim", "run ") +
-        c("fg", "roll loop on", { bold: true }) +
-        c("dim", " to enable");
-      ebZh = c("dim", "  未安装 · 运行 ") + c("fg", "roll loop on") + c("dim", " 启用");
+        c("fg", "roll loop go", { bold: true }) +
+        c("dim", " in this session");
+      ebZh = c("dim", "  会话驱动 · 在本会话运行 ") + c("fg", "roll loop go");
     } else if (installState === "stale" || installState === "disabled") {
       ebL =
         c("amber", "◌ STALE — plist present, not loaded", { bold: true }) +

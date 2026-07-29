@@ -20,8 +20,16 @@ const help = (lang: "en" | "zh"): string => stripAnsi(renderLoopHelp(lang));
  * from the dispatch source instead, so the help can never silently fall behind.
  */
 const INDEX_SRC = readFileSync(new URL("../src/commands/index.ts", import.meta.url), "utf8");
-const LOOP_DISPATCH = INDEX_SRC.slice(INDEX_SRC.indexOf('command === "loop"'));
+// codex review r2: the first attempt anchored on a string that does not exist, so
+// indexOf returned -1, slice(-1) kept only the last character, and the derived set
+// was EMPTY — making the "every live verb is advertised" assertion vacuous. Anchor
+// on the real registration and FAIL LOUD if the anchor ever moves again.
+const LOOP_ANCHOR = 'registerPorted("loop"';
+const anchorAt = INDEX_SRC.indexOf(LOOP_ANCHOR);
+if (anchorAt < 0) throw new Error(`loop dispatch anchor ${LOOP_ANCHOR} not found in commands/index.ts`);
+const LOOP_DISPATCH = INDEX_SRC.slice(anchorAt);
 const DISPATCHED = [...new Set([...LOOP_DISPATCH.matchAll(/args\[0\] === "([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!))];
+if (DISPATCHED.length < 20) throw new Error(`derived only ${DISPATCHED.length} loop subcommands — the scan is broken`);
 
 // Retirement stubs that only print a redirect (US-PORT-007/022) — deliberately
 // not advertised as live verbs.

@@ -659,8 +659,8 @@ export const v3Catalog: Catalog = {
     zh: "gh repo create <name> --public --source=. --push（或 `git remote add origin ... && git push -u origin main`）",
   },
   "init.next_loop_on": {
-    en: "Enable the loop schedule",
-    zh: "启用 loop 定时任务",
+    en: "Drive the backlog with roll loop go",
+    zh: "用 roll loop go 推进 backlog",
   },
   "init.next_repo_required": {
     en: "`roll loop` needs a pushable GitHub remote — create the repo first.",
