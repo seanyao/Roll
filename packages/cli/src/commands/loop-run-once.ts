@@ -814,26 +814,32 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   const id = await projectIdentity(identityRoot);
   const cycleId = makeCycleId();
 
-  // codex r15: this disclosure used to live on the IDLE path only, so a leftover lane
-  // that actually picked and built a card said nothing — the loudest case was the
-  // silent one. It is stated once per invocation now, before the outcome is known.
+  // A leftover `com.roll.loop.*` plist for this project is debris worth clearing.
   //
-  // codex r16: but hoisting it made it LIE in the common case. `roll loop go` spawns
-  // this command as its worker, so on any machine with a stray plist an owner-started
-  // run was told it "ran from a leftover launchd lane". Provenance is knowable — the
-  // go driver sets ROLL_LOOP_GO_WORKER — so attribute only when this was NOT a go
-  // worker, and otherwise merely note the debris without claiming it caused this run.
+  // Three rounds of review taught the shape of this message the hard way:
+  //   r15 — it only printed on the IDLE path, so a leftover lane that actually built
+  //         a card said nothing: the loudest case was the silent one.
+  //   r16 — hoisting it here made it LIE, because `roll loop go` runs this command as
+  //         its worker: an owner-started run was told a lane had started it.
+  //   r17 — gating on ROLL_LOOP_GO_WORKER did not fix that either: `--no-tmux` never
+  //         sets it, and in any case the ABSENCE of a flag cannot prove launchd
+  //         provenance.
+  // So it no longer claims provenance at all. It states the fact it can actually
+  // verify — a leftover lane exists — and leaves causation unasserted.
   if (leftoverLoopLaneLabel(id.slug)) {
-    const fromGo = (process.env["ROLL_LOOP_GO_WORKER"] ?? "").trim() === "1";
+    const noteLang = resolveLang({
+      rollLang: process.env["ROLL_LANG"],
+      lcAll: process.env["LC_ALL"],
+      lang: process.env["LANG"],
+    });
     process.stdout.write(
-      fromGo
-        ? "loop run-once: a leftover launchd lane exists for this project (it did not start this run).\n" +
-            "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n"
-        : "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
+      noteLang === "zh"
+        ? "loop run-once: 本项目还留着旧版的 launchd lane —— Roll 不再安装定时器。\n" +
+            "  卸载:roll doctor(列出全部 com.roll.* lane 与卸载命令)\n"
+        : "loop run-once: a leftover launchd lane exists for this project — Roll installs no timers.\n" +
             "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n",
     );
   }
-
   // FIX-1209: identity assertion — if the resolved project path contains a cycle
   // worktree marker, identity has drifted despite the preflight guard. Refuse
   // execution with an explicit error (never silently idle/paused).
