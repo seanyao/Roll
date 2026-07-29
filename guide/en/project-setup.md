@@ -75,7 +75,7 @@ roll setup                 # configure AI tools globally (one time per machine)
 cd my-project
 roll init                  # diagnose and route this project
 roll next                  # continue with design/apply/repair/migrate/loop/status
-roll loop on               # enable autonomous execution
+roll loop go               # work the backlog in this session
 ```
 
 `roll setup` syncs conventions for the AI tools installed on the machine.

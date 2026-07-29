@@ -17,19 +17,39 @@
  *   live in @roll/infra (configValidate / configSet / configKeyFile).
  *
  * ─── DELIBERATE DIVERGENCE: schedule reload ─────────────────────────────────
- * v2's cmd_config calls `_config_reload_schedule` after every successful write,
- * which re-runs `_install_launchd_plists >/dev/null 2>&1` — SILENT on success,
- * warning only when the loop is paused/muted or the install fails. The TS port
- * does NOT implicitly (re)mount launchd from a config write: mounting is owned
- * by `roll loop on` (US-LOOP-009), which FIX-212 made verify-or-fail-loud — a
- * silent best-effort remount from an unrelated config edit would undermine that
- * guarantee. The facades already print "run `roll loop on` to apply", and the
- * plain-key write path's observable output is unchanged (the v2 reload emits
- * nothing on the success path). Net: byte-identical CLI output; the only
- * behavioural change is that applying a new schedule is now an explicit
- * `roll loop on` rather than an implicit side effect.
+ * US-LOOP-120: `loop-window` and `loop-schedule` write keys that NOTHING READS.
+ * A quiet window and a period only meant something to a resident scheduler, and
+ * Roll installs none — how often cards advance is decided by when the owner opens
+ * a session and runs `roll loop go`. Both facades therefore say so on write rather
+ * than printing an apply hint for a command that no longer exists. Removing the
+ * facades outright is FIX-1485; until then they must not imply they took effect.
  */
 import { CONFIG_KEYS, configKeyFile, configResolve, configSet, configValidate } from "@roll/infra";
+import { INACTIVE_KEYS } from "./config-get.js";
+/**
+ * The "this key does nothing" note, in ONE language.
+ *
+ * codex r12: my first version printed EN and ZH back to back, which breaks the
+ * project's single-language rule for user-facing output (the language-surface test
+ * asserts `expectNoAdjacentBilingualPairs`). Bilingual means both wordings exist,
+ * not that both are shown.
+ */
+function inactiveNote(en: string, zh: string): void {
+  // Deliberately English, and NOT locale-selected (codex raised this in r13 and r18).
+  //
+  // The `ok("✓ set …")` line this annotates is English-only hardcoded, in all six
+  // places. Making the note Chinese under a zh locale therefore produces "English
+  // success line + Chinese note" — adjacent bilingual output, the exact rule this was
+  // meant to respect. Keeping it English makes the command's output CONSISTENTLY
+  // English for a zh user: not localised, but not lying and not mixed.
+  //
+  // The real fix is to localise `ok()` itself along with the frozen values that
+  // capture it, which is wider than a docs card. Tracked as FIX-1485 item 5.
+  void zh;
+  void resolveCurrent;
+  process.stdout.write(`${en}\n`);
+}
+
 import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";
 import { CONFIG_FACADE_KEYS, configGetCommand } from "./config-get.js";
 
@@ -65,7 +85,7 @@ function loopWindow(value: string, scope: Scope): number {
   if (value === "") {
     const [vs, s1] = configResolve("loop_active_start") ?? ["", "default"];
     const [ve] = configResolve("loop_active_end") ?? ["", "default"];
-    process.stdout.write(`loop-window: ${vs}-${ve} (${fromSource(s1)})\n`);
+    process.stdout.write(`loop-window: ${vs}-${ve} (${fromSource(s1)}) — inactive, nothing reads this\n`);
     return 0;
   }
   if (!/^[0-9]+-[0-9]+$/.test(value)) {
@@ -94,7 +114,10 @@ function loopWindow(value: string, scope: Scope): number {
   configSet("loop_active_start", String(start), file);
   configSet("loop_active_end", String(end), file);
   ok(`✓ set loop-window = ${start}-${end} in ${file}`);
-  process.stdout.write("run `roll loop on` to apply\n");
+  inactiveNote(
+    "note: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`",
+    "说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定",
+  );
   return 0;
 }
 
@@ -103,7 +126,9 @@ function loopSchedule(value: string, scope: Scope): number {
   if (value === "") {
     const [vp, sp] = configResolve("loop_schedule.period_minutes") ?? ["", "default"];
     const [vo] = configResolve("loop_schedule.offset_minute") ?? ["", "default"];
-    process.stdout.write(`loop-schedule: every ${vp}min (offset :${vo}) (${fromSource(sp)})\n`);
+    // codex r2: printing "every 60min" reads as a schedule in effect. Show the
+    // stored value, then say plainly that nothing acts on it.
+    process.stdout.write(`loop-schedule: ${vp}min / offset :${vo} (${fromSource(sp)}) — inactive, nothing reads this\n`);
     return 0;
   }
   if (!/^[0-9]+(\/[0-9]+)?$/.test(value)) {
@@ -131,7 +156,10 @@ function loopSchedule(value: string, scope: Scope): number {
   } else {
     ok(`✓ set loop-schedule = ${period} in ${file}`);
   }
-  process.stdout.write("run `roll loop on` to apply\n");
+  inactiveNote(
+    "note: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles",
+    "说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`",
+  );
   return 0;
 }
 
@@ -144,7 +172,7 @@ function dreamTime(value: string, scope: Scope): number {
     const [vh, sh] = configResolve(hourKey) ?? ["", "default"];
     let [vm] = configResolve(minKey) ?? ["", "default"];
     if (vm === "-" || vm === "") vm = "0";
-    process.stdout.write(`${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))} (${fromSource(sh)})\n`);
+    process.stdout.write(`${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))} (${fromSource(sh)}) — inactive, nothing reads this\n`);
     return 0;
   }
   if (!/^[0-9]{1,2}:[0-9]{1,2}$/.test(value)) {
@@ -168,7 +196,10 @@ function dreamTime(value: string, scope: Scope): number {
   configSet(hourKey, String(hh), file);
   configSet(minKey, String(mm), file);
   ok(`✓ set ${svc}-time = ${pad2(hh)}:${pad2(mm)} in ${file}`);
-  process.stdout.write("run `roll loop on` to apply\n");
+  inactiveNote(
+    `note: nothing reads this — run \`roll ${svc} run-once\` when you want a scan`,
+    `说明:这个值没人读 —— 想扫就跑 \`roll ${svc} run-once\``,
+  );
   return 0;
 }
 
@@ -275,5 +306,11 @@ export function configCommand(args: string[]): number {
   const file = configKeyFile(sc);
   configSet(key, value, file);
   ok(`✓ set ${key} = ${value} in ${file}`);
+  // codex r8: the FACADES disclose that these keys are dead, but a raw write
+  // (`roll config loop_schedule.period_minutes 30`) printed a bare success. Same
+  // key, same non-effect — say so on both paths.
+  if (INACTIVE_KEYS.has(key)) {
+    inactiveNote("note: this key is inactive — nothing reads it", "说明:这个 key 已失效 —— 没有任何东西读它");
+  }
   return 0;
 }

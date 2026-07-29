@@ -171,9 +171,9 @@ export function loopEnforceTcrCommand(args: string[], deps: EnforceTcrDeps = rea
       `**Story**: ${storyId}\n` +
       `**Reason**: zero tcr: commits since story start (${startedAt})\n\n` +
       `**Action required** (choose one):\n` +
-      `- Add TCR commits and re-run: \`roll loop now\`\n` +
+      `- Add TCR commits, then drive another cycle: \`roll loop go --cards ${storyId}\`\n` +
       `- Take over manually: \`$roll-build ${storyId}\`\n` +
-      `- Reset and retry: \`roll loop reset\` then \`roll loop now\`\n`,
+      `- Reset and retry: \`roll loop reset\` then \`roll loop go --cards ${storyId}\`\n`,
   );
   deps.notify("roll ⚠ TCR Failed", `${storyId}: no tcr: commits found`);
   return 1;
@@ -264,7 +264,10 @@ export function loopPrecheckCiCommand(args: string[], deps: PrecheckDeps = realP
         `**Failing conclusions**: ${verdict.redConclusions.join(",")}\n\n` +
         `**Action required**:\n` +
         `- Investigate and fix CI: \`gh -R ${slug} run list --commit ${commit}\`\n` +
-        `- After fixing and pushing green commit: \`roll loop now\`\n`,
+        // No storyId here: this gate runs BEFORE a card is picked, so there is nothing
+        // to interpolate. Name the unscoped command rather than a placeholder the
+        // reader would have to fill in (codex r3).
+        `- After fixing and pushing a green commit, drive another cycle: \`roll loop go\`\n`,
     );
     deps.notify("roll ⚠ CI red", `loop refused to build on broken base (${sha8})`);
     return 1;

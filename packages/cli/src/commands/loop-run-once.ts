@@ -49,6 +49,7 @@ import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { resolveLang, t, v3Catalog } from "@roll/spec";
+import { resolveCurrent } from "./lang.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
   "loop run-once: delivery published — PR open, awaiting reconciliation (Delivery Reconciler advances merge and credits main evidence)\n" +
@@ -814,6 +815,32 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   const id = await projectIdentity(identityRoot);
   const cycleId = makeCycleId();
 
+  // A leftover `com.roll.loop.*` plist for this project is debris worth clearing.
+  //
+  // Three rounds of review taught the shape of this message the hard way:
+  //   r15 — it only printed on the IDLE path, so a leftover lane that actually built
+  //         a card said nothing: the loudest case was the silent one.
+  //   r16 — hoisting it here made it LIE, because `roll loop go` runs this command as
+  //         its worker: an owner-started run was told a lane had started it.
+  //   r17 — gating on ROLL_LOOP_GO_WORKER did not fix that either: `--no-tmux` never
+  //         sets it, and in any case the ABSENCE of a flag cannot prove launchd
+  //         provenance.
+  // So it no longer claims provenance at all. It states the fact it can actually
+  // verify — a leftover lane exists — and leaves causation unasserted.
+  if (leftoverLoopLaneLabel(id.slug)) {
+    // codex r18: `resolveCurrent()` (not a hand-rolled resolveLang call) — it also
+    // consults the SAVED `roll config lang`, so a user configured to zh without
+    // ROLL_LANG set gets Chinese. The other resolveLang sites in this file omit that
+    // too; they are pre-existing and out of this card's scope.
+    const noteLang = resolveCurrent();
+    process.stdout.write(
+      noteLang === "zh"
+        ? "loop run-once: 本项目还留着旧版的 launchd lane —— Roll 不再安装定时器。\n" +
+            "  卸载:roll doctor(列出全部 com.roll.* lane 与卸载命令)\n"
+        : "loop run-once: a leftover launchd lane exists for this project — Roll installs no timers.\n" +
+            "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n",
+    );
+  }
   // FIX-1209: identity assertion — if the resolved project path contains a cycle
   // worktree marker, identity has drifted despite the preflight guard. Refuse
   // execution with an explicit error (never silently idle/paused).
@@ -1210,14 +1237,6 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
     // `com.roll.loop.*` lane, and that lane invokes THIS command. Without dormancy
     // it would keep logging idle rows unattended, so say so on the way out and name
     // the disarm path rather than letting it accumulate silently.
-    if (leftoverLoopLaneLabel(id.slug)) {
-      process.stdout.write(
-        "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
-          "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n" +
-          "loop run-once: 本次由旧版残留的 launchd lane 触发——Roll 不再安装定时器。\n" +
-          "  卸载方法:roll doctor(列出全部 com.roll.* lane 与卸载命令)\n",
-      );
-    }
     return 0;
   }
 

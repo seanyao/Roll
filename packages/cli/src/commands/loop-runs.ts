@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
 import { type Lang, resolveLang, t, v2Catalog } from "@roll/spec";
+import { collectProjectsRegistry } from "../lib/projects-registry.js";
 import { projectSlug, sharedRoot } from "./dashboard.js";
 
 function lang(): Lang {
@@ -184,23 +185,34 @@ function aggregateAllFiles(): string[] {
     for (const d of allDirs.split(":")) if (d) candidates.push(join(d, "runs.jsonl"));
   } else if ((process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim()) {
     candidates.push(join((process.env["ROLL_PROJECT_RUNTIME_DIR"] as string).trim(), "runs.jsonl"));
-  } else if (platform() === "darwin") {
-    const laDir = (process.env["_LAUNCHD_DIR"] ?? "").trim() || join(homedir(), "Library", "LaunchAgents");
-    let plists: string[] = [];
-    try {
-      plists = readdirSync(laDir).filter((f) => f.startsWith("com.roll.loop.") && f.endsWith(".plist"));
-    } catch {
-      plists = [];
+  } else {
+    // codex r15: this used to enumerate projects from `com.roll.loop.*` plists ONLY,
+    // which made `--all` progressively blind as owners followed the cleanup guide —
+    // remove the debris, lose the history. The project registry is the real list and
+    // has nothing to do with scheduling.
+    for (const entry of collectProjectsRegistry()) {
+      if (entry.path) candidates.push(join(entry.path, ".roll", "loop", "runs.jsonl"));
     }
-    for (const pl of plists) {
-      let content: string;
+    // A leftover lane may still point at a project the registry never recorded, so
+    // it stays a supplementary source — never the only one.
+    if (platform() === "darwin") {
+      const laDir = (process.env["_LAUNCHD_DIR"] ?? "").trim() || join(homedir(), "Library", "LaunchAgents");
+      let plists: string[] = [];
       try {
-        content = readFileSync(join(laDir, pl), "utf8");
+        plists = readdirSync(laDir).filter((f) => f.startsWith("com.roll.loop.") && f.endsWith(".plist"));
       } catch {
-        continue;
+        plists = [];
       }
-      const m = /<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/.exec(content);
-      if (m && m[1]) candidates.push(join(m[1], ".roll", "loop", "runs.jsonl"));
+      for (const pl of plists) {
+        let content: string;
+        try {
+          content = readFileSync(join(laDir, pl), "utf8");
+        } catch {
+          continue;
+        }
+        const m = /<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/.exec(content);
+        if (m && m[1]) candidates.push(join(m[1], ".roll", "loop", "runs.jsonl"));
+      }
     }
   }
   candidates.push(runsFile());

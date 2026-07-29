@@ -1,9 +1,16 @@
-# roll loop — Autonomous BACKLOG Executor
+# roll loop — Session-Driven BACKLOG Executor
 
-> **Resident scheduling is retired (US-LOOP-113).** `roll loop on` / `off` / `now` /
-> `fallback` no longer exist and nothing runs on a timer. Delivery is driven by the
-> agent session that runs `roll loop go`, and that session is the Supervisor.
-> `roll loop pause` / `resume` still gate autonomous progress.
+> **Nothing runs on a timer.** Delivery only happens because someone ran
+> `roll loop go`; Roll installs no scheduler and starts nothing on its own.
+>
+> A run you start does outlive the terminal: by default `go` puts the worker in a
+> detached tmux window, so closing your window (or Ctrl-C while following the feed)
+> stops you *watching*, not the run. What ends a run is its own scope — the cards
+> finishing, `--max-cycles` / `--for` being reached, the dead-loop breaker tripping,
+> `roll loop pause`, or killing the tmux session. Use `--no-tmux` to keep it in the
+> foreground of the terminal you started it in.
+>
+> So: no work between runs, and no run you did not start.
 
 `roll loop` executes BACKLOG stories: it picks the top pending story and delivers
 it — committing changes in TCR micro-steps — for as long as the session driving it
@@ -103,9 +110,10 @@ yourself only if you want them gone.
 
 ## How work is driven
 
-Nothing runs on a timer. A `roll loop go` chain runs inside the agent session you
-started it in, and that session is the Supervisor. Close the session and progress
-stops; that is the whole contract.
+Nothing runs on a timer. A `roll loop go` chain exists because you started it, and
+the session that started it is the Supervisor. Closing your window does not stop the
+run — see the note at the top of this guide for what does. The contract is: no work
+between runs, and no run you did not start.
 
 ```bash
 roll loop go                      # drive the whole Todo backlog
@@ -127,22 +135,21 @@ roll loop go --epic <name>        # Scope to one epic
 roll loop go --cards US-1,FIX-2   # Scope to explicit cards (runs while paused)
 roll loop go --max-cycles 1       # A single cycle, to try the flow
 
-roll loop status      # Show scheduler state and current loop state
+roll loop status      # Show run state (ACTIVE / PAUSED), queue, alerts, recent cycles
 roll loop watch       # Default owner view: phase, quiet time, TCR count, last signal, plus live activity
 roll loop watch -n 50 # Look back 50 lines before following (default 200; 'all' = whole log)
 roll loop watch --events      # Compact developer event stream from .roll/loop/events.ndjson
 roll loop watch --raw-events  # Raw JSON event stream for audit/debug only
 roll loop watch --verbose  # Also show the raw agent transcript (default folds it away)
 roll loop watch --attach   # Read-only attach to the loop's tmux observe window (tmux attach -r)
-roll loop go          # Run goal mode manually for all backlog until complete/pause/guardrail
+roll loop go          # Work all backlog until done, paused, or a guardrail stops it
 roll loop go --epic <name>              # Limit the goal to one epic
 roll loop go --cards US-1,FIX-2         # Limit the goal to selected cards
-roll loop go --budget 10                # Stop conservatively when goal cost reaches $10
-roll loop go --usage-threshold 0.85     # Pause when five-hour or weekly usage reaches this ratio
-roll loop go --no-wait                  # On usage limit, pause and return instead of waiting for reset
 roll loop go --for 5h                   # Stop after the current cycle once the timebox is reached
 roll loop go --max-cycles 3             # Stop after this many cycles
 roll loop go --review <auto|hetero|self|off>  # Set the final review policy
+roll loop go --no-tmux                  # Stay in this terminal instead of a detached tmux window
+roll loop go --attach                   # Follow the live feed after starting
 roll loop goal        # Show persisted goal status, scope, review mode, usage, limits, and safety gate
 
 roll loop runs        # Show last 10 run summaries (story IDs, TCR count, duration, slowest phase)
@@ -220,11 +227,10 @@ runs even while paused (FIX-1472).
 
 ### Goal Mode Safety Gates
 
-Budget and run limits are explicit per `roll loop go`. `--budget`,
-`--max-cycles`, and `--for` apply to THIS invocation only; omitting one means no
-limit for this run — Roll never silently inherits a budget or cap from a prior
-session's persisted goal, so a flagless `roll loop go` can neither be capped nor
-bricked by a limit you set days ago. Scope (`--epic`/`--cards`) and `--review`
+Run limits are explicit per `roll loop go`. `--max-cycles` and `--for` apply to
+THIS invocation only; omitting one means no limit for this run — Roll never
+silently inherits a cap from a prior session's persisted goal, so a flagless
+`roll loop go` can neither be capped nor bricked by a limit you set days ago. Scope (`--epic`/`--cards`) and `--review`
 persist only while the goal is unfinished. When a goal is `complete`, the next
 `roll loop go` archives it under `.roll/loop/goal-archive/`, records
 `goal:archived`, and starts a distinct goal from that invocation's flags. With
@@ -264,18 +270,13 @@ work. They fail loud with `runner_stale_for_repo` if the repo-local
 `@seanyao/roll` package version is newer than the running runner; install or
 publish the local build before resuming autonomous work.
 
-`roll loop go` enforces safety only at cycle boundaries. `--budget <usd>` uses
-the effective run cost ledger and moves the goal to `budget_limited` when the
-budget is reached. An idle or aborted cycle that ran no agent counts as a known
-$0, not as an unknown-cost row. Only a row where an agent actually executed but
-left no parseable usage is recorded as unknown; those still stop conservatively
-rather than being counted as zero. Usage headroom is checked against five-hour
-and weekly windows; by default Roll pauses at 85% and waits for the reset
-window, while `--no-wait` leaves the goal paused for the owner. The recovery
-wait is bounded — a hung usage API cannot stall the session forever; on timeout
-Roll records a `usage_wait_timeout` audit event and leaves the goal paused.
-`--for <duration>` is a wall-clock box: the in-flight cycle finishes, then the
-goal pauses with reason `timebox`.
+`roll loop go` enforces safety only at cycle boundaries. The global backstop is
+the **dead-loop breaker**: after a run of consecutive whole-goal no-progress
+cycles — none of which delivered a card — the goal is STOPPED with a loud ALERT,
+so an unmergeable card can never spin indefinitely and the loop provably halts
+within K cycles. `--for <duration>` is a wall-clock box: the in-flight cycle
+finishes, then the goal pauses with reason `timebox`. `--max-cycles <n>` stops
+after n cycles.
 
 Each safety trip records `goal:gate_tripped`, and `roll loop goal` shows the
 last safety gate reading.
@@ -287,13 +288,13 @@ goal events. The key fields are:
 
 | Field | Meaning |
 |-------|---------|
-| `Status` | `active`, `paused`, `budget_limited`, or `complete`. |
+| `Status` | `active`, `paused`, or `complete` (a historical goal's `budget_limited` reads as `paused`). |
 | `Scope` | All backlog, one epic, or an explicit card list. |
 | `Review` | Completion review policy: `auto`, `hetero`, `self`, or `off`. |
 | `Usage` | Goal cycle count, effective cost, and unknown-cost-row count. |
-| `Limits` | Explicit `--budget`, `--max-cycles`, and `--for` settings. |
-| `Safety gate` | The latest budget, usage, or timebox trip and its reading. |
-| `Last decision` | Why the goal continued, paused, became budget-limited, or completed. |
+| `Limits` | Explicit `--max-cycles` and `--for` settings. |
+| `Safety gate` | The latest timebox or dead-loop-breaker trip and its reading. |
+| `Last decision` | Why the goal continued, paused, or completed. |
 
 When `auto` final review degrades to same-provider review, the status view
 shows the recorded degradation reason from `goal:review_degraded`. When a goal
@@ -1137,7 +1138,7 @@ so the tmux viewer never looks frozen.
 | 5 | `publish_push` | push branch + open PR (or doc-only merge) | 5 – 30 s |
 | 6 | `cleanup` | env cleanup + emit PR final state + worktree teardown | < 1 s |
 
-> **US-AUTO-044**: the main loop exits after opening the PR and **no longer waits for merge**. The event-backed Delivery Reconciler advances it at cycle boundaries, read paths, or via `roll loop reconcile`; there is no dedicated merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
+> A cycle ends when the PR is open — it does **not** wait for merge. The event-backed Delivery Reconciler advances delivery at cycle boundaries, on read paths, or via `roll loop reconcile`; there is no merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
 
 Idle / failed / aborted cycles only emit the phases they actually entered.
 At cycle exit, the inner runner prints a phase breakdown panel sorted by
@@ -1301,8 +1302,9 @@ doubles as a heartbeat. The cycle runner calls
 roll-meta. Output goes to `~/.shared/roll/push-status.log` (rotated at 1MB, 2
 copies kept).
 
-Because the loop runs on its normal schedule, `status/loop.md` stays **≤35min
-fresh** — the watch prompt always sees recent data. The push is best-effort: a
+`status/loop.md` is refreshed by each cycle, so it is as fresh as the last cycle of
+the last run — not a fixed window. Between runs it does not change, which is itself
+the honest signal: a stale timestamp means nobody has driven the loop since. The push is best-effort: a
 network error, git conflict, or a >60s timeout is logged to push-status.log, the
 process is killed if it hangs, and the cycle continues. No ALERT, no retry.
 
@@ -1327,7 +1329,7 @@ stale. It only reads — it never modifies `seanyao/roll`.
 
 ### Troubleshooting: `status/loop.md` is stale
 
-If the snapshot's timestamp is far older than 35 minutes:
+If the snapshot's timestamp is far older than your last run:
 
 1. Check `~/.shared/roll/push-status.log` — it records every push attempt and
    any timeout or git error.
@@ -1362,7 +1364,7 @@ cron 日志打一条 WARNING 并跳过推送（绝不影响 cycle）。
 用 `${roll_meta_dir}/ops/push-loop-status.sh`。脚本写出 `status/loop.md` 并提交 +
 push 到 roll-meta。输出写到 `~/.shared/roll/push-status.log`（1MB 轮转，保留 2 份）。
 
-因为 loop 按固定节奏运行，`status/loop.md` 始终保持 **≤35min 新鲜**——巡检 prompt 总
+`status/loop.md` 由每个 cycle 刷新,新鲜度就是上一次运行的最后一个 cycle——不是固定窗口。两次运行之间它不变,这本身就是诚实的信号。巡检 prompt 总
 能看到近期数据。推送是 best-effort：网络错误、git 冲突或 >60s 超时都记进
 push-status.log，进程卡住会被 kill，cycle 继续。不设 ALERT，不重试。
 
@@ -1386,7 +1388,7 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 
 ### 排障：`status/loop.md` 不更新
 
-若快照时间戳远早于 35 分钟：
+若快照时间戳远早于你最近一次运行：
 
 1. 看 `~/.shared/roll/push-status.log`——它记录每次推送尝试以及任何超时或 git 错误。
 2. 确认 `roll_meta_dir` 已配置且路径存在（`roll config get roll_meta_dir`）。
@@ -1396,14 +1398,13 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 ## State Files
 
 Since Phase 2.0, a project's loop state lives **inside the project** at
-`<project>/.roll/loop/`. Only machine-level binding files (launchd runners,
-attach scripts) and the global mute switch stay in `~/.shared/roll/`. See
-[Loop Data Layout](loop-data-layout.md) for the full layout, migration, and
-`roll loop gc`.
+`<project>/.roll/loop/`. Only machine-level files — the attach script and the
+global mute switch — stay in `~/.shared/roll/`. See
+[Loop Data Layout](loop-data-layout.md) for the full layout and `roll loop gc`.
 
 自 Phase 2.0 起，项目的 loop 状态搬进了**项目目录** `<project>/.roll/loop/`。只有机
-器级绑定文件（launchd runner、attach 脚本）和全局静音开关留在 `~/.shared/roll/`。完
-整布局、迁移与 `roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
+器级文件——attach 脚本和全局静音开关——留在 `~/.shared/roll/`。完整布局与
+`roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
 
 | File | Content |
 |------|---------|
@@ -1430,7 +1431,55 @@ attach scripts) and the global mute switch stay in `~/.shared/roll/`. See
 
 ## Leftover launchd lanes
 
-Roll no longer installs or owns any launchd job. A machine that ran an older
-version may still carry `com.roll.*` plists; `roll doctor` lists every one it
-finds with its target directory and load state, and prints the command to
-disarm each. Nothing in Roll re-arms them.
+Roll installs no launchd job and owns none. A machine that ran an older version may
+still carry `com.roll.*` plists. A loaded one can still fire and invoke
+`roll loop run-once` — that path stays honest about it, but it is unattended work you
+did not ask for, so clear it. `roll status` / `roll loop status` keep naming leftover
+lanes until you do.
+
+Roll deliberately does NOT remove them for you: they live in your `~/Library/
+LaunchAgents/`, and silently unloading jobs on your machine is not Roll's call.
+
+Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
+plist。仍然加载着的那种还会触发并调用 `roll loop run-once`——那条路径会如实说明，
+但这属于你没要求过的无人驱动的活，该清掉。清掉之前，`roll status` / `roll loop status`
+会一直提示残留 lane。
+
+Roll 有意**不**替你删:它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务
+不是 Roll 该做的决定。
+
+**See what is there / 先看有什么:**
+
+```bash
+roll doctor                          # lists every com.roll.* lane, its target dir, load state
+ls ~/Library/LaunchAgents/com.roll.* # or look directly
+```
+
+**Disarm one lane / 卸载一条:**
+
+```bash
+launchctl bootout gui/$(id -u)/com.roll.loop.<slug>; rm -f ~/Library/LaunchAgents/com.roll.loop.<slug>.plist
+```
+
+`;` rather than `&&` on purpose: a lane that is not loaded makes `bootout` exit
+non-zero, and `&&` would then leave the plist on disk — the exact debris you are
+removing.
+
+这里用 `;` 而不是 `&&` 是有意的:未加载的 lane 会让 `bootout` 以非零退出,用 `&&` 就会
+把 plist 留在盘上 —— 正是你要清的那个垃圾。
+
+**Disarm every roll lane on this machine / 清掉本机所有 roll lane:**
+
+```bash
+for p in ~/Library/LaunchAgents/com.roll.*.plist; do
+  [ -e "$p" ] || continue
+  label=$(basename "$p" .plist)
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+  rm -f "$p"
+done
+```
+
+Then confirm with `roll doctor` — the leftover-lane section disappears when the
+last plist is gone.
+
+之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。

@@ -41,7 +41,7 @@ roll design --from-file docs/PRD.md
 `roll design --from-file ...` 命令；没有文件时，`roll design` 仍会在你的 AI
 agent 里拉起同一个 `roll-design` 技能。你描述领域模型，agent 把 INVEST 故事写入
 `.roll/backlog.md`，详细设计会生成自包含的 `design-review.html` Design Review Page，
-然后 `roll loop` 接过去接着干。
+然后你跑 `roll loop go` 把这些故事建出来。
 
 你也可以直接在 agent 里跑 `$roll-design`，效果一样。
 
@@ -61,15 +61,35 @@ roll idea "Add a health check endpoint"
 
 第一条故事要小：一个可见行为，一条明确测试路径。
 
-## 5. 启动 Loop
+## 5. 跑 Loop
+
+交付之所以前进是因为你启动了它 —— 没有任何东西会替你开始。在项目里打开一个 agent 会话，然后执行：
 
 ```bash
-roll loop on
+roll loop go
+```
+
+这个 agent 会话就是 Supervisor：它挑下一张 `📋 Todo` 卡、跑 build/fix 周期，
+也可以把活派给 Delta Team。你启动的运行会活过窗口(detached tmux),直到范围做完或到达上限;但 Roll 不会自己开始跑 —— 你不打开
+agent 会话跑 `roll loop go`，就什么都不会发生。
+
+想先只跑一轮：
+
+```bash
+roll loop go --max-cycles 1
+```
+
+需要限定范围时：`--epic <名称>` 只跑一个史诗，`--cards <id,...>` 只跑指定卡，
+`--for <时长>` 限制墙钟时间。
+
+任何时候看状态：
+
+```bash
 roll loop status
 ```
 
 `roll loop status` 是常用快照视图。若当前有 cycle 在跑，并且你想看实时视图，
-先用只读 watch 命令：
+用只读 watch 命令：
 
 ```bash
 roll loop watch
@@ -78,11 +98,14 @@ roll loop watch
 排查事件用 `roll loop watch --events`，只有需要原始审计 JSON 时才用
 `roll loop watch --raw-events`。所有 watch 模式都是只读；Ctrl-C 只停止视图。
 
-如果不想等调度触发，可以手动跑一轮：
+想暂时不让项目再跑周期，以及重新放开：
 
 ```bash
-roll loop now
+roll loop pause
+roll loop resume
 ```
+
+暂停期间，指定单卡的引导式执行 —— `roll loop go --cards US-DEMO-001` —— 仍然可以跑。
 
 ## 6. 生成验收报告
 

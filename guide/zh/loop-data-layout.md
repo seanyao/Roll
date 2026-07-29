@@ -42,7 +42,7 @@ project-local directory.
 
 ## Dream 的 cron 日志
 
-`roll-.dream`（每晚代码健康扫描）的 cron stdout 捕获日志也改为项目本地：
+`roll-.dream`（代码健康扫描）的 stdout 捕获日志也改为项目本地：
 
 | 服务 | 路径 |
 |------|------|
@@ -51,7 +51,7 @@ project-local directory.
 以前放在 `~/.shared/roll/dream/cron-<slug>.log`。项目本地后，删项目即
 清日志，并发项目也不会互相穿插。
 
-`roll-.dream` (the nightly code-health scan) also writes its cron stdout capture
+`roll-.dream` (the code-health scan) also writes its stdout capture
 project-local:
 
 | Service | Path |
@@ -113,15 +113,14 @@ use.
 
 ---
 
-## 家目录遗留文件（自动迁移已退役）
+## 家目录遗留文件
 
 The one-time move of control state out of `~/.shared/roll/loop/` into each
-project's `.roll/loop/` is over, and the automatic migration retired with the
-resident scheduler: no dual-path fallback, no rewrite on the way in.
+project's `.roll/loop/` is over. Roll reads the project-local paths only: no
+rewrite on the way in, no fallback to a second location.
 
-把控制状态从 `~/.shared/roll/loop/` 搬进各项目 `.roll/loop/` 的一次性迁移已经结束，
-执行它的自动迁移也随常驻调度一起退役 —— cycle 不再在启动时改写路径，也没有双路回退。
-Roll 只读上表里的项目本地路径。
+把控制状态从 `~/.shared/roll/loop/` 搬进各项目 `.roll/loop/` 的一次性迁移已经结束。
+Roll 只读上表里的项目本地路径:cycle 不会在启动时改写路径,也没有第二个位置可回退。
 
 If a project never made the move, copy its files by hand into
 `<project>/.roll/loop/`. Leftover `.migrated-*` markers are still reaped by
@@ -194,8 +193,7 @@ the project.
 **我这里还有 `*.migrated-<时间戳>` 文件，那是什么？**
 
 Leftovers from the one-time move to this layout. Nothing writes them any more —
-the automatic migration retired along with the resident scheduler, so a cycle no
-longer rewrites paths on the way in. `roll loop gc` still reaps markers older
+a cycle does not rewrite paths on the way in. `roll loop gc` reaps markers older
 than 7 days, so you can also just leave them alone. If you have a project that
 never made the move, copy the files to their new paths by hand using the table
 above.

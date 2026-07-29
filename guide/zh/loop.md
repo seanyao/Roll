@@ -1,8 +1,14 @@
-# roll loop — 自主 BACKLOG 执行器
+# roll loop — 会话驱动的 BACKLOG 执行器
 
-> **常驻调度已退役（US-LOOP-113）。** `roll loop on` / `off` / `now` / `fallback`
-> 不再存在，也没有任何东西按定时器运行。交付由跑 `roll loop go` 的那个 agent 会话
-> 驱动，那个会话就是 Supervisor。`roll loop pause` / `resume` 仍然把守自主推进。
+> **没有任何东西按定时器运行。** 交付只因为有人跑了 `roll loop go` 才发生;Roll 不安装
+> 任何调度器,也不会自己启动任何东西。
+>
+> 但你启动的这次运行**会活过终端**:默认 `go` 把 worker 放进 detached 的 tmux 窗口,
+> 所以关掉你的窗口(或跟随输出时按 Ctrl-C)只是停止**观看**,不是停止运行。真正结束一次
+> 运行的是它自己的范围 —— 卡跑完、`--max-cycles` / `--for` 到点、死循环熔断器跳闸、
+> `roll loop pause`,或者杀掉那个 tmux session。想让它留在当前终端前台就加 `--no-tmux`。
+>
+> 所以:两次运行之间没有活动,也不会有你没启动过的运行。
 
 `roll loop` 执行 BACKLOG 故事：摘取最高优先级的待办故事，通过 TCR 微提交完成代码
 交付 —— 只要驱动它的那个会话还在跑。
@@ -89,8 +95,9 @@ Builder 执行期间，主 checkout 会被物理写保护。Builder 在自己的
 
 ## 如何驱动
 
-没有任何东西按定时器运行。`roll loop go` 的连续 cycle 跑在你启动它的那个 agent
-会话里，那个会话就是 Supervisor。关掉会话，推进就停 —— 这就是全部约定。
+没有任何东西按定时器运行。`roll loop go` 的连续 cycle 之所以存在,是因为你启动了它;
+启动它的那个会话就是 Supervisor。关掉你的窗口**并不会**停止这次运行 —— 什么才会,
+见本文开头那段。约定是:两次运行之间没有活动,也不会有你没启动过的运行。
 
 ```bash
 roll loop go                      # 推进整个待办 backlog
@@ -111,7 +118,7 @@ roll loop go --epic <name>        # 限定到一个史诗
 roll loop go --cards US-1,FIX-2   # 限定到指定卡片（paused 下也会跑）
 roll loop go --max-cycles 1       # 只跑一个 cycle，试一下流程
 
-roll loop status      # 显示调度器状态和当前 loop 状态
+roll loop status      # 显示运行态(ACTIVE / PAUSED)、队列、告警、最近 cycle
 roll loop watch       # 默认 owner 视图：phase、quiet 时间、TCR 数、last signal + 实时活动
 roll loop watch -n 50 # 跟随前回看 50 行（默认 200；'all' = 整份日志）
 roll loop watch --events      # 从 .roll/loop/events.ndjson 渲染 compact 事件流
@@ -121,9 +128,6 @@ roll loop watch --attach   # 以只读方式 attach 到 loop 的 tmux 观测窗�
 roll loop go          # 手动运行 goal mode，默认覆盖全部 backlog，直到完成/暂停/触发护栏
 roll loop go --epic <name>              # 将 goal 限定到一个 epic
 roll loop go --cards US-1,FIX-2         # 将 goal 限定到指定卡片
-roll loop go --budget 10                # goal 成本达到 $10 后保守停止
-roll loop go --usage-threshold 0.85     # 5 小时或 7 天用量达到该比例后暂停
-roll loop go --no-wait                  # 触发用量闸后直接暂停返回，不等窗口恢复
 roll loop go --for 5h                   # 到时间盒后等当前 cycle 收尾再停
 roll loop go --max-cycles 3             # 跑满指定 cycle 数后停止
 roll loop go --review <auto|hetero|self|off>  # 设置完成前终审策略
@@ -198,21 +202,17 @@ Hold、Cut、未满足依赖、skip-list、open PR、已合并交付和 pending-
 
 ### Goal Mode 安全闸
 
-预算与运行上限每次 `roll loop go` 都是显式的。`--budget`、`--max-cycles`、`--for`
-只对本次调用生效；省略某项即代表本轮不设该限制——Roll 绝不从上一次会话持久化的
-goal 静默沿用预算或上限，因此一条不带 flag 的 `roll loop go` 既不会被几天前设的
-上限封顶，也不会被它卡死。范围（`--epic`/`--cards`）与 `--review` 只会在 goal 尚未
+运行上限每次 `roll loop go` 都是显式的。`--max-cycles`、`--for` 只对本次调用生效；
+省略即代表本轮不设该限制——Roll 绝不从上一次会话持久化的 goal 静默沿用上限，因此一条
+不带 flag 的 `roll loop go` 既不会被几天前设的上限封顶，也不会被它卡死。范围（`--epic`/`--cards`）与 `--review` 只会在 goal 尚未
 结束时于省略 flag 后沿用。goal 已 `complete` 时，下一次 `roll loop go` 会将它归档到
 `.roll/loop/goal-archive/`、记录 `goal:archived`，并完全按本次 flags 新建 goal；不带
 scope flag 则覆盖全部合格 backlog 卡，绝不会静默沿用已完成 goal 的范围。
 
-`roll loop go` 的安全闸只在 cycle 边界生效。`--budget <usd>` 使用有效成本账本；
-达到预算时 goal 进入 `budget_limited`。未执行 agent 的 idle 或 aborted 周期记为
-已知 $0，不算 unknown cost 行；只有真正执行了 agent 却测不到可解析用量的行才记为
-unknown，这类行仍按保守侧停止，不当作 0。用量闸检查 5 小时与 7 天窗口；默认 85%
-暂停并等待窗口恢复，`--no-wait` 则停下等 owner。恢复等待是有界的——卡死的用量 API
-不会让会话无限停摆；超时后 Roll 记录 `usage_wait_timeout` 审计事件并让 goal 保持暂停。
-`--for <duration>` 是墙钟时间盒：当前 cycle 收尾后，goal 以 `timebox` 原因暂停。
+`roll loop go` 的安全闸只在 cycle 边界生效。全局兜底是**死循环熔断器**:连续若干个
+整 goal 无进展(没交付任何卡)的 cycle 之后,goal 会被停下并大声告警 —— 一张合不进去的卡
+不可能无限打转,循环必然在 K 轮内停。`--for <duration>` 是墙钟时间盒:当前 cycle 收尾后
+goal 以 `timebox` 原因暂停;`--max-cycles <n>` 按轮数停。
 
 每个 builder cycle 前，`roll loop go` 会对主 checkout 的**完整** `git status`
 列表（绝不截断）与 runner 的**待交付证据 manifest** 逐条比对。每个 manifest 按 cycle
@@ -249,13 +249,13 @@ fail-loud；先安装或发布本地构建，再恢复自治施工。
 
 | 字段 | 含义 |
 |------|------|
-| `Status` | `active`、`paused`、`budget_limited` 或 `complete`。 |
+| `Status` | `active`、`paused` 或 `complete`（历史 goal 里的 `budget_limited` 读作 `paused`）。 |
 | `Scope` | 全 backlog、单个 epic 或显式卡片列表。 |
 | `Review` | 完成前终审策略：`auto`、`hetero`、`self` 或 `off`。 |
 | `Usage` | goal 已跑 cycle 数、有效成本、unknown cost 行数。 |
-| `Limits` | 显式传入的 `--budget`、`--max-cycles`、`--for` 限制。 |
-| `Safety gate` | 最近一次预算、用量或时间盒闸及其读数。 |
-| `Last decision` | goal 继续、暂停、预算限停或完成的原因。 |
+| `Limits` | 显式传入的 `--max-cycles`、`--for` 限制。 |
+| `Safety gate` | 最近一次时间盒或死循环熔断闸及其读数。 |
+| `Last decision` | goal 继续、暂停或完成的原因。 |
 
 `auto` 终审降级为同 provider review 时，状态视图会显示 `goal:review_degraded`
 记录的降级原因。goal 暂不能完成时，`Last decision` 会带上未达成的真相裁定原因
@@ -1008,7 +1008,7 @@ PR 等合并）每 30–60s 还会 emit 一次 `phase_tick` 心跳，tmux 不再
 | 5 | `publish_push` | push 分支 + 建 PR（doc-only 直接合） | 5 – 30 秒 |
 | 6 | `cleanup` | 环境清理 + 落 PR 终态 + 拆 worktree | < 1 秒 |
 
-> **US-AUTO-044**:主 loop 开完 PR 即退，**不再等合并**。事件型 Delivery Reconciler 在 cycle 边界、读路径或显式 `roll loop reconcile` 时推进；没有独立合并 daemon。有 open PR 的 story 由资格闸跳过，不会重复开，也不会假 Done。
+> 一个 cycle 在 PR 开出来时结束，**不等合并**。事件型 Delivery Reconciler 在 cycle 边界、读路径或显式 `roll loop reconcile` 时推进交付；没有合并 daemon。有 open PR 的 story 由资格闸跳过，不会重复开，也不会假 Done。
 
 Idle / failed / aborted cycle 只 emit 实际进入过的阶段。
 cycle 收尾时 inner runner 在 stdout 打一份按耗时降序的面板：
@@ -1158,7 +1158,7 @@ idle cycle，所以快照同时充当心跳。cycle runner 在 `cycle_end` 事�
 `${roll_meta_dir}/ops/push-loop-status.sh`。脚本写出 `status/loop.md` 并提交 + push 到
 roll-meta。输出写到 `~/.shared/roll/push-status.log`（1MB 轮转，保留 2 份）。
 
-因为 loop 按固定节奏运行，`status/loop.md` 始终保持 **≤35min 新鲜**——巡检 prompt 总能
+`status/loop.md` 由每个 cycle 刷新，所以它的新鲜度就是上一次运行的最后一个 cycle——不是一个固定窗口。两次运行之间它不变,而这本身就是诚实的信号:时间戳很旧就意味着从那以后没人驱动过 loop。巡检 prompt 看到的
 看到近期数据。推送是 best-effort：网络错误、git 冲突或 >60s 超时都记进
 push-status.log，进程卡住会被 kill，cycle 继续。不设 ALERT，不重试。
 
@@ -1182,7 +1182,7 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 
 ### 排障：`status/loop.md` 不更新
 
-若快照时间戳远早于 35 分钟：
+若快照时间戳远早于你最近一次运行：
 
 1. 看 `~/.shared/roll/push-status.log`——它记录每次推送尝试以及任何超时或 git 错误。
 2. 确认 `roll_meta_dir` 已配置且路径存在（`roll config get roll_meta_dir`）。
@@ -1194,8 +1194,8 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 Since Phase 2.0, loop state lives inside the project at `<project>/.roll/loop/`.
 
 自 Phase 2.0 起，项目的 loop 状态搬进了**项目目录** `<project>/.roll/loop/`。只有机
-器级绑定文件（launchd runner、attach 脚本）和全局静音开关留在 `~/.shared/roll/`。完
-整布局、迁移与 `roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
+器级文件——attach 脚本和全局静音开关——留在 `~/.shared/roll/`。完整布局与
+`roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
 
 | 文件 | 内容 |
 |------|------|
@@ -1218,6 +1218,41 @@ Since Phase 2.0, loop state lives inside the project at `<project>/.roll/loop/`.
 
 ## launchd 残留 lane
 
-Roll 不再安装或持有任何 launchd 任务。跑过旧版本的机器上可能还留着
-`com.roll.*` plist;`roll doctor` 会把找到的每一个连同目标目录与加载状态列出,
-并给出逐个卸载的命令。Roll 内部没有任何东西会重新武装它们。
+Roll no longer installs or owns any launchd job. An older machine may still carry
+`com.roll.*` plists — debris, not a scheduler. Roll deliberately does not remove
+them for you; see the EN guide for the same commands.
+
+Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
+plist。仍然加载着的那种还会触发并调用 `roll loop run-once` —— 那条路径会如实说明,
+但这属于你没要求过的无人驱动的活,该清掉。清掉之前,`roll status` / `roll loop status`
+会一直提示残留 lane。Roll 有意**不**替你删:
+它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务不是 Roll 该做的决定。
+
+先看有什么:
+
+```bash
+roll doctor                          # 列出每条 com.roll.* lane、目标目录、加载状态
+ls ~/Library/LaunchAgents/com.roll.*
+```
+
+卸载一条:
+
+```bash
+launchctl bootout gui/$(id -u)/com.roll.loop.<slug>; rm -f ~/Library/LaunchAgents/com.roll.loop.<slug>.plist
+```
+
+这里用 `;` 而不是 `&&` 是有意的:未加载的 lane 会让 `bootout` 以非零退出,用 `&&` 就会把
+plist 留在盘上 —— 正是你要清的那个垃圾。
+
+清掉本机所有 roll lane:
+
+```bash
+for p in ~/Library/LaunchAgents/com.roll.*.plist; do
+  [ -e "$p" ] || continue
+  label=$(basename "$p" .plist)
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+  rm -f "$p"
+done
+```
+
+之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。

@@ -158,7 +158,7 @@ export interface ClaudeArgvInput {
   storyId?: string;
   /** The claude binary (resolved path or "claude"); tests inject the shim name. */
   bin?: string;
-  /** FIX-220: when the user manually triggers `roll loop now`, the terminal is
+  /** FIX-220: when the owner is watching a run in a terminal, that terminal is
    *  interactive — drop --verbose and --output-format stream-json so the
    *  output is human-readable instead of a JSON flood. */
   interactive?: boolean;
@@ -195,7 +195,7 @@ export function buildClaudeArgv(input: ClaudeArgvInput): { bin: string; args: st
   // autorun directive, no story pin — so the reviewer is framed only by its own
   // review prompt, not told to "complete the delivery".
   const prompt = input.bare === true ? input.skillBody : `${AUTORUN_DIRECTIVE}${pin}${input.skillBody}`;
-  // FIX-220: manual `roll loop now` runs in an interactive terminal — strip
+  // FIX-220: an owner-watched run is interactive — strip
   // --verbose and --output-format stream-json so the user sees plain text
   // instead of a JSON flood. Cost tracking is best-effort on this path.
   const args = input.interactive
@@ -584,7 +584,7 @@ export interface AgentSpawnOptions {
   rig?: Rig;
   /** Agent-local autonomous step budget for CLIs that expose one. */
   maxSteps?: number;
-  /** FIX-220: when the user manually triggers `roll loop now`, drop --verbose
+  /** FIX-220: when the owner is watching the run, drop --verbose
    *  and --output-format stream-json for a human-readable terminal. */
   interactive?: boolean;
   /** FIX-319: bare spawn — send `skillBody` verbatim (no autorun directive / no
@@ -670,7 +670,7 @@ export function buildSpawnCommand(agent: string, opts: AgentSpawnOptions): { bin
 /**
  * FIX-224 (v2 `_AGENT_PTY_PREFIX`, FIX-136 lineage): non-claude agents
  * (pi/kimi/…) buffer their stdout when piped, blacking out the live
- * observation window (tmux watch / `roll loop now`) for the whole phase —
+ * observation window (tmux watch) for the whole phase —
  * wrap them in `script -q /dev/null` so they see a PTY and stream line by
  * line. claude is never wrapped: its stream-json protocol runs on plain
  * pipes. Only darwin gets the wrap (BSD `script` takes the command as argv;

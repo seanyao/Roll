@@ -42,12 +42,22 @@ describe("FIX-256 — goal mode docs and site wording", () => {
     }
   });
 
-  it("site exposes goal mode and no longer advertises loop / dream / brief as active lanes", () => {
+  /**
+   * US-LOOP-120: this used to assert the site said "goal mode" and listed
+   * "loop / pr / dream" service status. Both were framings against a scheduler:
+   * "goal mode" only meant something as the opposite of scheduled ticks, and the
+   * three-service snapshot described lanes that no longer exist. What the site
+   * must show now is the command and the two run states.
+   */
+  it("site presents roll loop go and the two run states, not scheduler lanes", () => {
     const site = doc("site/roll-data.js");
     expect(site).toContain("roll loop go");
-    expect(site).toContain("goal mode");
+    expect(site).toMatch(/ACTIVE ?\/ ?PAUSED|ACTIVE \/ PAUSED/);
+    // No lane inventory, in either language.
     expect(site).not.toContain("loop / dream / brief");
     expect(site).not.toContain("loop, dream and brief");
-    expect(site).toContain("loop / pr / dream");
+    expect(site).not.toContain("loop / pr / dream");
+    expect(site).not.toContain("scheduled tick");
+    expect(site).not.toContain("定时 tick");
   });
 });

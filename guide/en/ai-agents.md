@@ -33,9 +33,8 @@ roll agent list                 # show installed agents
 
 Roll uses three core Agent-domain roles:
 
-- `supervise` — coordinates at project level. In guided mode this may be the
-  current agent session you are talking to; in autonomous mode Roll resolves the
-  role and drives the loop.
+- `supervise` — coordinates at project level. This is the agent session you are
+  talking to: it drives the loop and can delegate the other roles.
 - `execute` — builds or fixes a story through the selected skill workflow.
 - `evaluate` — reviews, scores, or checks the delivery in a fresh session.
 
@@ -114,15 +113,15 @@ roll supervisor route --role evaluator --story US-123 --json
 The trace lists every candidate, eligibility, score reasons, warnings, skipped
 runtime facts, selected agent, strategy, and source binding.
 
-## Guided vs Autonomous Mode
+## One Session, Several Roles
 
-In guided mode, you can keep working in the current agent window. That session
-acts as the supervisor front door: it can inspect `roll agent`, run migrations,
-and ask Roll to continue through the CLI.
+You keep working in the agent window you already have. That session is the
+supervisor front door: it can inspect `roll agent`, run migrations, and drive the
+loop through the CLI.
 
-In autonomous mode, you do not open multiple agent windows manually. The loop
-resolves `supervise`, `story.execute`, and `story.evaluate`, then spawns fresh
-agent sessions for the roles through the configured bindings.
+You do not open a window per role. When a cycle needs `story.execute` or
+`story.evaluate`, the loop resolves the binding and spawns a fresh agent session
+for that role — while the session you are in stays the one coordinating.
 
 ## Supported Agents
 

@@ -68,10 +68,10 @@ window.RollData = (function () {
       meta: ["MIT licensed", "Node 22+", "Works with Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix when available"],
     },
     TERMINAL: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd scheduled",  detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "session driving",    detail: "cycle 1 · US-1 picked · isolated worktree" },
       { kind: "ok",     text: "tmux session",       detail: "roll-loop-roll · attach with `tmux attach -t roll-loop-roll`" },
-      { kind: "ok",     text: "active window",      detail: "10:00 – 18:00 · idle outside" },
+      { kind: "ok",     text: "session driving",    detail: "scope: all Todo · no cycle cap set" },
       { kind: "blank" },
       { kind: "stamp",  time: "11:05:02", text: "cycle #047 — picking story" },
       { kind: "step",   arrow: "story", label: "US-128", text: "PR inbox · GHA bot detection · peer required" },
@@ -80,14 +80,14 @@ window.RollData = (function () {
       { kind: "step",   arrow: "ci",    label: "green",  text: "Acceptance Check · 12/12 ✓", ok: true },
       { kind: "step",   arrow: "pr",    label: "#312",   text: "merged to main · TerminalOutcome delivered", ok: true },
       { kind: "blank" },
-      { kind: "stamp",  time: "11:09:18", text: "cycle #047 — delivered · idle until 12:05", muted: true },
+      { kind: "stamp",  time: "11:09:18", text: "cycle #047 — delivered · picking next card", muted: true },
       { kind: "cursor" },
     ],
     FRAME_A: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd scheduled",  detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "session driving",    detail: "cycle 1 · US-1 picked · isolated worktree" },
       { kind: "ok",     text: "tmux session",       detail: "roll-loop-roll · attach with `tmux attach -t roll-loop-roll`" },
-      { kind: "ok",     text: "active window",      detail: "10:00 – 18:00 · idle outside" },
+      { kind: "ok",     text: "session driving",    detail: "scope: all Todo · no cycle cap set" },
       { kind: "cursor" },
     ],
     WHY: {
@@ -117,7 +117,7 @@ window.RollData = (function () {
       ],
       analogy: {
         label: "The analogy",
-        body: "Like a smart building. You set the temperature; the system handles heating, cooling, and overnight maintenance on its own schedule. You stay in control of the decisions that matter.",
+        body: "Like a well-run workshop. You open it and set the job; the tools, jigs and checks are already in place, so the work moves without you doing each step. Whatever you set going finishes its batch; nothing new starts until you ask. You stay in control of the decisions that matter.",
       },
     },
     FEATURES_HEADING: {
@@ -130,10 +130,10 @@ window.RollData = (function () {
         { name: "Zero-start init", desc: "Start from a short requirement, PRD, or notes. roll init writes or finds the brief, roll next explains the next design step, and Designer turns it into Stories.", badges: ["core", "highlight"] },
         { name: "Existing codebase onboarding plan", desc: "Existing codebase adoption remains plan-first: diagnose without destructive migration, review, then roll init --apply shows an operation checkpoint before writing Roll metadata; roll next continues after apply.", badges: ["new", "highlight"] },
       ]},
-      { id: "autonomous", title: "Autonomous Execution", blurb: "Run while you sleep.", features: [
-        { name: "roll loop on",        mono: true, desc: "Supervisor picks Stories from Backlog and runs isolated Delta Units.", badges: ["core"] },
-        { name: "roll loop go",        mono: true, desc: "Manual goal mode for a scoped backlog run; scheduled ticks yield while the goal lock is held.", badges: ["new", "highlight"] },
-        { name: "roll loop status",    mono: true, desc: "Scheduler snapshot for loop / pr / dream service status, queues, alerts and recent runs.", badges: ["core"] },
+      { id: "autonomous", title: "Session-Driven Execution", blurb: "One session, many cards.", features: [
+        { name: "roll loop go",        mono: true, desc: "In this session, the Supervisor picks Stories from Backlog and runs isolated Delta Units.", badges: ["core"] },
+        { name: "roll loop go",        mono: true, desc: "Drive a scoped backlog run from this session: --epic, --cards, --max-cycles, --for.", badges: ["new", "highlight"] },
+        { name: "roll loop status",    mono: true, desc: "Run state (ACTIVE / PAUSED), queues, alerts, recent runs and cost.", badges: ["core"] },
         { name: "tmux attach -t roll-loop-<slug>", mono: true, desc: "Attach to the live tmux session and watch AI work in real time.", badges: ["highlight"] },
         { name: "roll loop pause / resume", mono: true, desc: "Hand-code yourself; let the system resume when you're done.", badges: [] },
       ]},
@@ -144,10 +144,10 @@ window.RollData = (function () {
         { name: "CI Gate",           desc: "Loop waits for green CI; red CI halts the loop and writes an ALERT entry.", badges: ["core"] },
         { name: "TCR Discipline",    desc: "No commit without passing tests; zero-diff commits revert automatically.", badges: ["core"] },
       ]},
-      { id: "dream", title: "Nightly Dream", blurb: "Maintenance, on its own.", features: [
+      { id: "dream", title: "Dream Scan", blurb: "Maintenance, when you ask.", features: [
         { name: "Code Health Scan", desc: "Detects dead code, architectural drift, and over-engineering candidates.", badges: ["highlight"] },
         { name: "Doc Coverage",     desc: "Flags missing guides, stale docs and undocumented ENV vars across the project.", badges: [] },
-        { name: "REFACTOR Queue",   desc: "Writes REFACTOR-NNN entries to Backlog so loop picks them up next morning.", badges: [] },
+        { name: "REFACTOR Queue",   desc: "Writes REFACTOR-NNN entries to Backlog so the loop picks them up on a later run.", badges: [] },
       ]},
       { id: "lifecycle", title: "Story Lifecycle", blurb: "Idea to merged PR, in one flow.", features: [
         { name: "Backlog capture", desc: "One-liners become IDEA or FIX entries without starting a full planning session.", badges: ["core"] },
@@ -211,7 +211,7 @@ window.RollData = (function () {
         { time: "10:00", title: "Security peer review", body: "Risky build triggers peer. claude → kimi negotiate the plan over up to three rounds. AGREE.", tag: "peer" },
         { time: "10:30", title: "Verified",             body: "Acceptance Check confirms ACs are met. Screenshots and test output collected as proof of life.", tag: "verify" },
         { time: "10:45", title: "Live",                 body: "Human approves the PR. Merge to main. The Story report records the evidence and delivery state.", tag: "ship" },
-        { time: "03:00", title: "Nightly scan queues improvements", body: "Dream finds a small refactor opportunity in the new code. Files REFACTOR-013 for tomorrow.", tag: "dream" },
+        { time: "16:20", title: "Dream scan queues improvements", body: "You run a dream scan; it finds a small refactor opportunity in the new code and files REFACTOR-013 for a later run.", tag: "dream" },
       ],
     },
     NUMBERS: {
@@ -219,7 +219,7 @@ window.RollData = (function () {
       stats: [
         { value: "20+",  label: "Standardized skills" },
         { value: "4",    label: "Quality safety nets" },
-        { value: "24/7", label: "Automated monitoring" },
+        { value: "1 session", label: "Many cards per sitting" },
         { value: "Hrs",  label: "Idea → production" },
       ],
     },
@@ -231,7 +231,7 @@ window.RollData = (function () {
         { name: "Overview",         path: "guide/en/overview.md",          desc: "Quick start, Supervisor execution model, onboarding samples, feature list." },
         { name: "Methodology",      path: "guide/en/methodology.md",       desc: "Markdown-as-code, INVEST stories, two-tier .roll/backlog.md index." },
         { name: "Loop",             path: "guide/en/loop.md",              desc: "Scheduling, subcommands, tmux visibility, PR inbox." },
-        { name: "Dream",            path: "guide/en/dream.md",             desc: "Nightly code health scan and REFACTOR generation." },
+        { name: "Dream",            path: "guide/en/dream.md",             desc: "On-demand code health scan and REFACTOR generation." },
         { name: "Peer",             path: "guide/en/peer.md",              desc: "Cross-agent review protocol — AGREE / REFINE / OBJECT / ESCALATE." },
         { name: "Skills",           path: "guide/en/skills.md",            desc: "Skill catalog and the decision tree for picking the right one." },
         { name: "Tools & Policy",   path: "guide/en/tools.md",             desc: "Built-in tools (bash / browser / git / github / network / fs / mcp), their per-cycle policy guardrails, and roll doctor tools status." },
@@ -277,10 +277,10 @@ window.RollData = (function () {
     },
     // Terminal stays mostly English — these are real CLI outputs.
     TERMINAL: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd 已调度",        detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "会话驱动中",            detail: "cycle 1 · 领取 US-1 · 隔离 worktree" },
       { kind: "ok",     text: "tmux 会话就绪",          detail: "roll-loop-roll · tmux attach -t roll-loop-roll 可接入" },
-      { kind: "ok",     text: "活跃窗口",              detail: "10:00 – 18:00 · 窗外静默" },
+      { kind: "ok",     text: "会话驱动中",            detail: "范围:全部 Todo · 未设轮数上限" },
       { kind: "blank" },
       { kind: "stamp",  time: "11:05:02", text: "cycle #047 — 摘取故事" },
       { kind: "step",   arrow: "story", label: "US-128", text: "PR 收件箱 · GHA 机器人检测 · 需 peer" },
@@ -289,14 +289,14 @@ window.RollData = (function () {
       { kind: "step",   arrow: "ci",    label: "绿灯",  text: "验收检查 · 12/12 ✓", ok: true },
       { kind: "step",   arrow: "pr",    label: "#312",  text: "已合入 main · TerminalOutcome delivered", ok: true },
       { kind: "blank" },
-      { kind: "stamp",  time: "11:09:18", text: "cycle #047 — delivered · 静默至 12:05", muted: true },
+      { kind: "stamp",  time: "11:09:18", text: "cycle #047 — delivered · 继续领下一张", muted: true },
       { kind: "cursor" },
     ],
     FRAME_A: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd 已调度",  detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "会话驱动中",      detail: "cycle 1 · 领取 US-1 · 隔离 worktree" },
       { kind: "ok",     text: "tmux 会话就绪",    detail: "roll-loop-roll · tmux attach -t roll-loop-roll 可接入" },
-      { kind: "ok",     text: "活跃窗口",        detail: "10:00 – 18:00 · 窗外静默" },
+      { kind: "ok",     text: "会话驱动中",      detail: "范围:全部 Todo · 未设轮数上限" },
       { kind: "cursor" },
     ],
     WHY: {
@@ -326,7 +326,7 @@ window.RollData = (function () {
       ],
       analogy: {
         label: "类比",
-        body: "像一栋智能楼宇。你设定温度,系统按自己的节奏调度供暖、制冷、夜间维护。决定权始终在你手里。",
+        body: "像一间打理好的工坊。你开门、定下今天做什么,工具、夹具和检查都已就位,活儿自己往前走,不用你一步步盯。你交下去的那批活会做完;不开口,就不会有新的开始。决定权始终在你手里。",
       },
     },
     FEATURES_HEADING: {
@@ -339,10 +339,10 @@ window.RollData = (function () {
         { name: "零起点 init", desc: "从一句需求、PRD 或笔记开始。roll init 写入或发现 brief，roll next 说明下一步设计动作，Designer 把它变成 Stories。", badges: ["core", "highlight"] },
         { name: "已有代码库接入计划", desc: "现有代码库仍然先出计划:无破坏诊断、review,再由 roll init --apply 展示操作检查点并等待确认,然后写入 Roll metadata。", badges: ["new", "highlight"] },
       ]},
-      { id: "autonomous", title: "自主执行", blurb: "你睡觉时它在跑。", features: [
-        { name: "roll loop on",        mono: true, desc: "Supervisor 从 Backlog 领取 Story，并运行隔离的 Delta Unit。", badges: ["core"] },
-        { name: "roll loop go",        mono: true, desc: "手动 goal mode，用于限定范围的 backlog 连跑；持有 goal lock 时定时 tick 会让路。", badges: ["new", "highlight"] },
-        { name: "roll loop status",    mono: true, desc: "调度快照:loop / pr / dream 服务状态、队列、告警、最近执行。", badges: ["core"] },
+      { id: "autonomous", title: "会话驱动执行", blurb: "一个会话，连着啃多张卡。", features: [
+        { name: "roll loop go",        mono: true, desc: "在本会话里，Supervisor 从 Backlog 领取 Story 并运行隔离的 Delta Unit。", badges: ["core"] },
+        { name: "roll loop go",        mono: true, desc: "在本会话里推进限定范围的 backlog：--epic、--cards、--max-cycles、--for。", badges: ["new", "highlight"] },
+        { name: "roll loop status",    mono: true, desc: "运行态(ACTIVE / PAUSED)、队列、告警、最近执行与成本。", badges: ["core"] },
         { name: "tmux attach -t roll-loop-<slug>", mono: true, desc: "接入实时 tmux 会话,观看 AI 现场工作。", badges: ["highlight"] },
         { name: "roll loop pause / resume", mono: true, desc: "需要手动改时暂停,改完再让系统接力。", badges: [] },
       ]},
@@ -353,10 +353,10 @@ window.RollData = (function () {
         { name: "CI 门禁",        desc: "Loop 等 CI 绿;红则停循环并写入 ALERT。", badges: ["core"] },
         { name: "TCR 纪律",       desc: "测试不过不准提交;空 diff 提交自动回滚。", badges: ["core"] },
       ]},
-      { id: "dream", title: "夜间 Dream", blurb: "维护自己跑。", features: [
+      { id: "dream", title: "Dream 巡检", blurb: "想扫就扫。", features: [
         { name: "代码健康扫描", desc: "识别死代码、架构漂移、过度工程候选项。", badges: ["highlight"] },
         { name: "文档覆盖率",   desc: "标记缺失指南、过时文档、未记录的 ENV 变量。", badges: [] },
-        { name: "REFACTOR 队列", desc: "把 REFACTOR-NNN 写进 Backlog,次日 loop 自己拣。", badges: [] },
+        { name: "REFACTOR 队列", desc: "把 REFACTOR-NNN 写进 Backlog,后面的运行会领到。", badges: [] },
       ]},
       { id: "lifecycle", title: "故事生命周期", blurb: "从想法到合入,同一条流。", features: [
         { name: "Backlog 捕获", desc: "一句话进入 IDEA 或 FIX,不强行开启完整规划会。", badges: ["core"] },
@@ -420,7 +420,7 @@ window.RollData = (function () {
         { time: "10:00", title: "安全 Peer 评审",     body: "高风险构建触发 peer。claude → kimi 至多三轮协商方案。AGREE。", tag: "peer" },
         { time: "10:30", title: "验证通过",          body: "验收检查确认 AC 全部满足。截图、测试输出作为「活体证据」入档。", tag: "verify" },
         { time: "10:45", title: "上线",              body: "人审批 PR。合入 main。Story 报告记录证据与交付状态。", tag: "ship" },
-        { time: "03:00", title: "夜检排上改进项",      body: "Dream 在新代码里发现一处小重构机会,写入 REFACTOR-013,明天再做。", tag: "dream" },
+        { time: "16:20", title: "Dream 巡检排上改进项", body: "你跑一次 dream 巡检,它在新代码里发现一处小重构机会,写入 REFACTOR-013,留给后面的运行。", tag: "dream" },
       ],
     },
     NUMBERS: {
@@ -428,7 +428,7 @@ window.RollData = (function () {
       stats: [
         { value: "20+",  label: "标准化技能" },
         { value: "4",    label: "质量安全网" },
-        { value: "24/7", label: "自动化监控" },
+        { value: "一个会话", label: "一次啃掉多张卡" },
         { value: "小时",  label: "想法 → 生产" },
       ],
     },
@@ -440,7 +440,7 @@ window.RollData = (function () {
         { name: "概述",        path: "guide/zh/overview.md",          desc: "快速开始、Supervisor 执行模型、接入样例、功能列表。" },
         { name: "方法论",       path: "guide/zh/methodology.md",       desc: "Markdown 即代码、INVEST 故事、.roll/backlog.md 两层索引。" },
         { name: "Loop",       path: "guide/zh/loop.md",              desc: "调度、子命令、tmux 可见性、PR 收件箱。" },
-        { name: "Dream",      path: "guide/zh/dream.md",             desc: "夜间代码健康巡检与 REFACTOR 生成。" },
+        { name: "Dream",      path: "guide/zh/dream.md",             desc: "按需代码健康巡检与 REFACTOR 生成。" },
         { name: "Peer",       path: "guide/zh/peer.md",              desc: "跨 Agent 评审协议 — AGREE / REFINE / OBJECT / ESCALATE。" },
         { name: "技能",        path: "guide/zh/skills.md",            desc: "技能目录与选用决策树。" },
         { name: "工具与策略",   path: "guide/zh/tools.md",             desc: "内置工具(bash / browser / git / github / network / fs / mcp)、各自的每周期策略护栏，以及 roll doctor tools status。" },

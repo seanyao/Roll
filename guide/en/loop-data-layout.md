@@ -47,7 +47,7 @@ resolve to the same project-local directory.
 
 ## Dream cron logs
 
-`roll-.dream` (the nightly code-health scan) also writes its cron stdout capture
+`roll-.dream` (the code-health scan) also writes its stdout capture
 project-local:
 
 | Service | Path |
@@ -58,7 +58,7 @@ Previously this lived in `~/.shared/roll/dream/cron-<slug>.log`.
 Moving it project-local means it is naturally garbage-collected when
 the project is deleted, and concurrent projects never interleave.
 
-`roll-.dream`（每晚代码健康扫描）的 cron stdout 捕获日志也改为项目本地：
+`roll-.dream`（代码健康扫描）的 stdout 捕获日志也改为项目本地：
 
 | 服务 | 路径 |
 |------|------|
@@ -122,13 +122,12 @@ reserved for future use; aggregation is live today.
 ## Legacy home-directory files (migration retired)
 
 The one-time move of control state out of `~/.shared/roll/loop/` into each
-project's `.roll/loop/` is over, and the automatic migration that performed it
-retired with the resident scheduler — a cycle no longer rewrites paths on the way
-in, and there is no dual-path fallback. Roll reads the project-local paths in the
-table above, and nothing else.
+project's `.roll/loop/` is over. Roll reads the project-local paths in the table
+above and nothing else: a cycle does not rewrite paths on the way in, and there is
+no fallback to a second location.
 
 把控制状态从 `~/.shared/roll/loop/` 搬进各项目 `.roll/loop/` 的一次性迁移已经结束，
-执行它的自动迁移也随常驻调度一起退役 —— cycle 不再在启动时改写路径，也没有双路回退。
+Roll 只读上表里的项目本地路径:cycle 不会在启动时改写路径,也没有第二个位置可回退。
 Roll 只读上表里的项目本地路径。
 
 If a project never made the move, copy its files by hand — `state-<slug>.yaml`,
@@ -212,16 +211,14 @@ inside the project, or open the file directly.
 
 **我这里还有 `*.migrated-<时间戳>` 文件，那是什么？**
 
-Leftovers from the one-time move to this layout. Nothing writes them any more —
-the automatic migration retired along with the resident scheduler, so a cycle no
-longer rewrites paths on the way in. `roll loop gc` still reaps markers older
-than 7 days, so you can also just leave them alone. If you have a project that
-never made the move, copy the files to their new paths by hand using the table
-above.
+Leftovers from the one-time move to this layout. Nothing writes them: a cycle does
+not rewrite paths on the way in. `roll loop gc` reaps markers older than 7 days, so
+you can also just leave them alone. If you have a project that never made the move,
+copy the files to their new paths by hand using the table above.
 
-这是一次性迁移到当前布局时留下的。现在已经没有任何东西会再写它们 —— 自动迁移随常驻
-调度一起退役了，cycle 不再在启动时改写路径。`roll loop gc` 仍会回收 7 天以上的标记，
-所以放着不管也可以。如果某个项目从未迁移过，照上面的表把文件手工复制到新路径即可。
+这是一次性迁移到当前布局时留下的。没有任何东西会再写它们:cycle 不会在启动时改写路径。
+`roll loop gc` 会回收 7 天以上的标记，所以放着不管也可以。如果某个项目从未迁移过，
+照上面的表把文件手工复制到新路径即可。
 
 See also: [roll loop](loop.md) · [Migration 2.0](migration-2.0.md) · [FAQ](faq.md)
 

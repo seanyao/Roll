@@ -1,18 +1,16 @@
-# roll-.dream — 夜间代码健康巡检
+# roll-.dream — 代码健康巡检
 
-`roll-.dream` 是每晚自动运行的代码巡检技能，扫描代码库中的架构摩擦、死代码和技术债。
-它由 launchd 在凌晨 3 点触发（通过 `roll loop on` 安装），
-并将发现的问题以 `REFACTOR-NNN` 条目的形式追加到 BACKLOG.md，等待 loop 执行。
+`roll-.dream` 扫描代码库中的架构摩擦、死代码和技术债，并把发现的问题以 `REFACTOR-NNN`
+条目的形式追加到 backlog，等待 loop 领取。
 
-调度触发的是一个自包含的 v3 runner，其心脏是 `roll dream run-once`
-（解析 `roll-.dream` skill 并就地起 agent 扫描的 TS 命令）——与 loop runner 同形，
-不依赖任何 bash 引擎函数。
+由你来跑:`roll dream run-once` 解析 `roll-.dream` skill 并就地起 agent 扫描。没有任何东西
+会替你跑 —— 没有调度、也没有后台进程,想扫的时候扫一次。
 
 ## Dream 做什么
 
-每晚 dream 完整扫描一次代码库，输出这些结果：
+每跑一次，dream 完整扫描一遍代码库，输出这些结果：
 
-1. **`.roll/dream/YYYY-MM-DD.md`** — 中文详细报告（每晚一个文件）
+1. **`.roll/dream/YYYY-MM-DD.md`** — 中文详细报告（按日期一个文件）
 2. **BACKLOG.md 条目** — 可操作的 `REFACTOR-NNN` 条目追加到 `## ♻️ Refactor` 表格
 3. **`.roll/dream/structure-scan.json`** — 代码结构发现的确定性 TypeScript/AST 证据
 
@@ -60,36 +58,16 @@ Dream **不会**生成 REFACTOR 条目的场景：
 - 纯粹的风格偏好问题
 - BACKLOG 中已有对应 US 或 FIX 条目的问题
 
-## 调度配置
-
-Dream 默认在凌晨 3 点运行。推荐用 `roll config dream-time` 改时间——
-一条命令同时写 `loop_dream_hour` 与 `loop_dream_minute` 两个 key：
+## 什么时候跑
 
 ```bash
-roll config dream-time 03:20   # 同时写 loop_dream_hour + loop_dream_minute
-```
+roll dream run-once   # 现在扫一遍
 
-改完时间只写配置；用 `roll loop on` 重挂应用新调度（config 写入不再自动重挂
-launchd —— US-PORT-006）。`roll loop on` 会把 dream plist 和 loop、pr plist 一起安装。
-三个服务统一管理：
-
-```bash
-roll loop on       # 安装 loop + pr + dream
-roll loop off      # 卸载 loop + pr + dream
-roll loop status   # 查看三个服务的状态
-```
-
-## 手动触发
-
-无需等到凌晨 3 点，随时可以手动跑一次 dream 巡检：
-
-```bash
-# v3 原生——与夜间 runner 同一个心脏
-roll dream run-once
-
-# 或在 Claude Code 里直接调用 skill
+# 或在 agent 会话里直接调用 skill
 $roll-.dream
 ```
+
+想扫就扫:做规划之前、大重构之后,或者在准备处理 REFACTOR 卡的会话开头跑一次。
 
 Dream 每次运行写入当天日期的文件，并追加到 BACKLOG.md。
 同一天运行两次是安全的（只是产生第二次追加，不会覆盖）。
