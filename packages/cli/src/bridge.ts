@@ -15,8 +15,6 @@ import { renderFrontDoor } from "./lib/front-door.js";
 import { isSnapshotStale, loadTruthSnapshot, renderNowMs } from "./lib/truth-read.js";
 import { renderState } from "./render.js";
 import { treeVersion } from "./commands/version.js";
-import { type WakeDeps, tryWakeOnRoll, buildProductionWakeDeps, createProductionWakeDeps } from "./lib/wake-hook.js";
-export { buildProductionWakeDeps, createProductionWakeDeps };
 
 /** A ported subcommand: receives args after the subcommand, returns exit code. */
 export type Handler = (args: string[]) => number | Promise<number>;
@@ -134,9 +132,6 @@ export async function dispatch(
   // FIX-298: the network guard is injectable so the wiring is unit-testable
   // without real network IO. Production passes nothing → the real guard runs.
   gate: (commandName: string) => Promise<{ ok: boolean }> = (name) => requireNetwork(name, process.cwd()),
-  // US-LOOP-079i: wake-on-roll hook deps — injectable for testing.
-  // Production passes real deps from bin/roll.js; tests omit to skip wake.
-  wakeDeps?: WakeDeps,
 ): Promise<RunResult> {
   const [command, ...rest] = argv;
   if (command !== undefined) {
@@ -160,15 +155,6 @@ export async function dispatch(
         const net = await gate(gateName);
         if (!net.ok) return { status: 1 };
       }
-      // US-LOOP-113 (codex review r4): the wake-on-roll-command hook is DISARMED.
-      // It existed to re-arm a launchd lane when a DORMANT project got new work.
-      // With `roll loop off` removed, leaving it live would be a one-way trap: an
-      // ordinary command could arm a timer that the CLI no longer offers any way to
-      // disarm — the exact opposite of "nothing runs on its own". The hook and its
-      // DORMANT machinery are deleted outright by US-LOOP-114/115; cutting the call
-      // here keeps every intermediate commit safe to ship.
-      void tryWakeOnRoll;
-      void wakeDeps;
       return { status: await handler(rest) };
     }
   }

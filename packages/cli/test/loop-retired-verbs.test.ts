@@ -66,11 +66,20 @@ describe("US-LOOP-113 — retired scheduler verbs are unreachable", () => {
  * carried a legacy DORMANT marker, so its call site is cut.
  */
 describe("US-LOOP-113 — no roll command can arm a scheduler", () => {
-  it("the wake hook is not invoked from the dispatch path", () => {
+  it("the wake hook module is gone entirely (US-LOOP-114)", () => {
     const bridge = readFileSync(new URL("../src/bridge.ts", import.meta.url), "utf8");
-    // The import may remain (deleted with the module in US-LOOP-114); what must be
-    // gone is the CALL that re-arms a lane.
-    expect(bridge).not.toMatch(/await\s+tryWakeOnRoll\s*\(/);
+    // US-LOOP-113 cut the CALL; US-LOOP-114 deletes the module and every trace of
+    // its wiring, so the bridge must not even mention it.
+    expect(bridge).not.toMatch(/wake-hook/);
+    expect(bridge).not.toMatch(/tryWakeOnRoll|WakeDeps|ProductionWakeDeps/);
+    // The CLI entry no longer builds wake deps either.
+    const bin = readFileSync(new URL("../bin/roll.js", import.meta.url), "utf8");
+    expect(bin).not.toMatch(/WakeDeps|wakeDeps/);
+  });
+
+  it("dream run-once carries no re-arm port (US-LOOP-114)", () => {
+    const dream = readFileSync(new URL("../src/commands/dream-run-once.ts", import.meta.url), "utf8");
+    expect(dream).not.toMatch(/dreamReArm|rearmLoop|wake-hook/);
   });
 
   it("a legacy DORMANT marker does not arm anything on a normal command", () => {
