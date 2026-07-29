@@ -58,6 +58,7 @@ function repository(
     access: "write",
     requiredDelivery: true,
     noChangePolicy: options.noChangeAllowed === true ? "no_change_allowed" : "changes_required",
+    workBranch: `campaign/${alias}`,
     ...(options.dependsOnRepo === undefined ? {} : { dependsOnRepo: options.dependsOnRepo }),
     worktreePath,
     baseSha,
@@ -146,6 +147,9 @@ repositories:
       workspaceId: "ws-1",
       issueRoot,
       repositories,
+      ...(options.integration === undefined || options.integration.length === 0
+        ? {}
+        : { integrationAcceptance: { command: options.integration, cwdRepoId: first.repoId } }),
     },
   };
   if (options.ownerExemptsFirst) {
@@ -161,6 +165,7 @@ repositories:
   }
   const testRuns: Array<{ repoId: string; command: readonly string[] }> = [];
   const integrationRuns: Array<{
+    cwdRepoId: string;
     command: readonly string[];
     env: Readonly<Record<string, string>>;
   }> = [];
@@ -188,8 +193,8 @@ repositories:
           stderr: "",
         };
       }),
-      runIntegration: vi.fn(async (_execution, command, env) => {
-        integrationRuns.push({ command, env });
+      runIntegration: vi.fn(async (_execution, cwdRepoId, command, env) => {
+        integrationRuns.push({ cwdRepoId, command, env });
         if (options.integrationThrows) throw new Error("spawn integration ENOENT");
         return { exitCode: 0, stdout: "integration passed", stderr: "" };
       }),
@@ -260,6 +265,7 @@ describe("US-WS-012 repository capture verification", () => {
       { repoId: f.second.repoId, command: ["npm", "test"] },
     ]);
     expect(f.integrationRuns).toEqual([{
+      cwdRepoId: f.first.repoId,
       command: ["./verify-sot-contract.sh"],
       env: {
         ROLL_INTEGRATION_INPUTS: JSON.stringify({
@@ -283,8 +289,8 @@ describe("US-WS-012 repository capture verification", () => {
       }),
     );
     expect(events.filter((event) => event["type"] === "repository:publish_planned")).toEqual([
-      expect.objectContaining({ repoId: f.first.repoId, dependsOn: [] }),
-      expect.objectContaining({ repoId: f.second.repoId, dependsOn: [f.first.repoId] }),
+      expect.objectContaining({ repoId: f.first.repoId, branch: "campaign/api", dependsOn: [] }),
+      expect.objectContaining({ repoId: f.second.repoId, branch: "campaign/web", dependsOn: [f.first.repoId] }),
     ]);
   });
 

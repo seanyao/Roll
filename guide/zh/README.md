@@ -14,6 +14,8 @@
 ## 操作 Roll
 
 - [自治 Loop](loop.md)
+- [Context Engineering](context.md)
+- [APE Context 迁移](context-ape-migration.md)
 - [Workspace Doctor](workspace-doctor.md)
 - [AI Agent 与角色分工](ai-agents.md)
 - [工具与策略](tools.md)

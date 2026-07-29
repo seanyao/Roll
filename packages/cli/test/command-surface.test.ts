@@ -102,6 +102,13 @@ describe("REFACTOR-056 — validateCommandSurface fails loud", () => {
     ).toThrow(/must declare a target/);
   });
 
+  it("rejects an alias that collides with any canonical command", () => {
+    expect(() => validateCommandSurface([
+      { current: "workspace", aliases: ["ws"], owner: "workspace", audience: "human", disposition: "public", rationale: "t" },
+      { current: "ws", owner: "status", audience: "human", disposition: "nested", target: "status ws", rationale: "t" },
+    ])).toThrow(/duplicate alias/);
+  });
+
   it("accepts the shipped registry", () => {
     expect(() => validateCommandSurface(COMMAND_SURFACE)).not.toThrow();
   });

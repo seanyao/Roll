@@ -20,6 +20,7 @@ import {
   CONSISTENCY_DIMENSION_LABELS,
   ensureDeliveriesFresh,
   queryStoryDelivery,
+  workspaceContextAuditReleaseGap,
   type ConsistencyDimension,
   type ExecPort,
   type FreshnessPort,
@@ -28,6 +29,7 @@ import { resolveIntegrationBranch } from "@roll/infra";
 import { resolveLang, STATUS_MARKER, t, v2Catalog, type Lang } from "@roll/spec";
 import { c, renderState, strw, trunc } from "../render.js";
 import { consistencyAuditCommand } from "./consistency-audit.js";
+import { auditRegisteredWorkspaceContextTree } from "./workspace-context-audit.js";
 
 const EXEC_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
@@ -48,12 +50,12 @@ const DIM_CHECKS: Record<ConsistencyDimension, (projectDir: string) => DimResult
   "truth-live": (p) => checkTruthLive(p),
 };
 
-interface DimResult {
+export interface DimResult {
   status: "pass" | "fail";
   gaps: string[];
   note?: string;
 }
-interface Report {
+export interface Report {
   overall: "pass" | "fail";
   dimensions: Record<string, DimResult>;
 }
@@ -875,17 +877,46 @@ function pyListRepr(items: string[]): string {
 // ─── orchestration ────────────────────────────────────────────────────────────
 /** Programmatic pass/fail for the seven dimensions — the `roll release` gate. */
 export function consistencyPasses(projectDir: string): boolean {
-  return runAll(projectDir).overall === "pass";
+  return buildConsistencyReport(projectDir).overall === "pass";
 }
 
-function runAll(projectDir: string): Report {
+export function buildConsistencyReport(
+  projectDir: string,
+  dimensionChecks: Record<ConsistencyDimension, (projectDir: string) => DimResult> = DIM_CHECKS,
+): Report {
   const report: Report = { overall: "pass", dimensions: {} };
   for (const dim of CONSISTENCY_DIMENSIONS) {
-    const result = DIM_CHECKS[dim](projectDir);
+    const result = dimensionChecks[dim](projectDir);
     report.dimensions[dim] = result;
     if (result.status === "fail") report.overall = "fail";
   }
+  const matrixPath = join(projectDir, "docs", "generated", "workspace-context-compatibility-matrix.json");
+  const allowlistPath = join(projectDir, "config", "workspace-context-audit-allowlist.json");
+  if (existsSync(matrixPath) || existsSync(allowlistPath)) {
+    const tests = report.dimensions["tests"] ?? { status: "pass", gaps: [] };
+    const contextGate = checkWorkspaceContextAudit(projectDir);
+    tests.gaps.push(...contextGate.gaps);
+    if (tests.gaps.length > 0) {
+      tests.status = "fail";
+      report.overall = "fail";
+    }
+    report.dimensions["tests"] = tests;
+  }
   return report;
+}
+
+/** The exact static authority check injected into the release tests dimension. */
+export function checkWorkspaceContextAudit(projectDir: string): DimResult {
+  try {
+    const contextAudit = auditRegisteredWorkspaceContextTree(projectDir);
+    const gap = workspaceContextAuditReleaseGap(contextAudit.summary);
+    return gap === null ? { status: "pass", gaps: [] } : { status: "fail", gaps: [gap] };
+  } catch (error) {
+    return {
+      status: "fail",
+      gaps: [`Workspace context audit could not run: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
 }
 
 /** Port of format_human. */
@@ -1072,7 +1103,7 @@ function checkHelp(command: string): string {
 
   ${command} check                # verdict-first seven-dimension table
   ${command} check --json         # machine-readable JSON (same computation)
-  ${command} audit [--json]       # US-TRUTH-002 shadow drift audit (read-only, exit 0)
+  ${command} audit --project-dir DIR [--json]  # US-TRUTH-002 shadow drift audit (read-only, exit 0)
 `;
 }
 
@@ -1107,7 +1138,7 @@ export function runConsistencyCheck(
       else if (a === "--project-dir") projectDir = rest[++i] ?? projectDir;
       else if (a.startsWith("--project-dir=")) projectDir = a.slice("--project-dir=".length);
     }
-    const report = runAll(projectDir);
+    const report = buildConsistencyReport(projectDir);
     if (renderMode === "table") {
       // Public command: NO_COLOR-aware verdict-first table; JSON carries f/w/?.
       if (!process.stdout.isTTY || (process.env["NO_COLOR"] ?? "") !== "") renderState.useColor = false;

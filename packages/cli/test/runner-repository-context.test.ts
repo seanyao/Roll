@@ -5,10 +5,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   repositoryIdFromRemote,
+  WORKSPACE_EXECUTION_CONTEXT_V1,
   type CycleRepositoryExecutionContext,
   type RepositoryExecutionContext,
+  type WorkspaceExecutionContextV1,
 } from "@roll/spec";
-import { BUILD_HEARTBEAT_GAP_MS, cycleStep, initialCycleState, nodeExecPort, type RouteDeps } from "@roll/core";
+import {
+  BUILD_HEARTBEAT_GAP_MS,
+  claimStoryLease,
+  cycleStep,
+  deriveWorkspaceExecutionAuthorities,
+  initialCycleState,
+  nodeExecPort,
+  readLeases,
+  type RouteDeps,
+} from "@roll/core";
 import {
   REPOSITORY_CONTEXT_MAX_CHARS,
   buildRepositoryContextMap,
@@ -214,6 +225,26 @@ function productionMultiWorkspaceFixture(): {
   return { root, issueRoot, storyId, repositories };
 }
 
+function workspaceExecutionFor(root: string): WorkspaceExecutionContextV1 {
+  const canonicalRoot = realpathSync(root);
+  const manifest = JSON.parse(readFileSync(join(canonicalRoot, "workspace.yaml"), "utf8")) as {
+    workspaceId: string;
+    repositories: WorkspaceExecutionContextV1["bindings"];
+  };
+  return {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: {
+      workspaceId: manifest.workspaceId,
+      root: canonicalRoot,
+      canonicalRoot,
+      lifecycle: "active",
+    },
+    resolution: { source: "explicit", evidence: [] },
+    bindings: manifest.repositories,
+    authorities: deriveWorkspaceExecutionAuthorities(canonicalRoot),
+  };
+}
+
 describe("US-WS-010 repository Builder context", () => {
   it("resolves the production Workspace Issue only after the Story identity is known", async () => {
     const fixture = productionWorkspaceFixture();
@@ -257,6 +288,79 @@ describe("US-WS-010 repository Builder context", () => {
       repositoryExecution: resolved,
     });
     expect(stepped.state.ctx.repositoryExecution).toEqual(resolved);
+  });
+
+  it("routes production repository verification and push through the frozen Workspace tool context", async () => {
+    const fixture = productionWorkspaceFixture();
+    const fixturePaths: RunnerPaths = {
+      eventsPath: join(fixture.root, "runtime", "events.ndjson"),
+      runsPath: join(fixture.root, "runtime", "runs.jsonl"),
+      alertsPath: join(fixture.root, "runtime", "alerts.log"),
+      lockPath: join(fixture.root, "runtime", "lock"),
+      heartbeatPath: join(fixture.root, "runtime", "heartbeat"),
+      worktreePath: join(fixture.root, "legacy-worktree"),
+    };
+    const ports = nodePorts({
+      repoCwd: fixture.root,
+      paths: fixturePaths,
+      skillBody: "BUILD STORY",
+      routeDeps,
+      agentSpawn: fakeSpawn(),
+    });
+    const resolved = await ports.repositories?.resolve(fixture.storyId);
+    expect(resolved).toBeDefined();
+    const ctx = {
+      cycleId: "cycle-tool-runtime",
+      branch: "story/US-WS-010",
+      loop: "ci",
+      storyId: fixture.storyId,
+      agent: "codex" as const,
+      repositoryExecution: resolved,
+    };
+
+    const repositories = ports.repositories?.bind(ctx);
+    expect(await repositories?.git.commitsAhead(fixture.repoId)).toBe(0);
+    expect(await repositories?.git.tcrCount(fixture.repoId)).toBe(0);
+    expect(await repositories?.git.recentCommits(fixture.repoId)).toEqual([]);
+    expect(await repositories?.git.headSha(fixture.repoId)).toBe(fixture.headSha);
+    const verificationScript = join(resolved?.repositories[fixture.repoId]?.worktreePath ?? "", "verify.mjs");
+    writeFileSync(verificationScript, "process.stdout.write('verified')\n", "utf8");
+    const verification = await repositories?.verification.runRepository(
+      fixture.repoId,
+      ["node", "verify.mjs"],
+      { TOKEN: "ghp_abcdefghijklmnopqrstuvwxyz" },
+    );
+    const push = await repositories?.git.push(fixture.repoId, "story/US-WS-010");
+
+    expect(verification).toEqual({ exitCode: 0, stdout: "verified", stderr: "" });
+    expect(push?.code).not.toBe(0);
+    const toolEventsPath = join(fixture.root, "runtime", "events", "tools.ndjson");
+    const events = readFileSync(toolEventsPath, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const invocations = events.filter((event) => event["type"] === "tool:invoke");
+    expect(invocations.filter((event) => (
+      event["invocation"] as Record<string, unknown> | undefined
+    )?.["toolId"] === "runner.git.query")).toHaveLength(4);
+    expect(invocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "tool:invoke",
+        cycleId: ctx.cycleId,
+        invocation: expect.objectContaining({
+          toolId: "bash",
+          repoId: fixture.repoId,
+          context: expect.objectContaining({
+            workspace: expect.objectContaining({ workspaceId: resolved?.workspaceId }),
+            issue: expect.objectContaining({ storyId: fixture.storyId }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        type: "tool:invoke",
+        cycleId: ctx.cycleId,
+        invocation: expect.objectContaining({ toolId: "git.push", repoId: fixture.repoId }),
+      }),
+    ]));
+    expect(readFileSync(toolEventsPath, "utf8")).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz");
   });
 
   it("reuses the persisted Story integration command when resolving a later Cycle", async () => {
@@ -314,29 +418,18 @@ describe("US-WS-010 repository Builder context", () => {
     expect(() => buildRepositoryContextMap(oversized)).toThrow("repository_context_too_large");
   });
 
-  it("runs the Builder at the Issue root and injects the repository map without spawning an external engine", async () => {
-    const spawn = fakeSpawn();
-    const spawnOptions = applyRepositoryBuilderContext({
+  it("rejects a repository map that is not bound to a Workspace execution context", () => {
+    expect(() => applyRepositoryBuilderContext({
       cycleId: "cycle-fixture",
       branch: "cycle-fixture",
       loop: "ci",
       repositoryExecution: execution,
+      workspaceContextScope: "legacy_migration_only",
     }, {
       purpose: "builder",
       cwd: paths.worktreePath,
       skillBody: "BUILD STORY",
-    });
-
-    await spawn("claude", spawnOptions);
-
-    expect(spawn).toHaveBeenCalledOnce();
-    expect(spawn).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({
-        cwd: execution.issueRoot,
-        skillBody: expect.stringContaining("repo-111111111111"),
-      }),
-    );
+    })).toThrow("missing_execution_context");
   });
 
   it("binds Git/provider adapters by repoId and rejects read-only publish before the adapter runs", async () => {
@@ -664,15 +757,27 @@ describe("US-WS-010 repository Builder context", () => {
     ].map((row) => JSON.stringify(row)).join("\n") + "\n");
     const spawn = fakeSpawn();
     vi.mocked(spawn).mockImplementation(async (_agent, options) => {
-      expect(options.cwd).toBe(realpathSync(fixture.issueRoot));
+      const selected = fixture.repositories[0];
+      if (selected === undefined) throw new Error("missing selected fixture repository");
+      expect(options.cwd).toBe(realpathSync(selected.path));
+      expect(options.skillBody).toContain(`Selected repository: ${selected.repoId} (${selected.alias})`);
+      expect(options.env).toMatchObject({
+        ROLL_REPOSITORY_ID: selected.repoId,
+        ROLL_REPOSITORY_ALIAS: selected.alias,
+      });
+      const promptContext = JSON.parse(
+        /context-json: (\{.*\})/u.exec(options.skillBody)?.[1] ?? "null",
+      ) as WorkspaceExecutionContextV1 | null;
+      expect(promptContext).toEqual(options.workspaceExecution);
       expect(options.skillBody).toContain(fixture.repositories[0]?.repoId ?? "missing-repo");
       expect(options.skillBody).toContain(fixture.repositories[1]?.repoId ?? "missing-repo");
       expect(options.writableRoots).toEqual(expect.arrayContaining([
         realpathSync(join(fixture.issueRoot, "artifacts")),
         realpathSync(join(fixture.issueRoot, "evidence")),
         realpathSync(join(fixture.issueRoot, "runtime")),
-        ...fixture.repositories.map((repo) => realpathSync(repo.path)),
+        realpathSync(fixture.repositories[0]?.path ?? ""),
       ]));
+      expect(options.writableRoots).not.toContain(realpathSync(fixture.repositories[1]?.path ?? ""));
       expect(options.writableRoots).not.toContain(realpathSync(fixture.issueRoot));
       for (const repo of fixture.repositories) {
         writeFileSync(join(repo.path, "delivery.txt"), `${repo.alias} delivered\n`);
@@ -726,6 +831,9 @@ describe("US-WS-010 repository Builder context", () => {
       cycleId: "cycle-production-chain",
       branch: "cycle-production-chain",
       loop: "ci",
+      workspaceExecution: workspaceExecutionFor(fixture.root),
+      workspaceContextScope: "issue_required" as const,
+      repositorySelector: fixture.repositories[0]?.repoId,
     };
     const rootModeBefore = statSync(fixture.root).mode & 0o777;
     const nodeExec = vi.spyOn(nodeExecPort, "run");
@@ -817,26 +925,18 @@ describe("US-WS-010 repository Builder context", () => {
     });
   });
 
-  it("preserves the current one-repository spawn contract when no Workspace context is supplied", async () => {
-    const spawn = fakeSpawn();
+  it("fails closed when no Workspace context is supplied", () => {
     const input = {
       purpose: "builder",
       cwd: paths.worktreePath,
       skillBody: "BUILD STORY",
     } as const;
-    const spawnOptions = applyRepositoryBuilderContext({
+    expect(() => applyRepositoryBuilderContext({
       cycleId: "cycle-legacy",
       branch: "cycle-legacy",
       loop: "ci",
-    }, input);
-
-    await spawn("claude", spawnOptions);
-
-    expect(spawn).toHaveBeenCalledWith("claude", {
-      purpose: "builder",
-      cwd: paths.worktreePath,
-      skillBody: "BUILD STORY",
-    });
+      workspaceContextScope: "legacy_migration_only",
+    }, input)).toThrow("missing_execution_context");
   });
 
   it("does not let nodePorts construction statically rewrite a Builder call", async () => {
@@ -893,11 +993,12 @@ describe("US-WS-010 repository Builder context", () => {
       runsPath: join(runtimeRoot, "runs.jsonl"),
       alertsPath: join(runtimeRoot, "alerts.log"),
     };
-    const leasePath = join(runtimeRoot, "story-leases.json");
-    const legacyLease = `${JSON.stringify({
-      "US-WS-010": { pid: 4242, claimedAt: 1, source: "cycle" },
-    })}\n`;
-    writeFileSync(leasePath, legacyLease);
+    const leasePath = join(runtimeRoot, "leases");
+    expect(claimStoryLease(leasePath, "US-WS-010", {
+      pid: process.pid,
+      claimedAt: 1,
+      source: "cycle",
+    })).toMatchObject({ status: "claimed" });
     const ports = nodePorts({
       repoCwd: "/project",
       paths: scopedPaths,
@@ -943,7 +1044,7 @@ describe("US-WS-010 repository Builder context", () => {
     expect(readFileSync(scopedPaths.runsPath, "utf8")).toContain(
       '"story_id":"US-WS-010","cycle_id":"cycle-terminal"',
     );
-    expect(readFileSync(leasePath, "utf8")).toBe(legacyLease);
+    expect(readLeases(leasePath)["US-WS-010"]).toBeUndefined();
     expect(appendAlert).toHaveBeenCalledWith(
       scopedPaths.alertsPath,
       expect.stringContaining("workspace_repository_scope_required: cleanup_worktree"),

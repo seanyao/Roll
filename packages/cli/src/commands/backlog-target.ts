@@ -16,6 +16,7 @@ import {
   workspaceTargetSelector,
   type LegacyWorkspaceProject,
 } from "./workspace-target.js";
+import { canonicalWorkspaceSelectorValue, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 export type BacklogOperation = "read" | "mutation";
 
@@ -135,7 +136,7 @@ export function stripBacklogScopeArgs(args: readonly string[]): BacklogScopedArg
   let allSeen = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       if (workspaceSeen || args[index + 1] === undefined) return { ok: false };
       workspaceSeen = true;
       index += 1;
@@ -219,11 +220,6 @@ function realCommandTargetDeps(): BacklogCommandTargetDeps {
   };
 }
 
-function flagValue(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  return index >= 0 ? args[index + 1] : undefined;
-}
-
 export function resolveBacklogCommandTarget(
   args: readonly string[],
   operation: BacklogOperation,
@@ -236,7 +232,7 @@ export function resolveBacklogCommandTarget(
     return { ok: false, code: "invalid_target", candidates: [] };
   }
   const cwdInspection = inspectWorkspaceCwd(deps.cwd(), entries);
-  const explicitWorkspace = flagValue(args, "--workspace");
+  const explicitWorkspace = canonicalWorkspaceSelectorValue(args);
   const environmentWorkspace = deps.environmentWorkspace();
   return resolveBacklogTarget({
     operation,

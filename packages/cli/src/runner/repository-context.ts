@@ -7,7 +7,12 @@ import {
   readRepositoryBoundFacts,
   readWorkspace,
 } from "@roll/infra";
-import { repositoryEventIdentity, type CycleContext } from "@roll/core";
+import {
+  buildWorkspaceExecutionContext,
+  deriveWorkspaceExecutionAuthorities,
+  repositoryEventIdentity,
+  type CycleContext,
+} from "@roll/core";
 import {
   parseIssueManifest,
   type CycleRepositoryExecutionContext,
@@ -16,6 +21,7 @@ import {
   type RepositoryExecutionContext,
   type RepositoryExecutionEvent,
   type RepositoryExecutionEventPayload,
+  type WorkspaceExecutionContextV1,
 } from "@roll/spec";
 
 const execFileAsync = promisify(execFile);
@@ -73,12 +79,15 @@ export async function resolveRepositoryExecutionContext(
   const repositories: Record<string, RepositoryExecutionContext> = {};
   for (const target of manifest.repositories) {
     const fact = boundFacts.get(target.alias);
+    const workBranch = target.access === "write" ? (target.workBranch ?? fact?.workBranch ?? undefined) : undefined;
     if (
       fact === undefined ||
       fact.workspaceId !== workspace.workspaceId ||
       fact.storyId !== storyId ||
       fact.repoId !== target.repoId ||
-      fact.access !== target.access
+      fact.access !== target.access ||
+      (target.access === "write" && (workBranch === undefined || fact.workBranch !== workBranch)) ||
+      (target.access === "read" && fact.workBranch !== null)
     ) {
       throw new Error(`repository_context_mismatch: ${target.alias}`);
     }
@@ -92,6 +101,7 @@ export async function resolveRepositoryExecutionContext(
       access: target.access,
       requiredDelivery: target.requiredDelivery,
       ...(target.access === "write" ? { noChangePolicy: target.noChangePolicy } : {}),
+      ...(workBranch === undefined ? {} : { workBranch }),
       ...(target.dependsOnRepo === undefined ? {} : { dependsOnRepo: target.dependsOnRepo }),
       worktreePath: canonicalWorktree,
       baseSha: fact.baseSha,
@@ -104,7 +114,64 @@ export async function resolveRepositoryExecutionContext(
   if (Object.keys(repositories).length === 0) {
     throw new Error(`invalid_repository_map: ${storyId}`);
   }
-  return { workspaceId: workspace.workspaceId, issueRoot: canonicalIssue, repositories };
+  const integrationCwdTarget = manifest.integrationAcceptance === undefined
+    ? undefined
+    : manifest.integrationAcceptance.cwd === undefined
+      ? manifest.repositories.filter((target) => target.access === "write").length === 1
+        ? manifest.repositories.find((target) => target.access === "write")
+        : undefined
+      : manifest.repositories.find((target) => target.alias === manifest.integrationAcceptance?.cwd);
+  const integrationAcceptance = manifest.integrationAcceptance === undefined ? undefined : {
+    command: manifest.integrationAcceptance.command,
+    cwdRepoId: integrationCwdTarget?.repoId ?? "",
+  };
+  if (integrationAcceptance !== undefined && integrationAcceptance.cwdRepoId === "") {
+    throw new Error(`invalid_integration_cwd: ${manifest.integrationAcceptance?.cwd ?? ""}`);
+  }
+  return {
+    workspaceId: workspace.workspaceId,
+    issueRoot: canonicalIssue,
+    repositories,
+    ...(integrationAcceptance === undefined ? {} : { integrationAcceptance }),
+  };
+}
+
+/** Rebuild and validate the full immutable Workspace context at the Cycle bind
+ * boundary. Repository ports use this single snapshot for every governed tool
+ * invocation in the Cycle. */
+export function buildRepositoryWorkspaceExecutionContext(
+  workspaceRoot: string,
+  storyId: string,
+  execution: CycleRepositoryExecutionContext,
+): WorkspaceExecutionContextV1 {
+  const canonicalWorkspace = realpathSync(workspaceRoot);
+  const workspace = readWorkspace(canonicalWorkspace);
+  const manifest = issueManifest(execution.issueRoot, workspace.workspaceId, storyId);
+  const built = buildWorkspaceExecutionContext({
+    facts: {
+      candidate: {
+        workspaceId: workspace.workspaceId,
+        root: canonicalWorkspace,
+        canonicalRoot: canonicalWorkspace,
+        manifestWorkspaceId: workspace.workspaceId,
+        pathState: "valid",
+        lifecycle: "active",
+      },
+      manifest: workspace,
+      authorities: deriveWorkspaceExecutionAuthorities(canonicalWorkspace),
+      issue: {
+        manifest,
+        manifestPath: join(execution.issueRoot, "manifest.json"),
+        execution,
+      },
+    },
+    source: "issue_manifest",
+    evidence: [],
+  });
+  if (!built.ok) {
+    throw new Error(`${built.error.code}: ${built.error.message}`);
+  }
+  return built.context;
 }
 
 /** The only Issue event writer for repository-scoped runtime facts. Callers

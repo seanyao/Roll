@@ -96,6 +96,7 @@ export interface EnsureRepositoryCacheInput extends ResolveRepositoryCacheIdenti
   readonly lockRetryMs?: number;
   readonly operationTimeoutMs?: number;
   readonly now?: () => number;
+  readonly onLockAcquired?: () => void;
 }
 
 interface ParsedIntegrationRefspec {
@@ -522,6 +523,7 @@ export async function ensureRepositoryCache(
   );
   const now = input.now ?? Date.now;
   try {
+    input.onLockAcquired?.();
     prepareMachineRoots(identity, resolve(input.rollHome));
     const guard = (): void => {
       assertRepositoryLockOwned(identity, lease);
@@ -585,6 +587,7 @@ export async function withRepositoryCacheLock<T>(
   input: ResolveRepositoryCacheIdentityInput & {
     readonly lockTimeoutMs?: number;
     readonly lockRetryMs?: number;
+    readonly onLockAcquired?: () => void;
   },
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -600,6 +603,7 @@ export async function withRepositoryCacheLock<T>(
   prepareMachineRoots(identity, resolve(input.rollHome));
   const lease = await takeRepositoryLock(identity, lockTimeoutMs, lockRetryMs);
   try {
+    input.onLockAcquired?.();
     return await fn();
   } finally {
     releaseRepositoryLock(identity, lease);

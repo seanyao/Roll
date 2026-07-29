@@ -184,16 +184,15 @@ describe("US-WS-012 planRepositoryPublish — one plan per changed repo, depende
   it("plans only changed writable legs, ordered by declared dependency", () => {
     const plan = planRepositoryPublish(
       [
-        { repoId: "repo-front", alias: "front", changed: true, dependsOnRepo: "repo-back" },
-        { repoId: "repo-back", alias: "back", changed: true },
-        { repoId: "repo-doc", alias: "doc", changed: false },
+        { repoId: "repo-front", alias: "front", changed: true, workBranch: "campaign/front", dependsOnRepo: "repo-back" },
+        { repoId: "repo-back", alias: "back", changed: true, workBranch: "campaign/back" },
+        { repoId: "repo-doc", alias: "doc", changed: false, workBranch: "campaign/doc" },
       ],
-      { workspaceId: "ws-1", storyId: "US-X" },
     );
     expect(plan.ok).toBe(true);
     if (plan.ok) {
       expect(plan.entries.map((entry) => entry.repoId)).toEqual(["repo-back", "repo-front"]);
-      expect(plan.entries[0]?.branch).toBe("roll/ws-1/US-X");
+      expect(plan.entries.map((entry) => entry.branch)).toEqual(["campaign/back", "campaign/front"]);
       expect(plan.entries[1]?.dependsOn).toEqual(["repo-back"]);
     }
   });
@@ -201,10 +200,9 @@ describe("US-WS-012 planRepositoryPublish — one plan per changed repo, depende
   it("rejects a dependency cycle loudly instead of guessing an order", () => {
     const plan = planRepositoryPublish(
       [
-        { repoId: "repo-a", alias: "a", changed: true, dependsOnRepo: "repo-b" },
-        { repoId: "repo-b", alias: "b", changed: true, dependsOnRepo: "repo-a" },
+        { repoId: "repo-a", alias: "a", changed: true, workBranch: "campaign/a", dependsOnRepo: "repo-b" },
+        { repoId: "repo-b", alias: "b", changed: true, workBranch: "campaign/b", dependsOnRepo: "repo-a" },
       ],
-      { workspaceId: "ws-1", storyId: "US-X" },
     );
     expect(plan.ok).toBe(false);
     if (!plan.ok) expect(plan.code).toBe("dependency_cycle");
@@ -212,8 +210,7 @@ describe("US-WS-012 planRepositoryPublish — one plan per changed repo, depende
 
   it("rejects a dependency on an unknown repo", () => {
     const plan = planRepositoryPublish(
-      [{ repoId: "repo-a", alias: "a", changed: true, dependsOnRepo: "repo-ghost" }],
-      { workspaceId: "ws-1", storyId: "US-X" },
+      [{ repoId: "repo-a", alias: "a", changed: true, workBranch: "campaign/a", dependsOnRepo: "repo-ghost" }],
     );
     expect(plan.ok).toBe(false);
     if (!plan.ok) expect(plan.code).toBe("unknown_dependency");

@@ -1,0 +1,21 @@
+US-WS-023 terminal evidence (headless transcript; not screenshot evidence)
+Captured: 2026-07-24 Asia/Shanghai
+
+$ roll workspace create --help
+Usage: roll workspace create <id> --config <file> [--check] [--json]
+
+$ roll workspace create ws-evidence --config <REPO_ROOT>/packages/cli/test/fixtures/workspace/us-ws-023-create.yaml --check --json
+{
+  "schema": "roll.workspace-create-result/v1",
+  "mode": "check",
+  "outcome": "created",
+  "workspaceId": "ws-evidence",
+  "root": "<WORKSPACE_ROOT>",
+  "steps": [
+    { "kind": "journal", "target": "<ROLL_HOME>/workspace-create/ws-evidence.pending.json", "action": "created" },
+    { "kind": "directory", "target": "<WORKSPACE_ROOT>", "action": "created" },
+    { "kind": "file", "target": "<WORKSPACE_ROOT>/workspace.yaml", "action": "created" },
+    { "kind": "cache", "target": "<REPO_ID>", "action": "created" },
+    { "kind": "registry", "target": "ws-evidence", "action": "created" }
+  ]
+}

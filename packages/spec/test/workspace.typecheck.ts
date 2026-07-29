@@ -6,8 +6,13 @@ import type {
   IssueRepositoryTarget,
   LegacyProjectEventMigrationInput,
   RepositoryBinding,
+  RepositoryHintProvenance,
+  RequirementHintProvenance,
+  RequirementHintV1,
+  RequirementSourceKey,
   RepositoryIssueIdentity,
   RollEvent,
+  StructuredRequirementProvenance,
   WorkspaceManifest,
   WorkspaceIdentity,
 } from "../src/index.js";
@@ -86,6 +91,42 @@ const workspaceContainsNoAny: AssertFalse<ContainsAny<WorkspaceManifest>> = fals
 const repositoryContainsNoAny: AssertFalse<ContainsAny<RepositoryBinding>> = false;
 const issueContainsNoAny: AssertFalse<ContainsAny<IssueManifest>> = false;
 const issueTargetContainsNoAny: AssertFalse<ContainsAny<IssueRepositoryTarget>> = false;
+const requirementHintIsNotAny: AssertFalse<IsAny<RequirementHintV1>> = false;
+const requirementHintContainsNoAny: AssertFalse<ContainsAny<RequirementHintV1>> = false;
+type RequirementHintSource = RequirementHintV1["sources"][number];
+type RequirementHintStory = RequirementHintV1["storyIds"][number];
+type RequirementHintRepository = RequirementHintV1["repositoryRemotes"][number];
+type RequirementHintPath = RequirementHintV1["paths"][number];
+const requirementHintKeysStayClosed: AssertTrue<Equal<
+  keyof RequirementHintV1,
+  "schema" | "sources" | "storyIds" | "repositoryRemotes" | "paths" | "semanticTerms"
+>> = true;
+const requirementHintSourceKeysStayClosed: AssertTrue<Equal<keyof RequirementHintSource, "key" | "provenance">> = true;
+const requirementHintStoryKeysStayClosed: AssertTrue<Equal<keyof RequirementHintStory, "storyId" | "provenance">> = true;
+const requirementHintRepositoryKeysStayClosed: AssertTrue<Equal<keyof RequirementHintRepository, "remote" | "provenance">> = true;
+const requirementHintPathKeysStayClosed: AssertTrue<Equal<keyof RequirementHintPath, "path" | "provenance">> = true;
+const requirementSourceKeyKeysStayClosed: AssertTrue<Equal<keyof RequirementSourceKey, "provider" | "ref">> = true;
+const requirementSourceProviderStaysClosed: AssertTrue<Equal<
+  RequirementSourceKey["provider"],
+  "jira" | "github_issue" | "local_file" | "user_input"
+>> = true;
+const requirementHintProvenanceStaysClosed: AssertTrue<Equal<
+  RequirementHintProvenance,
+  | "explicit_user"
+  | "cli_argument"
+  | "issue_manifest"
+  | "cwd_repository"
+  | "deterministic_extraction"
+  | "semantic_inference"
+>> = true;
+const structuredProvenanceStaysClosed: AssertTrue<Equal<
+  StructuredRequirementProvenance,
+  "explicit_user" | "cli_argument" | "issue_manifest" | "deterministic_extraction"
+>> = true;
+const repositoryProvenanceStaysClosed: AssertTrue<Equal<
+  RepositoryHintProvenance,
+  "explicit_user" | "cli_argument" | "issue_manifest" | "cwd_repository" | "deterministic_extraction"
+>> = true;
 const workspaceIdentityContainsNoAny: AssertFalse<ContainsAny<WorkspaceIdentity>> = false;
 const issueIdentityContainsNoAny: AssertFalse<ContainsAny<IssueIdentity>> = false;
 const repositoryIssueIdentityContainsNoAny: AssertFalse<ContainsAny<RepositoryIssueIdentity>> = false;
@@ -95,6 +136,30 @@ const repositoryIssueIdentityKeysStayClosed: AssertTrue<
   Equal<keyof RepositoryIssueIdentity, "workspaceId" | "storyId" | "repoId">
 > = true;
 const nestedAnyDetectionProbe: AssertTrue<ContainsAny<{ nested: { value: ReturnType<typeof JSON.parse> } }>> = true;
+
+const requirementHint: RequirementHintV1 = {
+  schema: "roll.requirement-hint/v1",
+  sources: [{ key: { provider: "jira", ref: "APE-234" }, provenance: "explicit_user" }],
+  storyIds: [{ storyId: "US-WS-027", provenance: "cli_argument" }],
+  repositoryRemotes: [{ remote: "https://github.com/Owner/Repo", provenance: "cwd_repository" }],
+  paths: [{ path: "/work/ws", provenance: "deterministic_extraction" }],
+  semanticTerms: ["workspace resolver"],
+};
+// @ts-expect-error semantic inference cannot enter a structured source/story identity
+const structuredSemantic: StructuredRequirementProvenance = "semantic_inference";
+// @ts-expect-error cwd repository context cannot enter a structured source/story identity
+const structuredCwd: StructuredRequirementProvenance = "cwd_repository";
+// @ts-expect-error semantic inference cannot enter repository/path structured hints
+const repositorySemantic: RepositoryHintProvenance = "semantic_inference";
+const invalidHintUnknownField: RequirementHintV1 = {
+  schema: "roll.requirement-hint/v1",
+  sources: [],
+  storyIds: [],
+  repositoryRemotes: [],
+  paths: [],
+  // @ts-expect-error RequirementHintV1 is a closed object contract
+  extra: true,
+};
 
 const read: IssueRepositoryTarget = {
   repoId: "repo-0123456789ab",
@@ -108,6 +173,7 @@ const write: IssueRepositoryTarget = {
   access: "write",
   requiredDelivery: true,
   noChangePolicy: "changes_required",
+  workBranch: "roll/ws/US-1/product",
 };
 
 // @ts-expect-error read targets cannot require delivery
@@ -158,6 +224,18 @@ void [
   repositoryContainsNoAny,
   issueContainsNoAny,
   issueTargetContainsNoAny,
+  requirementHintIsNotAny,
+  requirementHintContainsNoAny,
+  requirementHintKeysStayClosed,
+  requirementHintSourceKeysStayClosed,
+  requirementHintStoryKeysStayClosed,
+  requirementHintRepositoryKeysStayClosed,
+  requirementHintPathKeysStayClosed,
+  requirementSourceKeyKeysStayClosed,
+  requirementSourceProviderStaysClosed,
+  requirementHintProvenanceStaysClosed,
+  structuredProvenanceStaysClosed,
+  repositoryProvenanceStaysClosed,
   workspaceIdentityContainsNoAny,
   issueIdentityContainsNoAny,
   repositoryIssueIdentityContainsNoAny,
@@ -165,6 +243,11 @@ void [
   issueIdentityKeysStayClosed,
   repositoryIssueIdentityKeysStayClosed,
   nestedAnyDetectionProbe,
+  requirementHint,
+  structuredSemantic,
+  structuredCwd,
+  repositorySemantic,
+  invalidHintUnknownField,
   read,
   write,
   invalidRead,

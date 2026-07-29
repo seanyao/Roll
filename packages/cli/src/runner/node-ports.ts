@@ -23,7 +23,12 @@ import {
   type StoryDeliveryTruth,
   type Tier,
 } from "@roll/core";
-import { absent, present, type CycleRepositoryExecutionContext, type RepositoryExecutionContext } from "@roll/spec";
+import {
+  absent,
+  present,
+  type CycleRepositoryExecutionContext,
+  type RepositoryExecutionContext,
+} from "@roll/spec";
 import {
   acquireLock,
   branchCleanlyRebasesOntoMain,
@@ -78,6 +83,7 @@ import {
   appendRepositoryExecutionEvent,
   resolveRepositoryExecutionContext,
 } from "./repository-context.js";
+import { defaultRepositoryAdapters, productionRepositoryAdapters, repositoryHeadSha } from "./repository-adapters.js";
 import {
   bootstrapWorktreeSkills,
   commitRollMetadataRepo,
@@ -85,6 +91,7 @@ import {
 } from "./worktree-bootstrap.js";
 import { rescueLeakedMain } from "./sandbox-boundary.js";
 import { createNodeAgentCapacityPort } from "./capacity-port.js";
+import { createNodeContextStageHost } from "./context-stage-host.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -127,126 +134,9 @@ async function recentCommitsAt(worktreeCwd: string, baseRef = "origin/main"): Pr
   return out;
 }
 
-async function repositoryCommitsAhead(repository: RepositoryExecutionContext): Promise<number> {
-  const result = await execFileAsync("git", ["rev-list", "--count", `${repository.baseSha}..HEAD`], {
-    cwd: repository.worktreePath,
-    encoding: "utf8",
-  });
-  const count = Number(result.stdout.trim());
-  if (!Number.isInteger(count) || count < 0) throw new Error("invalid commits-ahead result");
-  return count;
-}
-
-async function repositoryTcrCount(repository: RepositoryExecutionContext): Promise<number> {
-  const result = await execFileAsync("git", ["log", "--oneline", `${repository.baseSha}..HEAD`], {
-    cwd: repository.worktreePath,
-    encoding: "utf8",
-  });
-  return result.stdout.split("\n").filter((line) => line.includes(" tcr:")).length;
-}
-
-async function repositoryRecentCommits(repository: RepositoryExecutionContext): Promise<ObservedCommit[]> {
-  const result = await execFileAsync(
-    "git",
-    ["log", "--reverse", "--format=%H%x09%ct%x09%s", `${repository.baseSha}..HEAD`],
-    { cwd: repository.worktreePath, encoding: "utf8" },
-  );
-  return result.stdout.split("\n").flatMap((line) => {
-    if (line.trim() === "") return [];
-    const [hash, rawTs, ...message] = line.split("\t");
-    if (hash === undefined || hash === "") throw new Error("invalid recent-commit result");
-    const tsSec = Number(rawTs ?? "0");
-    if (!Number.isFinite(tsSec)) throw new Error("invalid recent-commit timestamp");
-    return [{ hash, message: message.join("\t"), tsSec }];
-  });
-}
-
-async function repositoryDirty(repository: RepositoryExecutionContext): Promise<boolean> {
-  const result = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], {
-    cwd: repository.worktreePath,
-    encoding: "utf8",
-  });
-  return result.stdout.trim() !== "";
-}
-
-async function repositoryHeadSha(repository: RepositoryExecutionContext): Promise<string> {
-  const result = await execFileAsync("git", ["rev-parse", "HEAD"], {
-    cwd: repository.worktreePath,
-    encoding: "utf8",
-  });
-  const head = result.stdout.trim();
-  if (!/^[0-9a-f]{40,64}$/u.test(head)) throw new Error("invalid repository head");
-  return head;
-}
-
-function commandFailure(error: unknown): { readonly exitCode: number; readonly stdout: string; readonly stderr: string } | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const record = error as Record<string, unknown>;
-  if (typeof record["code"] !== "number") return undefined;
-  return {
-    exitCode: record["code"],
-    stdout: typeof record["stdout"] === "string" ? record["stdout"] : "",
-    stderr: typeof record["stderr"] === "string" ? record["stderr"] : "",
-  };
-}
-
-async function runRepositoryCommand(
-  cwd: string,
-  command: readonly string[],
-  env: Readonly<Record<string, string>>,
-) {
-  const [executable, ...args] = command;
-  if (executable === undefined || executable.trim() === "") {
-    throw new Error("empty_repository_verification_command");
-  }
-  try {
-    const result = await execFileAsync(executable, args, {
-      cwd,
-      encoding: "utf8",
-      env: { ...process.env, ...env },
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-  } catch (error) {
-    const failure = commandFailure(error);
-    if (failure !== undefined) return failure;
-    throw error;
-  }
-}
-
-function defaultRepositoryAdapters(): RepositoryPortAdapters {
-  return {
-    git: {
-      commitsAhead: repositoryCommitsAhead,
-      tcrCount: repositoryTcrCount,
-      recentCommits: repositoryRecentCommits,
-      dirty: repositoryDirty,
-      headSha: repositoryHeadSha,
-      push: (repository, branch) => gitPush(repository.worktreePath, branch),
-    },
-    verification: {
-      runRepository: (repository, command, env) => runRepositoryCommand(repository.worktreePath, command, env),
-      runIntegration: (execution, command, env) => runRepositoryCommand(execution.issueRoot, command, env),
-    },
-    provider: {
-      async repoSlug(repository) {
-        return ghRepoSlug(await remoteUrl(repository.worktreePath));
-      },
-      async prState(repository, branch) {
-        const slug = ghRepoSlug(await remoteUrl(repository.worktreePath));
-        return slug === undefined ? "UNKNOWN" : prViewState(slug, branch);
-      },
-      async prMergeInfo(repository, branch) {
-        const slug = ghRepoSlug(await remoteUrl(repository.worktreePath));
-        return slug === undefined ? undefined : prViewMergeInfo(slug, branch);
-      },
-    },
-  };
-}
-
 export function createRepositoryPorts(
   ctx: CycleContext,
-  adapters: RepositoryPortAdapters = defaultRepositoryAdapters(),
+  adapters?: RepositoryPortAdapters,
 ): BoundRepositoryPorts {
   const execution = ctx.repositoryExecution;
   if (execution === undefined) throw new Error("missing_repository_context");
@@ -260,6 +150,7 @@ export function createRepositoryPorts(
   }
   if (entries.length === 0) throw new Error("invalid_repository_map: at least one repository is required");
   const defaults = defaultRepositoryAdapters();
+  const selectedAdapters = adapters ?? productionRepositoryAdapters(ctx);
   const context = (repoId: string): RepositoryExecutionContext => {
     const repository = execution.repositories[repoId];
     if (repository === undefined) throw new Error(`unknown_repository: ${repoId}`);
@@ -275,25 +166,25 @@ export function createRepositoryPorts(
   return {
     context,
     git: {
-      commitsAhead: async (repoId) => adapters.git.commitsAhead(context(repoId)),
-      tcrCount: async (repoId) => adapters.git.tcrCount(context(repoId)),
-      recentCommits: async (repoId) => adapters.git.recentCommits(context(repoId)),
-      dirty: async (repoId) => adapters.git.dirty(context(repoId)),
-      headSha: async (repoId) => (adapters.git.headSha ?? defaults.git.headSha ?? repositoryHeadSha)(context(repoId)),
-      push: async (repoId, branch) => adapters.git.push(writable(repoId, "publish"), branch),
+      commitsAhead: async (repoId) => selectedAdapters.git.commitsAhead(context(repoId)),
+      tcrCount: async (repoId) => selectedAdapters.git.tcrCount(context(repoId)),
+      recentCommits: async (repoId) => selectedAdapters.git.recentCommits(context(repoId)),
+      dirty: async (repoId) => selectedAdapters.git.dirty(context(repoId)),
+      headSha: async (repoId) => (selectedAdapters.git.headSha ?? defaults.git.headSha ?? repositoryHeadSha)(context(repoId)),
+      push: async (repoId, branch) => selectedAdapters.git.push(writable(repoId, "publish"), branch),
     },
     verification: {
       runRepository: async (repoId, command, env = {}) =>
-        (adapters.verification ?? defaults.verification)?.runRepository(writable(repoId, "verify"), command, env)
+        (selectedAdapters.verification ?? defaults.verification)?.runRepository(writable(repoId, "verify"), command, env)
           ?? Promise.reject(new Error("missing_repository_verification_adapter")),
-      runIntegration: async (command, env = {}) =>
-        (adapters.verification ?? defaults.verification)?.runIntegration(execution, command, env)
+      runIntegration: async (cwdRepoId, command, env = {}) =>
+        (selectedAdapters.verification ?? defaults.verification)?.runIntegration(execution, cwdRepoId, command, env)
           ?? Promise.reject(new Error("missing_repository_verification_adapter")),
     },
     provider: {
-      repoSlug: async (repoId) => adapters.provider.repoSlug(context(repoId)),
-      prState: async (repoId, branch) => adapters.provider.prState(context(repoId), branch),
-      prMergeInfo: async (repoId, branch) => adapters.provider.prMergeInfo(context(repoId), branch),
+      repoSlug: async (repoId) => selectedAdapters.provider.repoSlug(context(repoId)),
+      prState: async (repoId, branch) => selectedAdapters.provider.prState(context(repoId), branch),
+      prMergeInfo: async (repoId, branch) => selectedAdapters.provider.prMergeInfo(context(repoId), branch),
     },
     events: {
       append: (repoId, payload) => appendRepositoryExecutionEvent(ctx, repoId, payload),
@@ -304,7 +195,7 @@ export function createRepositoryPorts(
 
 function createWorkspaceRepositoryPorts(
   workspaceRoot: string,
-  adapters: RepositoryPortAdapters = defaultRepositoryAdapters(),
+  adapters?: RepositoryPortAdapters,
 ): RepositoryPorts {
   return {
     async prepare(request) {
@@ -433,6 +324,7 @@ export function nodePorts(opts: {
   const repositories = existsSync(join(opts.repoCwd, "workspace.yaml"))
     ? createWorkspaceRepositoryPorts(opts.repoCwd, opts.repositoryAdapters)
     : undefined;
+  const contextStage = repositories === undefined ? undefined : createNodeContextStageHost(opts.repoCwd);
   const backlogPath = opts.backlogPath ?? (
     repositories === undefined
       ? join(opts.repoCwd, ".roll", "backlog.md")
@@ -510,6 +402,7 @@ export function nodePorts(opts: {
     paths: opts.paths,
     skillBody: opts.skillBody,
     ...(repositories === undefined ? {} : { repositories }),
+    ...(contextStage === undefined ? {} : { contextStage }),
     clock,
     agentSpawn: spawn,
     capacity,
@@ -688,6 +581,11 @@ export function nodePorts(opts: {
           if (!existsSync(backlogPath)) return;
           const store = new BacklogStore();
           const snap = store.readBacklog(backlogPath);
+          // FIX-1475: EXACT id match. Every runner caller passes a concrete story
+          // id (setup In Progress, terminal Done, resume, reconcile), so prefix
+          // matching would wrongly flip `<id>-` descendant rows (completing
+          // FIX-1475 must not mark FIX-1475-followup). The CLI `roll backlog`
+          // pattern commands still use BacklogStore.mark directly.
           store.markExact(backlogPath, snap.hash, id, status);
         } catch {
           /* best-effort: reconcile owns the fallback */

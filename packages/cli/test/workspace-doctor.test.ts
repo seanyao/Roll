@@ -80,6 +80,7 @@ function captureRequirementFixture(f: Awaited<ReturnType<typeof fixture>>) {
   const body = join(f.home, "requirement.md");
   writeFileSync(body, "trusted requirement\n", "utf8");
   return captureRequirementSource({
+    rollHome: f.rollHome,
     workspaceRoot: f.workspace,
     provider: "jira",
     ref: "SOT-1800",
@@ -227,6 +228,7 @@ describe("US-WS-018 roll workspace doctor", () => {
     const captured = captureRequirementFixture(f);
     writeFileSync(join(captured.requirementPath, "requirement.md"), "projection drift\n", "utf8");
     expect(() => repairRequirementProjection({
+      rollHome: f.rollHome,
       workspaceRoot: f.workspace,
       provider: "jira",
       requirementId: captured.manifest.requirementId,

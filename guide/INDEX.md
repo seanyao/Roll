@@ -13,6 +13,8 @@
 | guide/en/acceptance-evidence.md | Acceptance Evidence — roll attest / Evidence lifecycle | guide | 2026-07-02 |
 | guide/en/changelog.md | Roll — Changelog | guide | 2026-05-21 |
 | guide/en/configuration.md | Roll — Configuration | guide | 2026-07-02 |
+| guide/en/context.md | Context Engineering | guide | 2026-07-24 |
+| guide/en/context-ape-migration.md | Migrating APE Context to Roll | guide | 2026-07-24 |
 | guide/en/conventions.md | Roll — Conventions & AGENTS.md | guide | 2026-07-02 |
 | guide/en/dream.md | roll-.dream — Nightly Code Health Scanner | guide | 2026-05-19 |
 | guide/en/faq.md | Roll FAQ | guide | 2026-07-02 |
@@ -43,6 +45,8 @@
 | guide/zh/browser-operations.md | Roll — 浏览器操作（受管通道 + 交互通道） | guide | 2026-07-15 |
 | guide/zh/changelog.md | Roll — Changelog (中文) | guide | 2026-05-21 |
 | guide/zh/configuration.md | Roll — 配置 | guide | 2026-07-02 |
+| guide/zh/context.md | Context Engineering | guide | 2026-07-24 |
+| guide/zh/context-ape-migration.md | 从 APE Context 迁移到 Roll | guide | 2026-07-24 |
 | guide/zh/conventions.md | Roll — 约定与 AGENTS.md | guide | 2026-07-02 |
 | guide/zh/dream.md | roll-.dream — 夜间代码健康巡检 | guide | 2026-05-19 |
 | guide/zh/faq.md | Roll 常见问题 | guide | 2026-07-02 |
@@ -74,8 +78,8 @@
 
 ## Coverage Summary
 
-- Total docs indexed: 60
-- By category: guide (56) / convention (2) / module (2)
+- Total docs indexed: 64
+- By category: guide (60) / convention (2) / module (2)
 
 ## Gap Report
 

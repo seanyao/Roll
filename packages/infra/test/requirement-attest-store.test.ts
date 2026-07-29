@@ -59,6 +59,7 @@ function fixture(): { readonly workspace: string; readonly requirementPath: stri
   const body = join(root, "requirement.md");
   write(body, "# Requirement\n");
   const captured = captureRequirementSource({
+    rollHome: root,
     workspaceRoot: workspace,
     provider: "jira",
     ref: "SOT-15499",

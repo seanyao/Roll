@@ -34,6 +34,19 @@ import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";
 import { CONFIG_FACADE_KEYS, configGetCommand } from "./config-get.js";
 
 type Scope = "project" | "global";
+export type ConfigWorkspaceContextOperation = "read" | "write";
+
+/** Argument classifier shared by live dispatch registration and config parsing. */
+export function configWorkspaceContextOperation(args: readonly string[]): ConfigWorkspaceContextOperation | undefined {
+  const positional = args.filter((arg) =>
+    arg !== "--list" && arg !== "--global" && arg !== "--project" && arg !== "--help" && arg !== "-h");
+  if (positional[0] === "help") return "read";
+  const key = positional[0];
+  if (key === undefined) return "read";
+  const known = key === "lang" || CONFIG_FACADE_KEYS.includes(key) || CONFIG_KEYS.some((record) => record.key === key);
+  if (!known) return undefined;
+  return positional.length >= 2 ? "write" : "read";
+}
 
 function noColor(): boolean {
   return (process.env["NO_COLOR"] ?? "") !== "";

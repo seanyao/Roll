@@ -53,6 +53,7 @@ function fixture() {
   write(join(contextRoot, "api.md"), "revision 6 context\n");
   write(join(contextRoot, "brief", "nested", "rules.md"), "revision 6 rules\n");
   const first = captureRequirementSource({
+    rollHome: root,
     workspaceRoot: workspace,
     provider: "jira",
     ref: "SOT-15499",
@@ -67,6 +68,7 @@ function fixture() {
   write(join(contextRoot, "api.md"), "revision 7 context\n");
   write(join(contextRoot, "brief", "nested", "rules.md"), "revision 7 rules\n");
   const current = captureRequirementSource({
+    rollHome: root,
     workspaceRoot: workspace,
     provider: "jira",
     ref: "SOT-15499",
@@ -119,6 +121,7 @@ describe("US-WS-007a Requirement archive v1 declared-consistency audit", () => {
     const f = fixture();
 
     const linked = captureRequirementSource({
+      rollHome: f.root,
       workspaceRoot: f.workspace,
       provider: "jira",
       ref: "SOT-15499",

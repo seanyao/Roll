@@ -23,6 +23,7 @@ import {
   rollbackHistoricalWorkspaceMigration,
   releaseLock,
   workspaceRegistryPath,
+  workspaceAuthorityLockPath,
 } from "../src/index.js";
 
 const roots: string[] = [];
@@ -138,13 +139,19 @@ describe("US-WS-019a historical Workspace migration transaction", () => {
     const saved = await plan(f);
     expect(saved.verdict).toBe("ready");
     const phases: string[] = [];
+    const lockOrder: string[] = [];
 
     const first = await applyHistoricalWorkspaceMigration({ sourceRoot: f.source, rollHome: f.rollHome, plan: saved }, {
-      afterPhase: (phase) => phases.push(phase),
+      onLockAcquired: (lock) => lockOrder.push(lock),
+      afterPhase: (phase) => {
+        expect(existsSync(workspaceAuthorityLockPath(f.rollHome, "ws-demo"))).toBe(true);
+        phases.push(phase);
+      },
     });
 
     const workspace = join(f.rollHome, "workspaces", "ws-demo");
     expect(first.outcome).toBe("migrated");
+    expect(lockOrder.slice(0, 3)).toEqual(["authority", "migration", "repository"]);
     expect(phases).toEqual(["prepared", "cache_ready", "content_ready", "workspace_ready", "registered", "activated", "cleanup_complete"]);
     expect(readFileSync(join(workspace, "backlog", "index.md"), "utf8")).toBe("# Backlog\n");
     expect(readFileSync(join(workspace, "backlog", "legacy", "US-1", "spec.md"), "utf8")).toBe("# US-1\n");

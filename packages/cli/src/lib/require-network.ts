@@ -88,6 +88,8 @@ export function networkNeeds(command: string, args: readonly string[]): string |
   if (args.includes("--help") || args.includes("-h") || args[0] === "help") return null;
 
   switch (command) {
+    case "context":
+      return args[0] === "read" ? "roll context read" : null;
     case "update":
       return "roll update";
     case "showcase":

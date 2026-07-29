@@ -211,7 +211,7 @@ export function defaultManagedChromeAdapterDeps(diagnosticsDir: string): Managed
   return {
     launcher: new SystemChromeLauncher(),
     mcpDiagnosticSessionFactory: new McpDiagnosticSessionFactory({
-      emit: defaultMcpEventEmitter(),
+      emit: defaultMcpEventEmitter(diagnosticsDir),
     }),
     fs: nodeAdapterFs(),
     now: () => new Date().toISOString(),
@@ -221,9 +221,9 @@ export function defaultManagedChromeAdapterDeps(diagnosticsDir: string): Managed
   };
 }
 
-function defaultMcpEventEmitter(): (event: import("./mcp-session.js").McpBrowserSessionEvent) => void {
+function defaultMcpEventEmitter(diagnosticsDir: string): (event: import("./mcp-session.js").McpBrowserSessionEvent) => void {
   const ledger = new BrowserOperationLedger();
-  const path = join(process.cwd(), ".roll", "browser-operations", "events.ndjson");
+  const path = join(diagnosticsDir, "events.ndjson");
   return (event) => ledger.recordBrowserEvent(path, event);
 }
 

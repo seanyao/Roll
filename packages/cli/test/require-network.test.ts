@@ -182,6 +182,7 @@ describe("FIX-298 requireNetwork — first checkpoint + active recovery", () => 
 
 describe("FIX-298 networkNeeds — the ONE declarative model of which commands need network", () => {
   it("gates the agent-spawning / PR commands", () => {
+    expect(networkNeeds("context", ["read", "--workspace", "roll", "--stage", "qa"])).toBe("roll context read");
     expect(networkNeeds("update", [])).toBe("roll update");
     expect(networkNeeds("showcase", [])).toBe("roll showcase");
     expect(networkNeeds("showcase", ["--json"])).toBe("roll showcase");
@@ -191,12 +192,14 @@ describe("FIX-298 networkNeeds — the ONE declarative model of which commands n
   });
 
   it("does NOT gate a non-network command (roll status)", () => {
+    expect(networkNeeds("context", ["status", "--workspace", "roll"])).toBeNull();
     expect(networkNeeds("status", [])).toBeNull();
     expect(networkNeeds("backlog", [])).toBeNull();
     expect(networkNeeds("config", ["loop_safety.proxy_enable_cmd"])).toBeNull();
   });
 
   it("never gates a cry for help", () => {
+    expect(networkNeeds("context", ["read", "--help"])).toBeNull();
     expect(networkNeeds("update", ["--help"])).toBeNull();
     expect(networkNeeds("update", ["-h"])).toBeNull();
     expect(networkNeeds("showcase", ["help"])).toBeNull();

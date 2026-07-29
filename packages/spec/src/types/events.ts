@@ -23,6 +23,7 @@ import type { BlockCause, FailureClass, TerminalEvent, TerminalOutcome } from ".
 import type { TaskLevel } from "./story.js";
 import type { BuilderFinalizationFacts, BuilderFinalizationVerdict } from "./builder.js";
 import type { ContractError, ContractResult } from "./workspace.js";
+import type { ContextDiagnosticCode } from "./context.js";
 
 export const LEGACY_PROJECT_EVENT_MIGRATION_V1 = "roll.legacy-project-event-migration/v1" as const;
 
@@ -49,6 +50,21 @@ export interface LegacyProjectEventMigrationInput {
 }
 
 export type RollEvent =
+  | {
+      type: "context:read";
+      workspaceId: string;
+      storyId?: string;
+      providerId: string;
+      branch: string;
+      startedAt: string;
+      durationMs: number;
+      fetchOutcome: "completed" | "failed" | "not_started";
+      revision?: string;
+      bytes: number;
+      diagnosticCodes: readonly ContextDiagnosticCode[];
+      snapshotId: string;
+      ts: number;
+    }
   // Loop lifecycle (BC2)
   | { type: "loop:fire"; loop: LoopType; ts: number }
   | { type: "loop:idle"; loop: LoopType; nextFire: number; ts: number }

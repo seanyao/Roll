@@ -61,9 +61,9 @@ function fixture() {
   const readRepoId = repositoryIdFromRemote(readUrl);
   if (!sotRepoId.ok || !readRepoId.ok) throw new Error("fixture remotes must be valid");
 
-  const config = join(home, "workspace-init.yaml");
+  const config = join(home, "workspace-create.yaml");
   writeFileSync(config, `
-schema: roll.workspace-init/v1
+schema: roll.workspace-create/v1
 id: ws-demo
 root: ${workspace}
 display_name: Demo Workspace
@@ -81,7 +81,7 @@ repositories:
 
 /** Write the Story Contract INSIDE the Workspace's own backlog tree
  *  (`backlog/**\/<story-id>/spec.md`) — its only valid runtime home. Called
- *  after `workspace init` so it never collides with the fresh-workspace plan. */
+ *  after `workspace create` so it never collides with the fresh-workspace plan. */
 function writeBacklogStorySpec(f: ReturnType<typeof fixture>, storyId = "US-XX1"): void {
   const backlogStoryDir = join(f.workspace, "backlog", "workspace-orchestration", storyId);
   mkdirSync(backlogStoryDir, { recursive: true });
@@ -141,7 +141,7 @@ afterEach(() => {
 });
 
 async function initWorkspace(f: ReturnType<typeof fixture>): Promise<void> {
-  const result = await run(["workspace", "init", "ws-demo", "--config", f.config, "--json"], f);
+  const result = await run(["workspace", "create", "ws-demo", "--config", f.config, "--json"], f);
   expect(result.status, result.stderr).toBe(0);
 }
 
@@ -494,7 +494,7 @@ repositories:
     const result = await run(["workspace", "issue", "init", storyId, "--workspace", "ws-demo", "--json"], f);
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "invalid_story_id" } });
-    // The pre-existing empty issues/ dir (from workspace init) must gain no new entries.
+    // The pre-existing empty issues/ dir (from workspace create) must gain no new entries.
     expect(existsSync(join(f.workspace, "issues"))).toBe(true);
     expect(readFileSync(f.config, "utf8")).toBe(before);
     expect(readdirSync(join(f.workspace, "issues"))).toEqual([]);

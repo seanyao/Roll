@@ -14,9 +14,11 @@ ws-beta	US-1	📋 Todo	ws-beta story
     "help": {
       "status": 0,
       "stderr": "",
-      "stdout": "Usage: roll backlog [show <story-id>] [--workspace <id|path>] [--all]
+      "stdout": "Usage: roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]
        roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]
-  Read or manage one resolved Workspace backlog; --all is read-only and mutations are rejected.
+  Reads may explicitly enable/disable Workspace clarification; --all is read-only and mutations are rejected.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
     },
     "read": {
@@ -54,9 +56,11 @@ ws-beta	US-1	📋 Todo	ws-beta story
     "help": {
       "status": 0,
       "stderr": "",
-      "stdout": "用法：roll backlog [show <story-id>] [--workspace <id|path>] [--all]
+      "stdout": "用法：roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]
       roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]
-  读取或管理一个明确工作区的 backlog；--all 只允许只读聚合，变更命令会拒绝。
+  读取时可显式启用/禁用 Workspace 澄清；--all 只允许只读聚合，变更命令会拒绝。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
     },
     "read": {

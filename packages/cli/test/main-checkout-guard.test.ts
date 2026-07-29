@@ -350,9 +350,13 @@ describe("main checkout guard — US-LOOP-089", () => {
       reason: "ahead",
       files: ["<commit>:leaked configured checkout commit"],
     });
+    // FIX-1475: quarantine records the leaked commits but must never move the
+    // shared checkout. The operator can inspect the bookmark and decide how to
+    // reconcile the branch explicitly.
     expect(sh(repo, ["rev-parse", "HEAD"])).toBe(leakedHead);
     expect(sh(repo, ["rev-parse", results[0]!.ref])).toBe(leakedHead);
-    expect(results[0]?.restoreCommand).toContain("git reset --hard origin/dev");
+    expect(results[0]!.restoreCommand).toContain("main was NOT moved");
+    expect(results[0]!.restoreCommand).toContain("git reset --hard origin/dev");
   });
 
   it("checkMainDirty ignores .roll runtime and skills submodule dirt", async () => {

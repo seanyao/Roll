@@ -52,6 +52,10 @@ const LEGACY_REPOSITORY_TERMINAL_COMMANDS = new Set<TerminalCommand["kind"]>([
   "wait_merge",
 ]);
 
+function storyLeasePath(ports: Ports): string {
+  return resolveStoryLeasePath(ports.paths);
+}
+
 function preservedIssueWorktreeFacts(ctx: CycleContext): object | undefined {
   const execution = ctx.repositoryExecution;
   if (execution === undefined) return undefined;

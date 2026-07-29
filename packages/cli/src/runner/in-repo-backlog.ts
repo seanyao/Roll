@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CycleContext } from "@roll/core";
 import { markStatusExact } from "@roll/core";
+import { resolveIntegrationBranch } from "@roll/infra";
 import type { Ports } from "./ports.js";
 
 // ── FIX-1238 / FIX-1475: in-repo layout backlog durability ───────────────────
@@ -58,11 +59,11 @@ const FLIP_IDENTITY = {
  * WORKING TREE instead would still leave the shared tree dirty and risk
  * publishing an owner's unpushed backlog edits. So we never read or mutate the
  * shared tree: we recompute the transition from the REMOTE backlog. We read
- * `origin/main:.roll/backlog.md`, apply ONLY this story's status transition in
- * memory (exact id — never `<id>-` descendants), assemble a tree = origin/main's
- * tree with only `.roll/backlog.md` replaced (a throwaway index — the checkout's
- * real index is untouched), `commit-tree` it onto origin/main, and push just
- * that object to `refs/heads/main`. The shared checkout's ref, HEAD, index, and
+ * the configured integration branch's remote backlog, apply ONLY this story's
+ * status transition in memory (exact id — never `<id>-` descendants), assemble
+ * a tree with only `.roll/backlog.md` replaced (a throwaway index — the checkout's
+ * real index is untouched), and push only that object. The shared checkout's
+ * ref, HEAD, index, and
  * working tree stay byte-identical (FIX-1475) while the flip lands durably on
  * the remote (FIX-1238). A racing non-fast-forward push fails LOUD (alert) —
  * never a force-push, never a local reset; the reconciler re-derives Done from
@@ -79,15 +80,20 @@ export async function commitInRepoBacklog(
   try {
     // Base the flip on the CURRENT remote tip so the pushed object is a clean
     // fast-forward carrying only the backlog change on top of already-merged work.
-    execFileSync("git", ["fetch", "origin", "main"], { cwd: ports.repoCwd, stdio: "ignore" });
-    const base = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], {
+    const configuredIntegration = resolveIntegrationBranch(ports.repoCwd);
+    const integrationBranch = configuredIntegration.startsWith("origin/")
+      ? configuredIntegration.slice("origin/".length)
+      : configuredIntegration;
+    execFileSync("git", ["fetch", "origin", integrationBranch], { cwd: ports.repoCwd, stdio: "ignore" });
+    const remoteRef = `refs/remotes/origin/${integrationBranch}`;
+    const base = execFileSync("git", ["rev-parse", remoteRef], {
       cwd: ports.repoCwd,
       encoding: "utf8",
     }).trim();
     if (!isObjectId(base)) {
       ports.events.appendAlert(
         ports.paths.alertsPath,
-        `FIX-1238/FIX-1475: in-repo backlog flip for ${storyId} (cycle ${ctx.cycleId}) skipped — could not resolve origin/main (got "${base}") — shared main untouched`,
+        `FIX-1238/FIX-1475: in-repo backlog flip for ${storyId} (cycle ${ctx.cycleId}) skipped — could not resolve ${remoteRef} (got "${base}") — shared checkout untouched`,
       );
       return;
     }
@@ -100,7 +106,7 @@ export async function commitInRepoBacklog(
         encoding: "utf8",
       });
     } catch {
-      // origin/main carries no backlog at this path — nothing to flip durably.
+      // The integration branch carries no backlog at this path — nothing to flip durably.
       return;
     }
     const { content: newContent, count } = markStatusExact(originContent, storyId, doneStatus);
@@ -134,7 +140,7 @@ export async function commitInRepoBacklog(
       }).trim();
       // Push the OBJECT to the remote branch — the shared checkout is never
       // checked out onto it, so refs/heads/main here stays put.
-      execFileSync("git", ["push", "origin", `${commit}:refs/heads/main`], {
+      execFileSync("git", ["push", "origin", `${commit}:refs/heads/${integrationBranch}`], {
         cwd: ports.repoCwd,
         stdio: "ignore",
       });
@@ -148,7 +154,7 @@ export async function commitInRepoBacklog(
   } catch (e) {
     ports.events.appendAlert(
       ports.paths.alertsPath,
-      `FIX-1238/FIX-1475: in-repo backlog flip push failed for ${storyId} (cycle ${ctx.cycleId}) — shared main left untouched — ${String(e)}`,
+      `FIX-1238/FIX-1475: in-repo backlog flip push failed for ${storyId} (cycle ${ctx.cycleId}) — shared checkout left untouched — ${String(e)}`,
     );
   }
 }

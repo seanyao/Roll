@@ -11,12 +11,15 @@ import {
 } from "@roll/infra";
 import { resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
-import { workspaceInitCommand } from "./workspace-init.js";
+import { workspaceCreateCommand } from "./workspace-create.js";
 import { workspaceIssueCommand } from "./workspace-issue.js";
 import { workspaceRequirementCommand } from "./workspace-requirement.js";
 import { workspaceDoctorCommand } from "./workspace-doctor.js";
 import { workspaceMigrateCommand } from "./workspace-migrate.js";
+import { workspaceEditCommand } from "./workspace-edit.js";
+import { workspaceSkillHandoffCommand } from "./workspace-skill-handoff.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { canonicalWorkspaceSelectorValue, containsCanonicalWorkspaceSelector, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const WORKSPACE_LIST_V1 = "roll.workspace-list/v1" as const;
 const WORKSPACE_VIEW_V1 = "roll.workspace-view/v1" as const;
@@ -74,17 +77,12 @@ function view(entry: InspectedWorkspace): WorkspaceView {
   };
 }
 
-function flagValue(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  return index >= 0 ? args[index + 1] : undefined;
-}
-
 function positionalArgs(args: readonly string[]): string[] {
   const values: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json" || arg === "--all") continue;
-    if (arg === "--workspace") {
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
       index += 1;
       continue;
     }
@@ -94,8 +92,8 @@ function positionalArgs(args: readonly string[]): string[] {
 }
 
 function unknownFlags(args: readonly string[]): string[] {
-  const allowed = new Set(["--json", "--all", "--workspace"]);
-  return args.filter((arg) => arg.startsWith("-") && !allowed.has(arg));
+  const allowed = new Set(["--json", "--all"]);
+  return args.filter((arg) => arg.startsWith("-") && !isCanonicalWorkspaceSelectorToken(arg) && !allowed.has(arg));
 }
 
 function errorMessage(code: WorkspaceTargetFailureCode | WorkspaceRegistryErrorCode | "invalid_arguments"): string {
@@ -183,8 +181,8 @@ function resolveOne(
 
 function parseTarget(args: readonly string[]): { readonly ok: true; readonly target?: string } | { readonly ok: false } {
   if (unknownFlags(args).length > 0) return { ok: false };
-  const optionTarget = flagValue(args, "--workspace");
-  if (args.includes("--workspace") && optionTarget === undefined) return { ok: false };
+  const optionTarget = canonicalWorkspaceSelectorValue(args);
+  if (containsCanonicalWorkspaceSelector(args) && optionTarget === undefined) return { ok: false };
   const positional = positionalArgs(args);
   if (positional.length > 1 || (optionTarget !== undefined && positional.length > 0)) return { ok: false };
   const target = optionTarget ?? positional[0];
@@ -202,7 +200,7 @@ function mutationSuccess(operation: WorkspaceOperation, workspace: WorkspaceView
 
 function listCommand(args: readonly string[], store: WorkspaceRegistry): number {
   const json = args.includes("--json");
-  if (unknownFlags(args).length > 0 || positionalArgs(args).length > 0 || args.includes("--workspace")) {
+  if (unknownFlags(args).length > 0 || positionalArgs(args).length > 0 || containsCanonicalWorkspaceSelector(args)) {
     return emitError("invalid_arguments", json);
   }
   try {
@@ -242,7 +240,7 @@ function showCommand(args: readonly string[], store: WorkspaceRegistry): number 
 
 function registerCommand(args: readonly string[], store: WorkspaceRegistry): number {
   const json = args.includes("--json");
-  if (unknownFlags(args).length > 0 || args.includes("--all") || args.includes("--workspace")) {
+  if (unknownFlags(args).length > 0 || args.includes("--all") || containsCanonicalWorkspaceSelector(args)) {
     return emitError("invalid_arguments", json);
   }
   const positional = positionalArgs(args);
@@ -293,11 +291,13 @@ export function workspaceCommand(args: string[]): number | Promise<number> {
     return 0;
   }
   const rest = args.slice(1);
-  if (subcommand === "init") return workspaceInitCommand(rest);
+  if (subcommand === "create") return workspaceCreateCommand(rest);
   if (subcommand === "issue") return workspaceIssueCommand(rest);
   if (subcommand === "requirement") return workspaceRequirementCommand(rest);
   if (subcommand === "doctor") return workspaceDoctorCommand(rest);
   if (subcommand === "migrate") return workspaceMigrateCommand(rest);
+  if (subcommand === "edit") return workspaceEditCommand(rest);
+  if (subcommand === "handoff") return workspaceSkillHandoffCommand(rest);
   const store = new WorkspaceRegistry({ rollHome: workspaceRollHome() });
   if (subcommand === "list") return listCommand(rest, store);
   if (subcommand === "show") return showCommand(rest, store);

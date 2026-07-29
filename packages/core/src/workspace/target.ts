@@ -304,6 +304,18 @@ export function resolveWorkspaceTarget(input: WorkspaceTargetInput): WorkspaceTa
   if (selected === undefined) return failure(input, "target_missing", "No Workspace target could be resolved");
   const invalid = candidateValidityFailure(input, selected.workspace);
   if (invalid !== null) return invalid;
+  if (
+    selected.workspace.lifecycle === "archived" &&
+    (input.operation !== "read" || selected.source !== "explicit")
+  ) {
+    return failure(
+      input,
+      "invalid_target",
+      "Archived Workspace authority is available only through an explicit read target",
+      [selected.source],
+      [selected.workspace],
+    );
+  }
   return {
     ok: true,
     source: selected.source,

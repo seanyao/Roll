@@ -161,7 +161,43 @@ exports[`US-WS-015 roll delivery surface > aggregates --all read-only and fails 
         "workspaceId": "ws-beta",
         "path": "<WS_2>"
       }
-    ]
+    ],
+    "clarification": {
+      "schema": "roll.workspace-clarification/v1",
+      "registryRevision": 2,
+      "discoveryFactsSha256": "<SHA256>",
+      "reason": "requirement_match_required",
+      "operation": "read",
+      "requirementSummary": {
+        "sources": [],
+        "storyIds": [],
+        "hasSemanticOnlyEvidence": false
+      },
+      "candidates": [
+        {
+          "workspaceId": "ws-alpha",
+          "displayName": "ws-alpha",
+          "lifecycle": "active",
+          "evidence": [],
+          "diagnostics": [],
+          "canonicalSelector": "--workspace ws-alpha"
+        },
+        {
+          "workspaceId": "ws-beta",
+          "displayName": "ws-beta",
+          "lifecycle": "active",
+          "evidence": [],
+          "diagnostics": [],
+          "canonicalSelector": "--workspace ws-beta"
+        }
+      ],
+      "allowedActions": [
+        "select_existing",
+        "create_new"
+      ],
+      "canonicalCreateCommand": "roll workspace create",
+      "canonicalRepairCommands": []
+    }
   }
 }
 ",
@@ -199,10 +235,12 @@ exports[`US-WS-015 roll delivery surface > aggregates --all read-only and fails 
 exports[`US-WS-015 roll delivery surface > freezes locale-specific help without adjacent bilingual output 1`] = `
 {
   "en": "Usage: roll delivery <list|show|reconcile> [options]
-  \`list [--workspace <id|path> | --all] [--json]\`
-  \`show <story-id> [--workspace <id|path>] [--json]\`
+  \`list [--workspace <id|path> | --all] [--interactive|--no-input] [--json]\`
+  \`show <story-id> [--workspace <id|path>] [--interactive|--no-input] [--json]\`
   \`reconcile [<story-id>] --workspace <id|path> [--dry-run] [--json]\`
-  Delivery is an Issue fact view; --all is read-only and reconciliation never reads backlog Markdown as completion truth.
+  Interaction capability is independent from --json; prompts use the controlling TTY, never stdout. Delivery is an Issue fact view; --all is read-only and reconciliation never reads backlog Markdown as completion truth.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
   "loopEn": "Usage: roll loop reconcile [<story-id>] --workspace <id|path> [--dry-run] [--json]
   Alias of \`roll delivery reconcile\`; folds Workspace Issue facts and never reads backlog Markdown as completion truth.
@@ -211,10 +249,12 @@ exports[`US-WS-015 roll delivery surface > freezes locale-specific help without 
   \`roll delivery reconcile\` 的别名；折叠工作区 Issue 事实，绝不把 backlog Markdown 当作完成真相。
 ",
   "zh": "用法：roll delivery <list|show|reconcile> [选项]
-  \`list [--workspace <ID|路径> | --all] [--json]\`
-  \`show <Story ID> [--workspace <ID|路径>] [--json]\`
+  \`list [--workspace <ID|路径> | --all] [--interactive|--no-input] [--json]\`
+  \`show <Story ID> [--workspace <ID|路径>] [--interactive|--no-input] [--json]\`
   \`reconcile [<Story ID>] --workspace <ID|路径> [--dry-run] [--json]\`
-  Delivery 是 Issue 事实视图；--all 仅限只读，对账绝不把 backlog Markdown 当作完成真相。
+  交互能力与 --json 相互独立；prompt 只写控制终端，绝不写 stdout。Delivery 是 Issue 事实视图；--all 仅限只读，对账绝不把 backlog Markdown 当作完成真相。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
 }
 `;

@@ -13,7 +13,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { isRealProjectPath, reachableProjects as filterReachableProjects } from "@roll/core";
 import type { ProjectRegistryEntry } from "./truth-console.js";
 
@@ -154,6 +154,12 @@ function remoteRepoName(cwd: string): string | null {
   const url = origin ?? (remote !== undefined ? gitOutput(cwd, ["remote", "get-url", remote]) : null);
   if (url === null || url === "") return null;
   const clean = url.replace(/\/+$/, "").replace(/\.git$/, "");
+  const supportMarker = `${sep}.worktrees${sep}support${sep}`;
+  const supportIndex = clean.indexOf(supportMarker);
+  if (isAbsolute(clean) && supportIndex > 0) {
+    const canonicalRepo = basename(clean.slice(0, supportIndex));
+    if (canonicalRepo !== "") return canonicalRepo;
+  }
   const repo = basename(clean);
   return repo !== "" ? repo : null;
 }

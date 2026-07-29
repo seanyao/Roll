@@ -21,13 +21,29 @@ export function toolResultSchema(output: JsonSchema): JsonSchema {
       endedAt: NUMBER,
       durationMs: NUMBER,
       attempt: INTEGER,
+      correlation: objectSchema({ workspaceId: NON_EMPTY_STRING, storyId: NON_EMPTY_STRING, repoId: NON_EMPTY_STRING }, ["workspaceId"]),
     },
     ["invocationId", "toolId", "caller", "startedAt", "endedAt", "durationMs"],
   );
   const warnings: JsonSchema = { type: "array", items: STRING };
   const error = objectSchema(
     {
-      code: { type: "string", enum: ["not_found", "init_failed", "policy_denied", "budget_exhausted", "sandbox_denied", "timeout", "adapter_error", "invalid_input", "unknown"] },
+      code: {
+        type: "string",
+        enum: [
+          "not_found",
+          "init_failed",
+          "policy_denied",
+          "budget_exhausted",
+          "sandbox_denied",
+          "timeout",
+          "adapter_error",
+          "invalid_input",
+          "missing_execution_context",
+          "invalid_execution_context",
+          "unknown",
+        ],
+      },
       message: STRING,
       retryable: BOOLEAN,
       detail: true,

@@ -1,7 +1,8 @@
-import { stat as nodeStat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { constants } from "node:fs";
+import { lstat, open, stat as nodeStat } from "node:fs/promises";
 import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
 import { fsReadInputSchema, fsReadOutputSchema, fsStatInputSchema, fsStatOutputSchema, fsWriteInputSchema, fsWriteOutputSchema } from "./schema-contracts.js";
+import { isCanonicalPathContained, resolveContainedPath, resolveWorkspaceLocalRepository } from "./workspace-local-context.js";
 
 export type FsToolId = "filesystem.stat" | "filesystem.read" | "filesystem.write";
 
@@ -34,6 +35,11 @@ export interface FsWriteOutput {
   bytesWritten: number;
 }
 
+export interface FsToolFactoryContext {
+  root: string;
+  access: "read" | "write";
+}
+
 type FsInput = FsStatInput | FsReadInput | FsWriteInput;
 type FsOutput = FsStatOutput | FsReadOutput | FsWriteOutput;
 
@@ -48,7 +54,7 @@ export class FsTool {
 
   constructor(
     private readonly id: FsToolId,
-    private readonly projectRoot = process.cwd(),
+    private readonly factoryContext?: FsToolFactoryContext,
   ) {
     this.declaration = {
       id: id as ToolDeclaration["id"],
@@ -74,21 +80,41 @@ export class FsTool {
 
   async execute(invocation: ToolInvocation<FsInput>, deps: ToolDeps): Promise<ToolResult<FsOutput>> {
     const startedAt = deps.now();
-    const target = resolveTarget(this.projectRoot, invocation.input.path);
-    if (!isAllowed(target, this.projectRoot, invocation.policy.sandbox?.allowedPaths)) {
-      return failure(invocation, startedAt, deps.now(), "policy_denied", `path is outside allowedPaths: ${target}`, false);
+    const access = this.id === "filesystem.write" ? "write" : "read";
+    const repository = resolveWorkspaceLocalRepository(invocation, access);
+    if (!repository.ok) return failure(invocation, startedAt, deps.now(), repository.code, repository.message, false);
+    const boundInvocation = invocation.repoId === undefined
+      ? { ...invocation, repoId: repository.repository.repoId }
+      : invocation;
+    if (!factoryAllows(this.factoryContext, repository.canonicalWorktreePath, access)) {
+      return failure(boundInvocation, startedAt, deps.now(), "invalid_execution_context", "filesystem factory capability does not match the selected Issue repository", false);
+    }
+    const target = resolveContainedPath(repository.canonicalWorktreePath, invocation.input.path, this.id !== "filesystem.read");
+    if (target === undefined) {
+      return failure(boundInvocation, startedAt, deps.now(), "invalid_execution_context", "filesystem path is outside the selected Issue repository", false);
+    }
+    if (!isAllowed(target, repository.canonicalWorktreePath, invocation.policy.sandbox?.allowedPaths)) {
+      return failure(boundInvocation, startedAt, deps.now(), "policy_denied", "filesystem path is outside allowedPaths", false);
     }
 
     try {
       if (this.id === "filesystem.stat") {
-        return ok(invocation, startedAt, deps.now(), await statOutput(target));
+        return ok(boundInvocation, startedAt, deps.now(), await statOutput(target));
       }
       if (this.id === "filesystem.read") {
-        return ok(invocation, startedAt, deps.now(), await readOutput(target, invocation.input as FsReadInput, deps));
+        return ok(boundInvocation, startedAt, deps.now(), await readOutput(target, invocation.input as FsReadInput, deps));
       }
-      return ok(invocation, startedAt, deps.now(), await writeOutput(target, invocation.input as FsWriteInput, deps));
-    } catch (cause) {
-      return failure(invocation, startedAt, deps.now(), "adapter_error", "filesystem operation failed", true, cause);
+      const output = await writeOutput(
+        target,
+        invocation.input as FsWriteInput,
+        repository.canonicalWorktreePath,
+        deps,
+      );
+      return output === undefined
+        ? failure(boundInvocation, startedAt, deps.now(), "invalid_execution_context", "filesystem write target must remain an existing regular file", false)
+        : ok(boundInvocation, startedAt, deps.now(), output);
+    } catch {
+      return failure(boundInvocation, startedAt, deps.now(), "adapter_error", "filesystem operation failed", true);
     }
   }
 }
@@ -105,19 +131,22 @@ function fsOutputSchema(id: FsToolId): ToolDeclaration["outputSchema"] {
   return fsWriteOutputSchema;
 }
 
-export function fsTools(projectRoot = process.cwd()): FsTool[] {
-  return [new FsTool("filesystem.stat", projectRoot), new FsTool("filesystem.read", projectRoot), new FsTool("filesystem.write", projectRoot)];
+export function fsTools(context?: FsToolFactoryContext): FsTool[] {
+  return [new FsTool("filesystem.stat", context), new FsTool("filesystem.read", context), new FsTool("filesystem.write", context)];
 }
 
-function resolveTarget(projectRoot: string, path: string): string {
-  return resolve(projectRoot, path);
+function factoryAllows(context: FsToolFactoryContext | undefined, repositoryRoot: string, access: "read" | "write"): boolean {
+  if (context === undefined) return true;
+  const root = resolveContainedPath(repositoryRoot, context.root, false);
+  if (root !== repositoryRoot) return false;
+  return access === "read" || context.access === "write";
 }
 
-function isAllowed(target: string, projectRoot: string, allowedPaths: readonly string[] | undefined): boolean {
+function isAllowed(target: string, repositoryRoot: string, allowedPaths: readonly string[] | undefined): boolean {
   if (allowedPaths === undefined || allowedPaths.length === 0) return true;
   return allowedPaths.some((path) => {
-    const root = resolve(projectRoot, path);
-    return target === root || target.startsWith(`${root}/`);
+    const root = resolveContainedPath(repositoryRoot, path, true);
+    return root !== undefined && isCanonicalPathContained(root, target);
   });
 }
 
@@ -142,11 +171,47 @@ async function readOutput(path: string, input: FsReadInput, deps: ToolDeps): Pro
   };
 }
 
-async function writeOutput(path: string, input: FsWriteInput, deps: ToolDeps): Promise<FsWriteOutput> {
+async function writeOutput(
+  path: string,
+  input: FsWriteInput,
+  repositoryRoot: string,
+  deps: ToolDeps,
+): Promise<FsWriteOutput | undefined> {
   const content = deps.redact(input.content);
-  await deps.fs.mkdir(dirname(path), { recursive: true });
-  await deps.fs.writeFile(path, content, "utf8");
-  return { bytesWritten: Buffer.byteLength(content, "utf8") };
+  const revalidated = resolveContainedPath(repositoryRoot, path, true);
+  if (revalidated !== path) return undefined;
+  return writeAnchoredFile(path, content, repositoryRoot);
+}
+
+async function writeAnchoredFile(
+  path: string,
+  content: string,
+  repositoryRoot: string,
+): Promise<FsWriteOutput | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    try {
+      handle = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW);
+    } catch (cause) {
+      if (isNotFound(cause)) return undefined;
+      throw cause;
+    }
+    const descriptorStat = await handle.stat();
+    const pathStat = await lstat(path);
+    const contained = resolveContainedPath(repositoryRoot, path, true) === path;
+    if (
+      !contained || !descriptorStat.isFile() || pathStat.isSymbolicLink() || !pathStat.isFile() ||
+      descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino ||
+      descriptorStat.nlink !== 1 || pathStat.nlink !== 1
+    ) {
+      return undefined;
+    }
+    await handle.truncate(0);
+    await handle.writeFile(content, "utf8");
+    return { bytesWritten: Buffer.byteLength(content, "utf8") };
+  } finally {
+    await handle?.close();
+  }
 }
 
 function countLines(content: string): number {
@@ -172,7 +237,7 @@ function failure(
   invocation: ToolInvocation<FsInput>,
   startedAt: number,
   endedAt: number,
-  code: "policy_denied" | "adapter_error",
+  code: "policy_denied" | "adapter_error" | "missing_execution_context" | "invalid_execution_context",
   message: string,
   retryable: boolean,
   detail?: unknown,
@@ -197,5 +262,12 @@ function meta(invocation: ToolInvocation<FsInput>, startedAt: number, endedAt: n
     startedAt,
     endedAt,
     durationMs: Math.max(0, endedAt - startedAt),
+    correlation: invocation.context === undefined
+      ? undefined
+      : {
+          workspaceId: invocation.context.workspace.workspaceId,
+          ...(invocation.context.issue?.storyId === undefined ? {} : { storyId: invocation.context.issue.storyId }),
+          ...(invocation.repoId === undefined ? {} : { repoId: invocation.repoId }),
+        },
   };
 }

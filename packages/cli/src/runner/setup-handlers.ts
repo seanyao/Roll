@@ -15,17 +15,16 @@ import {
   projectDeliveryLeases,
   readLeases,
   reconcileBranchName,
-  removeLease,
+  releaseStoryLease,
   runRowHasPublishedPr,
   type BacklogItem,
   type CycleCommand,
   type CycleContext,
   type HasOpenPr,
-  type LeaseEntry,
   type OpenPrReferenceInput,
   type PickOptions,
 } from "@roll/core";
-import { classifyStatus, parseEventLine, STATUS_MARKER, type LoopType, type RollEvent } from "@roll/spec";
+import { classifyStatus, STATUS_MARKER, type LoopType } from "@roll/spec";
 import { isScreenLocked, readWorkspace, resolveIntegrationBranch } from "@roll/infra";
 import { dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
@@ -49,6 +48,11 @@ import { latestScreenLockEvent } from "./screen-lock-events.js";
 import { pendingRecoveryCandidateIds } from "./recovery-candidates.js";
 import { resolveStoryLeasePath } from "./story-lease-path.js";
 import { decideInProgressReclaim, parseLegacyClaimTimestamp, readLeaseEvents } from "./lease-reclaim.js";
+import {
+  freezeWorkspaceCycleContext,
+  persistWorkspaceCycleContext,
+  persistWorkspaceCycleRepositorySelector,
+} from "./scoped-route.js";
 
 type SetupCommand = Extract<CycleCommand, { kind:
   | "preflight"
@@ -58,6 +62,30 @@ type SetupCommand = Extract<CycleCommand, { kind:
   | "resolve_route"
 }>;
 
+/** Resolve Workspace and legacy runners onto the canonical per-story lease directory. */
+function storyLeasePath(ports: Ports): string {
+  return resolveStoryLeasePath(ports.paths);
+}
+
+function workspaceSetupFailed(input: {
+  readonly ports: Ports;
+  readonly storyId: string;
+  readonly preCycleStatus?: string;
+  readonly leasePath: string;
+  readonly alert?: string;
+}): ExecuteResult {
+  if (input.alert !== undefined) input.ports.events.appendAlert(input.ports.paths.alertsPath, input.alert);
+  input.ports.backlog.markStatus?.(input.ports.repoCwd, input.storyId, input.preCycleStatus ?? STATUS_MARKER.todo);
+  try {
+    releaseStoryLease(input.leasePath, input.storyId, { source: "cycle", pid: process.pid });
+  } catch {
+    /* terminal cleanup retries the lease release */
+  }
+  return {
+    event: { type: "repository_setup_failed", storyId: input.storyId },
+    ctxPatch: input.preCycleStatus === undefined || input.preCycleStatus === "" ? {} : { preCycleStatus: input.preCycleStatus },
+  };
+}
 export async function executeSetupCommand(
   cmd: SetupCommand,
   ports: Ports,
@@ -103,7 +131,7 @@ export async function executeSetupCommand(
         const claims = rows.filter((r) => (r.status ?? "").includes("🔨"));
         if (claims.length > 0) {
           const slug = await ports.github.repoSlug(ports.repoCwd).catch(() => undefined);
-          const leases = readLeases(resolveStoryLeasePath(ports.paths));
+          const leases = readLeases(storyLeasePath(ports));
           const nowMs = Date.now();
           for (const claim of claims) {
             const cycle = latestDeliveringCycle(runRows, claim.id);
@@ -289,8 +317,8 @@ export async function executeSetupCommand(
       // runs. A crashed cycle leaves a stale cycle-lease that accumulates in the
       // file. Clean it before the claim predicate reads the shared ledger so a
       // dead owner cannot keep the Story blocked.
-      const storyLeasePath = resolveStoryLeasePath(ports.paths);
-      const deadLeases = cleanDeadLeases(storyLeasePath);
+      const leasePath = storyLeasePath(ports);
+      const deadLeases = cleanDeadLeases(leasePath);
       if (deadLeases.length > 0) {
         ports.events.appendAlert(
           ports.paths.alertsPath,
@@ -300,7 +328,7 @@ export async function executeSetupCommand(
       // US-DELIV-005: derive delivery leases before picking; --race permits
       // parallel work, then the first merge supersedes its siblings.
       const raceMode = process.env["ROLL_LOOP_RACE"] === "1";
-      const liveClaims = readLeases(storyLeasePath);
+      const liveClaims = readLeases(leasePath);
       const claimedByOther = buildClaimedByOther(liveClaims, Date.now(), process.pid);
       const cycleEvents = readLeaseEvents(ports.paths.eventsPath);
       const recoveryCandidateIds = pendingRecoveryCandidateIds(cycleEvents);
@@ -484,13 +512,13 @@ export async function executeSetupCommand(
       // 🔨 we are about to write. Best-effort: an absent status leaves it unset
       // (no revert target — the terminal then leaves the row untouched).
       const preCycleStatus = (story as { status?: string }).status;
-      if (ports.repositories === undefined) {
-        ports.backlog.markStatus?.(ports.repoCwd, story.id, STATUS_MARKER.in_progress);
-      }
-      // FIX-1211 / US-DELTA-003: atomically claim the cycle lease so another
-      // loop or host delegation cannot overwrite this owner.
+      // FIX-1211: atomically claim a cycle lease so another loop instance
+      // (or a host-delegation prepare) cannot claim the same story.
+      // Uses the single-truth claimStoryLease primitive — no-clobber.
+      // A claim failure here means another owner already holds the lease;
+      // the picker already filtered those, so this is a diagnostic guard.
       try {
-        const claimResult = claimStoryLease(storyLeasePath, story.id, {
+        const claimResult = claimStoryLease(leasePath, story.id, {
           pid: process.pid,
           source: "cycle",
           claimedAt: Date.now(),
@@ -518,20 +546,45 @@ export async function executeSetupCommand(
             repairJournal: prepared.repairJournal,
             ts: eventTs(ports),
           });
-          ports.backlog.markStatus?.(ports.repoCwd, story.id, preCycleStatus ?? STATUS_MARKER.todo);
-          try {
-            removeLease(storyLeasePath, story.id, "cycle");
-          } catch {
-            /* the terminal path retries lease cleanup */
-          }
-          return {
-            event: { type: "repository_setup_failed", storyId: story.id },
-            ctxPatch: {
-              ...(preCycleStatus !== undefined && preCycleStatus !== "" ? { preCycleStatus } : {}),
-            },
-          };
+          return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath });
         }
         repositoryExecution = await ports.repositories.resolve(story.id);
+      }
+      let workspaceExecution = ctx.workspaceExecution;
+      let repositorySelector = ctx.repositorySelector;
+      if (workspaceExecution !== undefined) {
+        const freezeExecution = repositoryExecution ?? workspaceExecution.issue?.execution;
+        const frozen = freezeExecution === undefined
+          ? { ok: false as const, code: "missing_execution_context" }
+          : freezeWorkspaceCycleContext({ workspace: workspaceExecution, storyId: story.id, execution: freezeExecution });
+        if (!frozen.ok) {
+          return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath,
+            alert: `workspace cycle context blocked before spawn for ${story.id}: ${frozen.code}` });
+        }
+        workspaceExecution = frozen.context;
+        const persisted = persistWorkspaceCycleContext(dirname(ports.paths.eventsPath), ctx.cycleId, workspaceExecution);
+        if (!persisted.ok) {
+          return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath,
+            alert: `workspace cycle context persistence blocked before spawn for ${story.id}: ${persisted.code}` });
+        }
+        workspaceExecution = persisted.context;
+        const selected = persistWorkspaceCycleRepositorySelector(
+          dirname(ports.paths.eventsPath),
+          ctx.cycleId,
+          workspaceExecution,
+          repositorySelector,
+        );
+        if (selected.ok) {
+          repositorySelector = selected.repoId;
+        } else if (selected.code !== "repository_selector_required") {
+          return workspaceSetupFailed({
+            ports,
+            storyId: story.id,
+            preCycleStatus,
+            leasePath,
+            alert: `workspace repository selection blocked before spawn for ${story.id}: ${selected.code}`,
+          });
+        }
       }
       // The visible claim follows successful Workspace preparation. Legacy
       // projects retain the same pick-time status transition.
@@ -554,6 +607,8 @@ export async function executeSetupCommand(
           type: "story_picked",
           storyId: story.id,
           ...(repositoryExecution === undefined ? {} : { repositoryExecution }),
+          ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+          ...(repositorySelector === undefined ? {} : { repositorySelector }),
         },
         ctxPatch: {
           evidenceRunDir,

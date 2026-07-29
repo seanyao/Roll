@@ -917,10 +917,12 @@ export function ensureDeliveriesFresh(
   freshness: FreshnessPort,
   exec: ExecPort,
   integrationBranch: string = DEFAULT_INTEGRATION_BRANCH,
+  runtimeRoot?: string,
 ): DeliveryRecord[] {
-  const runsPath = join(projectRoot, ".roll", "loop", RUNS_FILE);
-  const delPath = deliveriesPath(projectRoot);
-  const headPath = deliveriesHeadPath(projectRoot);
+  const resolvedRuntimeRoot = runtimeRoot ?? join(projectRoot, ".roll", "loop");
+  const runsPath = join(resolvedRuntimeRoot, RUNS_FILE);
+  const delPath = runtimeRoot === undefined ? deliveriesPath(projectRoot) : join(resolvedRuntimeRoot, "deliveries.jsonl");
+  const headPath = runtimeRoot === undefined ? deliveriesHeadPath(projectRoot) : join(resolvedRuntimeRoot, DELIVERIES_HEAD_FILE);
 
   // ── 1. Best-effort refresh the remote ref (FIX-905) ──────────────────────
   // Cheap, non-fatal: a failure (offline / no remote / no creds) just leaves

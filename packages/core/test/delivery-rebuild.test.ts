@@ -1555,6 +1555,25 @@ describe("ensureDeliveriesFresh", () => {
     expect(result[0].lifecycleState).toBe("done");
   });
 
+  it("reads a canonical Workspace runtime authority when explicitly supplied", () => {
+    const runtimeRoot = `${PROJ}/runtime`;
+    const runsPath = `${runtimeRoot}/runs.jsonl`;
+    const deliveriesPath = `${runtimeRoot}/deliveries.jsonl`;
+    const freshness = fakeFreshnessPort({
+      [runsPath]: { text: "", mtime: 1000 },
+      [deliveriesPath]: {
+        text: JSON.stringify({ storyId: "US-WORKSPACE", cycleId: "c1", lifecycleState: "done", recordedAt: 2000 }),
+        mtime: 2000,
+      },
+    });
+
+    const result = ensureDeliveriesFresh(PROJ, freshness, fakeExecPort(), undefined, runtimeRoot);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.storyId).toBe("US-WORKSPACE");
+    expect(freshness._files.has(`${PROJ}/.roll/loop/deliveries.jsonl`)).toBe(false);
+  });
+
   it("rebuilds when deliveries is missing", () => {
     const freshness = fakeFreshnessPort({
       [RUNS]: { text: [

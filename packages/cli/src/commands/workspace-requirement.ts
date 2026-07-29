@@ -7,9 +7,10 @@ import {
   captureRequirementSource,
   type InspectedWorkspace,
 } from "@roll/infra";
-import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
+import { isSafeGitRef, parseWorkspaceManifest, resolveLang, t, v3Catalog, type CampaignDeliveryTarget, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { canonicalWorkspaceSelectorValue, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const RESULT_V1 = "roll.workspace-requirement-result/v1" as const;
 const ERROR_V1 = "roll.workspace-requirement-error/v1" as const;
@@ -23,6 +24,7 @@ interface RequirementArgs {
   readonly contextRoot?: string;
   readonly contextPaths: readonly string[];
   readonly storyIds: readonly string[];
+  readonly deliveryTarget?: CampaignDeliveryTarget;
   readonly json: boolean;
 }
 
@@ -69,7 +71,7 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
   const contextPaths: string[] = [];
   const storyIds: string[] = [];
   let json = false;
-  const scalarFlags = new Set(["--workspace", "--provider", "--ref", "--revision", "--body-file", "--context-root"]);
+  const scalarFlags = new Set(["--provider", "--ref", "--revision", "--body-file", "--context-root", "--campaign-branch", "--main-merge"]);
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
@@ -77,7 +79,7 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
       json = true;
       continue;
     }
-    if (arg === "--context" || arg === "--story" || (arg !== undefined && scalarFlags.has(arg))) {
+    if (arg === "--context" || arg === "--story" || isCanonicalWorkspaceSelectorToken(arg) || (arg !== undefined && scalarFlags.has(arg))) {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) return undefined;
       index += 1;
@@ -96,9 +98,13 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
   const revision = scalar.get("--revision");
   const bodyFile = scalar.get("--body-file");
   if (provider === undefined || ref === undefined || revision === undefined || bodyFile === undefined || storyIds.length === 0) return undefined;
-  const workspace = scalar.get("--workspace");
+  const workspace = canonicalWorkspaceSelectorValue(args);
   const contextRoot = scalar.get("--context-root");
+  const campaignBranch = scalar.get("--campaign-branch");
+  const mainMerge = scalar.get("--main-merge");
   if (contextPaths.length > 0 && contextRoot === undefined) return undefined;
+  if ((campaignBranch === undefined) !== (mainMerge === undefined)) return undefined;
+  if (campaignBranch !== undefined && (!isSafeGitRef(campaignBranch) || mainMerge !== "forbidden")) return undefined;
   return {
     ...(workspace === undefined ? {} : { workspace }),
     provider,
@@ -108,6 +114,9 @@ function parseArgs(args: readonly string[]): RequirementArgs | undefined {
     ...(contextRoot === undefined ? {} : { contextRoot: resolve(contextRoot) }),
     contextPaths,
     storyIds,
+    ...(campaignBranch === undefined
+      ? {}
+      : { deliveryTarget: { terminal: "campaign_branch", branch: campaignBranch, mainMerge: "forbidden" } }),
     json,
   };
 }
@@ -194,6 +203,7 @@ export function workspaceRequirementCommand(args: string[], deps: RequirementCom
   if (decision.target.kind !== "workspace") return emitError("invalid_arguments", parsed.json);
   try {
     return emitResult(captureRequirementSource({
+      rollHome: workspaceRollHome(),
       workspaceRoot: decision.target.root,
       provider: parsed.provider,
       ref: parsed.ref,
@@ -203,6 +213,7 @@ export function workspaceRequirementCommand(args: string[], deps: RequirementCom
       ...(parsed.contextRoot === undefined ? {} : { contextRoot: parsed.contextRoot }),
       contextPaths: parsed.contextPaths,
       storyIds: parsed.storyIds,
+      ...(parsed.deliveryTarget === undefined ? {} : { deliveryTarget: parsed.deliveryTarget }),
     }), parsed.json);
   } catch (error) {
     if (error instanceof RequirementSourceStoreError) return emitError(error.code, parsed.json);

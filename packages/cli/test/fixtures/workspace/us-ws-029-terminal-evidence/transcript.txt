@@ -1,0 +1,34 @@
+US-WS-029 normalized agent terminal transcript
+Generated from the public agent Workspace clarification host.
+
+$ agent -> roll-.clarify workspace_target
+Workspace requirement jira:APE-234 needs clarification because requirement_match_required.
+No Workspace is selected by candidate order, and this clarification step performs no mutation.
+
+Candidates:
+- roll (active): no hard requirement evidence; diagnostics: none
+
+Choose one allowed action (select_existing, create_new)?
+
+> select_existing roll
+{
+  "kind": "resolution_retried",
+  "stopped": true,
+  "canonicalSelector": "--workspace roll",
+  "result": {
+    "selector": {
+      "kind": "id",
+      "workspaceId": "roll"
+    },
+    "status": "explicit_recheck_required"
+  }
+}
+
+> create_new ws-ape-234
+{
+  "kind": "collect_create_input",
+  "stopped": true,
+  "requestedWorkspaceId": "ws-ape-234",
+  "previewCommand": "roll workspace create <ID> --config <path> --check",
+  "applyAuthorized": false
+}

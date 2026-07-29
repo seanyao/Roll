@@ -3,9 +3,10 @@
 `roll backlog sync` 把 GitHub Issues 拉入一个明确解析出的工作区。它只写规划
 产物，不会回写 GitHub。
 
-命令按 `--workspace <id|path>`、标准工作区环境或 cwd 上下文、唯一 active
-工作区解析目标。目标歧义、冲突、仍处于旧单仓模式，或路径越出工作区时，
-都会在任何写入前失败。`--all` 只用于只读聚合，因此 sync 会拒绝它。
+命令按 `--workspace <ID|路径>`（或 `--ws`）、标准工作区环境、可达 Workspace/Issue
+context 或精确 requirement match 解析目标。Active lifecycle 本身绝不能选择与当前
+requirement 不匹配的 Workspace。目标歧义、冲突、discovery 不完整、仍处于旧单仓模式，
+或路径越出工作区时，都会在任何写入前失败。`--all` 只用于只读聚合，因此 sync 会拒绝它。
 
 ## 鉴权
 

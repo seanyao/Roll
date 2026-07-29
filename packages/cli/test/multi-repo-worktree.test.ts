@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { repositoryIdFromRemote } from "@roll/spec";
+import { claimStoryLease, readLeases } from "@roll/core";
 import { nodePorts, type RunnerPaths } from "../src/runner/index.js";
 import { executeSetupCommand } from "../src/runner/setup-handlers.js";
 import { executeTerminalCommand } from "../src/runner/terminal-handlers.js";
+import { resolveStoryLeasePath } from "../src/runner/story-lease-path.js";
 import { repositoryAgentWritableRoots } from "../src/runner/worktree-bootstrap.js";
 
 function leaseRecordPath(paths: RunnerPaths, storyId: string): string {

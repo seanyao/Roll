@@ -37,7 +37,11 @@ export const STORY_VALIDATE_USAGE =
   "  Exit 0 = ok or warning-only, non-zero = not ok.\n" +
   "  自检卡片是否满足可视证据契约:缺交付面只警告;缺可视证据 AC 才非 0。\n";
 
-export function storyValidateCommand(args: string[]): number {
+export interface StoryValidateCommandDeps {
+  readonly projectPath?: string;
+}
+
+export function storyValidateCommand(args: string[], deps: StoryValidateCommandDeps = {}): number {
   if (args[0] === "--help" || args[0] === "-h" || args[0] === undefined) {
     process.stdout.write(STORY_VALIDATE_USAGE);
     return args[0] === undefined ? 1 : 0;
@@ -54,7 +58,7 @@ export function storyValidateCommand(args: string[]): number {
     );
     return 2;
   }
-  const cwd = process.cwd();
+  const cwd = deps.projectPath ?? process.cwd();
   let spec: string | null;
   try {
     spec = storySpecPath(cwd, id);

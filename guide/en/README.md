@@ -15,6 +15,8 @@ visible language at a time.
 ## Operate Roll
 
 - [The autonomous loop](loop.md)
+- [Context Engineering](context.md)
+- [Migrating APE Context](context-ape-migration.md)
 - [Workspace doctor](workspace-doctor.md)
 - [AI agents and role casting](ai-agents.md)
 - [Tools and policy](tools.md)

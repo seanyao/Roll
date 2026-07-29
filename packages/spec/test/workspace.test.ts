@@ -51,6 +51,18 @@ function workspace() {
   };
 }
 
+function workspaceContexts() {
+  return {
+    enabled: true,
+    bindings: [{
+      providerId: "bipo-enterprise",
+      enabled: true,
+      required: true,
+      entrypoints: ["wiki/index.md"],
+    }],
+  };
+}
+
 function issue() {
   const product = repository();
   const docs = repository("https://github.com/Owner/Docs.git", "docs");
@@ -86,6 +98,7 @@ describe("Workspace repository identity", () => {
     expect(imports).toEqual([
       { kind: "value", source: "node:crypto" },
       { kind: "type", source: "./json-schema.js" },
+      { kind: "value", source: "./context-binding.js" },
     ]);
     expect(source).not.toMatch(/\b(?:process|globalThis|fetch|console|Date|setTimeout|setInterval)\b/u);
   });
@@ -114,6 +127,14 @@ describe("Workspace repository identity", () => {
     ["file:///Users/Example/Repo.git/", "file:///Users/Example/Repo"],
   ])("canonicalizes the closed v1 remote table: %s", (input, expected) => {
     expect(normalizeRepositoryRemote(input)).toEqual({ ok: true, value: expected });
+  });
+
+  it("keeps SSH and HTTPS repository identities schemeful and unequal for Context scope", () => {
+    const ssh = normalizeRepositoryRemote("git@gitee.com:bipo/dukang-axis.git");
+    const https = normalizeRepositoryRemote("https://gitee.com/bipo/dukang-axis.git");
+    expect(ssh).toEqual({ ok: true, value: "ssh://gitee.com/bipo/dukang-axis" });
+    expect(https).toEqual({ ok: true, value: "https://gitee.com/bipo/dukang-axis" });
+    expect(ssh).not.toEqual(https);
   });
 
   it.each([
@@ -304,6 +325,48 @@ describe("RepositoryBinding and WorkspaceManifest", () => {
     });
   });
 
+  it("keeps contexts optional and round-trips an explicitly authorized binding", () => {
+    expect(parseWorkspaceManifest(workspace(), {})).toMatchObject({
+      ok: true,
+      value: expect.not.objectContaining({ contexts: expect.anything() }),
+    });
+    expect(parseWorkspaceManifest({ ...workspace(), contexts: workspaceContexts() }, {})).toMatchObject({
+      ok: true,
+      value: { contexts: workspaceContexts() },
+    });
+  });
+
+  it("rejects invalid Workspace contexts at the Workspace contract boundary", () => {
+    expect(parseWorkspaceManifest({
+      ...workspace(),
+      contexts: {
+        enabled: true,
+        bindings: [{ ...workspaceContexts().bindings[0], enabled: false }],
+      },
+    }, {})).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        expect.objectContaining({ code: "invalid_value", path: "contexts.bindings[0]" }),
+      ]),
+    });
+  });
+
+  it.each([
+    ["root secret", { ...workspaceContexts(), credential: "workspace-secret-sentinel" }, "contexts.credential"],
+    [
+      "binding cache path",
+      { ...workspaceContexts(), bindings: [{ ...workspaceContexts().bindings[0], cachePath: "workspace-secret-sentinel" }] },
+      "contexts.bindings[0].cachePath",
+    ],
+  ])("rejects %s through parseWorkspaceManifest without echoing secret values", (_label, contextsValue, path) => {
+    const parsed = parseWorkspaceManifest({ ...workspace(), contexts: contextsValue }, {});
+    expect(parsed).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([expect.objectContaining({ code: "unknown_field", path })]),
+    });
+    expect(JSON.stringify(parsed)).not.toContain("workspace-secret-sentinel");
+  });
+
   it.each([
     ["unknown version", { ...workspace(), schema: "roll.workspace/v2" }, "unknown_version", "schema", {}],
     ["unknown root", { ...workspace(), root: "/tmp/workspace" }, "unknown_field", "root", {}],
@@ -448,7 +511,7 @@ describe("IssueManifest repository targets", () => {
     expect(issueManifestV1Schema).toMatchObject({ type: "object", additionalProperties: false });
   });
 
-  it("round-trips immutable repository target declarations", () => {
+  it("keeps legacy v1 Issue manifests without workBranch or integration cwd readable", () => {
     const parsed = parseIssueManifest(issue(), {
       workspaceId: "ws-sot-platform",
       storyId: "US-WS-001",
@@ -461,6 +524,19 @@ describe("IssueManifest repository targets", () => {
       ...issue(),
       integrationAcceptance: { command: ["./verify-sot-contract.sh"] },
     };
+    expect(parseIssueManifest(manifest, {})).toEqual({ ok: true, value: manifest });
+  });
+
+  it("round-trips new governed branches, explicit integration cwd, and campaign terminal", () => {
+    const manifest = {
+      ...issue(),
+      repositories: [
+        { ...issue().repositories[0], workBranch: "roll/ws-sot-platform/US-WS-001/product" },
+        issue().repositories[1],
+      ],
+      integrationAcceptance: { command: ["pnpm", "test:integration"], cwd: "product" },
+      deliveryTarget: { terminal: "campaign_branch", branch: "idea-074-workspace", mainMerge: "forbidden" },
+    } as const;
     expect(parseIssueManifest(manifest, {})).toEqual({ ok: true, value: manifest });
   });
 
@@ -487,6 +563,7 @@ describe("IssueManifest repository targets", () => {
     ["delivery type", { requiredDelivery: "yes" }, "invalid_type", "repositories[0].requiredDelivery"],
     ["repo ID", { repoId: "repo-not-a-hash" }, "invalid_value", "repositories[0].repoId"],
     ["alias", { alias: "Unsafe_Alias" }, "invalid_value", "repositories[0].alias"],
+    ["work branch", { workBranch: "../unsafe" }, "invalid_value", "repositories[0].workBranch"],
   ])("rejects malformed target field %s", (_label, targetOverride, code, path) => {
     const parsed = parseIssueManifest({
       ...issue(),

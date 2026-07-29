@@ -1,0 +1,10 @@
+{
+  "schema": "roll.acceptance-evidence/v1",
+  "storyId": "US-WS-029",
+  "surface": "agent_terminal",
+  "physical": false,
+  "taken": false,
+  "reason": "headless_terminal_capture_unavailable",
+  "transcript": "transcript.txt",
+  "screenshot": null
+}

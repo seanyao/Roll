@@ -212,8 +212,12 @@ export function appendIdea(
   id: string,
   kind: IdeaKind,
   desc: string,
+  options: { readonly epic?: string; readonly linkPrefix?: string } = {},
 ): AppendResult {
-  const row = `| ${id} | ${desc} | ${STATUS_MARKER.todo} |`;
+  const label = options.linkPrefix === undefined || options.epic === undefined
+    ? id
+    : `[${id}](${options.linkPrefix}/${options.epic}/${id}/spec.md)`;
+  const row = `| ${label} | ${desc} | ${STATUS_MARKER.todo} |`;
   const heading = IDEA_SECTIONS[kind];
   const lines = content.split("\n");
   const matcher = sectionMatcher(kind);

@@ -1,0 +1,2 @@
+Physical terminal capture skipped: the builder session has no permitted real Terminal capture channel.
+No PNG was generated or substituted. The normalized transcript is supplementary evidence bound to the real CLI E2E assertions.

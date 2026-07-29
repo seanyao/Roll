@@ -114,7 +114,7 @@ export function createWorkspaceAcceptanceFixture(): WorkspaceAcceptanceFixture {
   }
 
   writeFileSync(alphaConfig, [
-    "schema: roll.workspace-init/v1",
+    "schema: roll.workspace-create/v1",
     "id: ws-alpha",
     `root: ${alphaRoot}`,
     "requirements:",
@@ -130,7 +130,7 @@ export function createWorkspaceAcceptanceFixture(): WorkspaceAcceptanceFixture {
     "",
   ].join("\n"), "utf8");
   writeFileSync(betaConfig, [
-    "schema: roll.workspace-init/v1",
+    "schema: roll.workspace-create/v1",
     "id: ws-beta",
     `root: ${betaRoot}`,
     "repositories:",

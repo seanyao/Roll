@@ -52,7 +52,7 @@ import { hostname as osHostname } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExecOpts, ExecResult, ToolInvocation, ToolResult } from "@roll/spec";
 import { BashTool, type BashInput, type BashOutput } from "./tools/bash.js";
-import { infraToolExecFile, infraToolFs, invokeInfraTool, redactInfraToolValue } from "./tools/delegation.js";
+import { infraToolExecFile, invokeInfraTool, redactInfraToolValue } from "./tools/delegation.js";
 
 /** v2 default: outer PR-loop lock staleness (bin/roll 8326). */
 export const OUTER_LOCK_STALE_SEC = 900;
@@ -84,18 +84,43 @@ export async function execFile(command: string, args: readonly string[], opts: E
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       ...(opts.env !== undefined ? { env: { ...opts.env } } : {}),
     },
+    // This compatibility wrapper is used by machine lifecycle code. Agent-facing
+    // process execution goes through BashTool with repository_required context.
+    scope: "machine_only",
     policy: {
       timeoutMs: opts.timeoutMs,
       sandbox: {
         maxOutputBytes: opts.maxOutputBytes,
       },
     },
-    run: (invocation: ToolInvocation<BashInput>): Promise<ToolResult<BashOutput>> => tool.execute(invocation, {
-      fs: infraToolFs,
-      now: () => Date.now(),
-      execFile: infraToolExecFile,
-      redact: redactInfraToolValue,
-    }),
+    run: async (invocation: ToolInvocation<BashInput>): Promise<ToolResult<BashOutput>> => {
+      const startedAt = Date.now();
+      const output = await infraToolExecFile(
+        redactInfraToolValue(invocation.input.command),
+        (invocation.input.args ?? []).map(redactInfraToolValue),
+        {
+          cwd: invocation.input.cwd,
+          env: invocation.input.env === undefined
+            ? undefined
+            : Object.fromEntries(Object.entries(invocation.input.env).map(([key, value]) => [key, redactInfraToolValue(value)])),
+          timeoutMs: invocation.policy.timeoutMs,
+          maxOutputBytes: invocation.policy.sandbox?.maxOutputBytes,
+        },
+      );
+      const endedAt = Date.now();
+      return {
+        ok: true,
+        output,
+        meta: {
+          invocationId: invocation.invocationId,
+          toolId: invocation.toolId,
+          caller: invocation.caller,
+          startedAt,
+          endedAt,
+          durationMs: Math.max(0, endedAt - startedAt),
+        },
+      };
+    },
   });
   if (result.ok) return { ...result.output };
   return {

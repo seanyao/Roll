@@ -196,10 +196,10 @@ roll loop on
 | `roll backlog [show\|sync\|block\|defer\|lint\|…] [--workspace <ID\|路径>]` | 查看和管理一个明确 Workspace 的待办；`--all` 仅限只读 |
 | `roll config [lang\|prices\|tune\|…]` | 配置语言、价格和建议式调参 |
 | `roll delivery <list\|show\|reconcile> [--workspace <ID\|路径>]` | 查看 Issue 各仓 PR/CI/merge 事实与 exact-SHA 集成验收；`list --all` 仅限只读 |
-| `roll design [--from-file <path>] [--agent <name>]` | 交互式启动 `$roll-design`；详细设计会生成自包含 Design Review Page |
+| `roll design [--from-file <path>] [--agent <name>] [--workspace <ID\|路径>]` | 在一个明确 Workspace authority 上交互式启动 `$roll-design` |
 | `roll doctor [skills\|tools\|language]` | 诊断安装、skills、工具、权限与语言漂移 |
 | `roll help [--lang en\|zh] [name]` | 查看内置 Charter / guide；`roll --help` 显示 CLI usage |
-| `roll idea "<一句话描述>"` | 捕获并分类一张 backlog 卡 |
+| `roll idea "<一句话描述>" --workspace <ID\|路径>` | 在一个明确 Workspace backlog 中捕获并分类卡片 |
 | `roll init` | 诊断当前目录并路由 setup/onboard |
 | `roll loop <on\|go\|pause\|resume> --workspace <ID\|路径>` / `roll loop status --all` | 运行或变更一个 Workspace scheduler；聚合状态仅限只读 |
 | `roll next` | 接续 init/onboard，只给一个最合适的下一步 |
@@ -276,7 +276,7 @@ template/      roll init 安装的项目脚手架
 | | |
 |---|---|
 | **从这里开始** | [快速上手](guide/zh/getting-started.md) · [Workspace-first 交付](guide/zh/workspaces.md) · [概述与架构](guide/zh/overview.md) · [工程方法论](guide/zh/methodology.md) |
-| **日常使用** | [Loop（自主执行器）](guide/zh/loop.md) · [Workspace Doctor](guide/zh/workspace-doctor.md) · [工具与策略](guide/zh/tools.md) · [浏览器操作（受管通道 + 交互通道）](guide/zh/browser-operations.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
+| **日常使用** | [Loop（自主执行器）](guide/zh/loop.md) · [Context Engineering](guide/zh/context.md) · [APE Context 迁移](guide/zh/context-ape-migration.md) · [Workspace Doctor](guide/zh/workspace-doctor.md) · [工具与策略](guide/zh/tools.md) · [浏览器操作（受管通道 + 交互通道）](guide/zh/browser-operations.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
 | **质量机制** | [验收证据（`roll attest`）](guide/zh/acceptance-evidence.md) · [证据生命周期](guide/zh/acceptance-evidence.md#三段式生命周期) · [一致性与发版闸](guide/zh/consistency.md) · [跨 Agent 配对](guide/zh/pairing.md) · [Peer 评审](guide/zh/peer.md) · [测试隔离](guide/zh/test-isolation.md) |
 | **底层设计** | [架构：分层·领域·不变量](docs/architecture.md) · [验证体系](docs/verification.md) · [理念宣言](docs/manifesto.md) |
 

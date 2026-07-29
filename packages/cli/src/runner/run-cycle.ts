@@ -34,14 +34,21 @@ import {
   foldCycleAdversarial,
   initialCycleState,
   mapV2Status,
+  releaseStoryLease,
   watchdogVerdict,
 } from "@roll/core";
 import { CYCLE_TIMEOUT_SEC } from "@roll/core";
 import { AGENT_CAPACITY_LEASE_SCHEMA } from "@roll/spec";
+import { dirname } from "node:path";
 import { type Ports, type ProcessClock, executeCommand, buildRunRow, revertPrematureDone } from "./executor.js";
 import { readCycleAttributionFromEvents } from "../lib/cycle-attribution.js";
 import { classifyCycleFailure, readCycleEvents } from "./failure-attribution.js";
 import { killLiveAgents } from "./agent-spawn.js";
+import {
+  restorePersistedWorkspaceCycleContext,
+  restorePersistedWorkspaceCycleRepositorySelector,
+} from "./scoped-route.js";
+import { resolveStoryLeasePath } from "./story-lease-path.js";
 
 /** Inputs for one cycle run. */
 export interface RunCycleOptions {
@@ -78,7 +85,21 @@ export interface RunCycleResult {
  * terminal event in `finally`.
  */
 export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResult> {
-  const { ports, ctx } = opts;
+  const { ports } = opts;
+  let ctx = opts.ctx;
+  if (
+    ctx.repositorySelector === undefined &&
+    ctx.workspaceExecution?.issue !== undefined
+  ) {
+    const restoredRepository = restorePersistedWorkspaceCycleRepositorySelector(
+      dirname(ports.paths.eventsPath),
+      ctx.cycleId,
+      ctx.workspaceExecution,
+    );
+    if (restoredRepository.ok) {
+      ctx = { ...ctx, repositorySelector: restoredRepository.repoId };
+    }
+  }
   const timeoutSec = opts.timeoutSec ?? CYCLE_TIMEOUT_SEC;
   const maxSteps = opts.maxSteps ?? 1000;
   const killAgents = opts.killAgents ?? ((): number => killLiveAgents("SIGKILL"));
@@ -266,7 +287,11 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
       // orchestrator propagated story/agent), recover the best-known attribution
       // from events the cycle already wrote.
       const attr = readCycleAttributionFromEvents(ports.paths.eventsPath, liveCtx.cycleId);
-      const storyId = liveCtx.storyId ?? attr.storyId ?? "";
+      const restored = liveCtx.workspaceExecution?.issue === undefined
+        ? restorePersistedWorkspaceCycleContext(dirname(ports.paths.eventsPath), liveCtx.cycleId)
+        : undefined;
+      const workspaceExecution = restored?.ok ? restored.context : liveCtx.workspaceExecution;
+      const storyId = liveCtx.storyId ?? workspaceExecution?.issue?.storyId ?? attr.storyId ?? "";
       const agent = liveCtx.agent ?? attr.agent ?? "";
       const tctx = {
         cycleId: liveCtx.cycleId,
@@ -288,7 +313,12 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
           outcome: mapV2Status(status),
           cycleId: liveCtx.cycleId,
         };
-        const rowCtx: CycleContext = { ...liveCtx, storyId, agent };
+        const rowCtx: CycleContext = {
+          ...liveCtx,
+          storyId,
+          agent,
+          ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+        };
         const row = buildRunRow(fakeAppend, rowCtx, terminalSec);
         if (agent === "" && storyId !== "") {
           row["agent_unknown_reason"] = "aborted_before_agent_routed";
@@ -309,6 +339,13 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
         }
       } catch {
         /* best-effort terminal write; never mask the original failure */
+      }
+      if (storyId !== "") {
+        try {
+          releaseStoryLease(resolveStoryLeasePath(ports.paths), storyId, { source: "cycle", pid: process.pid });
+        } catch {
+          /* lease cleanup must never mask the original cycle failure */
+        }
       }
       if (state.done) state = { ...state, terminal: status };
     }
@@ -379,6 +416,9 @@ function mergeCtx(live: CycleContext, next: CycleContext): CycleContext {
     agentTimedOut: next.agentTimedOut ?? live.agentTimedOut,
     publishConfirmed: next.publishConfirmed ?? live.publishConfirmed,
     repositoryExecution: next.repositoryExecution ?? live.repositoryExecution,
+    workspaceExecution: next.workspaceExecution ?? live.workspaceExecution,
+    workspaceContextScope: next.workspaceContextScope ?? live.workspaceContextScope,
+    repositorySelector: next.repositorySelector ?? live.repositorySelector,
   };
 }
 

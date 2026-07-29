@@ -19,6 +19,9 @@ export type JsonSchema = boolean | {
   readonly oneOf?: readonly JsonSchema[];
   readonly anyOf?: readonly JsonSchema[];
   readonly minLength?: number;
+  readonly maxLength?: number;
+  readonly pattern?: string;
   readonly minimum?: number;
+  readonly maximum?: number;
   readonly minItems?: number;
 };

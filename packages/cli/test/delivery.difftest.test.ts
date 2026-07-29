@@ -197,7 +197,7 @@ function createDeliveredIssue(workspace: WorkspaceFixture, storyId: string): voi
   });
 }
 
-function captureRequirement(workspace: WorkspaceFixture, storyId: string, ref: string): string {
+function captureRequirement(rollHome: string, workspace: WorkspaceFixture, storyId: string, ref: string): string {
   const manifestPath = join(workspace.root, "workspace.yaml");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
   manifest["requirements"] = [{ provider: "jira", ref }];
@@ -210,6 +210,7 @@ function captureRequirement(workspace: WorkspaceFixture, storyId: string, ref: s
   const bodyFile = join(workspace.root, `${storyId}.md`);
   writeFileSync(bodyFile, `# ${storyId}\n`, "utf8");
   return captureRequirementSource({
+    rollHome,
     workspaceRoot: workspace.root,
     provider: "jira",
     ref,
@@ -261,7 +262,7 @@ function scrub(run: Run, workspaceRoots: readonly string[]): Run {
   const replace = (value: string): string => workspaceRoots.reduce((text, root, index) => {
     const canonical = realpathSync(root);
     return text.replaceAll(canonical, `<WS_${index + 1}>`).replaceAll(root, `<WS_${index + 1}>`);
-  }, value);
+  }, value).replace(/("discoveryFactsSha256":\s*")[0-9a-f]{64}(")/g, "$1<SHA256>$2");
   return { ...run, stdout: replace(run.stdout), stderr: replace(run.stderr) };
 }
 
@@ -402,8 +403,8 @@ describe("US-WS-015 roll delivery surface", () => {
 
     expect(malformed.map((result) => result.status)).toEqual([1, 1, 1]);
     expect(malformed.map((result) => JSON.parse(result.stderr).error.code)).toEqual([
-      "invalid_arguments",
-      "invalid_arguments",
+      "workspace_selector_missing_value",
+      "duplicate_workspace_selector",
       "invalid_arguments",
     ]);
   });
@@ -415,7 +416,7 @@ describe("US-WS-015 roll delivery surface", () => {
       const workspace = createWorkspace(f, `ws-requirement-${index}`);
       const storyId = `US-REQ-${index}`;
       createDeliveredIssue(workspace, storyId);
-      const requirementPath = captureRequirement(workspace, storyId, `WS-${index + 1}`);
+      const requirementPath = captureRequirement(f.rollHome, workspace, storyId, `WS-${index + 1}`);
       const sourcePath = join(requirementPath, "source.yaml");
       const attestPath = join(requirementPath, "attest.md");
       const backlogPath = join(workspace.root, "backlog", "index.md");
@@ -445,7 +446,7 @@ describe("US-WS-015 roll delivery surface", () => {
     const workspace = createWorkspace(f, "ws-requirement-directory-missing");
     const storyId = "US-REQ-DIR";
     createDeliveredIssue(workspace, storyId);
-    const requirementPath = captureRequirement(workspace, storyId, "WS-88");
+    const requirementPath = captureRequirement(f.rollHome, workspace, storyId, "WS-88");
     const backlogPath = join(workspace.root, "backlog", "index.md");
     const backlogBefore = readFileSync(backlogPath, "utf8");
     rmSync(requirementPath, { recursive: true, force: true });
@@ -467,7 +468,7 @@ describe("US-WS-015 roll delivery surface", () => {
     const targetStory = "US-TARGET";
     const otherStory = "US-OTHER";
     createDeliveredIssue(workspace, targetStory);
-    const requirementPath = captureRequirement(workspace, otherStory, "WS-99");
+    const requirementPath = captureRequirement(f.rollHome, workspace, otherStory, "WS-99");
     const attestPath = join(requirementPath, "attest.md");
     const attestBefore = readFileSync(attestPath, "utf8");
     const undeclared = join(workspace.root, "requirements", "jira", "misc-directory");

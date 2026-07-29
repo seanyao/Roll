@@ -147,7 +147,8 @@ exports[`US-WS-008 roll workspace issue init > freezes the scrubbed full JSON co
         "alias": "sot",
         "access": "write",
         "requiredDelivery": true,
-        "noChangePolicy": "changes_required"
+        "noChangePolicy": "changes_required",
+        "workBranch": "roll/ws-demo/US-XX1/sot"
       },
       {
         "repoId": "<REPO_ID>",
@@ -190,7 +191,8 @@ exports[`US-WS-008 roll workspace issue init > freezes the scrubbed full JSON co
         "alias": "sot",
         "access": "write",
         "requiredDelivery": true,
-        "noChangePolicy": "changes_required"
+        "noChangePolicy": "changes_required",
+        "workBranch": "roll/ws-demo/US-XX1/sot"
       },
       {
         "repoId": "<REPO_ID>",

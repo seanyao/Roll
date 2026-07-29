@@ -217,9 +217,25 @@ export interface GitResult {
   readonly signal?: string;
 }
 
+/** Result of an argv-only raw Git invocation whose stdout must remain byte exact. */
+export interface GitBinaryResult {
+  /** Process exit code (0 = success). */
+  code: number;
+  stdout: Uint8Array;
+  stderr: string;
+  /** Present when Node terminated the process after the configured timeout. */
+  readonly timedOut?: boolean;
+  /** PID of a timed-out Git child, retained for termination evidence. */
+  readonly pid?: number;
+  /** Termination signal reported by Node for a failed Git child. */
+  readonly signal?: string;
+}
+
 export interface GitExecutionOptions {
   /** Maximum wall-clock time before the Git child is terminated. */
   readonly timeoutMs?: number;
+  /** Narrow environment overrides for one Git invocation. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** True only for a full, lowercase-hex Git object id — NEVER a ref name, a
@@ -254,6 +270,7 @@ export async function rawGit(
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
       timeout: options.timeoutMs,
+      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
     }, (error, stdout, stderr) => {
       if (error === null) {
         resolveGit({ code: 0, stdout, stderr });
@@ -275,6 +292,52 @@ export async function rawGit(
         code: typeof err.code === "number" ? err.code : 1,
         stdout,
         stderr,
+        ...detail,
+      });
+    });
+    pid = child.pid;
+  });
+}
+
+/**
+ * Run `git <args>` without a shell and preserve stdout as the exact bytes Git
+ * emitted. This is intentionally separate from {@link rawGit}: blob consumers
+ * must validate UTF-8 before any decoding or digest/byte accounting occurs.
+ */
+export async function rawGitBinary(
+  args: readonly string[],
+  cwd?: string,
+  options: GitExecutionOptions = {},
+): Promise<GitBinaryResult> {
+  return new Promise<GitBinaryResult>((resolveGit) => {
+    let pid: number | undefined;
+    const child = execFile("git", [...args], {
+      cwd,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: options.timeoutMs,
+      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+    }, (error, stdout, stderr) => {
+      const stdoutBytes = new Uint8Array(stdout);
+      const stderrText = stderr.toString("utf8");
+      if (error === null) {
+        resolveGit({ code: 0, stdout: stdoutBytes, stderr: stderrText });
+        return;
+      }
+      const err = error as NodeJS.ErrnoException & {
+        readonly killed?: boolean;
+        readonly signal?: string;
+      };
+      const timedOut = err.killed === true && err.signal === "SIGTERM";
+      const detail = {
+        ...(timedOut ? { timedOut: true as const } : {}),
+        ...(timedOut && pid !== undefined ? { pid } : {}),
+        ...(err.signal === undefined ? {} : { signal: err.signal }),
+      };
+      resolveGit({
+        code: typeof err.code === "number" ? err.code : 1,
+        stdout: stdoutBytes,
+        stderr: stderrText,
         ...detail,
       });
     });
@@ -324,11 +387,14 @@ export async function git(
   const result = await invokeInfraTool<GitRawInput, GitResult>({
     declaration: GIT_RAW_DECLARATION,
     input: { args: [...args], cwd },
+    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
+    scope: "machine_only",
     ...(options.timeoutMs === undefined ? {} : { policy: { timeoutMs: options.timeoutMs } }),
     run: async (invocation) => ok(
       invocation,
       await rawGit(invocation.input.args, invocation.input.cwd, {
         timeoutMs: invocation.policy.timeoutMs,
+        ...(options.env === undefined ? {} : { env: options.env }),
       }),
     ),
   });
@@ -839,6 +905,8 @@ export async function commit(
   const result = await invokeInfraTool<GitCommitInput, GitResult>({
     declaration: GIT_COMMIT_DECLARATION,
     input: { cwd: repoCwd, message, allowEmpty: opts.allowEmpty },
+    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
+    scope: "machine_only",
     run: async (invocation) => {
       const args = ["commit", "-m", invocation.input.message];
       if (invocation.input.allowEmpty === true) args.splice(1, 0, "--allow-empty");
@@ -861,6 +929,8 @@ export async function push(
   const result = await invokeInfraTool<GitPushInput, GitResult>({
     declaration: GIT_PUSH_DECLARATION,
     input: { cwd: repoCwd, branch, remote: opts.remote, setUpstream: opts.setUpstream },
+    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
+    scope: "machine_only",
     run: async (invocation) => {
       const remote = invocation.input.remote ?? "origin";
       const args = invocation.input.setUpstream === true

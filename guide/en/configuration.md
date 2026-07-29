@@ -41,7 +41,7 @@ Create a versioned init config outside the target root, preview every path,
 registry, and machine-cache decision, then apply the exact same config:
 
 ```yaml
-schema: roll.workspace-init/v1
+schema: roll.workspace-create/v1
 id: ws-demo
 root: ~/.roll/workspaces/ws-demo
 display_name: Demo Workspace
@@ -55,8 +55,8 @@ repositories:
 ```
 
 ```bash
-roll workspace init ws-demo --config /absolute/path/workspace-init.yaml --check
-roll workspace init ws-demo --config /absolute/path/workspace-init.yaml
+roll workspace create ws-demo --config /absolute/path/workspace-create.yaml --check
+roll workspace create ws-demo --config /absolute/path/workspace-create.yaml
 ```
 
 `--check` performs no writes. Apply writes a repair journal before the durable

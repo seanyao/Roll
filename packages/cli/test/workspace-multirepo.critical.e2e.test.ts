@@ -30,8 +30,8 @@ function expectOk(result: ReturnType<typeof runRoll>): void {
 }
 
 function initializeTwoWorkspaces(f: WorkspaceAcceptanceFixture): void {
-  expectOk(runRoll(f, ["workspace", "init", "ws-alpha", "--config", f.alphaConfig, "--json"]));
-  expectOk(runRoll(f, ["workspace", "init", "ws-beta", "--config", f.betaConfig, "--json"]));
+  expectOk(runRoll(f, ["workspace", "create", "ws-alpha", "--config", f.alphaConfig, "--json"]));
+  expectOk(runRoll(f, ["workspace", "create", "ws-beta", "--config", f.betaConfig, "--json"]));
   expectOk(runRoll(f, ["workspace", "activate", "ws-alpha", "--json"]));
   expectOk(runRoll(f, ["workspace", "activate", "ws-beta", "--json"]));
 }

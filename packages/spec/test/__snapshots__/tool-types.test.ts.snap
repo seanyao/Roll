@@ -6,6 +6,7 @@ exports[`US-TOOL-001 tool type contracts > exports the complete tool type surfac
   "ExecResult",
   "MinimalFs",
   "ToolCaller",
+  "ToolContextCorrelation",
   "ToolCost",
   "ToolDeclaration",
   "ToolDefaults",

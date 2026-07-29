@@ -1,16 +1,46 @@
 import { createHash } from "node:crypto";
 import type { JsonSchema } from "./json-schema.js";
+import {
+  parseWorkspaceContexts,
+  workspaceContextsV1Schema,
+  type WorkspaceContextsV1,
+} from "./context-binding.js";
 
 export const WORKSPACE_MANIFEST_V1 = "roll.workspace/v1" as const;
+export const WORKSPACE_EXECUTION_CONTEXT_V1 = "roll.workspace-execution-context/v1" as const;
 export const REPOSITORY_BINDING_V1 = "roll.repository-binding/v1" as const;
 export const ISSUE_MANIFEST_V1 = "roll.issue/v1" as const;
 export const REQUIREMENT_SOURCE_V1 = "roll.requirement-source/v1" as const;
 export const REQUIREMENT_ATTEST_PROJECTION_V1 = "roll.requirement-attest-projection/v1" as const;
 export const REQUIREMENT_ARCHIVE_AUDIT_V1 = "roll.requirement-archive-audit/v1" as const;
+export const REQUIREMENT_HINT_V1 = "roll.requirement-hint/v1" as const;
+export const WORKSPACE_INTENT_V1 = "roll.workspace-intent/v1" as const;
 export const WORKSPACE_MIGRATION_FACTS_V1 = "roll.workspace-migration-facts/v1" as const;
 export const WORKSPACE_MIGRATION_PLAN_V1 = "roll.workspace-migration-plan/v1" as const;
+export const WORKSPACE_EDIT_CONFIG_V1 = "roll.workspace-edit/v1" as const;
+export const WORKSPACE_METADATA_REFERENCE_INDEX_V1 = "roll.workspace-metadata-reference-index/v1" as const;
+export const WORKSPACE_EDIT_PLAN_V1 = "roll.workspace-edit-plan/v1" as const;
+export const WORKSPACE_CREATE_APPLY_AUTHORIZATION_V1 = "roll.workspace-create-apply-authorization/v1" as const;
+export const WORKSPACE_CLARIFICATION_V1 = "roll.workspace-clarification/v1" as const;
+
+export const REQUIREMENT_HINT_PROVENANCES = [
+  "explicit_user",
+  "cli_argument",
+  "issue_manifest",
+  "cwd_repository",
+  "deterministic_extraction",
+  "semantic_inference",
+] as const;
 
 export type Sha256Digest = string;
+
+export interface WorkspaceCreateApplyAuthorizationV1 {
+  readonly schema: typeof WORKSPACE_CREATE_APPLY_AUTHORIZATION_V1;
+  readonly workspaceId: string;
+  readonly configSha256: Sha256Digest;
+  readonly planSha256: Sha256Digest;
+  readonly source: "direct_cli_apply" | "owner_after_preview";
+}
 
 export type HistoricalRemoteTruth =
   | {
@@ -253,6 +283,426 @@ export interface RequirementSourceReference {
 
 export type RequirementProvider = "jira" | "github_issue" | "local_file" | "user_input";
 
+export type RequirementHintProvenance = typeof REQUIREMENT_HINT_PROVENANCES[number];
+export type StructuredRequirementProvenance = Exclude<
+  RequirementHintProvenance,
+  "cwd_repository" | "semantic_inference"
+>;
+export type RepositoryHintProvenance = Exclude<RequirementHintProvenance, "semantic_inference">;
+
+export interface RequirementSourceKey {
+  readonly provider: RequirementProvider;
+  readonly ref: string;
+}
+
+export interface RequirementHintV1 {
+  readonly schema: typeof REQUIREMENT_HINT_V1;
+  readonly sources: readonly {
+    readonly key: RequirementSourceKey;
+    readonly provenance: StructuredRequirementProvenance;
+  }[];
+  readonly storyIds: readonly {
+    readonly storyId: string;
+    readonly provenance: StructuredRequirementProvenance;
+  }[];
+  readonly repositoryRemotes: readonly {
+    readonly remote: string;
+    readonly provenance: RepositoryHintProvenance;
+  }[];
+  readonly paths: readonly {
+    readonly path: string;
+    readonly provenance: RepositoryHintProvenance;
+  }[];
+  readonly semanticTerms?: readonly string[];
+}
+
+export type WorkspaceMatchEvidenceKind =
+  | "issue_exact"
+  | "requirement_source_exact"
+  | "repository_exact"
+  | "path_contained"
+  | "semantic_supported";
+
+export interface WorkspaceMatchEvidence {
+  readonly kind: WorkspaceMatchEvidenceKind;
+  readonly value: string;
+  readonly hard: boolean;
+  readonly score: number;
+  readonly source: string;
+  readonly provenance: RequirementHintProvenance;
+  readonly detail: string;
+}
+
+/** Backward-compatible name retained for requirement matching consumers. */
+export type WorkspaceRequirementMatchEvidenceKind = WorkspaceMatchEvidenceKind;
+export type WorkspaceRequirementMatchEvidence = WorkspaceMatchEvidence;
+
+export type WorkspaceContextScope =
+  | "machine_only"
+  | "workspace_optional_read"
+  | "workspace_required_read"
+  | "workspace_required_mutation"
+  | "issue_required"
+  | "repository_required"
+  | "legacy_migration_only";
+
+export type WorkspaceContextPolicySurface = "cli" | "skill" | "tool";
+
+/** Closed identity of the public operation that was allowed to enter a
+ * Workspace context fallback scope. The scope alone is never authorization. */
+export interface WorkspaceContextOperationProvenance {
+  readonly surface: WorkspaceContextPolicySurface;
+  readonly id: string;
+  readonly operation: string;
+}
+
+export type WorkspaceContextConsumer = "workspace" | "issue" | "repository";
+export type WorkspaceContextAccess = "none" | "read" | "mutation";
+export type WorkspaceRepositorySelectorPolicy = "not_applicable" | "required" | "forbidden";
+export type WorkspaceContextEffectTarget = "none" | "workspace" | "issue" | "repository" | "machine" | "legacy_project";
+
+export const WORKSPACE_CONTEXT_POLICY_SURFACES = ["cli", "skill", "tool"] as const;
+export const WORKSPACE_CONTEXT_POLICY_SCOPES = [
+  "machine_only",
+  "workspace_optional_read",
+  "workspace_required_read",
+  "workspace_required_mutation",
+  "issue_required",
+  "repository_required",
+  "legacy_migration_only",
+] as const;
+export const WORKSPACE_CONTEXT_POLICY_CONSUMERS = ["workspace", "issue", "repository"] as const;
+export const WORKSPACE_CONTEXT_POLICY_ACCESS = ["none", "read", "mutation"] as const;
+export const WORKSPACE_REPOSITORY_SELECTOR_POLICIES = ["not_applicable", "required", "forbidden"] as const;
+export const WORKSPACE_CONTEXT_EFFECT_TARGETS = ["none", "workspace", "issue", "repository", "machine", "legacy_project"] as const;
+
+const WORKSPACE_CONTEXT_POLICY_KEYS = new Set([
+  "surface",
+  "id",
+  "operation",
+  "scope",
+  "allowsAmbientCwd",
+  "allowsLegacyRollPath",
+  "acceptsWorkspaceSelector",
+  "contextConsumer",
+  "effectTarget",
+  "access",
+  "repositorySelector",
+  "rationale",
+]);
+
+const WORKSPACE_CONTEXT_POLICY_REQUIRED_KEYS = [
+  "surface",
+  "id",
+  "operation",
+  "scope",
+  "allowsAmbientCwd",
+  "allowsLegacyRollPath",
+] as const;
+
+const WORKSPACE_CONTEXT_EXPECTED_CONSUMER: Readonly<Partial<Record<WorkspaceContextScope, WorkspaceContextConsumer>>> = {
+  workspace_optional_read: "workspace",
+  workspace_required_read: "workspace",
+  workspace_required_mutation: "workspace",
+  issue_required: "issue",
+  repository_required: "repository",
+};
+
+export type WorkspaceContextPolicyValidationCode =
+  | "invalid_type"
+  | "missing_key"
+  | "unknown_key"
+  | "invalid_surface"
+  | "invalid_scope"
+  | "invalid_consumer"
+  | "invalid_scope_consumer"
+  | "invalid_value";
+
+export interface WorkspaceContextPolicyValidationIssue {
+  readonly code: WorkspaceContextPolicyValidationCode;
+  readonly path: string;
+  readonly message: string;
+}
+
+/** Closed, operation-level declaration for every public Workspace-aware surface. */
+export interface WorkspaceContextPolicy {
+  readonly surface: WorkspaceContextPolicySurface;
+  readonly id: string;
+  readonly operation: string;
+  readonly scope: WorkspaceContextScope;
+  readonly allowsAmbientCwd: boolean;
+  readonly allowsLegacyRollPath: boolean;
+  readonly acceptsWorkspaceSelector?: boolean;
+  readonly contextConsumer?: WorkspaceContextConsumer;
+  readonly effectTarget?: WorkspaceContextEffectTarget;
+  readonly access?: WorkspaceContextAccess;
+  readonly repositorySelector?: WorkspaceRepositorySelectorPolicy;
+  readonly rationale?: string;
+}
+
+/** Strict runtime validator for the closed WorkspaceContextPolicy schema. */
+export function validateWorkspaceContextPolicy(value: unknown): WorkspaceContextPolicyValidationIssue[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return [{ code: "invalid_type", path: "$", message: "policy must be an object" }];
+  }
+  const item = value as Record<string, unknown>;
+  const issues: WorkspaceContextPolicyValidationIssue[] = [];
+  for (const key of Object.keys(item).sort()) {
+    if (!WORKSPACE_CONTEXT_POLICY_KEYS.has(key)) {
+      issues.push({ code: "unknown_key", path: key, message: `unknown policy key '${key}'` });
+    }
+  }
+  for (const key of WORKSPACE_CONTEXT_POLICY_REQUIRED_KEYS) {
+    if (!Object.hasOwn(item, key)) {
+      issues.push({ code: "missing_key", path: key, message: `missing required policy key '${key}'` });
+    }
+  }
+  if (typeof item["surface"] !== "string") {
+    issues.push({ code: "invalid_type", path: "surface", message: "surface must be a string" });
+  } else if (!(WORKSPACE_CONTEXT_POLICY_SURFACES as readonly string[]).includes(item["surface"])) {
+    issues.push({ code: "invalid_surface", path: "surface", message: `unknown policy surface '${item["surface"]}'` });
+  }
+  for (const key of ["id", "operation"] as const) {
+    const field = item[key];
+    if (typeof field !== "string") {
+      issues.push({ code: "invalid_type", path: key, message: `${key} must be a string` });
+    } else if (field.trim() === "") {
+      issues.push({ code: "invalid_value", path: key, message: `${key} must not be empty` });
+    }
+  }
+  const scope = item["scope"];
+  const validScope = typeof scope === "string"
+    && (WORKSPACE_CONTEXT_POLICY_SCOPES as readonly string[]).includes(scope);
+  if (typeof scope !== "string") {
+    issues.push({ code: "invalid_type", path: "scope", message: "scope must be a string" });
+  } else if (!validScope) {
+    issues.push({ code: "invalid_scope", path: "scope", message: `unknown policy scope '${scope}'` });
+  }
+  for (const key of ["allowsAmbientCwd", "allowsLegacyRollPath"] as const) {
+    if (typeof item[key] !== "boolean") {
+      issues.push({ code: "invalid_type", path: key, message: `${key} must be a boolean` });
+    }
+  }
+  if (Object.hasOwn(item, "acceptsWorkspaceSelector") && typeof item["acceptsWorkspaceSelector"] !== "boolean") {
+    issues.push({ code: "invalid_type", path: "acceptsWorkspaceSelector", message: "acceptsWorkspaceSelector must be a boolean" });
+  }
+  const consumer = item["contextConsumer"];
+  const hasConsumer = Object.hasOwn(item, "contextConsumer");
+  const validConsumer = typeof consumer === "string"
+    && (WORKSPACE_CONTEXT_POLICY_CONSUMERS as readonly string[]).includes(consumer);
+  if (hasConsumer && typeof consumer !== "string") {
+    issues.push({ code: "invalid_type", path: "contextConsumer", message: "contextConsumer must be a string" });
+  } else if (hasConsumer && !validConsumer) {
+    issues.push({ code: "invalid_consumer", path: "contextConsumer", message: `unknown context consumer '${String(consumer)}'` });
+  }
+  if (Object.hasOwn(item, "access")) {
+    const access = item["access"];
+    if (typeof access !== "string") {
+      issues.push({ code: "invalid_type", path: "access", message: "access must be a string" });
+    } else if (!(WORKSPACE_CONTEXT_POLICY_ACCESS as readonly string[]).includes(access)) {
+      issues.push({ code: "invalid_value", path: "access", message: `unknown policy access '${access}'` });
+    }
+  }
+  if (Object.hasOwn(item, "effectTarget")) {
+    const target = item["effectTarget"];
+    if (typeof target !== "string") {
+      issues.push({ code: "invalid_type", path: "effectTarget", message: "effectTarget must be a string" });
+    } else if (!(WORKSPACE_CONTEXT_EFFECT_TARGETS as readonly string[]).includes(target)) {
+      issues.push({ code: "invalid_value", path: "effectTarget", message: `unknown effect target '${target}'` });
+    }
+  }
+  if (Object.hasOwn(item, "repositorySelector")) {
+    const selector = item["repositorySelector"];
+    if (typeof selector !== "string") {
+      issues.push({ code: "invalid_type", path: "repositorySelector", message: "repositorySelector must be a string" });
+    } else if (!(WORKSPACE_REPOSITORY_SELECTOR_POLICIES as readonly string[]).includes(selector)) {
+      issues.push({ code: "invalid_value", path: "repositorySelector", message: `unknown repository selector policy '${selector}'` });
+    }
+  }
+  if (Object.hasOwn(item, "rationale") && typeof item["rationale"] !== "string") {
+    issues.push({ code: "invalid_type", path: "rationale", message: "rationale must be a string" });
+  }
+  if (validScope && (!hasConsumer || validConsumer)) {
+    const expected = WORKSPACE_CONTEXT_EXPECTED_CONSUMER[scope as WorkspaceContextScope];
+    const actual = hasConsumer ? consumer as WorkspaceContextConsumer : undefined;
+    if (actual !== expected) {
+      issues.push({
+        code: "invalid_scope_consumer",
+        path: "contextConsumer",
+        message: `scope '${scope}' requires contextConsumer '${expected ?? "none"}'`,
+      });
+    }
+  }
+  return issues;
+}
+
+export type WorkspaceExecutionContextResolutionSource =
+  | "explicit"
+  | "environment"
+  | "cwd_manifest"
+  | "issue_manifest"
+  | "requirement_discovery";
+
+export interface WorkspaceExecutionAuthorityPaths {
+  readonly backlog: string;
+  readonly features: string;
+  readonly design: string;
+  readonly requirements: string;
+  readonly policy: string;
+  readonly evidence: string;
+  readonly toolDumps: string;
+  readonly events: string;
+  readonly runtime: string;
+  readonly locks: string;
+}
+
+export interface WorkspaceExecutionContextV1 {
+  readonly schema: typeof WORKSPACE_EXECUTION_CONTEXT_V1;
+  readonly workspace: {
+    readonly workspaceId: string;
+    readonly root: string;
+    readonly canonicalRoot: string;
+    readonly lifecycle: WorkspaceLifecycle;
+  };
+  readonly resolution: {
+    readonly source: WorkspaceExecutionContextResolutionSource;
+    readonly evidence: readonly WorkspaceMatchEvidence[];
+  };
+  readonly bindings: readonly RepositoryBinding[];
+  readonly contexts?: WorkspaceContextsV1;
+  readonly issue?: {
+    readonly storyId: string;
+    readonly manifestPath: string;
+    readonly execution: CycleRepositoryExecutionContext;
+  };
+  readonly authorities: WorkspaceExecutionAuthorityPaths;
+}
+
+export interface WorkspaceIntentV1 {
+  readonly schema: typeof WORKSPACE_INTENT_V1;
+  readonly operation: "read" | "mutation";
+  readonly interaction: "interactive" | "non_interactive";
+  readonly scope: WorkspaceContextScope;
+  readonly cwd: string;
+  readonly explicitSelector?: {
+    readonly workspaceId?: string;
+    readonly path?: string;
+  };
+  readonly requirement: RequirementHintV1;
+}
+
+export interface WorkspaceMatchCandidateV1 {
+  readonly workspaceId: string;
+  readonly root: string;
+  readonly lifecycle: WorkspaceLifecycle;
+  readonly evidence: readonly WorkspaceRequirementMatchEvidence[];
+  readonly hardMatch: boolean;
+  readonly score: number;
+}
+
+export type WorkspaceDiscoveryDiagnosticCode =
+  | "stale_registry"
+  | "identity_mismatch"
+  | "invalid_workspace_manifest"
+  | "invalid_issue_manifest"
+  | "symlink_escape"
+  | "discovery_io_failure";
+
+export interface WorkspaceDiscoveryDiagnosticV1 {
+  readonly workspaceId: string;
+  readonly root: string;
+  readonly code: WorkspaceDiscoveryDiagnosticCode;
+  readonly authorityPath: string;
+  readonly message: string;
+}
+
+export type WorkspaceDiscoveryDecisionV1 = (
+  | {
+      readonly ok: true;
+      readonly kind: "selected";
+      readonly target: WorkspaceMatchCandidateV1;
+    }
+  | {
+      readonly ok: false;
+      readonly kind: "choice_required";
+      readonly code: "requirement_match_required";
+      readonly candidates: readonly WorkspaceMatchCandidateV1[];
+    }
+  | {
+      readonly ok: false;
+      readonly kind: "create_required";
+      readonly code: "create_required";
+      readonly candidates: readonly WorkspaceMatchCandidateV1[];
+    }
+  | {
+      readonly ok: false;
+      readonly kind: "activation_required";
+      readonly code: "workspace_activation_required";
+      readonly candidates: readonly WorkspaceMatchCandidateV1[];
+    }
+  | {
+      readonly ok: false;
+      readonly kind: "conflict";
+      readonly code:
+        | "ambiguous_requirement_match"
+        | "invalid_requirement_hint"
+        | "workspace_discovery_incomplete";
+      readonly candidates: readonly WorkspaceMatchCandidateV1[];
+    }
+) & { readonly diagnostics: readonly WorkspaceDiscoveryDiagnosticV1[] };
+
+export type WorkspaceClarificationReason =
+  | "requirement_match_required"
+  | "ambiguous_requirement_match"
+  | "requirement_workspace_conflict"
+  | "workspace_activation_required"
+  | "create_required"
+  | "workspace_discovery_incomplete";
+
+export type WorkspaceClarificationAction =
+  | "select_existing"
+  | "create_new"
+  | "repair_discovery";
+
+export interface WorkspaceClarificationCandidateV1 {
+  readonly workspaceId: string;
+  readonly displayName: string;
+  readonly lifecycle: Exclude<WorkspaceLifecycle, "archived">;
+  readonly evidence: readonly WorkspaceMatchEvidence[];
+  readonly diagnostics: readonly WorkspaceDiscoveryDiagnosticV1[];
+  readonly canonicalSelector: string;
+}
+
+export interface WorkspaceClarificationHandoffV1 {
+  readonly schema: typeof WORKSPACE_CLARIFICATION_V1;
+  readonly registryRevision: number;
+  readonly discoveryFactsSha256: Sha256Digest;
+  readonly reason: WorkspaceClarificationReason;
+  readonly operation: "read" | "mutation";
+  readonly requirementSummary: {
+    readonly sources: readonly RequirementSourceKey[];
+    readonly storyIds: readonly string[];
+    readonly hasSemanticOnlyEvidence: boolean;
+  };
+  readonly candidates: readonly WorkspaceClarificationCandidateV1[];
+  readonly allowedActions: readonly WorkspaceClarificationAction[];
+  readonly canonicalCreateCommand: "roll workspace create";
+  readonly canonicalRepairCommands: readonly string[];
+}
+
+export type WorkspaceClarificationAnswerV1 =
+  | {
+      readonly action: "select_existing";
+      readonly workspaceId: string;
+    }
+  | {
+      readonly action: "create_new";
+      readonly workspaceId?: string;
+    }
+  | {
+      readonly action: "repair_discovery";
+    };
+
 export interface RequirementEvidenceDescriptor {
   readonly bytes: number;
   readonly sha256: string;
@@ -273,6 +723,12 @@ export interface RequirementAttestProjectionContract {
   readonly evidenceAuthority: "issue";
 }
 
+export interface CampaignDeliveryTarget {
+  readonly terminal: "campaign_branch";
+  readonly branch: string;
+  readonly mainMerge: "forbidden";
+}
+
 export interface RequirementSourceManifest {
   readonly schema: typeof REQUIREMENT_SOURCE_V1;
   readonly requirementId: string;
@@ -285,6 +741,7 @@ export interface RequirementSourceManifest {
   readonly context: readonly RequirementContextDescriptor[];
   readonly stories: readonly string[];
   readonly attest: RequirementAttestProjectionContract;
+  readonly deliveryTarget?: CampaignDeliveryTarget;
 }
 
 export type RequirementArchiveFindingCode =
@@ -336,6 +793,116 @@ export interface WorkspaceManifest {
   readonly createdAt?: string;
   readonly requirements: readonly RequirementSourceReference[];
   readonly repositories: readonly RepositoryBinding[];
+  readonly contexts?: WorkspaceContextsV1;
+}
+
+export interface WorkspaceEditRepositoryInput {
+  readonly alias: string;
+  readonly remote: string;
+  readonly provider: string;
+  readonly integrationBranch: string;
+  readonly branchPattern: string;
+  readonly requiredChecks: readonly string[];
+}
+
+export interface WorkspaceEditConfigV1 {
+  readonly schema: typeof WORKSPACE_EDIT_CONFIG_V1;
+  readonly workspaceId: string;
+  readonly expectedManifestSha256: Sha256Digest;
+  readonly displayName: string;
+  readonly requirements: readonly RequirementSourceReference[];
+  readonly repositories: readonly WorkspaceEditRepositoryInput[];
+}
+
+export interface WorkspaceMetadataIssueReference {
+  readonly storyId: string;
+  readonly manifestSha256: Sha256Digest;
+  readonly requirementKeys: readonly RequirementSourceReference[];
+  readonly repoIds: readonly string[];
+}
+
+export interface WorkspaceMetadataRequirementArchiveReference {
+  readonly requirementId: string;
+  readonly source: RequirementSourceReference;
+  readonly manifestSha256: Sha256Digest;
+}
+
+export interface WorkspaceMetadataAdditionalFact {
+  readonly kind: "delivery" | "runtime" | "event" | "migration";
+  readonly authorityPath: string;
+  readonly sha256: Sha256Digest;
+  readonly requirementKeys: readonly RequirementSourceReference[];
+  readonly repoIds: readonly string[];
+}
+
+export interface WorkspaceMetadataReferenceIndex {
+  readonly schema: typeof WORKSPACE_METADATA_REFERENCE_INDEX_V1;
+  readonly workspaceId: string;
+  readonly issues: readonly WorkspaceMetadataIssueReference[];
+  readonly requirementArchives: readonly WorkspaceMetadataRequirementArchiveReference[];
+  readonly additionalFacts: readonly WorkspaceMetadataAdditionalFact[];
+}
+
+export type WorkspaceEditChangeKind =
+  | "display_name"
+  | "requirement"
+  | "repository_identity"
+  | "repository_workflow"
+  | "repository";
+
+export interface WorkspaceEditChange {
+  readonly kind: WorkspaceEditChangeKind;
+  readonly path: string;
+  readonly operation: "added" | "removed" | "updated";
+  readonly before?: unknown;
+  readonly after?: unknown;
+  readonly safety: "safe" | "blocked";
+}
+
+export interface WorkspaceEditReference {
+  readonly kind: "issue_requirement" | "issue_repository" | "requirement_archive" | "additional_fact";
+  readonly authorityPath: string;
+  readonly storyId?: string;
+  readonly requirementId?: string;
+  readonly repoId?: string;
+}
+
+export type WorkspaceEditBlockerCode =
+  | "manifest_changed"
+  | "metadata_referenced"
+  | "normalization_failed"
+  | "reference_index_invalid";
+
+export interface WorkspaceEditBlocker {
+  readonly code: WorkspaceEditBlockerCode;
+  readonly path: string;
+  readonly message: string;
+  readonly references: readonly WorkspaceEditReference[];
+}
+
+export interface WorkspaceEditWarning {
+  readonly code: "requirement_capture_pending";
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface WorkspaceEditPlan {
+  readonly schema: typeof WORKSPACE_EDIT_PLAN_V1;
+  readonly outcome: "ready" | "blocked";
+  readonly workspaceId: string;
+  readonly manifestPath: string;
+  readonly beforeSha256: Sha256Digest;
+  readonly afterSha256: Sha256Digest;
+  readonly referenceIndexSha256: Sha256Digest;
+  readonly beforeManifest: WorkspaceManifest;
+  readonly afterManifest: WorkspaceManifest;
+  readonly changes: readonly WorkspaceEditChange[];
+  readonly blockers: readonly WorkspaceEditBlocker[];
+  readonly warnings: readonly WorkspaceEditWarning[];
+  readonly nextAction: {
+    readonly kind: "apply" | "blocked";
+    readonly command?: string;
+  };
 }
 
 export interface WorkspaceManifestExpectations {
@@ -394,6 +961,8 @@ export interface WriteIssueRepositoryTarget extends IssueRepositoryTargetBase {
   readonly access: "write";
   readonly requiredDelivery: boolean;
   readonly noChangePolicy: NoChangePolicy;
+  /** Immutable governed branch resolved when the Issue is initialized. */
+  readonly workBranch?: string;
 }
 
 export type IssueRepositoryTarget = ReadIssueRepositoryTarget | WriteIssueRepositoryTarget;
@@ -413,6 +982,7 @@ export interface RepositoryExecutionContext {
   readonly access: RepositoryAccess;
   readonly requiredDelivery: boolean;
   readonly noChangePolicy?: NoChangePolicy;
+  readonly workBranch?: string;
   readonly dependsOnRepo?: string;
   readonly worktreePath: string;
   readonly baseSha: string;
@@ -424,6 +994,16 @@ export interface RepositoryExecutionContext {
  * cardinality one and many intentionally share this exact contract. */
 export type RepositoryExecutionMap = Readonly<Record<string, RepositoryExecutionContext>>;
 
+/** Workspace/Issue-root execution boundary carried by one Story Cycle. */
+export interface CycleRepositoryExecutionContext extends WorkspaceIdentity {
+  readonly issueRoot: string;
+  readonly repositories: RepositoryExecutionMap;
+  readonly integrationAcceptance?: {
+    readonly command: readonly string[];
+    readonly cwdRepoId: string;
+  };
+}
+
 export interface IssueManifest {
   readonly schema: typeof ISSUE_MANIFEST_V1;
   readonly workspaceId: string;
@@ -432,7 +1012,9 @@ export interface IssueManifest {
   readonly repositories: readonly IssueRepositoryTarget[];
   readonly integrationAcceptance?: {
     readonly command: readonly string[];
+    readonly cwd?: string;
   };
+  readonly deliveryTarget?: CampaignDeliveryTarget;
 }
 
 export interface IssueManifestExpectations {
@@ -472,6 +1054,113 @@ export const repositoryBindingV1Schema: JsonSchema = objectSchema(
   ["schema", "repoId", "alias", "remote", "integrationBranch", "provider", "workflow"],
 );
 
+const workspaceStringArraySchema: JsonSchema = { type: "array", items: stringSchema };
+const workspaceRepositoryExecutionCommandsSchema = objectSchema(
+  { test: workspaceStringArraySchema, integration: workspaceStringArraySchema },
+  ["test", "integration"],
+);
+const workspaceRepositoryExecutionContextSchema = objectSchema(
+  {
+    repoId: stringSchema,
+    alias: stringSchema,
+    access: { type: "string", enum: ["read", "write"] },
+    requiredDelivery: { type: "boolean" },
+    noChangePolicy: { type: "string", enum: ["changes_required", "no_change_allowed"] },
+    workBranch: stringSchema,
+    dependsOnRepo: stringSchema,
+    worktreePath: stringSchema,
+    baseSha: stringSchema,
+    headSha: stringSchema,
+    commands: workspaceRepositoryExecutionCommandsSchema,
+  },
+  ["repoId", "alias", "access", "requiredDelivery", "worktreePath", "baseSha", "headSha", "commands"],
+);
+const workspaceCycleExecutionContextSchema = objectSchema(
+  {
+    workspaceId: stringSchema,
+    issueRoot: stringSchema,
+    repositories: { type: "object", additionalProperties: workspaceRepositoryExecutionContextSchema },
+    integrationAcceptance: objectSchema(
+      {
+        command: { type: "array", items: stringSchema, minItems: 1 },
+        cwdRepoId: stringSchema,
+      },
+      ["command", "cwdRepoId"],
+    ),
+  },
+  ["workspaceId", "issueRoot", "repositories"],
+);
+const workspaceMatchEvidenceSchema = objectSchema(
+  {
+    kind: {
+      type: "string",
+      enum: ["issue_exact", "requirement_source_exact", "repository_exact", "path_contained", "semantic_supported"],
+    },
+    value: stringSchema,
+    hard: { type: "boolean" },
+    score: { type: "number" },
+    source: stringSchema,
+    provenance: {
+      type: "string",
+      enum: ["explicit_user", "cli_argument", "issue_manifest", "cwd_repository", "deterministic_extraction", "semantic_inference"],
+    },
+    detail: stringSchema,
+  },
+  ["kind", "value", "hard", "score", "source", "provenance", "detail"],
+);
+const workspaceAuthoritiesV1Schema = objectSchema(
+  {
+    backlog: stringSchema,
+    features: stringSchema,
+    design: stringSchema,
+    requirements: stringSchema,
+    policy: stringSchema,
+    evidence: stringSchema,
+    toolDumps: stringSchema,
+    events: stringSchema,
+    runtime: stringSchema,
+    locks: stringSchema,
+  },
+  ["backlog", "features", "design", "requirements", "policy", "evidence", "toolDumps", "events", "runtime", "locks"],
+);
+
+export const workspaceExecutionContextV1Schema: JsonSchema = objectSchema(
+  {
+    schema: { const: WORKSPACE_EXECUTION_CONTEXT_V1 },
+    workspace: objectSchema(
+      {
+        workspaceId: stringSchema,
+        root: stringSchema,
+        canonicalRoot: stringSchema,
+        lifecycle: { type: "string", enum: ["registered", "active", "paused", "archived"] },
+      },
+      ["workspaceId", "root", "canonicalRoot", "lifecycle"],
+    ),
+    resolution: objectSchema(
+      {
+        source: {
+          type: "string",
+          enum: ["explicit", "environment", "cwd_manifest", "issue_manifest", "requirement_discovery"],
+        },
+        evidence: { type: "array", items: workspaceMatchEvidenceSchema },
+      },
+      ["source", "evidence"],
+    ),
+    bindings: { type: "array", items: repositoryBindingV1Schema },
+    contexts: workspaceContextsV1Schema,
+    issue: objectSchema(
+      {
+        storyId: stringSchema,
+        manifestPath: stringSchema,
+        execution: workspaceCycleExecutionContextSchema,
+      },
+      ["storyId", "manifestPath", "execution"],
+    ),
+    authorities: workspaceAuthoritiesV1Schema,
+  },
+  ["schema", "workspace", "resolution", "bindings", "authorities"],
+);
+
 export const workspaceManifestV1Schema: JsonSchema = objectSchema(
   {
     schema: { const: WORKSPACE_MANIFEST_V1 },
@@ -480,6 +1169,7 @@ export const workspaceManifestV1Schema: JsonSchema = objectSchema(
     createdAt: stringSchema,
     requirements: { type: "array", items: requirementSourceSchema },
     repositories: { type: "array", items: repositoryBindingV1Schema, minItems: 1 },
+    contexts: workspaceContextsV1Schema,
   },
   ["schema", "workspaceId", "displayName", "requirements", "repositories"],
 );
@@ -503,6 +1193,7 @@ const issueRepositoryTargetSchema: JsonSchema = {
         ...issueTargetCommonProperties,
         access: { const: "write" },
         noChangePolicy: { type: "string", enum: ["changes_required", "no_change_allowed"] },
+        workBranch: stringSchema,
       },
       ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy"],
     ),
@@ -517,8 +1208,12 @@ export const issueManifestV1Schema: JsonSchema = objectSchema(
     requirements: { type: "array", items: requirementSourceSchema },
     repositories: { type: "array", items: issueRepositoryTargetSchema, minItems: 1 },
     integrationAcceptance: objectSchema(
-      { command: { type: "array", items: stringSchema, minItems: 1 } },
+      { command: { type: "array", items: stringSchema, minItems: 1 }, cwd: stringSchema },
       ["command"],
+    ),
+    deliveryTarget: objectSchema(
+      { terminal: { const: "campaign_branch" }, branch: stringSchema, mainMerge: { const: "forbidden" } },
+      ["terminal", "branch", "mainMerge"],
     ),
   },
     ["schema", "workspaceId", "storyId", "requirements", "repositories"],
@@ -557,6 +1252,10 @@ export const requirementSourceV1Schema: JsonSchema = objectSchema(
         evidenceAuthority: { const: "issue" },
       },
       ["schema", "mode", "evidenceAuthority"],
+    ),
+    deliveryTarget: objectSchema(
+      { terminal: { const: "campaign_branch" }, branch: stringSchema, mainMerge: { const: "forbidden" } },
+      ["terminal", "branch", "mainMerge"],
     ),
   },
   [
@@ -924,6 +1623,33 @@ function parseRequirementAttest(
     : undefined;
 }
 
+function parseCampaignDeliveryTarget(
+  value: unknown,
+  path: string,
+  errors: ContractError[],
+): CampaignDeliveryTarget | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    errors.push({ code: "invalid_type", path, message: "campaign delivery target must be an object" });
+    return undefined;
+  }
+  errors.push(...unknownFieldErrors(value, ["terminal", "branch", "mainMerge"], path));
+  const branch = requiredString(value, "branch", `${path}.`, errors);
+  if (value["terminal"] !== "campaign_branch") {
+    errors.push({ code: "invalid_value", path: `${path}.terminal`, message: "campaign delivery terminal must be campaign_branch" });
+  }
+  if (value["mainMerge"] !== "forbidden") {
+    errors.push({ code: "invalid_value", path: `${path}.mainMerge`, message: "campaign delivery must explicitly forbid main merge" });
+  }
+  if (branch !== undefined && !isSafeGitRef(branch)) {
+    errors.push({ code: "invalid_value", path: `${path}.branch`, message: "campaign branch is not a safe Git ref" });
+  }
+  return branch !== undefined && isSafeGitRef(branch) &&
+      value["terminal"] === "campaign_branch" && value["mainMerge"] === "forbidden"
+    ? { terminal: "campaign_branch", branch, mainMerge: "forbidden" }
+    : undefined;
+}
+
 function safeRequirementReference(value: string): boolean {
   return value === value.trim() && !/[\x00-\x1f\x7f]/u.test(value) && !/:\/\//u.test(value) &&
     !/(?:^|[?&;#\s_-])(?:access|api)?[_-]?(?:token|key)=/iu.test(value) &&
@@ -948,6 +1674,7 @@ export function parseRequirementSourceManifest(value: unknown): ContractResult<R
     "context",
     "stories",
     "attest",
+    "deliveryTarget",
   ], "");
   if (value["schema"] !== REQUIREMENT_SOURCE_V1) {
     errors.push({ code: "unknown_version", path: "schema", message: `expected ${REQUIREMENT_SOURCE_V1}` });
@@ -984,6 +1711,7 @@ export function parseRequirementSourceManifest(value: unknown): ContractResult<R
     errors.push({ code: "invalid_value", path: "stories", message: "Story IDs must use safe identifiers" });
   }
   const attest = parseRequirementAttest(value["attest"], errors);
+  const deliveryTarget = parseCampaignDeliveryTarget(value["deliveryTarget"], "deliveryTarget", errors);
   if (
     errors.length > 0 || requirementId === undefined || ref === undefined || revision === undefined ||
     capturedAt === undefined || (provider !== "jira" && provider !== "github_issue" && provider !== "local_file" && provider !== "user_input") ||
@@ -1005,6 +1733,7 @@ export function parseRequirementSourceManifest(value: unknown): ContractResult<R
       context,
       stories,
       attest,
+      ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
     },
   };
 }
@@ -1091,7 +1820,7 @@ export function parseWorkspaceManifest(
   if (!isRecord(value)) return fail("invalid_type", "workspace", "Workspace manifest must be an object");
   const errors = unknownFieldErrors(
     value,
-    ["schema", "workspaceId", "displayName", "createdAt", "requirements", "repositories"],
+    ["schema", "workspaceId", "displayName", "createdAt", "requirements", "repositories", "contexts"],
     "",
   );
   if (value["schema"] !== WORKSPACE_MANIFEST_V1) {
@@ -1113,6 +1842,10 @@ export function parseWorkspaceManifest(
     }
   }
   errors.push(...duplicateErrors(repositories));
+  const parsedContexts = value["contexts"] === undefined
+    ? undefined
+    : parseWorkspaceContexts(value["contexts"]);
+  if (parsedContexts !== undefined && !parsedContexts.ok) errors.push(...parsedContexts.errors);
 
   if (workspaceId !== undefined && !isSafeIdentifier(workspaceId)) {
     errors.push({ code: "invalid_value", path: "workspaceId", message: "Workspace ID contains unsafe characters" });
@@ -1132,6 +1865,7 @@ export function parseWorkspaceManifest(
       ...(createdAt !== undefined ? { createdAt } : {}),
       requirements,
       repositories,
+      ...(parsedContexts?.ok === true ? { contexts: parsedContexts.value } : {}),
     },
   };
 }
@@ -1167,7 +1901,7 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
   }
   errors.push(...unknownFieldErrors(
     value,
-    ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy", "pathScope", "dependsOnRepo"],
+    ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy", "workBranch", "pathScope", "dependsOnRepo"],
     path,
   ));
   const repoId = requiredString(value, "repoId", `${path}.`, errors);
@@ -1179,11 +1913,18 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
   }
 
   const noChangePolicy = value["noChangePolicy"];
+  const workBranch = value["workBranch"];
   if (access === "write" && noChangePolicy !== "changes_required" && noChangePolicy !== "no_change_allowed") {
     errors.push({ code: "invalid_value", path: `${path}.noChangePolicy`, message: "write target requires an explicit no-change policy" });
   }
   if (access === "read" && noChangePolicy !== undefined) {
     errors.push({ code: "invalid_value", path: `${path}.noChangePolicy`, message: "read target must not declare a no-change policy" });
+  }
+  if (access === "read" && workBranch !== undefined) {
+    errors.push({ code: "invalid_value", path: `${path}.workBranch`, message: "read target must not declare a work branch" });
+  }
+  if (access === "write" && workBranch !== undefined && (typeof workBranch !== "string" || !isSafeGitRef(workBranch))) {
+    errors.push({ code: "invalid_value", path: `${path}.workBranch`, message: "work branch must be a safe governed Git ref" });
   }
   if (access === "read" && requiredDelivery === true) {
     errors.push({ code: "invalid_value", path: `${path}.requiredDelivery`, message: "read target cannot require delivery" });
@@ -1219,7 +1960,15 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
     return { repoId, alias, access, requiredDelivery, ...optionalFields };
   }
   if (noChangePolicy !== "changes_required" && noChangePolicy !== "no_change_allowed") return undefined;
-  return { repoId, alias, access, requiredDelivery, noChangePolicy, ...optionalFields };
+  return {
+    repoId,
+    alias,
+    access,
+    requiredDelivery,
+    noChangePolicy,
+    ...(typeof workBranch === "string" ? { workBranch } : {}),
+    ...optionalFields,
+  };
 }
 
 function duplicateTargetErrors(targets: readonly IssueRepositoryTarget[]): ContractError[] {
@@ -1283,7 +2032,7 @@ export function parseIssueManifest(
   if (!isRecord(value)) return fail("invalid_type", "issue", "Issue manifest must be an object");
   const errors = unknownFieldErrors(
     value,
-    ["schema", "workspaceId", "storyId", "requirements", "repositories", "integrationAcceptance"],
+    ["schema", "workspaceId", "storyId", "requirements", "repositories", "integrationAcceptance", "deliveryTarget"],
     "",
   );
   if (value["schema"] !== ISSUE_MANIFEST_V1) {
@@ -1334,17 +2083,28 @@ export function parseIssueManifest(
     if (!isRecord(rawIntegration)) {
       errors.push({ code: "invalid_type", path: "integrationAcceptance", message: "integration acceptance must be an object" });
     } else {
-      errors.push(...unknownFieldErrors(rawIntegration, ["command"], "integrationAcceptance"));
+      errors.push(...unknownFieldErrors(rawIntegration, ["command", "cwd"], "integrationAcceptance"));
       const command = parseStringArray(rawIntegration["command"], "integrationAcceptance.command", errors);
+      const cwd = optionalString(rawIntegration, "cwd", "integrationAcceptance.", errors);
       if (command !== undefined) {
         if (command.length === 0) {
           errors.push({ code: "invalid_value", path: "integrationAcceptance.command", message: "integration command must not be empty" });
-        } else {
-          integrationAcceptance = { command };
+        } else if (cwd === undefined || isSafeAlias(cwd)) {
+          integrationAcceptance = { command, ...(cwd === undefined ? {} : { cwd }) };
         }
+      }
+      if (cwd !== undefined && !isSafeAlias(cwd)) {
+        errors.push({ code: "invalid_value", path: "integrationAcceptance.cwd", message: "integration cwd must name a safe repository alias" });
       }
     }
   }
+  if (integrationAcceptance?.cwd !== undefined) {
+    const cwdTarget = targetsByAlias.get(integrationAcceptance.cwd);
+    if (cwdTarget === undefined || cwdTarget.access !== "write") {
+      errors.push({ code: "invalid_value", path: "integrationAcceptance.cwd", message: "integration cwd must name a writable Issue repository" });
+    }
+  }
+  const deliveryTarget = parseCampaignDeliveryTarget(value["deliveryTarget"], "deliveryTarget", errors);
 
   if (workspaceId !== undefined && !isSafeIdentifier(workspaceId)) {
     errors.push({ code: "invalid_value", path: "workspaceId", message: "Workspace ID contains unsafe characters" });
@@ -1370,6 +2130,7 @@ export function parseIssueManifest(
       requirements,
       repositories: targets,
       ...(integrationAcceptance === undefined ? {} : { integrationAcceptance }),
+      ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
     },
   };
 }

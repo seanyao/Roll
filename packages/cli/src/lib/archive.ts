@@ -22,6 +22,45 @@ import type { Dirent } from "node:fs";
 export const UNCATEGORIZED = "uncategorized";
 
 /**
+ * Resolve the project-data authority root without conflating canonical
+ * Workspaces with imported legacy projects. A canonical Workspace owns
+ * `backlog/index.md` + `features/` directly; legacy projects keep `.roll/`.
+ */
+export type ProjectDataAuthorityMode = "auto" | "workspace" | "legacy";
+
+export function projectDataRoot(projectPath: string, authorityMode: ProjectDataAuthorityMode = "auto"): string {
+  if (authorityMode === "workspace") return projectPath;
+  if (authorityMode === "legacy") return join(projectPath, ".roll");
+  try {
+    if (statSync(join(projectPath, "workspace.yaml")).isFile()) return projectPath;
+  } catch {
+    // No canonical Workspace marker; retain legacy auto-detection below.
+  }
+  return existsSync(join(projectPath, "backlog", "index.md")) && existsSync(join(projectPath, "features"))
+    ? projectPath
+    : join(projectPath, ".roll");
+}
+
+export function projectDataPath(projectPath: string, ...segments: string[]): string {
+  return join(projectDataRoot(projectPath), ...segments);
+}
+
+export function projectBacklogPath(projectPath: string, authorityMode: ProjectDataAuthorityMode = "auto"): string {
+  const root = projectDataRoot(projectPath, authorityMode);
+  return root === projectPath ? join(root, "backlog", "index.md") : join(root, "backlog.md");
+}
+
+export function projectRuntimePath(projectPath: string, ...segments: string[]): string {
+  const root = projectDataRoot(projectPath);
+  return root === projectPath ? join(root, "runtime", ...segments) : join(root, "loop", ...segments);
+}
+
+export function projectOperationalPath(projectPath: string, ...segments: string[]): string {
+  const root = projectDataRoot(projectPath);
+  return root === projectPath ? join(root, "runtime", ...segments) : join(root, ...segments);
+}
+
+/**
  * FIX-1059 — is this directory entry a markdown FILE we should treat as a story
  * candidate? A real `.md` file qualifies directly; a SYMLINK whose name ends in
  * `.md` qualifies only when it resolves (stat follows the link) to a real
@@ -72,7 +111,7 @@ export function isRunArtifactDir(name: string, depth: number): boolean {
  *  `**AC:**` block, while the real ACs still live in the epic feature file
  *  (FIX-226). Exposing the full list lets that caller fall through. */
 export function findFeatureFiles(projectPath: string, storyId: string): string[] {
-  const root = join(projectPath, ".roll", "features");
+  const root = projectDataPath(projectPath, "features");
   if (!existsSync(root)) return [];
   const hits: string[] = [];
   const walk = (dir: string, depth: number): void => {
@@ -112,7 +151,7 @@ export function findFeatureFile(projectPath: string, storyId: string): string | 
 /** Resolve an existing card folder even when a partial cycle worktree carries
  *  only `.roll/features/<epic>/<ID>/` artifacts and no spec/index/backlog. */
 function liveCardDirEpicOf(projectPath: string, storyId: string): string | null {
-  const root = join(projectPath, ".roll", "features");
+  const root = projectDataPath(projectPath, "features");
   let epics: string[] = [];
   try {
     for (const e of readdirSync(root, { withFileTypes: true })) {
@@ -188,11 +227,15 @@ export function liveEpicOf(projectPath: string, storyId: string): string | null 
  *   - No hit → null (→ uncategorized at the call site).
  * Single-ID callers ({@link liveEpicOf} / {@link findFeatureFile}) are untouched.
  */
-export function bulkLiveEpics(projectPath: string, ids: readonly string[]): Map<string, string | null> {
+export function bulkLiveEpics(
+  projectPath: string,
+  ids: readonly string[],
+  authorityMode: ProjectDataAuthorityMode = "auto",
+): Map<string, string | null> {
   const result = new Map<string, string | null>();
   const remaining = new Set(ids);
   const files: Array<{ path: string; name: string; dirName: string }> = [];
-  const root = join(projectPath, ".roll", "features");
+  const root = join(projectDataRoot(projectPath, authorityMode), "features");
   const walk = (dir: string, depth: number): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
@@ -270,7 +313,7 @@ export function bulkLiveEpics(projectPath: string, ids: readonly string[]): Map<
 
 /** Read `.roll/index.json` → ID→epic map; {} on absence / malformed (lenient). */
 export function readIndex(projectPath: string): Record<string, string> {
-  const p = join(projectPath, ".roll", "index.json");
+  const p = projectDataPath(projectPath, "index.json");
   if (!existsSync(p)) return {};
   try {
     const obj = JSON.parse(readFileSync(p, "utf8")) as { stories?: Record<string, string> };
@@ -287,8 +330,12 @@ export function readIndex(projectPath: string): Record<string, string> {
  * epic the live walk can place is recorded. Deterministic + idempotent (sorted,
  * no volatile fields). Returns the written map.
  */
-export function generateIndex(projectPath: string): Record<string, string> {
-  const backlogPath = join(projectPath, ".roll", "backlog.md");
+export function generateIndex(
+  projectPath: string,
+  authorityMode: ProjectDataAuthorityMode = "auto",
+): Record<string, string> {
+  const authorityRoot = projectDataRoot(projectPath, authorityMode);
+  const backlogPath = projectBacklogPath(projectPath, authorityMode);
   let ids: string[] = [];
   if (existsSync(backlogPath)) {
     try {
@@ -298,9 +345,9 @@ export function generateIndex(projectPath: string): Record<string, string> {
     }
   }
   // FIX-275: one walk for all ids (was a full-tree walk PER id).
-  const bulk = bulkLiveEpics(projectPath, ids);
+  const bulk = bulkLiveEpics(projectPath, ids, authorityMode);
   const stories = buildStoryIndex(ids, (id) => bulk.get(id) ?? null);
-  const rollDir = join(projectPath, ".roll");
+  const rollDir = authorityRoot;
   if (!existsSync(rollDir)) mkdirSync(rollDir, { recursive: true });
   writeFileSync(join(rollDir, "index.json"), serializeIndex(stories));
   return stories;
@@ -331,7 +378,7 @@ export function epicForStory(projectPath: string, storyId: string): string | nul
  */
 export function cardArchiveDir(projectPath: string, storyId: string): string {
   const epic = epicForStory(projectPath, storyId) ?? UNCATEGORIZED;
-  return join(projectPath, ".roll", "features", epic, storyId);
+  return projectDataPath(projectPath, "features", epic, storyId);
 }
 
 /**

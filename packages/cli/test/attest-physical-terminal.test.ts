@@ -15,11 +15,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   captureScreenshot,
+  WorkspaceRegistry,
   type CaptureFact,
   type EvidenceRun,
   type ScreenshotKind,
   type ShotRun,
 } from "@roll/infra";
+import { REPOSITORY_BINDING_V1, WORKSPACE_MANIFEST_V1, repositoryIdFromRemote } from "@roll/spec";
 import { attestCommand } from "../src/commands/attest.js";
 import {
   hasPhysicalTerminalCapture,
@@ -448,9 +450,33 @@ describe("US-INIT-003d: doctor --tools physical Terminal.app evidence", () => {
   // invokes it, so the bundled dev entry point is the code under test.
   it("CLI entry point records physical_terminal skip for `roll doctor --tools` on a no-GUI host", () => {
     const proj = tmp("attest-cli-entry");
-    const cardDir = join(proj, ".roll", "features", "init-onboard", "US-PHYS-CLI");
+    const rollHome = tmp("attest-cli-roll-home");
+    const remote = "https://example.test/workspaces/physical-cli.git";
+    const repoId = repositoryIdFromRemote(remote);
+    if (!repoId.ok) throw new Error("fixture remote must be valid");
+    writeFileSync(join(proj, "workspace.yaml"), `${JSON.stringify({
+      schema: WORKSPACE_MANIFEST_V1,
+      workspaceId: "physical-cli",
+      displayName: "Physical CLI",
+      requirements: [],
+      repositories: [{
+        schema: REPOSITORY_BINDING_V1,
+        repoId: repoId.value,
+        alias: "product",
+        remote,
+        integrationBranch: "main",
+        provider: "generic",
+        workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+      }],
+    }, null, 2)}\n`, "utf8");
+    mkdirSync(join(proj, "backlog"), { recursive: true });
+    writeFileSync(join(proj, "backlog", "index.md"), "| ID | Description | Status |\n|----|----|----|\n", "utf8");
+    const cardDir = join(proj, "features", "init-onboard", "US-PHYS-CLI");
     mkdirSync(cardDir, { recursive: true });
     writeFileSync(join(cardDir, "spec.md"), doctorPhysicalSpec("US-PHYS-CLI"));
+    const registry = new WorkspaceRegistry({ rollHome });
+    registry.register({ workspaceId: "physical-cli", root: proj });
+    registry.activate("physical-cli");
     const here = dirname(fileURLToPath(import.meta.url));
     const rollBin = resolve(here, "..", "bin", "roll.js");
 
@@ -462,6 +488,8 @@ describe("US-INIT-003d: doctor --tools physical Terminal.app evidence", () => {
         env: {
           ...process.env,
           ROLL_LANG: "en",
+          ROLL_HOME: rollHome,
+          ROLL_WORKSPACE: "physical-cli",
           NO_COLOR: "1",
           ROLL_ATTEST_NO_TERMINAL: "1",
         },

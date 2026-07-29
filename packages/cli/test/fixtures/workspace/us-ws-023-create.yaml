@@ -1,0 +1,8 @@
+schema: roll.workspace-create/v1
+id: ws-evidence
+root: /tmp/roll-us-ws-023-workspace
+display_name: US-WS-023 Evidence
+repositories:
+  - alias: product
+    source: file:///tmp/roll-us-ws-023-product.git
+    integration_branch: main

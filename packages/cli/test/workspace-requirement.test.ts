@@ -138,6 +138,52 @@ describe("US-WS-007 roll workspace requirement add", () => {
     expect(readFileSync(join(requirementPath, "requirement.md"), "utf8")).toContain("Revision 43");
   });
 
+  it("persists an explicit campaign terminal while keeping main merge forbidden", async () => {
+    const f = fixture();
+    expect((await run([...addArgs(f), "--json"], f)).status).toBe(0);
+    const campaignArgs = [
+      ...addArgs(f),
+      "--campaign-branch", "idea-074-workspace",
+      "--main-merge", "forbidden",
+      "--json",
+    ];
+    const captured = await run(campaignArgs, f);
+    expect(captured).toMatchObject({ status: 0, stderr: "" });
+    const source = JSON.parse(readFileSync(
+      join(f.workspace, "requirements", "jira", "req-c78ccf14ea21", "source.yaml"),
+      "utf8",
+    )) as Record<string, unknown>;
+    expect(source["deliveryTarget"]).toEqual({
+      terminal: "campaign_branch",
+      branch: "idea-074-workspace",
+      mainMerge: "forbidden",
+    });
+
+    const repeatedWithoutFlags = await run([...addArgs(f), "--json"], f);
+    expect(repeatedWithoutFlags.status).toBe(0);
+    const preserved = JSON.parse(readFileSync(
+      join(f.workspace, "requirements", "jira", "req-c78ccf14ea21", "source.yaml"),
+      "utf8",
+    )) as Record<string, unknown>;
+    expect(preserved["deliveryTarget"]).toEqual(source["deliveryTarget"]);
+  });
+
+  it("rejects partial or non-forbidden campaign target arguments before writing", async () => {
+    const f = fixture();
+    const partial = await run([...addArgs(f), "--campaign-branch", "idea-074-workspace", "--json"], f);
+    expect(partial.status).toBe(1);
+    expect(existsSync(join(f.workspace, "requirements"))).toBe(false);
+
+    const unsafe = await run([
+      ...addArgs(f),
+      "--campaign-branch", "idea-074-workspace",
+      "--main-merge", "allowed",
+      "--json",
+    ], f);
+    expect(unsafe.status).toBe(1);
+    expect(existsSync(join(f.workspace, "requirements"))).toBe(false);
+  });
+
   it("resolves explicit, environment and cwd Workspace selectors ahead of a different active Workspace", async () => {
     const explicitFixture = fixture();
     const explicitDecoy = activateDecoyWorkspace(explicitFixture);

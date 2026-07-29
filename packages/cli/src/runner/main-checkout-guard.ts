@@ -772,7 +772,7 @@ async function quarantineAhead(opts: QuarantineOptions): Promise<QuarantineResul
   // caller's alert), but still NEVER reset — the shared ref stays exactly
   // where it is; recovery is an explicit human decision.
   if (!gitQuiet(opts.repoCwd, ["branch", ref, "HEAD"])) return null;
-  const restoreCommand = `# FIX-1475: main was NOT moved — the ahead commits remain on main (bookmarked at ${ref}); to drop them manually: git reset --hard ${integrationBranch}`;
+  const restoreCommand = `# FIX-1475: main was NOT moved — the ahead commits remain on the shared checkout branch (bookmarked at ${ref}); to drop them manually: git reset --hard ${integrationBranch}`;
   const path = manifestPath(opts.runtimeDir, id);
   const ev = toEvent(opts, "ahead", ref, files, path, restoreCommand);
   writeManifest(path, {

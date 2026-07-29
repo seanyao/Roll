@@ -193,6 +193,25 @@ describe("resolveWorkspaceTarget precedence and registry identity", () => {
       error: { code: "all_requires_readonly" },
     });
   });
+
+  it("allows archived Workspace authority only through an explicit read target", () => {
+    const archived = { ...registry[0]!, lifecycle: "archived" as const };
+    expect(resolveWorkspaceTarget(input({
+      operation: "read",
+      registry: [archived],
+      explicit: id("ws-alpha"),
+    }))).toMatchObject({ ok: true, source: "explicit", target: { workspaceId: "ws-alpha" } });
+    expect(resolveWorkspaceTarget(input({
+      operation: "mutation",
+      registry: [archived],
+      explicit: id("ws-alpha"),
+    }))).toMatchObject({ ok: false, error: { code: "invalid_target", candidates: [{ workspaceId: "ws-alpha" }] } });
+    expect(resolveWorkspaceTarget(input({
+      operation: "read",
+      registry: [archived],
+      environment: id("ws-alpha"),
+    }))).toMatchObject({ ok: false, error: { code: "invalid_target", candidates: [{ workspaceId: "ws-alpha" }] } });
+  });
 });
 
 describe("resolveWorkspaceTarget fail-loud safety matrix", () => {

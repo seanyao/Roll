@@ -136,11 +136,13 @@ describe("US-WS-009 Workspace backlog reads", () => {
     await registerActive(f, "ws-beta", beta);
 
     const byId = await runCli(["backlog", "--workspace", "ws-alpha"], f);
+    const byAlias = await runCli(["backlog", "--ws", "ws-alpha"], f);
     const byPath = await runCli(["backlog", "--workspace", beta], f);
     const showAlpha = await runCli(["backlog", "show", "US-1", "--workspace", "ws-alpha"], f);
     const showBeta = await runCli(["backlog", "show", "US-1", "--workspace", "ws-beta"], f);
 
     expect(byId.stdout).toContain("ws-alpha story");
+    expect(byAlias).toEqual(byId);
     expect(byId.stdout).not.toContain("ws-beta story");
     expect(byPath.stdout).toContain("ws-beta story");
     expect(showAlpha.stdout).toContain("# US-1 ws-alpha contract");

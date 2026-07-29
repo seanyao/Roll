@@ -142,7 +142,14 @@ export function parseBacklog(content: string): BacklogItem[] {
  */
 export function appendBacklogRow(
   content: string,
-  row: { id: string; title: string; epic: string; dependsOn?: string[]; chainDepth?: number },
+  row: {
+    id: string;
+    title: string;
+    epic: string;
+    dependsOn?: string[];
+    chainDepth?: number;
+    linkPrefix?: string;
+  },
 ): { content: string; appended: boolean } {
   // FIX-1475: de-dup by an EXACT id-cell match, not `content.includes("| [id]")`.
   // The substring form falsely treated ANOTHER row whose description opens with a
@@ -160,7 +167,8 @@ export function appendBacklogRow(
     row.dependsOn !== undefined && row.dependsOn.length > 0 ? `depends-on:${row.dependsOn.join(",")}` : "",
   ].filter((t) => t !== "");
   const desc = tags.length > 0 ? `${row.title} ${tags.join(" ")}` : row.title;
-  const line = `| [${row.id}](.roll/features/${row.epic}/${row.id}/spec.md) | ${desc} | ${STATUS_MARKER.todo} |`;
+  const linkPrefix = row.linkPrefix ?? ".roll/features";
+  const line = `| [${row.id}](${linkPrefix}/${row.epic}/${row.id}/spec.md) | ${desc} | ${STATUS_MARKER.todo} |`;
   const lines = content.split("\n");
   let anchor = -1;
   let lastTableRow = -1;

@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { relative, resolve, sep, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   renderBranchPattern,
   resolveIssueInitPlan,
@@ -21,6 +22,7 @@ import {
 } from "@roll/core";
 import {
   ISSUE_MANIFEST_V1,
+  parseIssueManifest,
   type IssueManifest,
   type IssueRepositoryTarget,
   type RepositoryBinding,
@@ -44,6 +46,10 @@ import {
   type ExpectedWorktreeFacts,
 } from "./issue-worktree-git.js";
 import { git, isImmutableGitObjectId } from "./git.js";
+import {
+  withWorkspaceAuthorityLock,
+  WorkspaceAuthorityLockError,
+} from "./workspace-authority-lock.js";
 
 const ISSUE_INIT_JOURNAL_V1 = "roll.issue-init-journal/v1" as const;
 
@@ -229,10 +235,14 @@ function parseRepositoryBoundEvent(raw: unknown, issueRoot: string): { readonly 
  *  genuine corruption, and silently dropping it could un-bind an alias that
  *  had already durably completed, letting a retry recreate/rebind it and
  *  lose the fact that it was ever pinned. */
-export function readRepositoryBoundFacts(issueRoot: string): ReadonlyMap<string, PinnedTargetFacts> {
+export function readRepositoryBoundFacts(
+  issueRoot: string,
+  dependencies: { readonly readText?: (path: string) => string } = {},
+): ReadonlyMap<string, PinnedTargetFacts> {
   const path = eventsPath(issueRoot);
-  if (!existsSync(path)) return new Map();
-  const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.trim() !== "");
+  if (dependencies.readText === undefined && !existsSync(path)) return new Map();
+  const text = dependencies.readText?.(path) ?? readFileSync(path, "utf8");
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
   const facts = new Map<string, PinnedTargetFacts>();
   for (const line of lines) {
     let raw: unknown;
@@ -513,14 +523,51 @@ async function resolveExpectedTargetFacts(
 /** Every immutable field the manifest carries for one repository target —
  *  compared in full so a changed requirement/repository/access set under the
  *  same Workspace/Story identity is a manifest_conflict, not silently reused. */
-function manifestsMatch(onDisk: unknown, expected: IssueManifest): boolean {
-  if (typeof onDisk !== "object" || onDisk === null) return false;
-  const record = onDisk as Record<string, unknown>;
-  if (record["schema"] !== expected.schema) return false;
-  if (record["workspaceId"] !== expected.workspaceId) return false;
-  if (record["storyId"] !== expected.storyId) return false;
-  return JSON.stringify(record["requirements"] ?? null) === JSON.stringify(expected.requirements)
-    && JSON.stringify(record["repositories"] ?? null) === JSON.stringify(expected.repositories);
+function manifestsMatch(issueRoot: string, onDisk: unknown, expected: IssueManifest): boolean {
+  const parsed = parseIssueManifest(onDisk, { workspaceId: expected.workspaceId, storyId: expected.storyId });
+  if (!parsed.ok) return false;
+  try {
+    const repositories = parsed.value.repositories.map((actual, index) => {
+      const target = expected.repositories[index];
+      if (
+        actual.access !== "write" || actual.workBranch !== undefined ||
+        target?.access !== "write" || target.workBranch === undefined
+      ) return actual;
+      const pinned = readPinnedTargetFacts(issueRoot, actual.alias, {
+        workspaceId: expected.workspaceId,
+        storyId: expected.storyId,
+        repoId: actual.repoId,
+      });
+      if (pinned?.workBranch !== target.workBranch) return actual;
+      return { ...actual, workBranch: target.workBranch };
+    });
+    const actualIntegration = parsed.value.integrationAcceptance;
+    const expectedIntegration = expected.integrationAcceptance;
+    const writable = parsed.value.repositories.filter((target) => target.access === "write");
+    const integrationAcceptance = actualIntegration !== undefined && actualIntegration.cwd === undefined &&
+        expectedIntegration?.cwd !== undefined && writable.length === 1 && writable[0]?.alias === expectedIntegration.cwd
+      ? { ...actualIntegration, cwd: expectedIntegration.cwd }
+      : actualIntegration;
+    const normalized: IssueManifest = {
+      ...parsed.value,
+      repositories,
+      ...(integrationAcceptance === undefined ? {} : { integrationAcceptance }),
+    };
+    // A Requirement campaign target is frozen only when the Issue is created.
+    // Adding a target to the same Requirement revision later must not
+    // retroactively rewrite or invalidate an existing legacy Issue that did
+    // not capture one. Once an Issue carries a target, however, it remains an
+    // immutable part of the comparison.
+    let comparableExpected: Omit<IssueManifest, "deliveryTarget"> | IssueManifest = expected;
+    if (normalized.deliveryTarget === undefined) {
+      const { deliveryTarget, ...legacyExpected } = expected;
+      void deliveryTarget;
+      comparableExpected = legacyExpected;
+    }
+    return isDeepStrictEqual(normalized, comparableExpected);
+  } catch {
+    return false;
+  }
 }
 
 export interface IssueCheckTargetReport {
@@ -588,13 +635,31 @@ function expectedManifestForContract(
           access: "write",
           requiredDelivery: declared.requiredDelivery,
           noChangePolicy: declared.requiredDelivery ? "changes_required" : "no_change_allowed",
+          workBranch: renderBranchPattern(binding.workflow.branchPattern, {
+            workspaceId,
+            storyId: contract.storyId,
+            repoAlias: declared.alias,
+          }),
           ...(declared.dependsOnRepo === undefined ? {} : { dependsOnRepo: declared.dependsOnRepo }),
         },
     );
   }
-  const requirements = resolveRequirementSourcesForStory(requirementManifests, contract.storyId)
+  const linkedRequirements = resolveRequirementSourcesForStory(requirementManifests, contract.storyId);
+  const requirements = linkedRequirements
     .map((manifest) => ({ provider: manifest.provider, ref: manifest.ref }));
-  return { schema: ISSUE_MANIFEST_V1, workspaceId, storyId: contract.storyId, requirements, repositories };
+  const deliveryTargets = new Map(linkedRequirements.flatMap((manifest) =>
+    manifest.deliveryTarget === undefined ? [] : [[JSON.stringify(manifest.deliveryTarget), manifest.deliveryTarget] as const]
+  ));
+  const deliveryTarget = deliveryTargets.size === 1 ? [...deliveryTargets.values()][0] : undefined;
+  return {
+    schema: ISSUE_MANIFEST_V1,
+    workspaceId,
+    storyId: contract.storyId,
+    requirements,
+    repositories,
+    ...(contract.integrationAcceptance === undefined ? {} : { integrationAcceptance: contract.integrationAcceptance }),
+    ...(deliveryTarget === undefined ? {} : { deliveryTarget }),
+  };
 }
 
 function probeManifestState(issueRoot: string, expected: IssueManifest): IssueTargetProbeState {
@@ -607,7 +672,7 @@ function probeManifestState(issueRoot: string, expected: IssueManifest): IssueTa
   } catch {
     return "conflict";
   }
-  return manifestsMatch(value, expected) ? "compatible" : "conflict";
+  return manifestsMatch(issueRoot, value, expected) ? "compatible" : "conflict";
 }
 
 /** Combine a target's cache state and its real git worktree identity into ONE
@@ -754,6 +819,9 @@ export async function inspectIssueInit(input: InspectIssueInitInput): Promise<Is
 }
 
 export interface ApplyIssueInitDeps {
+  /** Test-only causal trace for the Workspace authority lock and nested
+   * repository-cache locks acquired by this operation. */
+  readonly onLockAcquired?: (lock: "authority" | "repository", alias?: string) => void;
   /** Test-only hook fired synchronously right after each target's real git
    *  worktree is created — lets a test inject a genuine filesystem mutation
    *  (e.g. making an earlier target dirty) between one target's creation and
@@ -877,7 +945,7 @@ function writeJournal(issueRoot: string, journal: IssueInitJournal): void {
 async function rollbackCreatedTargets(
   targets: readonly JournalTarget[],
   cacheByAlias: ReadonlyMap<string, ResolvedTargetCache>,
-  deps: Pick<ApplyIssueInitDeps, "beforeRollbackMutation">,
+  deps: Pick<ApplyIssueInitDeps, "beforeRollbackMutation" | "onLockAcquired">,
 ): Promise<void> {
   for (const target of [...targets].reverse()) {
     if (!target.created) continue;
@@ -890,7 +958,11 @@ async function rollbackCreatedTargets(
     // shared cache admin — take the owning repoId lock once so a concurrent
     // Workspace's add cannot interleave with either half of this rollback.
     try {
-      await withRepositoryCacheLock({ rollHome: cache.rollHome, binding: cache.binding }, async () => {
+      await withRepositoryCacheLock({
+        rollHome: cache.rollHome,
+        binding: cache.binding,
+        onLockAcquired: () => deps.onLockAcquired?.("repository", target.alias),
+      }, async () => {
         deps.beforeRollbackMutation?.(target.alias, target.path);
         await issueWorktreeRemove(cache.cachePath, target.path, { readOnly: target.access === "read" });
         // The worktree is gone; also delete the governed branch, but ONLY when
@@ -919,7 +991,7 @@ async function rollbackCreatedTargets(
  *  Home repository cache (~/.roll/repos via the existing repository-cache
  *  contract) — never a Workspace-relative cache. ALL targets/cache/base SHA
  *  are resolved before the Issue root is created or mutated. */
-export async function applyIssueInit(input: ApplyIssueInitInput, deps: ApplyIssueInitDeps = {}): Promise<ApplyIssueInitResult> {
+async function applyIssueInitUnlocked(input: ApplyIssueInitInput, deps: ApplyIssueInitDeps = {}): Promise<ApplyIssueInitResult> {
   // Containment MUST be checked before any read/write below — a symlinked
   // Issue root (or a symlinked ancestor like `workspace/issues` itself)
   // escaping the Workspace would otherwise let every subsequent manifest,
@@ -988,7 +1060,7 @@ export async function applyIssueInit(input: ApplyIssueInitInput, deps: ApplyIssu
   }
   const plan = planResult.value;
 
-  if (manifestExists && !manifestsMatch(manifestOnDisk, plan.manifest)) {
+  if (manifestExists && !manifestsMatch(input.issueRoot, manifestOnDisk, plan.manifest)) {
     throw new IssueInitializationError("manifest_conflict", "Issue manifest on disk conflicts with the resolved Story Contract's immutable intent");
   }
 
@@ -1008,6 +1080,7 @@ export async function applyIssueInit(input: ApplyIssueInitInput, deps: ApplyIssu
         binding,
         rollHome: input.rollHome,
         integrationRefspec: integrationRefspecFor(binding),
+        onLockAcquired: () => deps.onLockAcquired?.("repository", declared.alias),
       });
       const pinned = readPinnedTargetFacts(input.issueRoot, declared.alias, { workspaceId: input.workspaceId, storyId: input.contract.storyId, repoId: binding.repoId });
       if (pinned !== undefined) {
@@ -1122,7 +1195,11 @@ export async function applyIssueInit(input: ApplyIssueInitInput, deps: ApplyIssu
       // rewrites and can cross-bind a worktree path to the wrong governed
       // branch (US-WS-011 concurrent-isolation gate).
       const added = await withRepositoryCacheLock(
-        { rollHome: cache.rollHome, binding: cache.binding },
+        {
+          rollHome: cache.rollHome,
+          binding: cache.binding,
+          onLockAcquired: () => deps.onLockAcquired?.("repository", target.alias),
+        },
         () => {
           deps.beforeAddMutation?.(target.alias, targetPath);
           return issueWorktreeAdd(cache.cachePath, targetPath, cache.baseSha, target.workBranch, {
@@ -1178,5 +1255,21 @@ export async function applyIssueInit(input: ApplyIssueInitInput, deps: ApplyIssu
     writeJournal(input.issueRoot, journal);
     if (error instanceof IssueInitializationError) throw error;
     throw new IssueInitializationError("apply_failed", `Issue init failed: ${(error as Error).message}`, { cause: error });
+  }
+}
+
+export async function applyIssueInit(input: ApplyIssueInitInput, deps: ApplyIssueInitDeps = {}): Promise<ApplyIssueInitResult> {
+  try {
+    return await withWorkspaceAuthorityLock({
+      rollHome: input.rollHome,
+      workspaceId: input.workspaceId,
+      operation: "issue-init",
+      onAcquired: () => deps.onLockAcquired?.("authority"),
+    }, () => applyIssueInitUnlocked(input, deps));
+  } catch (error) {
+    if (error instanceof WorkspaceAuthorityLockError) {
+      throw new IssueInitializationError("apply_failed", "Workspace authority is locked by another metadata writer", { cause: error });
+    }
+    throw error;
   }
 }

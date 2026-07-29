@@ -100,7 +100,7 @@ describe("US-WS-021 Workspace-first documentation contract", () => {
     const zh = doc("guide/zh/workspaces.md");
 
     for (const token of [
-      "roll workspace init",
+      "roll workspace create",
       "--workspace <id|path>",
       "multiple active Workspaces",
       "issues/<storyId>/<repoAlias>/",
@@ -115,7 +115,7 @@ describe("US-WS-021 Workspace-first documentation contract", () => {
     ]) expect(en, `guide/en/workspaces.md missing ${token}`).toContain(token);
 
     for (const token of [
-      "roll workspace init",
+      "roll workspace create",
       "--workspace <ID|路径>",
       "多个 active Workspace",
       "issues/<storyId>/<repoAlias>/",

@@ -14,6 +14,7 @@ import {
 import { protectReadOnlyWorktree, unprotectReadOnlyWorktree } from "../src/issue-worktree-git.js";
 import { ensureRepositoryCache, resolveRepositoryCacheIdentity } from "../src/repository-cache.js";
 import { readLockOwner } from "../src/process.js";
+import { workspaceAuthorityLockPath } from "../src/workspace-authority-lock.js";
 
 const sandboxes: string[] = [];
 afterEach(() => {
@@ -39,8 +40,11 @@ function git(cwd: string, args: readonly string[]): string {
 function treeDigest(root: string): string {
   const hash = createHash("sha256");
   const visit = (path: string, relativePath: string): void => {
+    if (relativePath === "locks/workspace-authority" || relativePath.startsWith("locks/workspace-authority/")) return;
     const stat = lstatSync(path);
-    hash.update(`${relativePath}\0${stat.mode}\0${stat.size}\0${stat.mtimeMs}\0${stat.ctimeMs}\0`);
+    const normalizedSize = relativePath === "locks" ? 0 : stat.size;
+    const directoryMetadata = relativePath === "locks" ? "authority-child-normalized" : `${stat.mtimeMs}\0${stat.ctimeMs}`;
+    hash.update(`${relativePath}\0${stat.mode}\0${normalizedSize}\0${directoryMetadata}\0`);
     if (stat.isSymbolicLink()) {
       hash.update(`L\0${readlinkSync(path)}\0`);
       return;
@@ -165,6 +169,63 @@ describe("inspectIssueInit", () => {
     }
     expect(report.targets["sot1"]?.workBranch).toBe("roll/ws-demo/US-XX1/sot1");
     expect(report.targets["sot3"]?.workBranch).toBeNull();
+  });
+
+  it("keeps a legacy Issue compatible when workBranch was event-frozen and its Requirement later gains a campaign target", async () => {
+    const f = fixture();
+    const requirement: RequirementSourceManifest = {
+      schema: "roll.requirement-source/v1",
+      requirementId: "req-legacy",
+      provider: "user_input",
+      ref: "IDEA-074",
+      revision: "owner-1",
+      capturedAt: "2026-07-27T00:00:00.000Z",
+      previousRevisions: [],
+      requirement: { bytes: 1, sha256: "a".repeat(64) },
+      context: [],
+      stories: [f.contract.storyId],
+      attest: {
+        schema: "roll.requirement-attest-projection/v1",
+        mode: "generated_aggregate",
+        evidenceAuthority: "issue",
+      },
+    };
+    await applyIssueInit({
+      workspaceId: "ws-demo",
+      rollHome: f.rollHome,
+      workspaceRoot: f.workspaceRoot,
+      issueRoot: f.issueRoot,
+      contract: f.contract,
+      bindings: f.bindings,
+      requirementManifests: [requirement],
+    });
+
+    const manifestPath = join(f.issueRoot, "manifest.json");
+    const legacy = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      repositories: Array<Record<string, unknown>>;
+    };
+    for (const target of legacy.repositories) delete target["workBranch"];
+    writeFileSync(manifestPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+    const report = await inspectIssueInit({
+      workspaceId: "ws-demo",
+      rollHome: f.rollHome,
+      workspaceRoot: f.workspaceRoot,
+      issueRoot: f.issueRoot,
+      contract: f.contract,
+      bindings: f.bindings,
+      requirementManifests: [{
+        ...requirement,
+        deliveryTarget: {
+          terminal: "campaign_branch",
+          branch: "idea-074-workspace",
+          mainMerge: "forbidden",
+        },
+      }],
+    });
+
+    expect(report.manifest.state).toBe("compatible");
+    expect(JSON.parse(readFileSync(manifestPath, "utf8"))).not.toHaveProperty("deliveryTarget");
   });
 
   it("reports conflict (never silently omits) a target whose alias has no matching Workspace repository binding", async () => {
@@ -362,7 +423,9 @@ describe("applyIssueInit", () => {
       ],
     };
     const observed: string[] = [];
+    const lockOrder: string[] = [];
     const assertOwned = (alias: string, phase: "add" | "rollback"): void => {
+      expect(existsSync(workspaceAuthorityLockPath(f.rollHome, "ws-demo"))).toBe(true);
       const repository = f.bindings.find((candidate) => candidate.alias === alias);
       if (repository === undefined) throw new Error(`fixture binding missing: ${alias}`);
       const identity = resolveRepositoryCacheIdentity({ rollHome: f.rollHome, binding: repository });
@@ -382,6 +445,7 @@ describe("applyIssueInit", () => {
       bindings: f.bindings,
       requirementManifests: f.requirementManifests,
     }, {
+      onLockAcquired: (lock, alias) => lockOrder.push(`${lock}:${alias ?? "workspace"}`),
       beforeAddMutation: (alias) => assertOwned(alias, "add"),
       beforeMutateTarget: (alias) => {
         if (alias === "sot2") throw new Error("force rollback after sot1 creation");
@@ -390,6 +454,9 @@ describe("applyIssueInit", () => {
     })).rejects.toThrow(IssueInitializationError);
 
     expect(observed).toEqual(["add:sot1", "rollback:sot1"]);
+    expect(lockOrder[0]).toBe("authority:workspace");
+    expect(lockOrder).toContain("repository:sot1");
+    expect(lockOrder.slice(1).every((entry) => entry.startsWith("repository:"))).toBe(true);
     expect(existsSync(join(f.issueRoot, "sot1"))).toBe(false);
   });
 
@@ -411,7 +478,11 @@ describe("applyIssueInit", () => {
     // The immutable manifest never carries runtime SHA/path/branch.
     expect(JSON.stringify(manifest)).not.toContain("baseSha");
     expect(JSON.stringify(manifest)).not.toContain("worktreePath");
-    expect(JSON.stringify(manifest)).not.toContain("workBranch");
+    expect(manifest.repositories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ alias: "sot1", workBranch: "roll/ws-demo/US-XX1/sot1" }),
+      expect.objectContaining({ alias: "sot2", workBranch: "roll/ws-demo/US-XX1/sot2" }),
+    ]));
+    expect(manifest.repositories.find((target) => target.alias === "sot3")).not.toHaveProperty("workBranch");
 
     const events = readFileSync(join(f.issueRoot, "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(events).toHaveLength(3);

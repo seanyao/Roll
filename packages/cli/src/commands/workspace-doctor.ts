@@ -8,6 +8,7 @@ import {
   normalizeAgentCapacityPolicy,
   normalizeAgentScopeConfig,
   normalizeRequirementSourceReference,
+  readLeases,
   type IssueStoryContract,
   type WorkspaceDoctorProbe,
   type WorkspaceDoctorRepairKind,
@@ -408,25 +409,24 @@ function runtimeLockProbes(workspaceRoot: string): WorkspaceDoctorProbe[] {
         : pidAlive(owner.pid) ? "active" : "stale_owned_dead";
     probes.push({ kind: "runtime_lock", state, targetId: relativePath, evidencePath: `runtime/locks/${relativePath}` });
   }
-  const storyLeasePath = join(root, "story-leases.json");
-  if (!existsSync(storyLeasePath)) return probes;
-  let leases: unknown;
+  const storyLeaseDir = join(root, "leases");
+  let leases: ReturnType<typeof readLeases>;
   try {
-    leases = JSON.parse(readFileSync(storyLeasePath, "utf8"));
+    leases = readLeases(storyLeaseDir);
   } catch {
-    leases = undefined;
-  }
-  if (!isRecord(leases)) {
-    probes.push({ kind: "runtime_lock", state: "unsupported_schema", targetId: "story-leases", evidencePath: "runtime/locks/story-leases.json" });
+    probes.push({ kind: "runtime_lock", state: "unsupported_schema", targetId: "story-leases", evidencePath: "runtime/locks/leases" });
     return probes;
   }
   for (const [storyId, value] of Object.entries(leases).sort(([left], [right]) => left.localeCompare(right))) {
+    const evidencePath = existsSync(join(storyLeaseDir, `${storyId}.lease`))
+      ? `runtime/locks/leases/${storyId}.lease`
+      : "runtime/locks/story-leases.json";
     if (
       !isRecord(value) || typeof value["claimedAt"] !== "number" ||
-      (value["source"] !== "cycle" && value["source"] !== "human" && value["source"] !== "supervisor") ||
+      (value["source"] !== "cycle" && value["source"] !== "human" && value["source"] !== "supervisor" && value["source"] !== "host-delegation") ||
       (value["pid"] !== undefined && typeof value["pid"] !== "number")
     ) {
-      probes.push({ kind: "runtime_lock", state: "unsupported_schema", targetId: storyId, evidencePath: "runtime/locks/story-leases.json" });
+      probes.push({ kind: "runtime_lock", state: "unsupported_schema", targetId: storyId, evidencePath });
       continue;
     }
     const source = value["source"];
@@ -435,7 +435,7 @@ function runtimeLockProbes(workspaceRoot: string): WorkspaceDoctorProbe[] {
     const state = source === "cycle" && typeof pid === "number"
       ? pidAlive(pid) ? "active" : "stale_owned_dead"
       : staleHuman ? "stale_live_or_foreign" : "active";
-    probes.push({ kind: "runtime_lock", state, targetId: storyId, evidencePath: "runtime/locks/story-leases.json" });
+    probes.push({ kind: "runtime_lock", state, targetId: storyId, evidencePath });
   }
   return probes;
 }
@@ -643,6 +643,7 @@ async function repairCache(
 }
 
 function repairProjection(
+  rollHome: string,
   workspaceRoot: string,
   workspace: WorkspaceManifest,
   action: WorkspaceDoctorRepairAction,
@@ -660,6 +661,7 @@ function repairProjection(
   if (inspection.state === "current") return "reused";
   if (!repairOffered(report, action)) throw new WorkspaceDoctorRepairError("projection_repair_not_offered");
   return repairRequirementProjection({
+    rollHome,
     workspaceRoot,
     provider: source.value.provider,
     requirementId: source.value.requirementId,
@@ -774,7 +776,7 @@ async function executeRepair(
   if (action.kind === "update_registry_path") return repairRegistryPath(rollHome, action, path, report);
   const workspace = readWorkspace(entry.root);
   if (action.kind === "rebuild_cache") return repairCache(rollHome, workspace, action, report);
-  if (action.kind === "repair_requirement_projection") return repairProjection(entry.root, workspace, action, report);
+  if (action.kind === "repair_requirement_projection") return repairProjection(rollHome, entry.root, workspace, action, report);
   if (action.kind === "recreate_clean_worktree") return repairIssue(rollHome, entry, workspace, action, report);
   if (action.kind === "cleanup_stale_capacity_broker_lock") return cleanupCapacityBrokerLock(rollHome, action, report);
   return cleanupLease(rollHome, action, report);

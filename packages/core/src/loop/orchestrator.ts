@@ -115,12 +115,15 @@ import type {
   RepositoryCycleIdentity,
   RepositoryExecutionContext,
   TerminalOutcome,
+  WorkspaceExecutionContextV1,
+  WorkspaceContextScope,
 } from "@roll/spec";
 import { cycleCurrency } from "../cost/tracker.js";
 import type { RollEvent } from "@roll/spec";
 import { builderFinalizationReady, finalizeBuilder, handoffKindFor } from "./builder-finalization.js";
 import { adversarialNextStep, adversarialDegradeDecision, type AdversarialFailure, type AdversarialRunSummary } from "./adversarial.js";
 import { nextWaitAction, type WaitAction } from "../delivery/pr.js";
+import type { ContextCycleStageStateV1 } from "../context/stage-handoff.js";
 
 // ── v2 terminal vocabulary (six-state model) ─────────────────────────────────
 
@@ -941,6 +944,9 @@ export interface CycleContext {
    *  v4.0 only `standard` (builder-only) actually executes — verified/planned add
    *  evaluator/planner stages in later stories. Absent ⇒ not yet selected. */
   selectedProfile?: ExecutionProfile;
+  /** Exact Context stage state. Consuming stages must use this handoff rather
+   * than discovering a newer Snapshot from the durable store. */
+  contextStage?: ContextCycleStageStateV1;
   /** FIX-208: the real per-cycle cost folded from the agent's parsed usage
    *  (cost/tracker.ts), set by the executor after spawn_agent. Threaded into
    *  BOTH the cycle:end event and the runs row so they agree. Absent ⇒ no
@@ -995,6 +1001,14 @@ export interface CycleContext {
    * cardinality-one Workspace still has one map entry; no repoCwd/worktree
    * compatibility fields are mirrored onto CycleContext. */
   repositoryExecution?: CycleRepositoryExecutionContext;
+  /** US-WS-033: immutable Workspace/Issue authority snapshot resolved once at
+   * invocation start and carried through runner, recovery, watch and terminal
+   * handlers. Consumers must never rediscover authority from cwd. */
+  workspaceExecution?: WorkspaceExecutionContextV1;
+  /** Explicit policy classification for missing Workspace authority. */
+  workspaceContextScope?: WorkspaceContextScope;
+  /** Explicit repository selector; canonicalized to repoId before spawn. */
+  repositorySelector?: string;
 }
 
 export type RepositoryCommandOperation = "context" | "edit" | "test" | "tcr" | "publish";
@@ -1163,6 +1177,8 @@ export type CycleEvent =
       type: "story_picked";
       storyId: string;
       repositoryExecution?: CycleRepositoryExecutionContext;
+      workspaceExecution?: WorkspaceExecutionContextV1;
+      repositorySelector?: string;
     }
   | { type: "repository_setup_failed"; storyId: string }
   | { type: "no_story" } // picker returned nothing → idle (bin/roll:9180-class).
@@ -1454,6 +1470,12 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
             ...(event.repositoryExecution === undefined
               ? {}
               : { repositoryExecution: event.repositoryExecution }),
+            ...(event.workspaceExecution === undefined
+              ? {}
+              : { workspaceExecution: event.workspaceExecution }),
+            ...(event.repositorySelector === undefined
+              ? {}
+              : { repositorySelector: event.repositorySelector }),
           },
         },
         commands: [

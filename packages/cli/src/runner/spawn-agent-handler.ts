@@ -1,8 +1,9 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { extractUsage, getAgentSpec, toCycleCost, type AgentInternalFailure, type CycleCommand, type CycleContext, type RunKillReason } from "@roll/core";
-import type { CycleCost } from "@roll/spec";
-import { agentSpawnEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
+import { isDeepStrictEqual } from "node:util";
+import { advanceContextCycleStageState, extractUsage, getAgentSpec, resolveWorkspaceExecutionContextScope, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext, type RunKillReason } from "@roll/core";
+import type { CycleCost, RepositoryExecutionContext } from "@roll/spec";
+import { agentSpawnEnvironment, workspaceExecutionEnvironment, type AgentSpawnOptions } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
 import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination } from "./main-checkout-guard.js";
 import { recoverKimiUsage, recoverPiUsage } from "./usage-recovery.js";
@@ -20,12 +21,60 @@ import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktr
 import { resolveIntegrationBranch } from "@roll/infra";
 import { readGateMode, recordSpawnRound } from "./round-journal-emit.js";
 import type { ExecuteResult, Ports } from "./ports.js";
+import { invalidContextHandoff, type ContextStageHandoffV1 } from "./context-handoff.js";
+import type { ContextStageHostReadInputV1 } from "./context-stage-host.js";
+import { prepareWorkspaceSkillHandoff } from "./workspace-skill-handoff.js";
+import { resolveWorkspaceCycleRepository } from "./scoped-route.js";
 import {
   RepositoryObservationError,
   observeWritableRepositoryCommitCount,
 } from "./repository-observation.js";
 
 type SpawnAgentCommand = Extract<CycleCommand, { kind: "spawn_agent" }>;
+
+export type ContextBuilderSkillBodyResult =
+  | {
+      readonly status: "ready";
+      readonly skillBody: string;
+      readonly handoff?: ContextStageHandoffV1;
+    }
+  | {
+      readonly status: "blocked";
+      readonly diagnostic: ReturnType<typeof invalidContextHandoff>;
+    };
+
+/** The production prompt boundary for Context-aware Builder stages. */
+export async function prepareContextBuilderSkillBody(
+  ports: Pick<Ports, "contextStage">,
+  storyId: string | undefined,
+  skillBody: string,
+  contextInput: Omit<ContextStageHostReadInputV1, "storyId" | "stage"> = { refs: [] },
+): Promise<ContextBuilderSkillBodyResult> {
+  if (ports.contextStage === undefined || storyId === undefined || storyId === "") {
+    return { status: "ready", skillBody };
+  }
+  let result: Awaited<ReturnType<NonNullable<Ports["contextStage"]>["readForStage"]>>;
+  try {
+    result = await ports.contextStage.readForStage({
+      storyId,
+      stage: storyId.startsWith("FIX-") || storyId.startsWith("BUG-") ? "fix" : "build",
+      ...contextInput,
+    });
+  } catch {
+    return { status: "blocked", diagnostic: invalidContextHandoff() };
+  }
+  if (result.status === "ready") {
+    return {
+      status: "ready",
+      skillBody: `${skillBody}\n\n${result.encodedEnvelope}`,
+      handoff: result.handoff,
+    };
+  }
+  return {
+    status: "blocked",
+    diagnostic: result.status === "blocked" ? result.diagnostic : invalidContextHandoff(),
+  };
+}
 
 function executionSkillBody(ports: Ports, storyId: string | undefined): string {
   if (!ports.skillBody.startsWith("# Roll Loop")) return ports.skillBody;
@@ -40,13 +89,95 @@ export function applyRepositoryBuilderContext(
   ctx: CycleContext,
   options: AgentSpawnOptions,
 ): AgentSpawnOptions {
-  const execution = ctx.repositoryExecution;
-  if (execution === undefined) return options;
+  const execution = ctx.repositoryExecution ?? ctx.workspaceExecution?.issue?.execution;
+  const prepared = prepareWorkspaceBuilderSkillBody(ctx, options.skillBody);
+  if (!prepared.ok) throw new Error(prepared.code);
+  if (execution === undefined) return { ...options, skillBody: prepared.skillBody };
   return {
     ...options,
     cwd: execution.issueRoot,
-    skillBody: injectRepositoryContext(options.skillBody, execution),
+    skillBody: prepared.skillBody,
   };
+}
+
+export type WorkspaceBuilderSkillBodyResult =
+  | {
+      readonly ok: true;
+      readonly skillBody: string;
+      readonly contextJson?: string;
+      readonly selectedRepository?: RepositoryExecutionContext;
+    }
+  | { readonly ok: false; readonly code: string };
+
+export type WorkspaceSpawnIdentityResult =
+  | { readonly ok: true; readonly selectedRepository?: RepositoryExecutionContext }
+  | { readonly ok: false; readonly code: string };
+
+/** Validate the frozen Workspace/Issue/repository identity before any spawn side effect. */
+export function resolveWorkspaceSpawnIdentity(ctx: CycleContext): WorkspaceSpawnIdentityResult {
+  if (ctx.workspaceExecution === undefined) {
+    return { ok: false, code: "missing_execution_context" };
+  }
+  const scoped = resolveWorkspaceExecutionContextScope({
+    scope: "issue_required",
+    context: ctx.workspaceExecution,
+  });
+  if (!scoped.ok || scoped.context?.issue === undefined) {
+    return { ok: false, code: scoped.ok ? "missing_execution_context" : scoped.error.code };
+  }
+  if (ctx.storyId !== scoped.context.issue.storyId) {
+    return { ok: false, code: "story_identity_mismatch" };
+  }
+  if (
+    ctx.repositoryExecution !== undefined &&
+    !isDeepStrictEqual(ctx.repositoryExecution, scoped.context.issue.execution)
+  ) {
+    return { ok: false, code: "repository_context_mismatch" };
+  }
+  const selected = resolveWorkspaceCycleRepository(scoped.context, ctx.repositorySelector);
+  return selected.ok
+    ? { ok: true, selectedRepository: selected.repository }
+    : selected;
+}
+
+/** Compose repository details under the canonical Workspace handoff block. */
+export function prepareWorkspaceBuilderSkillBody(
+  ctx: CycleContext,
+  skillBody: string,
+): WorkspaceBuilderSkillBodyResult {
+  const identity = resolveWorkspaceSpawnIdentity(ctx);
+  if (!identity.ok) return identity;
+  const execution = ctx.repositoryExecution ?? ctx.workspaceExecution?.issue?.execution;
+  const repositoryBody = execution === undefined
+    ? skillBody
+    : injectRepositoryContext(skillBody, execution);
+  if (ctx.workspaceExecution === undefined) return { ok: true, skillBody: repositoryBody };
+  const selected = identity.selectedRepository;
+  if (selected === undefined) return { ok: false, code: "missing_repository_context" };
+  const selectedBody = [
+    "[Selected Workspace repository]",
+    `Selected repository: ${selected.repoId} (${selected.alias})`,
+    "Use this exact repoId for repository-scoped commands; do not infer another repository from cwd or ordering.",
+    "[/Selected Workspace repository]",
+    "",
+    repositoryBody,
+  ].join("\n");
+  const prepared = prepareWorkspaceSkillHandoff({
+    skillName: ctx.storyId?.startsWith("FIX-") || ctx.storyId?.startsWith("BUG-")
+      ? "roll-fix"
+      : "roll-build",
+    scope: "issue_required",
+    context: ctx.workspaceExecution,
+    skillBody: selectedBody,
+  });
+  return prepared.ok
+    ? {
+        ok: true,
+        skillBody: prepared.skillBody,
+        contextJson: prepared.contextJson,
+        selectedRepository: selected,
+      }
+    : prepared;
 }
 
 export async function executeSpawnAgentCommand(
@@ -56,6 +187,14 @@ export async function executeSpawnAgentCommand(
 ): Promise<ExecuteResult> {
   switch (cmd.kind) {
     case "spawn_agent": {
+      const spawnIdentity = resolveWorkspaceSpawnIdentity(ctx);
+      if (!spawnIdentity.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace spawn identity blocked for ${ctx.storyId ?? "?"}: ${spawnIdentity.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return { event: { type: "agent_exited", exit: 1, timedOut: false } };
+      }
       // FIX-343 (step ①): mint the BUILDER's unique session id ONCE, here at the
       // working-agent spawn, and reuse it across retries (a non-empty
       // ctx.builderSessionId means a prior attempt already minted it). The attest
@@ -74,7 +213,7 @@ export async function executeSpawnAgentCommand(
       // landing reads the HEAD. No targetSubmodule ⇒ ports.paths.worktreePath
       // (execRepoCwd ⇒ ports.repoCwd), byte-identical to today.
       const legacyExecCwd = resolveExecutionCwd(ports, ctx);
-      const execCwd = ctx.repositoryExecution?.issueRoot ?? legacyExecCwd;
+      const execCwd = spawnIdentity.selectedRepository?.worktreePath ?? legacyExecCwd;
       const execRepoCwd = ctx.repositoryExecution === undefined
         ? resolveExecutionRepoCwd(ports, ctx)
         : undefined;
@@ -113,21 +252,99 @@ export async function executeSpawnAgentCommand(
       // FAIL CLOSED — the Builder never starts — when no valid `design` binding
       // resolves OR the Designer publishes no valid contract. No-op for
       // standard/verified.
+      let contextStage: ContextCycleStageStateV1 | undefined = ctx.contextStage;
       if (ctx.selectedProfile === "designed") {
         const design = await runDesignerStage(ports, ctx);
+        contextStage = design.contextStage ?? contextStage;
         if (!design.ok) {
           ports.events.appendAlert(
             ports.paths.alertsPath,
             `designer stage failed closed for ${ctx.storyId ?? "?"}: ${design.reasons.join("; ")} — Builder not started (cycle ${ctx.cycleId ?? "?"})`,
           );
-          return { event: { type: "agent_exited", exit: 1, timedOut: false }, ctxPatch: { builderSessionId } };
+          return {
+            event: { type: "agent_exited", exit: 1, timedOut: false },
+            ctxPatch: {
+              builderSessionId,
+              ...(contextStage === undefined ? {} : { contextStage }),
+            },
+          };
         }
       }
+      // Context must be resolved before any observer/watchdog starts. A missing
+      // or invalid handoff blocks the consuming stage without spawning an agent
+      // and without leaving background timers behind.
+      const skillBodyForSpawn = maybeInjectProjectMap(
+        executionSkillBody(ports, ctx.storyId),
+        execCwd,
+        readProjectMapEnabled(ports.repoCwd),
+        ctx.storyId,
+      );
+      const lowScoreFeedback = ctx.storyId !== undefined && ctx.storyId !== ""
+        ? buildLowScoreFixForwardPrompt(ports.repoCwd, ctx.storyId)
+        : "";
+      // US-CYCLE-007: on a repair round, lead with the checksummed briefing;
+      // otherwise retain the plain low-score fix-forward prompt.
+      let repairBriefingLead = "";
+      if (lowScoreFeedback !== "" && execRepoCwd !== undefined) {
+        try {
+          const briefing = await buildRepairRoundBriefing(ports, ctx, execCwd, execRepoCwd);
+          if (briefing !== null && briefing.leadText !== "") repairBriefingLead = briefing.leadText;
+        } catch {
+          /* briefing is a warm-start aid; fall back to lowScoreFeedback */
+        }
+      }
+      const preContextSkillBody =
+        repairBriefingLead !== ""
+          ? `${repairBriefingLead}\n\n${skillBodyForSpawn}`
+          : lowScoreFeedback !== ""
+          ? `${lowScoreFeedback}\n\n${skillBodyForSpawn}`
+          : skillBodyForSpawn;
+      const contextSkillBody = await prepareContextBuilderSkillBody(
+        ports,
+        ctx.storyId,
+        preContextSkillBody,
+        contextStage ?? { refs: [] },
+      );
+      if (contextSkillBody.status === "blocked") {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `context stage blocked for ${ctx.storyId ?? "?"}: ${contextSkillBody.diagnostic.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return {
+          event: { type: "agent_exited", exit: 1, timedOut: false },
+          ctxPatch: {
+            builderSessionId,
+            ...(contextStage === undefined ? {} : { contextStage }),
+          },
+        };
+      }
+      const workspaceSkillBody = prepareWorkspaceBuilderSkillBody(ctx, contextSkillBody.skillBody);
+      if (!workspaceSkillBody.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace skill handoff blocked for ${ctx.storyId ?? "?"}: ${workspaceSkillBody.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return {
+          event: { type: "agent_exited", exit: 1, timedOut: false },
+          ctxPatch: {
+            builderSessionId,
+            ...(contextStage === undefined ? {} : { contextStage }),
+          },
+        };
+      }
+      const finalSkillBody = workspaceSkillBody.skillBody;
+      const nextContextStage: ContextCycleStageStateV1 | undefined = contextSkillBody.handoff === undefined
+        ? contextStage
+        : advanceContextCycleStageState(
+            contextStage,
+            contextSkillBody.handoff,
+            ctx.storyId?.startsWith("FIX-") || ctx.storyId?.startsWith("BUG-") ? "fix" : "build",
+          );
       // US-PORT-011: the live observation file — one stable path per project,
       // truncated at each agent start, fed every chunk in real time. The popup
       // (runner template) and any `tail -f` watcher read THIS, not buffers.
       const livePath = join(dirname(ports.paths.eventsPath), "live.log");
-      const liveBanner = `── cycle ${ctx.cycleId ?? "?"} · ${ctx.storyId ?? "?"} · agent ${cmd.agent} · build-session ${builderSessionId} ──`;
+      const liveBanner = `── cycle ${ctx.cycleId ?? "?"} · workspace ${ctx.workspaceExecution?.workspace.workspaceId ?? ctx.repositoryExecution?.workspaceId ?? "legacy"} · story ${ctx.storyId ?? "?"} · agent ${cmd.agent} · build-session ${builderSessionId} ──`;
       try {
         writeFileSync(livePath, `${liveBanner}\n`);
       } catch {
@@ -229,51 +446,6 @@ export async function executeSpawnAgentCommand(
           : {}),
         appendEvent: (ev) => ports.events.appendEvent(ports.paths.eventsPath, ev),
       });
-      // FIX-338 (Phase B 杠杆2): when `loop_safety.project_map: true`, PREPEND a
-      // concise, bounded project map into the working agent's initial context so it
-      // doesn't burn execute time on sed/rg exploration. Agent-agnostic (one prompt
-      // body all shapes consume) + bounded (hard char cap). DEFAULT-OFF — a no-op
-      // until flipped on, in which case `ports.skillBody` is sent unchanged.
-      const skillBodyForSpawn = maybeInjectProjectMap(
-        executionSkillBody(ports, ctx.storyId),
-        // E4: map the tree the builder actually works in (the submodule for a
-        // submodule cycle), not the superproject shell.
-        execCwd,
-        readProjectMapEnabled(ports.repoCwd),
-        ctx.storyId,
-      );
-      // FIX-386: when the story was re-picked after a low peer review score,
-      // inject the reviewer's findings as a fix-forward task so the builder
-      // fixes on the same resumed branch instead of starting fresh.
-      const lowScoreFeedback = ctx.storyId !== undefined && ctx.storyId !== ""
-        ? buildLowScoreFixForwardPrompt(ports.repoCwd, ctx.storyId)
-        : "";
-      // US-CYCLE-007: a non-empty lowScoreFeedback means THIS is a REPAIR round
-      // (a re-dispatch after evaluator findings). Package the repair inputs as a
-      // checksummed BRIEFING artifact (findings + git diff --stat + involved
-      // files:lines + design-contract refs) and LEAD the skill body with it — the
-      // fresh session's SOLE context entry point, prefixed with "start from these
-      // findings; do NOT re-explore the whole repository". The briefing SUPERSEDES
-      // the plain fix-forward prompt (it already carries the findings + the
-      // branch-discipline instructions), so we never prepend both (no context
-      // bloat). GUARDRAIL: this whole block only runs on a repair round — a
-      // first/normal cycle has lowScoreFeedback === "" and finalSkillBody stays
-      // byte-identical to skillBodyForSpawn.
-      let repairBriefingLead = "";
-      if (lowScoreFeedback !== "" && execRepoCwd !== undefined) {
-        try {
-          const briefing = await buildRepairRoundBriefing(ports, ctx, execCwd, execRepoCwd);
-          if (briefing !== null && briefing.leadText !== "") repairBriefingLead = briefing.leadText;
-        } catch {
-          /* briefing is a warm-start AID — never fail the spawn; fall back below */
-        }
-      }
-      const finalSkillBody =
-        repairBriefingLead !== ""
-          ? `${repairBriefingLead}\n\n${skillBodyForSpawn}`
-          : lowScoreFeedback !== ""
-            ? `${lowScoreFeedback}\n\n${skillBodyForSpawn}`
-            : skillBodyForSpawn;
       // lever-4 (cross-card warm-context): after the pool was narrowed to
       // 国产/开源 agents (kimi/pi/reasonix), NO current engine declares a
       // warm-reuse capability — every cycle runs COLD. The resume-resolution +
@@ -327,23 +499,36 @@ export async function executeSpawnAgentCommand(
           mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
         }
         res = await Promise.race([
-          ports.agentSpawn(cmd.agent, applyRepositoryBuilderContext(ctx, {
+          ports.agentSpawn(cmd.agent, {
           purpose: "builder",
           // E4: the builder runs in the submodule cycle worktree for a submodule
           // story (execCwd); its git env + writable roots target the submodule's
           // own repo/object store so its commits actually land there.
-          cwd: execCwd,
+          cwd: workspaceSkillBody.selectedRepository?.worktreePath ?? execCwd,
           skillBody: finalSkillBody,
           ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-          ...(ctx.repositoryExecution !== undefined
-            ? { writableRoots: repositoryAgentWritableRoots(ctx.repositoryExecution) }
+          ...(ctx.repositoryExecution !== undefined && workspaceSkillBody.selectedRepository !== undefined
+            ? {
+                writableRoots: repositoryAgentWritableRoots({
+                  ...ctx.repositoryExecution,
+                  repositories: {
+                    [workspaceSkillBody.selectedRepository.repoId]: workspaceSkillBody.selectedRepository,
+                  },
+                }),
+              }
             : execRepoCwd === undefined
               ? {}
               : { writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath) }),
           ...(ctx.model !== undefined && ctx.model !== "" ? { model: ctx.model } : {}),
+          ...(ctx.workspaceExecution === undefined ? {} : { workspaceExecution: ctx.workspaceExecution }),
           env: {
             ...process.env,
             ROLL_LOOP_ALERT: ports.paths.alertsPath,
+            ...workspaceExecutionEnvironment(ctx.workspaceExecution),
+            ...(workspaceSkillBody.selectedRepository === undefined ? {} : {
+              ROLL_REPOSITORY_ID: workspaceSkillBody.selectedRepository.repoId,
+              ROLL_REPOSITORY_ALIAS: workspaceSkillBody.selectedRepository.alias,
+            }),
             ...agentSpawnEnvironment(cmd.agent),
           },
           // FIX-204B: pin the executor-picked story into the agent prompt — the
@@ -371,7 +556,7 @@ export async function executeSpawnAgentCommand(
           onSpawn: (child) => {
             spawnedPid = child.pid;
           },
-          })),
+          }),
           lostRace,
         ]);
       } finally {
@@ -659,6 +844,7 @@ export async function executeSpawnAgentCommand(
         // traceable to a recorded build-session id, not asserted).
         ctxPatch: {
           builderSessionId,
+          ...(nextContextStage === undefined ? {} : { contextStage: nextContextStage }),
           ...(costPatch !== undefined ? { cost: costPatch } : {}),
           ...(usageUnknownReason !== undefined ? { usageUnknownReason } : {}),
           ...(agentInternalFailure !== undefined ? { agentInternalFailure } : {}),

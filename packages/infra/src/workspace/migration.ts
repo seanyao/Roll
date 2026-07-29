@@ -28,6 +28,11 @@ import { rawGit } from "../git.js";
 import { acquireLock, releaseLock } from "../process.js";
 import { ensureRepositoryCache } from "../repository-cache.js";
 import { WorkspaceRegistry } from "../workspace-registry.js";
+import {
+  withWorkspaceAuthorityLock,
+  withWorkspaceAuthorityLockSync,
+  WorkspaceAuthorityLockError,
+} from "../workspace-authority-lock.js";
 import { collectHistoricalMigrationFacts } from "./migration-facts.js";
 
 const JOURNAL_V1 = "roll.workspace-migration-journal/v1" as const;
@@ -76,6 +81,7 @@ export interface HistoricalWorkspaceMigrationDeps {
   readonly afterPhase?: (phase: HistoricalWorkspaceMigrationPhase) => void;
   readonly forceCopy?: boolean;
   readonly now?: () => number;
+  readonly onLockAcquired?: (lock: "authority" | "migration" | "repository") => void;
 }
 
 export interface HistoricalWorkspaceMigrationResult {
@@ -723,7 +729,7 @@ function migrationLockPath(rollHome: string, workspaceId: string): string {
 }
 
 /** Apply or resume one exact owner-approved historical migration plan. */
-export async function applyHistoricalWorkspaceMigration(
+async function applyHistoricalWorkspaceMigrationUnlocked(
   input: ApplyHistoricalWorkspaceMigrationInput,
   deps: HistoricalWorkspaceMigrationDeps = {},
 ): Promise<HistoricalWorkspaceMigrationResult> {
@@ -759,6 +765,7 @@ export async function applyHistoricalWorkspaceMigration(
   const lock = acquireLock(lockPath, process.pid, { cycleId: `workspace-migration:${plan.workspaceId}`, unparseableIsHeld: true });
   if (!lock.acquired) throw new HistoricalWorkspaceMigrationError("concurrent_migration", "Workspace migration is already running");
   try {
+    deps.onLockAcquired?.("migration");
     if (completedMigrationIsActive(normalizedInput, plan) && !existsSync(journalPath)) {
       const ownership = plan.verdict === "manual_metadata_handoff" ? "independent_git" : plan.verdict === "repository_cutover_required" ? "product_tracked" : "ordinary";
       return completedResult({
@@ -805,6 +812,7 @@ export async function applyHistoricalWorkspaceMigration(
         transportRemote: journal.transportRemote,
         rollHome: journal.rollHome,
         integrationRefspec: `+refs/heads/${repo.integrationBranch}:refs/remotes/origin/${repo.integrationBranch}`,
+        onLockAcquired: () => deps.onLockAcquired?.("repository"),
       });
       journal = { ...journal, phase: "cache_ready" };
       writeJournal(journalPath, journal);
@@ -854,8 +862,28 @@ export async function applyHistoricalWorkspaceMigration(
   }
 }
 
+export async function applyHistoricalWorkspaceMigration(
+  input: ApplyHistoricalWorkspaceMigrationInput,
+  deps: HistoricalWorkspaceMigrationDeps = {},
+): Promise<HistoricalWorkspaceMigrationResult> {
+  const plan = parseHistoricalWorkspaceMigrationPlan(input.plan);
+  try {
+    return await withWorkspaceAuthorityLock({
+      rollHome: resolve(input.rollHome),
+      workspaceId: plan.workspaceId,
+      operation: "migration",
+      onAcquired: () => deps.onLockAcquired?.("authority"),
+    }, () => applyHistoricalWorkspaceMigrationUnlocked(input, deps));
+  } catch (error) {
+    if (error instanceof WorkspaceAuthorityLockError) {
+      throw new HistoricalWorkspaceMigrationError("concurrent_migration", "Workspace authority is locked by another metadata writer", { cause: error });
+    }
+    throw error;
+  }
+}
+
 /** Roll back only a non-active migration transaction; shared cache data is preserved. */
-export function rollbackHistoricalWorkspaceMigration(
+function rollbackHistoricalWorkspaceMigrationUnlocked(
   input: ApplyHistoricalWorkspaceMigrationInput,
 ): RollbackHistoricalWorkspaceMigrationResult {
   const plan = parseHistoricalWorkspaceMigrationPlan(input.plan);
@@ -898,5 +926,23 @@ export function rollbackHistoricalWorkspaceMigration(
     return { outcome: "rolled_back", workspaceId: plan.workspaceId };
   } finally {
     releaseLock(lockPath);
+  }
+}
+
+export function rollbackHistoricalWorkspaceMigration(
+  input: ApplyHistoricalWorkspaceMigrationInput,
+): RollbackHistoricalWorkspaceMigrationResult {
+  const plan = parseHistoricalWorkspaceMigrationPlan(input.plan);
+  try {
+    return withWorkspaceAuthorityLockSync({
+      rollHome: resolve(input.rollHome),
+      workspaceId: plan.workspaceId,
+      operation: "migration",
+    }, () => rollbackHistoricalWorkspaceMigrationUnlocked(input));
+  } catch (error) {
+    if (error instanceof WorkspaceAuthorityLockError) {
+      throw new HistoricalWorkspaceMigrationError("concurrent_migration", "Workspace authority is locked by another metadata writer", { cause: error });
+    }
+    throw error;
   }
 }

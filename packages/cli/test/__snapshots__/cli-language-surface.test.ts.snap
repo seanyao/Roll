@@ -43,6 +43,8 @@ internal  test · run-once · story · notify · enforce-tcr · precheck-ci · h
 
 [38;2;88;166;255mstates    [0mACTIVE (lanes armed) · DORMANT (backlog drained → loop lane self-unloads, zero idle records) · PAUSED (you stopped it)
 [38;2;88;166;255mwake      [0ma DORMANT loop wakes on any roll command · the daily dream scan · a PR merge
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
   "zh": "用法：roll loop <子命令>
 自治交付循环——按作动/传感/告警/维护分组。
@@ -55,6 +57,8 @@ internal  test · run-once · story · notify · enforce-tcr · precheck-ci · h
 
 [38;2;88;166;255m状态      [0mACTIVE 运行中(lane 就绪) · DORMANT 休眠(backlog 抽干→自卸 loop lane、不再记空转) · PAUSED 已暂停(你停的)
 [38;2;88;166;255m唤醒      [0m休眠的 loop 由以下唤醒：任意 roll 命令 · 每日 dream 扫描 · PR 合并
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
 }
 `;

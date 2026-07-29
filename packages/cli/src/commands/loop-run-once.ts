@@ -12,9 +12,9 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
-import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
-import { createScheduler, isOwnerHeld, launchdLabel, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
+import { EventBus, assessBacklog, branchCanaryVerdict, buildWorkspaceExecutionContext, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, deriveWorkspaceExecutionAuthorities, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason, type WorkspaceMatchEvidence } from "@roll/spec";
+import { createScheduler, isOwnerHeld, launchdLabel, loadExplicitWorkspaceDiscovery, loadWorkspaceDiscovery, readLockOwner, releaseLock } from "@roll/infra";
 import { dormantMarkerPath, resolveLoopRunState, writeDormantMarker } from "./loop-sched.js";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -50,8 +50,16 @@ import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { emitBacklogTargetError, resolveBacklogCommandTarget, stripBacklogScopeArgs, type ResolvedBacklogTarget } from "./backlog-target.js";
-import { resolveLang, t, v3Catalog } from "@roll/spec";
+import { canonicalWorkspaceSelectorIndex, containsCanonicalWorkspaceSelector, workspaceSelectorArgs } from "../lib/workspace-selector.js";
+import { resolveLang, t, v3Catalog, type WorkspaceExecutionContextV1 } from "@roll/spec";
 import { resolveStoryLeasePath } from "../runner/story-lease-path.js";
+import {
+  resolveRequirementMatchedWorkspace,
+  restorePersistedWorkspaceCycleContext,
+  restorePersistedWorkspaceCycleRepositorySelector,
+  validateRequirementMatchedWorkspace,
+} from "../runner/scoped-route.js";
+import { workspaceRollHome } from "./workspace-target.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
   "loop run-once: delivery published — PR open, awaiting reconciliation (Delivery Reconciler advances merge and credits main evidence)\n" +
@@ -167,12 +175,23 @@ export function cycleSignalTeardown(
     // FIX-1060: recover story/agent from events the cycle already wrote before
     // the signal, so an aborted cycle is never anonymous.
     const attr = readCycleAttributionFromEvents(paths.eventsPath, cycleId);
+    const restored = restorePersistedWorkspaceCycleContext(deps.runtimeDir ?? dirname(paths.eventsPath), cycleId);
+    const restoredRepository = restored.ok
+      ? restorePersistedWorkspaceCycleRepositorySelector(
+          deps.runtimeDir ?? dirname(paths.eventsPath),
+          cycleId,
+          restored.context,
+        )
+      : undefined;
     const ctx: CycleContext = {
       cycleId,
       branch,
       loop: "ci" as never,
-      storyId: attr.storyId,
+      storyId: restored.ok ? restored.context.issue?.storyId : attr.storyId,
       agent: attr.agent,
+      workspaceContextScope: "issue_required",
+      ...(restored.ok ? { workspaceExecution: restored.context } : {}),
+      ...(restoredRepository?.ok ? { repositorySelector: restoredRepository.repoId } : {}),
     };
     const tctx = { cycleId, branch, agent: ctx.agent ?? "", model: ctx.model ?? "" };
     const terminalSec = now();
@@ -858,15 +877,19 @@ export function buildLoopRouteDeps(projectPath: string): RouteDeps {
 
 /** `roll loop run-once --help` usage. Bilingual on separate lines (EN then ZH). */
 export const RUN_ONCE_USAGE =
-  "Usage: roll loop run-once [--workspace <id|path>] [--dry-run] [--race]\n" +
+  "Usage: roll loop run-once [--workspace <id|path>] [--repository <repoId|alias>] [--dry-run] [--race]\n" +
   "  Run ONE loop cycle now: pick a Todo card, build it through TCR, run the\n" +
   "  gates (attest + peer), and publish a PR. Exits when the cycle terminates.\n" +
   "  --workspace Bind the cycle runtime, backlog, locks, and events to one Workspace.\n" +
+  "              A scoped Story requirement may resolve the matching Workspace from any cwd.\n" +
+  "  --repository Select one repository by stable repoId or unique alias.\n" +
   "  --dry-run   Print the command plan only — no git / gh / agent side effects.\n" +
   "  --race      Opt in to same-card parallel racing (default: one-card-one-lease).\n" +
   "              The first merge atomically supersedes the remaining siblings.\n" +
   "立即跑一个 loop 周期:选一张 Todo 卡,经 TCR 建造,过闸(验收+同行评审),发 PR。\n" +
   "  --workspace 将周期 runtime、backlog、锁和事件绑定到一个 Workspace。\n" +
+  "              带 Story 范围时可从任意 cwd 精确匹配 Workspace。\n" +
+  "  --repository 通过稳定 repoId 或唯一 alias 选择一个仓库。\n" +
   "  --dry-run   只打印命令计划——不动 git / gh / agent。\n" +
   "  --race      显式开同卡并行竞速(默认一卡一租约);首个 merge 原子取消其余 sibling。";
 
@@ -883,6 +906,45 @@ export interface LoopRunOnceDeps {
   readonly backfillMergedRuns?: typeof backfillMergedRuns;
 }
 
+function repositorySelectorArg(args: readonly string[]):
+  | { readonly ok: true; readonly selector?: string }
+  | { readonly ok: false } {
+  const indices = args.flatMap((arg, index) => arg === "--repository" ? [index] : []);
+  if (indices.length > 1) return { ok: false };
+  const index = indices[0];
+  if (index === undefined) return { ok: true };
+  const selector = args[index + 1];
+  return selector === undefined || selector.startsWith("-")
+    ? { ok: false }
+    : { ok: true, selector };
+}
+
+function canonicalWorkspaceRepositorySelector(
+  context: WorkspaceExecutionContextV1 | undefined,
+  selector: string | undefined,
+): { readonly ok: true; readonly repoId?: string; readonly alias?: string } | { readonly ok: false; readonly code: string } {
+  if (context === undefined) {
+    return selector === undefined
+      ? { ok: true }
+      : { ok: false, code: "missing_execution_context" };
+  }
+  const requested = (selector ?? "").trim();
+  if (requested === "") {
+    const only = context.bindings.length === 1 ? context.bindings[0] : undefined;
+    return only === undefined
+      ? { ok: true }
+      : { ok: true, repoId: only.repoId, alias: only.alias };
+  }
+  const byId = context.bindings.find((binding) => binding.repoId === requested);
+  if (byId !== undefined) return { ok: true, repoId: byId.repoId, alias: byId.alias };
+  const byAlias = context.bindings.filter((binding) => binding.alias === requested);
+  if (byAlias.length > 1) return { ok: false, code: "ambiguous_repository_selector" };
+  const selected = byAlias[0];
+  return selected === undefined
+    ? { ok: false, code: "unknown_repository_selector" }
+    : { ok: true, repoId: selected.repoId, alias: selected.alias };
+}
+
 /**
  * The `loop run-once` entry. Returns a process exit code (0 ok).
  */
@@ -895,31 +957,61 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     return 0;
   }
   const dryRun = args.includes("--dry-run");
+  const repositorySelector = repositorySelectorArg(args);
+  if (!repositorySelector.ok) {
+    process.stderr.write("loop run-once: invalid_repository_selector\n");
+    return 1;
+  }
   // US-DELIV-005: `--race` is the explicit opt-in for same-card parallel
   // racing. It is carried to the pick_story handler via env (the default —
   // one-card-one-lease — needs no signal).
   if (args.includes("--race")) process.env["ROLL_LOOP_RACE"] = "1";
+  const allowedCards = parseAllowedCardsEnv();
 
-  // FIX-1209: preflight — detect and heal core.worktree contamination BEFORE
-  // resolving project identity. The harness systematically writes core.worktree
-  // into the shared main checkout's git config every cycle (FIX-914 family),
-  // causing `rev-parse --show-toplevel` to return a cycle worktree path — making
-  // projectIdentity() resolve to the wrong checkout. Detect and unset before
-  // any identity-dependent code runs. Also stores the healing detail so an ALERT
-  // can be written once `alertsPath` is available.
-  const workspaceRequested = args.includes("--workspace") || (process.env["ROLL_WORKSPACE"] ?? "").trim() !== "";
-  const legacyRunnerBound = (process.env["ROLL_MAIN_PROJECT"] ?? "").trim() !== "" ||
-    (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() !== "";
+  // Resolve the required mutation Workspace before consulting any project/runtime
+  // compatibility environment. Ambient runner paths are locations, not authority.
   let workspaceTarget: ResolvedBacklogTarget | undefined;
-  if (workspaceRequested || !legacyRunnerBound) {
+  let workspaceResolutionEvidence: readonly WorkspaceMatchEvidence[] = [];
+  let requirementDiscovery: ReturnType<typeof loadWorkspaceDiscovery> | undefined;
+  let requirementFailureCode: string | undefined;
+  let workspaceResolutionSource: "explicit" | "environment" | "cwd_manifest" | "requirement_discovery" =
+    containsCanonicalWorkspaceSelector(args) ? "explicit" : (process.env["ROLL_WORKSPACE"] ?? "").trim() !== ""
+      ? "environment"
+      : "cwd_manifest";
+  {
     const scoped = stripBacklogScopeArgs(args);
     if (!scoped.ok) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
     const selectorArgs: string[] = [];
-    const workspaceIndex = args.indexOf("--workspace");
-    if (workspaceIndex >= 0) selectorArgs.push("--workspace", args[workspaceIndex + 1] ?? "");
-    const decision = resolveBacklogCommandTarget(selectorArgs, "mutation");
+    const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
+    if (workspaceIndex >= 0) selectorArgs.push(...workspaceSelectorArgs(args[workspaceIndex + 1] ?? ""));
+    let decision = resolveBacklogCommandTarget(selectorArgs, "mutation");
+    if (!decision.ok && decision.code === "target_missing" && allowedCards !== undefined && allowedCards.size > 0) {
+      const discovery = loadWorkspaceDiscovery({ rollHome: workspaceRollHome() });
+      requirementDiscovery = discovery;
+      const requirementDecision = resolveRequirementMatchedWorkspace({
+        storyIds: [...allowedCards],
+        workspaces: discovery.workspaces,
+        diagnostics: discovery.diagnostics,
+        cwd: process.cwd(),
+        operation: "mutation",
+      });
+      if (requirementDecision.ok) {
+        decision = resolveBacklogCommandTarget(
+          workspaceSelectorArgs(requirementDecision.target.workspaceId),
+          "mutation",
+        );
+        workspaceResolutionSource = "requirement_discovery";
+        workspaceResolutionEvidence = requirementDecision.target.evidence;
+      } else {
+        requirementFailureCode = requirementDecision.code;
+      }
+    }
     if (!decision.ok) {
-      if (workspaceRequested || decision.code === "migration_required") return emitBacklogTargetError(decision);
+      if (requirementFailureCode !== undefined) {
+        process.stderr.write(`loop run-once: ${requirementFailureCode}\n`);
+        return 1;
+      }
+      return emitBacklogTargetError(decision);
     } else {
       if ("aggregate" in decision) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
       workspaceTarget = decision;
@@ -929,16 +1021,15 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   let id: { path: string; slug: string };
   let workspaceBinding: { workspaceId: string; runtimeRoot: string; backlogPath: string } | undefined;
   if (workspaceTarget === undefined) {
-    const identityRoot = (process.env["ROLL_MAIN_PROJECT"] ?? "").trim() || process.cwd();
-    coreWorktreeHeal = checkCoreWorktreeContamination(identityRoot);
-    id = await projectIdentity(identityRoot);
+    process.stderr.write("loop run-once: missing_execution_context\n");
+    return 1;
   } else {
     workspaceBinding = {
       workspaceId: workspaceTarget.workspaceId,
       runtimeRoot: workspaceTarget.runtimeRoot,
       backlogPath: workspaceTarget.backlogPath,
     };
-    coreWorktreeHeal = { healed: false, detail: "" };
+    coreWorktreeHeal = checkCoreWorktreeContamination(workspaceTarget.workspaceRoot);
     id = { path: workspaceTarget.workspaceRoot, slug: workspaceTarget.workspaceId };
   }
   const cycleId = makeCycleId();
@@ -971,7 +1062,64 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   }
 
   const branch = `loop/cycle-${cycleId}`;
-  const ctx = { cycleId, branch, loop: "ci" as never };
+  let workspaceExecution;
+  if (workspaceTarget !== undefined) {
+    const discovery = requirementDiscovery ?? loadExplicitWorkspaceDiscovery({
+        rollHome: workspaceRollHome(),
+        workspaceId: workspaceTarget.workspaceId,
+      });
+    const facts = discovery.workspaces.find(
+      (entry) => entry.candidate.workspaceId === workspaceTarget?.workspaceId,
+    );
+    if (facts === undefined) {
+      process.stderr.write("loop run-once: missing_execution_context\n");
+      return 1;
+    }
+    if (allowedCards !== undefined && allowedCards.size > 0) {
+      const allDiscovery = requirementDiscovery ?? loadWorkspaceDiscovery({ rollHome: workspaceRollHome() });
+      const validation = validateRequirementMatchedWorkspace({
+        target: facts,
+        workspaces: allDiscovery.workspaces,
+        storyIds: [...allowedCards],
+        operation: "mutation",
+      });
+      if (!validation.ok) {
+        process.stderr.write(`loop run-once: ${validation.code}\n`);
+        return 1;
+      }
+      workspaceResolutionEvidence = validation.evidence;
+    }
+    const built = buildWorkspaceExecutionContext({
+      facts: {
+        candidate: facts.candidate,
+        manifest: facts.manifest,
+        authorities: deriveWorkspaceExecutionAuthorities(facts.candidate.canonicalRoot),
+      },
+      source: workspaceResolutionSource,
+      evidence: workspaceResolutionEvidence,
+    });
+    if (!built.ok) {
+      process.stderr.write(`loop run-once: ${built.error.code}\n`);
+      return 1;
+    }
+    workspaceExecution = built.context;
+  }
+  const selectedRepository = canonicalWorkspaceRepositorySelector(
+    workspaceExecution,
+    repositorySelector.selector,
+  );
+  if (!selectedRepository.ok) {
+    process.stderr.write(`loop run-once: ${selectedRepository.code}\n`);
+    return 1;
+  }
+  const ctx: CycleContext = {
+    cycleId,
+    branch,
+    loop: "ci" as never,
+    workspaceContextScope: "issue_required",
+    ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+    ...(selectedRepository.repoId === undefined ? {} : { repositorySelector: selectedRepository.repoId }),
+  };
 
   if (dryRun) {
     const plan = dryRunPlan(ctx);
@@ -981,6 +1129,12 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
         `# project: ${id.slug}`,
         `# cycle:   ${cycleId}`,
         `# branch:  ${branch}`,
+        `# workspace: ${ctx.workspaceExecution?.workspace.workspaceId ?? "legacy"}`,
+        `# story:   ${allowedCards === undefined ? "scheduler-pick" : [...allowedCards].join(",")}`,
+        `# context-source: ${ctx.workspaceExecution?.resolution.source ?? "legacy"}`,
+        ...(selectedRepository.repoId === undefined
+          ? []
+          : [`# repository: ${selectedRepository.repoId} (${selectedRepository.alias ?? "unknown"})`]),
         "#",
         "# command plan (orchestrator → executor):",
         ...plan.map((l) => `  ${l}`),
@@ -1034,7 +1188,6 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     worktreePath: join(rt, "worktrees", `cycle-${cycleId}`),
   };
 
-  const allowedCards = parseAllowedCardsEnv();
   if (allowedCards === undefined) {
     const goLockOwner = readLockOwner(join(rt, "go.lock"));
     if (isOwnerHeld(goLockOwner, Math.floor(Date.now() / 1000), GO_LOCK_STALE_SEC)) {

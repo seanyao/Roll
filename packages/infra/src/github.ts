@@ -149,6 +149,8 @@ export async function gh(args: readonly string[]): Promise<GhResult> {
   const result = await invokeInfraTool<GhRawInput, GhResult>({
     declaration: GH_RAW_DECLARATION,
     input: { args: [...args] },
+    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
+    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh(invocation.input.args)),
   });
   if (result.ok) return result.output;
@@ -535,6 +537,8 @@ export async function prCreate(input: PrCreateInput): Promise<string> {
   const r = await invokeInfraTool<GitHubPrCreateToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "create", ...input, base },
+    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
+    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh([
       "-R", invocation.input.slug, "pr", "create",
       "--base", invocation.input.base, "--head", invocation.input.head,
@@ -563,6 +567,8 @@ export async function prMerge(slug: string, ref: string, mode: PrMergeMode): Pro
   const result = await invokeInfraTool<GitHubPrMergeToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "merge", slug, ref, mode },
+    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
+    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh([
       "-R", invocation.input.slug, "pr", "merge", invocation.input.ref, ...flags, "--squash", "--delete-branch",
     ])),
@@ -579,6 +585,8 @@ export async function prReady(slug: string, ref: string): Promise<GhResult> {
   const result = await invokeInfraTool<GitHubPrReadyToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "ready", slug, ref },
+    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
+    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh([
       "-R", invocation.input.slug, "pr", "ready", invocation.input.ref,
     ])),
@@ -780,6 +788,8 @@ export async function runList(
   const r = await invokeInfraTool<GitHubCiStatusToolInput, GhResult>({
     declaration: GITHUB_CI_DECLARATION,
     input: { action: "status", slug, fields, commit: opts.commit, branch: opts.branch, limit: opts.limit },
+    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
+    scope: "machine_only",
     run: async (invocation) => {
       const argv = ["-R", invocation.input.slug, "run", "list"];
       if (invocation.input.commit !== undefined) argv.push("--commit", invocation.input.commit);

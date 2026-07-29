@@ -47,6 +47,7 @@ describe("US-WS-007 Story reverse lookup — fresh process proof", () => {
     const captureScript = `
       import { captureRequirementSource } from ${JSON.stringify(infraDistUrl)};
       captureRequirementSource({
+        rollHome: ${JSON.stringify(root)},
         workspaceRoot: ${JSON.stringify(workspace)},
         provider: "jira",
         ref: "SOT-15499",

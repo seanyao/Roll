@@ -27,6 +27,29 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
+      - name: Context critical acceptance
+        run: pnpm --filter @roll/cli exec vitest run test/context.critical.e2e.test.ts
+      - name: Context focused layer regression
+        run: |
+          pnpm --filter @roll/spec exec vitest run test/context.test.ts
+          pnpm --filter @roll/core exec vitest run test/context-execution-plan.test.ts test/context
+          pnpm --filter @roll/infra exec vitest run test/context
+          pnpm --filter @roll/cli exec vitest run test/context-command.difftest.test.ts test/context-command.e2e.test.ts test/context-skill-handoff.test.ts test/context-snapshot-handoff.e2e.test.ts test/context-agent-handoff.e2e.test.ts
+      - name: Strict skill audit
+        run: node skills/scripts/audit-skills.mjs --strict
+      - name: Workspace context authority audit
+        run: node scripts/audit-workspace-context.mjs --json | tee workspace-context-audit.json
+      - name: Workspace context operation case closure
+        run: |
+          node scripts/generate-workspace-context-validation-cases.mjs
+          git diff --exit-code -- docs/generated/workspace-context-validation-cases.json
+          pnpm --filter @roll/cli exec vitest run test/workspace-context-case-map.test.ts test/workspace-context-operation-evidence.test.ts test/workspace-context.critical.e2e.test.ts
+          pnpm --filter @roll/infra exec vitest run test/workspace-context-operation-evidence.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-context-audit
+          path: workspace-context-audit.json
       - run: pnpm test:e2e
       # FIX-340 — story-id uniqueness guard. A no-op in the public repo (the
       # `.roll/features` corpus lives in the roll-meta repo, absent here → exit

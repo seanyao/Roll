@@ -3,10 +3,12 @@
 `roll backlog sync` pulls GitHub Issues into one resolved Workspace. It writes
 planning artifacts only and never writes back to GitHub.
 
-The command resolves its target from `--workspace <id|path>`, the standard
-Workspace environment or cwd context, or the single active Workspace.
-Ambiguous, conflicting, legacy-repository, or out-of-Workspace targets fail
-before any file is written. `--all` is read-only and is rejected for sync.
+The command resolves its target from `--workspace <id|path>` (or `--ws`), the
+standard Workspace environment, reachable Workspace/Issue context, or an exact
+requirement match. Active lifecycle alone never selects a mismatched Workspace.
+Ambiguous, conflicting, incomplete-discovery, legacy-repository, or
+out-of-Workspace targets fail before any file is written. `--all` is read-only
+and is rejected for sync.
 
 ## Authentication
 

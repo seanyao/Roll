@@ -5,16 +5,22 @@ exports[`US-WS-021 Workspace-first documentation contract > freezes Workspace-aw
   "en": {
     "agent": "Usage: roll agent [--workspace <id|path>|migrate [--dry-run]|list|readiness|cast]
   Inspect machine Agent Scope, readiness and role casting; --workspace resolves one read-only Workspace casting trace.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
-    "backlog": "Usage: roll backlog [show <story-id>] [--workspace <id|path>] [--all]
+    "backlog": "Usage: roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]
        roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]
-  Read or manage one resolved Workspace backlog; --all is read-only and mutations are rejected.
+  Reads may explicitly enable/disable Workspace clarification; --all is read-only and mutations are rejected.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
     "delivery": "Usage: roll delivery <list|show|reconcile> [options]
-  \`list [--workspace <id|path> | --all] [--json]\`
-  \`show <story-id> [--workspace <id|path>] [--json]\`
+  \`list [--workspace <id|path> | --all] [--interactive|--no-input] [--json]\`
+  \`show <story-id> [--workspace <id|path>] [--interactive|--no-input] [--json]\`
   \`reconcile [<story-id>] --workspace <id|path> [--dry-run] [--json]\`
-  Delivery is an Issue fact view; --all is read-only and reconciliation never reads backlog Markdown as completion truth.
+  Interaction capability is independent from --json; prompts use the controlling TTY, never stdout. Delivery is an Issue fact view; --all is read-only and reconciliation never reads backlog Markdown as completion truth.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
     "loop": "Usage: roll loop <subcommand>
 The autonomous delivery loop — grouped control / observe / alerts / maintain.
@@ -27,9 +33,12 @@ internal  test · run-once · story · notify · enforce-tcr · precheck-ci · h
 
 states    ACTIVE (lanes armed) · DORMANT (backlog drained → loop lane self-unloads, zero idle records) · PAUSED (you stopped it)
 wake      a DORMANT loop wakes on any roll command · the daily dream scan · a PR merge
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
-    "workspace": "Usage: roll workspace <init|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
-  \`init <id> --config <file> [--check] [--json]\`
+    "workspace": "Usage: roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
+  \`create <id> --config <file> [--authorization <file>] [--check] [--json]\`
+  \`edit <id|path> --config <file> [--check] [--json]\`
   \`issue init <story-id> --workspace <id> [--check] [--json]\`
   \`requirement add --provider <provider> --ref <ref> --revision <revision> --body-file <file> --story <id> [options]\`
   \`doctor <id> [--json] [--repair <typed-action>] [--path <absolute-path>]\`
@@ -39,22 +48,31 @@ wake      a DORMANT loop wakes on any roll command · the daily dream scan · a 
   \`show <id|path> [--json]\`
   \`register <id> <path> [--json]\`
   \`activate|pause|archive <id|path> [--json]\`
-  Init/issue/migrate --check and doctor diagnosis are read-only; migrate apply/rollback, typed doctor repairs and lifecycle mutations require one explicit target; --all is read-only.
+  Create/edit/issue/migrate --check and doctor diagnosis are read-only; migrate apply/rollback, typed doctor repairs and lifecycle mutations require one explicit target; --all is read-only.
+
+Alias: roll ws ... (canonical: roll workspace ...)
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
   },
   "zh": {
     "agent": "用法：roll agent [--workspace <ID|路径>|migrate [--dry-run]|list|readiness|cast]
   查看机器 Agent Scope、就绪状态与角色分工；--workspace 只读解析一个工作区的 casting trace。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
-    "backlog": "用法：roll backlog [show <story-id>] [--workspace <id|path>] [--all]
+    "backlog": "用法：roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]
       roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]
-  读取或管理一个明确工作区的 backlog；--all 只允许只读聚合，变更命令会拒绝。
+  读取时可显式启用/禁用 Workspace 澄清；--all 只允许只读聚合，变更命令会拒绝。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
     "delivery": "用法：roll delivery <list|show|reconcile> [选项]
-  \`list [--workspace <ID|路径> | --all] [--json]\`
-  \`show <Story ID> [--workspace <ID|路径>] [--json]\`
+  \`list [--workspace <ID|路径> | --all] [--interactive|--no-input] [--json]\`
+  \`show <Story ID> [--workspace <ID|路径>] [--interactive|--no-input] [--json]\`
   \`reconcile [<Story ID>] --workspace <ID|路径> [--dry-run] [--json]\`
-  Delivery 是 Issue 事实视图；--all 仅限只读，对账绝不把 backlog Markdown 当作完成真相。
+  交互能力与 --json 相互独立；prompt 只写控制终端，绝不写 stdout。Delivery 是 Issue 事实视图；--all 仅限只读，对账绝不把 backlog Markdown 当作完成真相。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
     "loop": "用法：roll loop <子命令>
 自治交付循环——按作动/传感/告警/维护分组。
@@ -67,9 +85,12 @@ wake      a DORMANT loop wakes on any roll command · the daily dream scan · a 
 
 状态      ACTIVE 运行中(lane 就绪) · DORMANT 休眠(backlog 抽干→自卸 loop lane、不再记空转) · PAUSED 已暂停(你停的)
 唤醒      休眠的 loop 由以下唤醒：任意 roll 命令 · 每日 dream 扫描 · PR 合并
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
-    "workspace": "用法：roll workspace <init|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
-  \`init <ID> --config <文件> [--check] [--json]\`
+    "workspace": "用法：roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
+  \`create <ID> --config <文件> [--authorization <文件>] [--check] [--json]\`
+  \`edit <ID|路径> --config <文件> [--check] [--json]\`
   \`issue init <Story ID> --workspace <ID> [--check] [--json]\`
   \`requirement add --provider <来源> --ref <引用> --revision <修订> --body-file <文件> --story <ID> [选项]\`
   \`doctor <ID> [--json] [--repair <类型化动作>] [--path <绝对路径>]\`
@@ -79,7 +100,10 @@ wake      a DORMANT loop wakes on any roll command · the daily dream scan · a 
   \`show <ID|路径> [--json]\`
   \`register <ID> <路径> [--json]\`
   \`activate|pause|archive <ID|路径> [--json]\`
-  init/issue/migrate --check 和 doctor 诊断只读；migrate apply/rollback、doctor 类型化修复和生命周期变更必须显式指定一个目标；--all 仅限只读。
+  create/edit/issue/migrate --check 和 doctor 诊断只读；migrate apply/rollback、doctor 类型化修复和生命周期变更必须显式指定一个目标；--all 仅限只读。
+
+别名：roll ws ...（canonical：roll workspace ...）
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
   },
 }

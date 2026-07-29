@@ -182,6 +182,34 @@ cycle 写 `loop:pending`，只做恢复探测，不启动 Builder、不把卡记
 **反规则**：不因历史表现自动改写角色绑定。不做失败后的静默跨 agent 重试。指标可以*建议*
 策略变更，但绝不绕过 human-on-the-loop。
 
+### BC3.5 · Context Engineering
+
+Context Engineering 发布统一语言：`Context Provider`、`Context Binding`、`Context Page`、
+`Context Scope`、`Context Read`、`ContextReadSnapshotV1`、`Context Diagnostic` 与
+`Context Revision Decision`。v1 Provider 是 Git 承载的 LLM Wiki；repository、environment、
+workflow、DB、Kubernetes、测试账号与旧 shared execution context 都只是普通 Context Page，
+差异由 `page_type` 与 `scope` 表达，不形成新的运行时类型。
+
+能力边界：
+
+- **Machine registry** `~/.roll/context-providers.yaml` 归机器 operator；只保存 Provider
+  remote/branch/enablement，不保存 secret。
+- **Workspace Coordination** 发布 canonical Workspace target、schemeful repository identity、
+  Workspace `contexts` binding 与 authority paths；Context Engineering 不复制 target discovery
+  或 remote normalizer。
+- **Context Engineering** 编译授权 execution plan，每次 fresh read 对每个唯一 Provider fetch
+  一次，并从同一 commit 读取页面、校验 scope，产出不可变 Snapshot；fetch 失败无 stale fallback。
+- **Execution** 只通过 typed Snapshot reference 与 authority envelope 消费页面。复用 Snapshot
+  不 fetch；请求新页面必须新 read。revision 改变后由调用阶段记录
+  `continue_with_handoff_snapshot`、`adopt_new_snapshot` 或 `needs_reconciliation`，不得静默采用。
+- **Tool Use / Guardrails** 负责 DB、Kubernetes、测试账号与 credential 的实时访问授权。
+  Context 只保存 mapping、policy 和 opaque `credential_ref`，页面内容低于 system、developer、
+  skill、owner、Workspace authority 与工具安全策略。
+
+因此 Context Engineering 与 Workspace Coordination、Execution 的 published language 通过
+`WorkspaceExecutionContextV1 -> ContextReadRequestV1 -> ContextReadSnapshotV1 -> Agent handoff`
+单向传递；Context Provider 只获取和验证文档，不执行 Wiki 中的命令，也不查询外部系统。
+
 ### BC4 · 交付（Delivery Reconciler）
 
 一个 Issue 可以包含多个 required repository target；每个 target 至多有一个 governed open
