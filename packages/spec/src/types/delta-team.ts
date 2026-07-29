@@ -166,7 +166,13 @@ export interface DelegationResolution {
   readonly schema: "roll-delta-resolution/v1";
   readonly delegationId: string;
   readonly storyId: string;
-  readonly trigger: DelegationTrigger;
+  /**
+   * US-LOOP-110 (codex r5): a PERSISTED resolution on disk may predate the trigger
+   * collapse, so this read contract holds historical values too. New resolutions
+   * are constrained at the write boundary — `roll delta prepare` rejects a template
+   * whose trigger is not live.
+   */
+  readonly trigger: DelegationTrigger | HistoricalDelegationTrigger;
   readonly topology: DeliveryTopology;
   readonly qualityProfile: QualityProfile;
   readonly presetId: string;
@@ -190,7 +196,8 @@ export interface DeltaArtifactManifest {
   readonly storyId: string;
   readonly cycleId?: string;
   readonly role: DeltaRole;
-  readonly trigger: DelegationTrigger;
+  /** Read contract over a persisted v2 artifact — may be a historical value. */
+  readonly trigger: DelegationTrigger | HistoricalDelegationTrigger;
   readonly topology: DeliveryTopology;
   readonly qualityProfile: QualityProfile;
   readonly executionIdentity: {

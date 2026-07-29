@@ -247,6 +247,37 @@ function prepareCommand(args: string[]): number {
   // resolution template (credible provenance claims). The host is the attestation authority
   // for these fields; they must never be fabricated or re-used from other sources.
   const templateRecord = resolutionTemplate as Record<string, unknown>;
+
+  // US-LOOP-110 (codex review r5): the template's own `trigger` is persisted into
+  // the resolution on disk. Unchecked, a `--trigger host-guided` prepare could
+  // write a NEW resolution claiming the retired `loop-autonomous`, contradicting
+  // its own delta:prepared event. A new record must never carry a retired literal,
+  // so refuse rather than silently rewrite the host's template.
+  const templateTrigger = templateRecord.trigger;
+  if (templateTrigger !== undefined) {
+    const liveTrigger =
+      typeof templateTrigger === "string" && (DELEGATION_TRIGGERS as readonly string[]).includes(templateTrigger);
+    if (!liveTrigger) {
+      const msg = `Resolution template declares trigger ${JSON.stringify(templateTrigger)}, which is not a live trigger (${DELEGATION_TRIGGERS.join("|")})`;
+      if (json) {
+        process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: msg }) + "\n");
+      } else {
+        process.stderr.write(`${msg}\n`);
+      }
+      return 1;
+    }
+    const flagTrigger = flags["trigger"];
+    if (typeof flagTrigger === "string" && flagTrigger !== templateTrigger) {
+      const msg = `Resolution template trigger ${JSON.stringify(templateTrigger)} disagrees with --trigger ${JSON.stringify(flagTrigger)}`;
+      if (json) {
+        process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: msg }) + "\n");
+      } else {
+        process.stderr.write(`${msg}\n`);
+      }
+      return 1;
+    }
+  }
+
   const hostPresetSha256 = templateRecord.presetSha256 as string | undefined;
   const hostInventorySha256 = templateRecord.inventorySha256 as string | undefined;
   const hostInventoryObservedAt = templateRecord.inventoryObservedAt as string | undefined;
