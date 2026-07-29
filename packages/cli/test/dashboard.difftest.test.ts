@@ -8,7 +8,7 @@
  * runs. Zero engine spawn.
  */
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -461,6 +461,63 @@ describe("frozen: roll loop status (live)", () => {
     expect(ts).not.toMatch(/in \d+m \d+s/);
     // And the dream plist is not silently ignored: it is debris to remove.
     expect(ts).toContain("session-driven");
+    expect(ts).toContain("leftover plist");
+  });
+
+  /**
+   * codex r3: the tripwire above always writes a LOOP plist, which masked a real
+   * gap — the leftover check only looked at the loop lane, and the dream line that
+   * used to mention a dream plist was deleted in this same card. So a dream-only
+   * leftover would have been silent everywhere. Test each lane ALONE.
+   */
+  it("US-LOOP-118: a dream-only leftover is reported, with no loop plist present", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const la = env["_LAUNCHD_DIR"] as string;
+    const slug = env["ROLL_MAIN_SLUG"] as string;
+    // writeLoopPlist() normally creates this dir; these cases skip it on purpose.
+    mkdirSync(la, { recursive: true });
+    writeFileSync(
+      join(la, `com.roll.dream.${slug}.plist`),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict></dict></plist>\n',
+    );
+    // Deliberately NO loop plist — that is the case the old predicate missed.
+    expect(existsSync(join(la, `com.roll.loop.${slug}.plist`))).toBe(false);
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-dreamonly-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    expect(ts).toContain("leftover plist");
+    expect(ts).not.toContain("next fire");
+  });
+
+  it("US-LOOP-118: a pr-only leftover is reported too (retired by US-DELIV-006)", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const la = env["_LAUNCHD_DIR"] as string;
+    mkdirSync(la, { recursive: true });
+    writeFileSync(
+      join(la, `com.roll.pr.${env["ROLL_MAIN_SLUG"] as string}.plist`),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict></dict></plist>\n',
+    );
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-pronly-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    expect(tsRun(env, ["--no-color"], proj)).toContain("leftover plist");
+  });
+
+  it("US-LOOP-118: a clean machine says nothing about leftovers", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-clean-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    expect(ts).toContain("session-driven");
+    expect(ts).not.toContain("leftover plist");
   });
 
   it("US-LOOP-118: a calendar plist yields NO next-run promise either", () => {

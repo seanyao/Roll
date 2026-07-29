@@ -1320,15 +1320,24 @@ export function agentSummaryLine(records: RunRecord[], windowCycles = 50, minSam
 // Install-state / schedule / tick lines (eyebrow)
 // ════════════════════════════════════════════════════════════════════════════
 /**
- * Is a loop plist for this project still on disk?
+ * Is a plist for ANY retired lane of this project still on disk?
  *
  * US-LOOP-118: this used to grade the lane — "enabled" when `launchctl print`
  * succeeded, "stale" when it did not — and the banner then promised a next run for
  * an "enabled" one. Nothing fires, so the grade is meaningless and the probe is
  * pointless: a plist is leftover debris either way.
+ *
+ * codex r3: it also checked only the LOOP lane, so a dream-only (or pr-only)
+ * leftover went unmentioned here — and the dream line that used to mention it was
+ * deleted in the same card, which would have made that plist silent everywhere.
+ * `pr` is included because it was retired earlier still (US-DELIV-006).
  */
+const RETIRED_LANE_SERVICES = ["loop", "pr", "dream"] as const;
+
 function loopLaneLeftover(): boolean {
-  return existsSync(join(launchAgentsDir(), `com.roll.loop.${projectSlug()}.plist`));
+  const dir = launchAgentsDir();
+  const slug = projectSlug();
+  return RETIRED_LANE_SERVICES.some((svc) => existsSync(join(dir, `com.roll.${svc}.${slug}.plist`)));
 }
 
 function launchAgentsDir(): string {
