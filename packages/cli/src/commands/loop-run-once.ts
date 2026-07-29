@@ -814,14 +814,23 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   const id = await projectIdentity(identityRoot);
   const cycleId = makeCycleId();
 
-  // codex r15: this disclosure used to live on the IDLE path only, so a leftover
-  // lane that actually picked and built a card said nothing — the loudest case was
-  // the silent one. Say it up front, before the outcome is known, so it is stated
-  // exactly once per invocation regardless of how the cycle ends.
+  // codex r15: this disclosure used to live on the IDLE path only, so a leftover lane
+  // that actually picked and built a card said nothing — the loudest case was the
+  // silent one. It is stated once per invocation now, before the outcome is known.
+  //
+  // codex r16: but hoisting it made it LIE in the common case. `roll loop go` spawns
+  // this command as its worker, so on any machine with a stray plist an owner-started
+  // run was told it "ran from a leftover launchd lane". Provenance is knowable — the
+  // go driver sets ROLL_LOOP_GO_WORKER — so attribute only when this was NOT a go
+  // worker, and otherwise merely note the debris without claiming it caused this run.
   if (leftoverLoopLaneLabel(id.slug)) {
+    const fromGo = (process.env["ROLL_LOOP_GO_WORKER"] ?? "").trim() === "1";
     process.stdout.write(
-      "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
-        "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n",
+      fromGo
+        ? "loop run-once: a leftover launchd lane exists for this project (it did not start this run).\n" +
+            "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n"
+        : "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
+            "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n",
     );
   }
 
