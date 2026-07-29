@@ -35,7 +35,15 @@ import { INACTIVE_KEYS } from "./config-get.js";
  * not that both are shown.
  */
 function inactiveNote(en: string, zh: string): void {
-  process.stdout.write(`${resolveCurrent() === "zh" ? zh : en}\n`);
+  // codex r13: selecting by locale here produced a WORSE mix — the `ok()` success
+  // line above is English-only (pre-existing), so a zh user got an English line then
+  // a Chinese note: adjacent bilingual output, which is exactly the rule this was
+  // meant to respect. The note annotates that line, so it matches that line's
+  // language. Localising the pair properly means localising `ok()` too, which is a
+  // wider change than this card owns.
+  void zh;
+  void resolveCurrent;
+  process.stdout.write(`${en}\n`);
 }
 
 import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";

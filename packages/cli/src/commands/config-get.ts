@@ -13,8 +13,6 @@ import { join } from "node:path";
 // registry; importing CONFIG_KEYS keeps `roll config` and the infra config
 // model in lockstep (scope / store / default) — one place to add a key.
 
-import { resolveCurrent } from "./lang.js";
-
 export const CONFIG_FACADE_KEYS = ["loop-window", "loop-schedule", "dream-time"];
 
 /**
@@ -163,12 +161,9 @@ export function configGetCommand(args: string[]): number {
   // codex r9: a raw READ of a dead key printed a bare value, reading as effective.
   // Writes already disclosed it; both directions must.
   if (INACTIVE_KEYS.has(key)) {
-    // Single language, per the project's user-surface rule (codex r12).
-    process.stdout.write(
-      resolveCurrent() === "zh"
-        ? "说明:这个 key 已失效 —— 没有任何东西读它\n"
-        : "note: this key is inactive — nothing reads it\n",
-    );
+    // codex r13: matches the language of the value line it annotates (that line is
+    // English-only), so the two never appear as an adjacent bilingual pair.
+    process.stdout.write("note: this key is inactive — nothing reads it\n");
   }
   return 0;
 }

@@ -36,10 +36,20 @@ function freshSandbox(): Sandbox {
 }
 
 function tsCfg(sb: Sandbox, args: string[]): { status: number; stdout: string; stderr: string } {
-  const save = { HOME: process.env["HOME"], ROLL_HOME: process.env["ROLL_HOME"], NO_COLOR: process.env["NO_COLOR"] };
+  const save = {
+    HOME: process.env["HOME"],
+    ROLL_HOME: process.env["ROLL_HOME"],
+    NO_COLOR: process.env["NO_COLOR"],
+    ROLL_LANG: process.env["ROLL_LANG"],
+  };
   process.env["HOME"] = sb.home;
   process.env["ROLL_HOME"] = join(sb.home, ".roll");
   process.env["NO_COLOR"] = "1";
+  // US-LOOP-120: the inactive-key notes follow the locale, so a frozen value is only
+  // portable with the language PINNED — otherwise this passes on an en box and fails
+  // under ROLL_LANG=zh or in CI. Same class of trap this repo hit with TZ. The
+  // `finally` below restores every key in `save`, so adding it here is enough.
+  process.env["ROLL_LANG"] = "en";
   const saveCwd = process.cwd();
   process.chdir(sb.proj);
   const outChunks: string[] = [];
