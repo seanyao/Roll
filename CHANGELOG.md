@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 破坏性变更:定时任务全部退役,交付改由 agent 会话驱动
+
+**你要做什么:** 以前用 `roll loop on` 让它按点自己跑的,现在改成打开一个 agent 会话、
+在里面跑 `roll loop go`。想只跑一张卡就 `roll loop go --cards US-123`,想试一个 cycle 就
+`--max-cycles 1`。
+
+**能力边界(如实说):** **不开会话,就什么都不会发生。** Roll 不再安装任何定时器,也不在
+后台留任何常驻进程。以前"晚上让它自己干"这件事,现在需要你开着一个会话让它连续跑 ——
+会话结束,推进就停。
+
+**消失的命令(六个):** `roll loop on`、`roll loop off`、`roll loop now`、
+`roll loop fallback`、`roll loop test`,以及 `roll loop off --all`。跑它们会提示该用什么。
+`roll loop pause` / `resume` 保留 —— 它们管的是"停自主推进",跟定时器无关;熔断器也仍会
+自动暂停。显式指定卡片的一次性运行在暂停状态下照样能跑,那是你当场的决定。
+
+**失效的配置:** `roll config loop-schedule`(执行频率)和 `roll config loop-window`
+(静默时段)现在还能设,但**没有任何东西会读它们** —— 频率和时段由你什么时候开会话决定。
+这两个门面会在后续版本里去掉。
+
+**旧机器上的残留:** 跑过旧版本的机器上可能还留着 `com.roll.*` 的 launchd 文件。它们已经
+不可能启动 cycle(指向的脚本已不存在),但属于该清掉的垃圾。`roll doctor` 会列出每一个并
+给出卸载命令;Roll 有意不替你删 —— 那是你机器上的任务。清理步骤见
+[roll loop 指南](guide/en/loop.md#leftover-launchd-lanes)。
+
 ## v4.728.1 — 2026-07-28
 
 ### Delta Team(把一张卡分给设计/建造/评审三个角色跑)

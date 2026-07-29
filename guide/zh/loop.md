@@ -1,8 +1,8 @@
-# roll loop — 自主 BACKLOG 执行器
+# roll loop — 会话驱动的 BACKLOG 执行器
 
-> **常驻调度已退役（US-LOOP-113）。** `roll loop on` / `off` / `now` / `fallback`
-> 不再存在，也没有任何东西按定时器运行。交付由跑 `roll loop go` 的那个 agent 会话
-> 驱动，那个会话就是 Supervisor。`roll loop pause` / `resume` 仍然把守自主推进。
+> **没有任何东西按定时器运行。** 交付由跑 `roll loop go` 的那个 agent 会话驱动 ——
+> 那个会话就是 Supervisor，会话结束，推进就停。Roll 不安装任何调度器，也不留后台进程。
+> `roll loop pause` / `resume` 在会话内把守自主推进。
 
 `roll loop` 执行 BACKLOG 故事：摘取最高优先级的待办故事，通过 TCR 微提交完成代码
 交付 —— 只要驱动它的那个会话还在跑。
@@ -1194,8 +1194,8 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 Since Phase 2.0, loop state lives inside the project at `<project>/.roll/loop/`.
 
 自 Phase 2.0 起，项目的 loop 状态搬进了**项目目录** `<project>/.roll/loop/`。只有机
-器级绑定文件（launchd runner、attach 脚本）和全局静音开关留在 `~/.shared/roll/`。完
-整布局、迁移与 `roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
+器级文件——attach 脚本和全局静音开关——留在 `~/.shared/roll/`。完整布局与
+`roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
 
 | 文件 | 内容 |
 |------|------|
@@ -1218,6 +1218,40 @@ Since Phase 2.0, loop state lives inside the project at `<project>/.roll/loop/`.
 
 ## launchd 残留 lane
 
-Roll 不再安装或持有任何 launchd 任务。跑过旧版本的机器上可能还留着
-`com.roll.*` plist;`roll doctor` 会把找到的每一个连同目标目录与加载状态列出,
-并给出逐个卸载的命令。Roll 内部没有任何东西会重新武装它们。
+Roll no longer installs or owns any launchd job. An older machine may still carry
+`com.roll.*` plists — debris, not a scheduler. Roll deliberately does not remove
+them for you; see the EN guide for the same commands.
+
+Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
+plist。它们已经不可能启动 cycle(指向的 runner 脚本已不存在),但属于该清掉的垃圾;
+在清掉之前,`roll status` / `roll loop status` 会一直提示它们。Roll 有意**不**替你删:
+它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务不是 Roll 该做的决定。
+
+先看有什么:
+
+```bash
+roll doctor                          # 列出每条 com.roll.* lane、目标目录、加载状态
+ls ~/Library/LaunchAgents/com.roll.*
+```
+
+卸载一条:
+
+```bash
+launchctl bootout gui/$(id -u)/com.roll.loop.<slug>; rm -f ~/Library/LaunchAgents/com.roll.loop.<slug>.plist
+```
+
+这里用 `;` 而不是 `&&` 是有意的:未加载的 lane 会让 `bootout` 以非零退出,用 `&&` 就会把
+plist 留在盘上 —— 正是你要清的那个垃圾。
+
+清掉本机所有 roll lane:
+
+```bash
+for p in ~/Library/LaunchAgents/com.roll.*.plist; do
+  [ -e "$p" ] || continue
+  label=$(basename "$p" .plist)
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+  rm -f "$p"
+done
+```
+
+之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。

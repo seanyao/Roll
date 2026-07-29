@@ -1,9 +1,9 @@
-# roll loop — Autonomous BACKLOG Executor
+# roll loop — Session-Driven BACKLOG Executor
 
-> **Resident scheduling is retired (US-LOOP-113).** `roll loop on` / `off` / `now` /
-> `fallback` no longer exist and nothing runs on a timer. Delivery is driven by the
-> agent session that runs `roll loop go`, and that session is the Supervisor.
-> `roll loop pause` / `resume` still gate autonomous progress.
+> **Nothing runs on a timer.** Delivery is driven by the agent session that runs
+> `roll loop go` — that session is the Supervisor, and when it ends, progress stops.
+> Roll installs no scheduler and leaves no background process.
+> `roll loop pause` / `resume` gate autonomous progress within a session.
 
 `roll loop` executes BACKLOG stories: it picks the top pending story and delivers
 it — committing changes in TCR micro-steps — for as long as the session driving it
@@ -1396,14 +1396,13 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 ## State Files
 
 Since Phase 2.0, a project's loop state lives **inside the project** at
-`<project>/.roll/loop/`. Only machine-level binding files (launchd runners,
-attach scripts) and the global mute switch stay in `~/.shared/roll/`. See
-[Loop Data Layout](loop-data-layout.md) for the full layout, migration, and
-`roll loop gc`.
+`<project>/.roll/loop/`. Only machine-level files — the attach script and the
+global mute switch — stay in `~/.shared/roll/`. See
+[Loop Data Layout](loop-data-layout.md) for the full layout and `roll loop gc`.
 
 自 Phase 2.0 起，项目的 loop 状态搬进了**项目目录** `<project>/.roll/loop/`。只有机
-器级绑定文件（launchd runner、attach 脚本）和全局静音开关留在 `~/.shared/roll/`。完
-整布局、迁移与 `roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
+器级文件——attach 脚本和全局静音开关——留在 `~/.shared/roll/`。完整布局与
+`roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
 
 | File | Content |
 |------|---------|
@@ -1430,7 +1429,53 @@ attach scripts) and the global mute switch stay in `~/.shared/roll/`. See
 
 ## Leftover launchd lanes
 
-Roll no longer installs or owns any launchd job. A machine that ran an older
-version may still carry `com.roll.*` plists; `roll doctor` lists every one it
-finds with its target directory and load state, and prints the command to
-disarm each. Nothing in Roll re-arms them.
+Roll installs no launchd job and owns none. A machine that ran an older version may
+still carry `com.roll.*` plists. They cannot start a cycle — the runner scripts they
+pointed at are gone — but they are debris worth clearing, and `roll status` /
+`roll loop status` will keep naming them until you do.
+
+Roll deliberately does NOT remove them for you: they live in your `~/Library/
+LaunchAgents/`, and silently unloading jobs on your machine is not Roll's call.
+
+Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
+plist。它们已经不可能启动 cycle（它们指向的 runner 脚本已不存在），但属于该清掉的垃圾;
+在清掉之前，`roll status` / `roll loop status` 会一直提示它们。
+
+Roll 有意**不**替你删:它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务
+不是 Roll 该做的决定。
+
+**See what is there / 先看有什么:**
+
+```bash
+roll doctor                          # lists every com.roll.* lane, its target dir, load state
+ls ~/Library/LaunchAgents/com.roll.* # or look directly
+```
+
+**Disarm one lane / 卸载一条:**
+
+```bash
+launchctl bootout gui/$(id -u)/com.roll.loop.<slug>; rm -f ~/Library/LaunchAgents/com.roll.loop.<slug>.plist
+```
+
+`;` rather than `&&` on purpose: a lane that is not loaded makes `bootout` exit
+non-zero, and `&&` would then leave the plist on disk — the exact debris you are
+removing.
+
+这里用 `;` 而不是 `&&` 是有意的:未加载的 lane 会让 `bootout` 以非零退出,用 `&&` 就会
+把 plist 留在盘上 —— 正是你要清的那个垃圾。
+
+**Disarm every roll lane on this machine / 清掉本机所有 roll lane:**
+
+```bash
+for p in ~/Library/LaunchAgents/com.roll.*.plist; do
+  [ -e "$p" ] || continue
+  label=$(basename "$p" .plist)
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+  rm -f "$p"
+done
+```
+
+Then confirm with `roll doctor` — the leftover-lane section disappears when the
+last plist is gone.
+
+之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。

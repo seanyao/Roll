@@ -68,8 +68,8 @@ window.RollData = (function () {
       meta: ["MIT licensed", "Node 22+", "Works with Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix when available"],
     },
     TERMINAL: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd scheduled",  detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "session driving",    detail: "cycle 1 · US-1 picked · isolated worktree" },
       { kind: "ok",     text: "tmux session",       detail: "roll-loop-roll · attach with `tmux attach -t roll-loop-roll`" },
       { kind: "ok",     text: "active window",      detail: "10:00 – 18:00 · idle outside" },
       { kind: "blank" },
@@ -84,8 +84,8 @@ window.RollData = (function () {
       { kind: "cursor" },
     ],
     FRAME_A: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd scheduled",  detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "session driving",    detail: "cycle 1 · US-1 picked · isolated worktree" },
       { kind: "ok",     text: "tmux session",       detail: "roll-loop-roll · attach with `tmux attach -t roll-loop-roll`" },
       { kind: "ok",     text: "active window",      detail: "10:00 – 18:00 · idle outside" },
       { kind: "cursor" },
@@ -130,8 +130,8 @@ window.RollData = (function () {
         { name: "Zero-start init", desc: "Start from a short requirement, PRD, or notes. roll init writes or finds the brief, roll next explains the next design step, and Designer turns it into Stories.", badges: ["core", "highlight"] },
         { name: "Existing codebase onboarding plan", desc: "Existing codebase adoption remains plan-first: diagnose without destructive migration, review, then roll init --apply shows an operation checkpoint before writing Roll metadata; roll next continues after apply.", badges: ["new", "highlight"] },
       ]},
-      { id: "autonomous", title: "Autonomous Execution", blurb: "Run while you sleep.", features: [
-        { name: "roll loop on",        mono: true, desc: "Supervisor picks Stories from Backlog and runs isolated Delta Units.", badges: ["core"] },
+      { id: "autonomous", title: "Session-Driven Execution", blurb: "One session, many cards.", features: [
+        { name: "roll loop go",        mono: true, desc: "In this session, the Supervisor picks Stories from Backlog and runs isolated Delta Units.", badges: ["core"] },
         { name: "roll loop go",        mono: true, desc: "Manual goal mode for a scoped backlog run; scheduled ticks yield while the goal lock is held.", badges: ["new", "highlight"] },
         { name: "roll loop status",    mono: true, desc: "Scheduler snapshot for loop / pr / dream service status, queues, alerts and recent runs.", badges: ["core"] },
         { name: "tmux attach -t roll-loop-<slug>", mono: true, desc: "Attach to the live tmux session and watch AI work in real time.", badges: ["highlight"] },
@@ -277,8 +277,8 @@ window.RollData = (function () {
     },
     // Terminal stays mostly English — these are real CLI outputs.
     TERMINAL: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd 已调度",        detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "会话驱动中",            detail: "cycle 1 · 领取 US-1 · 隔离 worktree" },
       { kind: "ok",     text: "tmux 会话就绪",          detail: "roll-loop-roll · tmux attach -t roll-loop-roll 可接入" },
       { kind: "ok",     text: "活跃窗口",              detail: "10:00 – 18:00 · 窗外静默" },
       { kind: "blank" },
@@ -293,8 +293,8 @@ window.RollData = (function () {
       { kind: "cursor" },
     ],
     FRAME_A: [
-      { kind: "prompt", text: "roll loop on" },
-      { kind: "ok",     text: "launchd 已调度",  detail: "loop :05/hr · pr :05/5min · dream 03:10" },
+      { kind: "prompt", text: "roll loop go" },
+      { kind: "ok",     text: "会话驱动中",      detail: "cycle 1 · 领取 US-1 · 隔离 worktree" },
       { kind: "ok",     text: "tmux 会话就绪",    detail: "roll-loop-roll · tmux attach -t roll-loop-roll 可接入" },
       { kind: "ok",     text: "活跃窗口",        detail: "10:00 – 18:00 · 窗外静默" },
       { kind: "cursor" },
@@ -339,8 +339,8 @@ window.RollData = (function () {
         { name: "零起点 init", desc: "从一句需求、PRD 或笔记开始。roll init 写入或发现 brief，roll next 说明下一步设计动作，Designer 把它变成 Stories。", badges: ["core", "highlight"] },
         { name: "已有代码库接入计划", desc: "现有代码库仍然先出计划:无破坏诊断、review,再由 roll init --apply 展示操作检查点并等待确认,然后写入 Roll metadata。", badges: ["new", "highlight"] },
       ]},
-      { id: "autonomous", title: "自主执行", blurb: "你睡觉时它在跑。", features: [
-        { name: "roll loop on",        mono: true, desc: "Supervisor 从 Backlog 领取 Story，并运行隔离的 Delta Unit。", badges: ["core"] },
+      { id: "autonomous", title: "会话驱动执行", blurb: "一个会话，连着啃多张卡。", features: [
+        { name: "roll loop go",        mono: true, desc: "在本会话里，Supervisor 从 Backlog 领取 Story 并运行隔离的 Delta Unit。", badges: ["core"] },
         { name: "roll loop go",        mono: true, desc: "手动 goal mode，用于限定范围的 backlog 连跑；持有 goal lock 时定时 tick 会让路。", badges: ["new", "highlight"] },
         { name: "roll loop status",    mono: true, desc: "调度快照:loop / pr / dream 服务状态、队列、告警、最近执行。", badges: ["core"] },
         { name: "tmux attach -t roll-loop-<slug>", mono: true, desc: "接入实时 tmux 会话,观看 AI 现场工作。", badges: ["highlight"] },

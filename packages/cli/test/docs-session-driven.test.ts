@@ -1,0 +1,133 @@
+/**
+ * US-LOOP-120 — the docs describe a session-driven loop, and only that.
+ *
+ * Resident scheduling is gone from the product. The risk this guards is DRIFT: a
+ * doc that still teaches `roll loop on`, or promises work "hourly" / "at 3am" /
+ * "while you sleep", sends a reader to a command that errors and sells autonomy
+ * that does not exist. A guide that lies is worse than a missing guide.
+ *
+ * Two rules, both asserted over every doc surface:
+ *   1. No retired command appears as something to run.
+ *   2. No copy promises unattended progress.
+ */
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const ROOT = resolve(__dirname, "../../..");
+
+/** Every doc surface an owner reads: guides, docs, README, and the site. */
+function docFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return; // absent tree (e.g. a slim checkout) is not a failure
+    }
+    for (const name of names) {
+      if (name === "node_modules" || name.startsWith(".")) continue;
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(md|html|js)$/.test(name)) out.push(p);
+    }
+  };
+  walk(join(ROOT, "guide"));
+  walk(join(ROOT, "docs"));
+  walk(join(ROOT, "site"));
+  const readme = join(ROOT, "README.md");
+  try {
+    if (statSync(readme).isFile()) out.push(readme);
+  } catch {
+    /* no README */
+  }
+  return out;
+}
+
+/**
+ * `roll loop <verb>` forms that no longer dispatch. Written as a regex over the
+ * command SHAPE rather than the bare word, so prose like "on the loop" or a
+ * `--cards` flag never false-positives.
+ */
+const RETIRED_COMMAND = /roll loop (on|off|now|fallback|test|test-quality-check)\b/;
+
+/**
+ * Copy that promises progress with nobody driving. Each of these shipped in the
+ * guides or slides at some point and had to be rewritten.
+ */
+const UNATTENDED_CLAIM = [
+  /never sleeps/i,
+  /永不休眠/,
+  /\bhourly\b/i,
+  /每小时(扫描|执行)/,
+  /runs? (automatically )?at 3am/i,
+  /凌晨 ?3 ?点(触发|运行)/,
+  /while you sleep/i,
+];
+
+describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
+  it("no doc teaches a retired roll loop subcommand", () => {
+    const offenders: string[] = [];
+    for (const f of docFiles()) {
+      const text = readFileSync(f, "utf8");
+      for (const [i, line] of text.split("\n").entries()) {
+        if (RETIRED_COMMAND.test(line)) offenders.push(`${relative(ROOT, f)}:${i + 1}`);
+      }
+    }
+    expect(offenders, `retired commands still documented at: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("no doc promises progress without a session driving", () => {
+    const offenders: string[] = [];
+    for (const f of docFiles()) {
+      const text = readFileSync(f, "utf8");
+      for (const [i, line] of text.split("\n").entries()) {
+        for (const claim of UNATTENDED_CLAIM) {
+          if (claim.test(line)) offenders.push(`${relative(ROOT, f)}:${i + 1} — ${claim.source}`);
+        }
+      }
+    }
+    expect(offenders, `unattended-autonomy copy at: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("the capability boundary is stated where a reader will meet it", () => {
+    // Not just "no lies" — the honest limit has to be SAID. A reader who only
+    // sees `roll loop go` could still assume it keeps going after they close the
+    // terminal, so the loop guide and the overview must say otherwise.
+    const loopEn = readFileSync(join(ROOT, "guide/en/loop.md"), "utf8");
+    expect(loopEn).toMatch(/nothing runs on a timer/i);
+    expect(loopEn).toMatch(/when it ends, progress stops/i);
+
+    const overviewEn = readFileSync(join(ROOT, "guide/en/overview.md"), "utf8");
+    expect(overviewEn).toMatch(/nothing advances while no session is driving/i);
+
+    const overviewZh = readFileSync(join(ROOT, "guide/zh/overview.md"), "utf8");
+    expect(overviewZh).toContain("没有会话在驱动时");
+  });
+
+  it("the one-time launchd cleanup guide is present and actionable", () => {
+    // A machine upgraded across this change still carries plists. The guide must
+    // give the real commands, not just say "clean them up".
+    const en = readFileSync(join(ROOT, "guide/en/loop.md"), "utf8");
+    expect(en).toContain("launchctl bootout");
+    expect(en).toContain("rm -f ~/Library/LaunchAgents/");
+    // `;` not `&&`: bootout exits non-zero for an unloaded lane, and `&&` would
+    // then leave the plist behind — the exact debris being removed.
+    expect(en).toMatch(/launchctl bootout[^\n]*;\s*rm -f/);
+    const zh = readFileSync(join(ROOT, "guide/zh/loop.md"), "utf8");
+    expect(zh).toContain("launchctl bootout");
+  });
+
+  it("the CHANGELOG records this as a breaking change with the replacement", () => {
+    const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+    const unreleased = log.slice(log.indexOf("## Unreleased"), log.indexOf("## v4."));
+    expect(unreleased).toContain("破坏性变更");
+    // Names what disappeared AND what to do instead — a breaking note without a
+    // replacement just strands the reader.
+    expect(unreleased).toContain("roll loop on");
+    expect(unreleased).toContain("roll loop go");
+    // And states the boundary plainly.
+    expect(unreleased).toContain("不开会话,就什么都不会发生");
+  });
+});

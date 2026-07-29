@@ -43,8 +43,8 @@ Use the exact `roll design --from-file ...` command printed by `roll init` when
 it detects a PRD. Without a file, `roll design` still launches the same
 `roll-design` skill in your AI agent. You talk through the domain model, the
 agent writes INVEST stories into `.roll/backlog.md`, and detailed design notes
-get a self-contained `design-review.html` Design Review Page — then `roll loop`
-takes over.
+get a self-contained `design-review.html` Design Review Page — then you run
+`roll loop go` to build those stories.
 
 You can also run `$roll-design` directly inside your agent if you prefer.
 
@@ -66,15 +66,37 @@ Then edit `.roll/features/<epic>/<ID>/spec.md` so the ACs describe what
 
 Keep the first story tiny: one visible behavior, one clear test path.
 
-## 5. Start The Loop
+## 5. Run The Loop
+
+Delivery only advances while you are sitting in front of it. Open an agent
+session in the project and run:
 
 ```bash
-roll loop on
+roll loop go
+```
+
+That agent session is the Supervisor: it picks the next `📋 Todo` card, runs the
+build/fix cycle, and can delegate to a Delta Team. When the session ends, work
+stops. Nothing in Roll advances on its own — if you do not open an agent session
+and run `roll loop go`, nothing happens.
+
+To try exactly one cycle first:
+
+```bash
+roll loop go --max-cycles 1
+```
+
+Scope the run when you want a specific slice: `--epic <name>` for one epic,
+`--cards <id,...>` for named cards, `--for <duration>` to cap wall-clock time.
+
+Check state at any point:
+
+```bash
 roll loop status
 ```
 
 `roll loop status` is the normal snapshot view. If a cycle is running and you
-want the live view, start with the read-only watch command:
+want the live view, use the read-only watch command:
 
 ```bash
 roll loop watch
@@ -84,11 +106,15 @@ Use `roll loop watch --events` for compact event debugging and
 `roll loop watch --raw-events` only when you need raw audit JSON. All watch
 modes are read-only; Ctrl-C stops only the view.
 
-For an immediate local cycle instead of waiting for the schedule:
+To hold the project against further cycles, and to release it again:
 
 ```bash
-roll loop now
+roll loop pause
+roll loop resume
 ```
+
+While paused, a guided single-card run — `roll loop go --cards US-DEMO-001` —
+still goes through.
 
 ## 6. Render Acceptance Evidence
 

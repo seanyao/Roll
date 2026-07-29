@@ -588,8 +588,8 @@
         <span class="lang-zh">自主交付</span>
       </h3>
       <p>
-        <span class="lang-en"><code>roll loop on</code> runs BACKLOG items hourly. Dream scans code health nightly. <strong>Humans retain sole release authority</strong>.</span>
-        <span class="lang-zh"><code>roll loop on</code> 每小时执行 BACKLOG。Dream 夜间扫描代码健康。<strong>发布权始终在人手里</strong>。</span>
+        <span class="lang-en"><code>roll loop go</code> works the BACKLOG in your agent session, cycle after cycle. <code>roll dream run-once</code> scans code health on demand. <strong>Humans retain sole release authority</strong>.</span>
+        <span class="lang-zh"><code>roll loop go</code> 在你的 agent 会话里一轮接一轮推进 BACKLOG。<code>roll dream run-once</code> 按需扫代码健康。<strong>发布权始终在人手里</strong>。</span>
       </p>
     </div>
     <div class="card" style="border-left:3px solid var(--accent-light);">
@@ -792,8 +792,8 @@
   <div class="analogy fade-in">
     <div class="analogy-label"><span class="lang-en">Priority Order</span><span class="lang-zh">优先级顺序</span></div>
     <p>
-      <span class="lang-en">FIX (bugs first) > US (user value) > REFACTOR (tech debt). Automated by <strong>$roll-loop</strong> — the autonomous executor scans BACKLOG hourly and routes each item to the right skill.</span>
-      <span class="lang-zh">FIX（先修 bug）> US（用户价值）> REFACTOR（技术债）。由 <strong>$roll-loop</strong> 自动执行——每小时扫描 BACKLOG，路由到对应的 Skill。</span>
+      <span class="lang-en">FIX (bugs first) > US (user value) > REFACTOR (tech debt). Driven by <strong>$roll-loop</strong> — in your agent session it takes the next BACKLOG item and routes it to the right skill.</span>
+      <span class="lang-zh">FIX（先修 bug）> US（用户价值）> REFACTOR（技术债）。由 <strong>$roll-loop</strong> 驱动——在 agent 会话里领取下一张 BACKLOG 卡，路由到对应的 Skill。</span>
     </p>
   </div>
   <span class="slide-number">07 / 18</span>
@@ -978,7 +978,7 @@
     </div>
     <div class="card" style="border-top: 3px solid var(--accent-light);">
       <h3 style="font-size:15px;color:var(--accent-light);">$roll-.dream — <span class="lang-en">Nightly Health Scan</span><span class="lang-zh">夜间健康扫描</span></h3>
-      <p><span class="lang-en">Runs at 3am. Six dimensions of code health:</span><span class="lang-zh">凌晨 3 点运行。代码健康的六个维度：</span></p>
+      <p><span class="lang-en">Run it on demand. Six dimensions of code health:</span><span class="lang-zh">按需跑一遍。代码健康的六个维度：</span></p>
       <p style="margin-top:8px;"><span class="lang-en">1. Dead Code · 2. Architectural Drift · 3. Pruning Candidates · 4. Emerging Patterns · 5. Doc Coverage · 6. Doc Freshness</span><span class="lang-zh">1. 死代码 · 2. 架构漂移 · 3. 可裁剪项 · 4. 涌现模式 · 5. 文档覆盖 · 6. 文档新鲜度</span></p>
       <p style="margin-top:8px;"><strong><span class="lang-en">Output:</span><span class="lang-zh">输出：</span></strong> <span class="lang-en">REFACTOR-XXX entries in BACKLOG</span><span class="lang-zh">在 BACKLOG 中生成 REFACTOR-XXX 条目</span></p>
     </div>
@@ -1015,7 +1015,7 @@
     <div class="auto-layer">
       <div class="al-icon">🔄</div>
       <h4><span class="lang-en">Loop Layer</span><span class="lang-zh">Loop 层</span></h4>
-      <p><span class="lang-en">Hourly BACKLOG scan. Auto-routes each item to the right skill. FIX > US > REFACTOR.</span><span class="lang-zh">每小时扫描 BACKLOG，自动路由到对应 Skill。FIX > US > REFACTOR。</span></p>
+      <p><span class="lang-en">Takes the next BACKLOG item while your session drives it. Routes each item to the right skill. FIX > US > REFACTOR.</span><span class="lang-zh">会话驱动时领取下一张 BACKLOG 卡，路由到对应 Skill。FIX > US > REFACTOR。</span></p>
       <div class="al-skills">roll-loop · roll-brief</div>
     </div>
     <div class="auto-layer">
@@ -1074,10 +1074,10 @@
       <tr><td class="skill-name">$roll-doc-audit</td><td><span class="phase-tag phase-support"><span class="lang-en">Document</span><span class="lang-zh">文档</span></span></td><td><span class="lang-en">Auto-scan, index, gap analysis, fill for project docs</span><span class="lang-zh">自动扫描、建索引、找缺口、补写项目文档</span></td></tr>
       <tr><td class="skill-name">$roll-notes</td><td><span class="phase-tag phase-support"><span class="lang-en">Journal</span><span class="lang-zh">日志</span></span></td><td><span class="lang-en">Project diary — records dev moments chronologically</span><span class="lang-zh">项目日记——按时间记录开发瞬间</span></td></tr>
       <tr><td class="skill-name">$roll-doctor</td><td><span class="phase-tag phase-support"><span class="lang-en">Maintain</span><span class="lang-zh">体检</span></span></td><td><span class="lang-en">ROLL self-health check (skills/symlinks/config/templates)</span><span class="lang-zh">ROLL 自身健康检查（Skill/链接/配置/模板）</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-loop</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Hourly BACKLOG executor — routes items to skills</span><span class="lang-zh">每小时 BACKLOG 执行器——路由到对应 Skill</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-peer</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Cross-agent peer review, up to 3 negotiation rounds</span><span class="lang-zh">跨 Agent 同行评审，最多 3 轮协商</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-brief</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Owner-facing briefing: done, in-progress, queue, escalations</span><span class="lang-zh">面向负责人的简报：已完成、进行中、队列、待升级</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-.dream</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Nightly 6-dimension code health scan → REFACTOR entries</span><span class="lang-zh">夜间 6 维代码健康扫描 → REFACTOR 条目</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-loop</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Session-driven BACKLOG executor — routes items to skills</span><span class="lang-zh">会话驱动的 BACKLOG 执行器——路由到对应 Skill</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-peer</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Cross-agent peer review, up to 3 negotiation rounds</span><span class="lang-zh">跨 Agent 同行评审，最多 3 轮协商</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-brief</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Owner-facing briefing: done, in-progress, queue, escalations</span><span class="lang-zh">面向负责人的简报：已完成、进行中、队列、待升级</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-.dream</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Nightly 6-dimension code health scan → REFACTOR entries</span><span class="lang-zh">夜间 6 维代码健康扫描 → REFACTOR 条目</span></td></tr>
       <tr><td class="skill-name" style="color:var(--text-dim);">$roll-.review</td><td><span class="phase-tag phase-support"><span class="lang-en">Hidden</span><span class="lang-zh">隐式</span></span></td><td><span class="lang-en">Per-commit self-review: correctness, security, maintainability</span><span class="lang-zh">每次提交自查：正确性、安全、可维护性</span></td></tr>
       <tr><td class="skill-name" style="color:var(--text-dim);">$roll-.changelog</td><td><span class="phase-tag phase-support"><span class="lang-en">Hidden</span><span class="lang-zh">隐式</span></span></td><td><span class="lang-en">Auto-generates CHANGELOG.md from completed stories</span><span class="lang-zh">从已完成 Story 自动生成 CHANGELOG.md</span></td></tr>
       <tr><td class="skill-name" style="color:var(--text-dim);">$roll-.qa</td><td><span class="phase-tag phase-support"><span class="lang-en">Hidden</span><span class="lang-zh">隐式</span></span></td><td><span class="lang-en">Test pyramid standards: unit/E2E/visual/smoke + CI gates</span><span class="lang-zh">测试金字塔标准：单元 / E2E / 视觉 / 冒烟 + CI 闸门</span></td></tr>
@@ -1147,7 +1147,7 @@
     │&nbsp;&nbsp;&nbsp;└── <span class="dir">briefs/</span> <span class="comment"><span class="lang-en">← Owner-facing digests</span><span class="lang-zh">← 面向负责人的简报</span></span><br>
     ├── <span class="dir">.github/workflows/</span><br>
     │&nbsp;&nbsp;&nbsp;├── <span class="file">ci.yml</span> <span class="comment"><span class="lang-en">← Quality gate on every commit</span><span class="lang-zh">← 每次提交的质量闸门</span></span><br>
-    │&nbsp;&nbsp;&nbsp;└── <span class="file">sentinel.yml</span> <span class="comment"><span class="lang-en">← Scheduled production patrols</span><span class="lang-zh">← 定时生产巡逻</span></span><br>
+    │&nbsp;&nbsp;&nbsp;└── <span class="file">sentinel.yml</span> <span class="comment"><span class="lang-en">← On-demand production patrols</span><span class="lang-zh">← 按需生产巡逻</span></span><br>
     └── <span class="comment"><span class="lang-en">... source code</span><span class="lang-zh">... 源代码</span></span>
   </div>
   <span class="slide-number">15 / 18</span>

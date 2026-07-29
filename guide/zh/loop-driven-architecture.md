@@ -50,7 +50,7 @@ Roll 采用不同的协调方式。没有中心规划器，没有共享执行图
  story
 ```
 
-每个定时 Loop：
+每个 Loop：
 1. **轮询**特定 artifact（BACKLOG、open PR、alert 文件）
 2. **行动**（写代码、heal CI、合 PR）
 3. **写回**共享 artifact（提交、PR 评论、BACKLOG 更新）
@@ -128,7 +128,7 @@ DAG 被设计为执行一次后终止。Loop 被设计为永远运行，在条�
 
 **可观测性**：Loop 的每一个动作都会产生一个 git commit、一条 PR 评论或一次 BACKLOG 更新。系统的历史就是 git log——人类可读、可 diff、可回滚。
 
-**人类控制**：想暂停交付？在 BACKLOG 里设个标志。想优先处理某个 story？编辑优先级。想停掉某个 Loop？删掉对应的 launchd plist。不需要打断一个运行中的编排器或取消正在飞行中的 Agent 链。
+**人类控制**：想暂停交付？在 BACKLOG 里设个标志。想优先处理某个 story？编辑优先级。想停掉交付？结束会话，或者 `roll loop pause`。不需要打断一个运行中的编排器或取消正在飞行中的 Agent 链。
 
 **增量正确性**：TCR（Test-Commit-Revert）确保每个微步骤要么将代码库推进到绿色状态，要么干净地回滚。Loop 在两次 cycle 之间绝不留下损坏的仓库状态。
 

@@ -9,7 +9,7 @@
 适合：
 - 从零开始的新项目
 - 有明确的产品愿景，实现细节灵活
-- 想从 day 1 用 Roll loop 的自治能力
+- 想从 day 1 就用 agent 会话驱动的 Roll loop 推进交付
 - 团队愿意先写 PRD / Architecture 再动代码（即使只写最薄一层）
 
 不适合：
@@ -76,18 +76,18 @@ my-new-project/                       ← Roll 原生项目，从 day 1 就是 .
 2. `roll init` 生成 `.roll/` 骨架 + `AGENTS.md`
 3. **写第一版 specs**：用 `$roll-design` 或手写，在 `.roll/specs/` 完成 PRD / Architecture / DDD
 4. **拆解 Story**：用 `$roll-design` 把 specs 拆成 INVEST-compliant Story 写入 `.roll/backlog.md`
-5. **启动 loop**：`roll loop on`，进入自治构建
-6. 创始人持续校对、调整 specs，loop 跟着新 backlog 跑
+5. **跑 loop**：打开一个 agent 会话，执行 `roll loop go`（先试一轮用 `roll loop go --max-cycles 1`）。这个会话就是 Supervisor；会话结束交付就停 —— 不打开会话就没有任何进展
+6. 创始人持续校对、调整 specs，下一次 `roll loop go` 按新 backlog 推进
 
 ## 创始人的两种姿态
 
 **姿态 A — specs-driven（重型）**
-先把 PRD / Architecture 写得相对完整再启动 loop。
+先把 PRD / Architecture 写得相对完整，再开 agent 会话跑 loop。
 - 适合：愿景清晰、有 senior 工程师、关键决策需要前置敲定
 - 风险：可能过度设计、与现实脱节
 
 **姿态 B — seed-driven（轻型）**
-specs 只写最核心的 1-2 章，backlog 只列前 3 条 Story，启动 loop 边跑边写。
+specs 只写最核心的 1-2 章，backlog 只列前 3 条 Story，边跑 loop 边写。
 - 适合：愿景模糊、迭代快、容错高、Hackathon 节奏
 - 风险：早期决策反复，loop 可能跑出不符合最终愿景的代码
 
@@ -109,7 +109,7 @@ specs 只写最核心的 1-2 章，backlog 只列前 3 条 Story，启动 loop �
 - 新创立的 SaaS 产品，第一天就用 Roll 管开发
 - 学习型项目，"如何用 Roll 协作" 本身就是学习目标
 - Hackathon 项目，48 小时内从 idea 到 demo，全程 Roll 驱动
-- 个人侧项目，单人开发但想要 AI loop 的"24h 续航"能力
+- 个人侧项目，单人开发但想让一个 agent 会话一次啃掉多条 Story
 
 ## 演化路径
 

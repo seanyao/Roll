@@ -128,7 +128,7 @@ A DAG is designed to execute once and terminate. A loop is designed to run forev
 
 **Observability**: Every action a loop takes produces a git commit, a PR comment, or a BACKLOG update. The history of the system is the git log — human-readable, diffable, revertable.
 
-**Human control**: Want to pause delivery? Set a flag in BACKLOG. Want to prioritize a story? Edit the backlog priority. Want to stop a loop? Remove the launchd plist. No need to interrupt a running orchestrator or cancel a mid-flight agent chain.
+**Human control**: Want to pause delivery? Set a flag in BACKLOG. Want to prioritize a story? Edit the backlog priority. Want to stop delivery? End the session, or `roll loop pause`. No need to interrupt a running orchestrator or cancel a mid-flight agent chain.
 
 **Incremental correctness**: TCR (Test-Commit-Revert) ensures every micro-step either advances the codebase to a green state or reverts cleanly. The loop never leaves the repository in a broken state between cycles.
 

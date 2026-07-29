@@ -12,15 +12,18 @@
 
 > **Roll 有两套界面。** 读这份 FAQ 时请分清：
 >
-> - **CLI 命令** —— 在终端里跑：`roll init`、`roll loop on`、`roll status`、
->   `roll loop cycle` 等。负责状态管理、调度、观测。**它们本身不写代码**。
+> - **CLI 命令** —— 在终端里跑：`roll init`、`roll loop go`、`roll status`、
+>   `roll loop cycle` 等。负责状态管理、执行、观测。**它们本身不写代码**。
 > - **Skill** —— 在你的 AI agent 里调用（Claude Code、Cursor、Codex、Pi
 >   等）：`$roll-build`、`$roll-design`、`$roll-fix`、`$roll-onboard` 等。
 >   在 Claude Code 里输入形式是 `/roll-build`；`$` 前缀是文档里跨工具的
 >   通用写法。**真正写代码的是 skill**。
 >
-> 看到 `roll loop on` —— 是 shell 命令。看到 `$roll-build US-001` —— 是
+> 看到 `roll loop go` —— 是 shell 命令。看到 `$roll-build US-001` —— 是
 > 你在 agent prompt 里调用的 skill。
+>
+> **Roll 里没有任何东西会自己往前跑。** 只有你开着一个 agent 会话、里面跑着
+> `roll loop go`，交付才会推进；会话一关，loop 就停。
 
 ### A1. Roll 会不会改我代码、搞坏我的 main 分支？
 
@@ -38,7 +41,7 @@
 - **Phase 8** 直推 `main` —— 你坐在 agent 面前看着这一切发生，随时能叫停
 - 远程 CI 是最后一道网：push 后变红你立刻就能看到，修一下或 revert
 
-**Loop 模式（`roll loop on`）：**
+**Loop 模式（在你打开的 agent 会话里跑 `roll loop go`）：**
 
 - 在 worktree 的分支上构建（`loop/cycle-${CYCLE_ID}`）
 - `gh pr create --base main` 开 PR
@@ -57,8 +60,8 @@
 $roll-build US-001         # 在 Claude Code 里输入：/roll-build US-001
 ```
 
-你会在眼前看完整的 design → TCR → 本地 CI → review → push 过程，把
-loop 开起来之前先看清 Roll 到底碰了什么。
+你会在眼前看完整的 design → TCR → 本地 CI → review → push 过程，在用
+`roll loop go` 把整个史诗交给它之前，先看清 Roll 到底碰了什么。
 
 ---
 
@@ -82,11 +85,11 @@ Roll **不会**碰你的源代码 —— 除非 agent 正在执行你写的某�
 
 ---
 
-### A3. 我不想让它自动跑，能手动一条条来吗？
+### A3. 我不想让它连着跑一长串，能手动一条条来吗？
 
-**短答：** 能。Loop 是 opt-in 的。
+**短答：** 能。这本来就是默认行为 —— loop 只在你叫它的时候才跑。
 
-**细节：** 不开 `roll loop on`，Roll 就是一套 CLI + skill 库。你在
+**细节：** 只要你不跑 `roll loop go`，Roll 就是一套 CLI + skill 库。你在
 `.roll/backlog.md` 写一条 story，然后在 AI agent 里调用 skill：
 
 ```text
@@ -98,22 +101,25 @@ $roll-fix   FIX-002        # 端到端跑一条 bugfix
 
 每次调用都在你眼前跑完 design → TCR → 本地 CI 闸 → agent 自审 → 推到
 `main`，每一步你都看得见，随时能叫停。
-等你信任这套流程了，再在终端跑 `roll loop on` 让它自己选 story。
+等你信任这套流程了，再在 agent 会话里跑 `roll loop go --max-cycles 1` 让它
+自己选一条 story，之后再逐步放宽这次运行的范围。
 
 ---
 
 ### A4. 装上之后改了我哪些系统配置？怎么干净卸载？
 
-**短答：** 三个地方，`./uninstall.sh` 全部还原。
+**短答：** 两个地方，`./uninstall.sh` 全部还原。
 
 **细节：**
 
-- **全局**：`~/.roll/`（你的 config）、`~/.shared/roll/`（loop 状态、
+- **全局**：`~/.roll/`（你的 config）、`~/.shared/roll/`（共享 loop 状态、
   `runs.jsonl`）。每个项目的 agent 路由放在 `.roll/agents.yaml`。
   npm 二进制放在 npm 全局目录里。
 - **每个项目**：`.roll/`，以及 `.claude/skills/`（或其他 agent 等价路径）
   下指向 Roll skill 的软链。
-- **只在 `roll loop on` 之后**：macOS 上一个 `launchd` plist 用来触发周期。
+
+Roll 做的每件事都发生在你亲手启动的命令里、在前台、只在你让它跑着的期间。
+它不会装下任何你走开之后还继续跑的东西。
 
 要完全卸载：
 
@@ -168,7 +174,7 @@ token/cost 列仍显示 `—/—`。新 agent 的支持不会自动出现，需�
 **试一下：**
 
 ```bash
-roll loop status                 # 调度快照，带成本列
+roll loop status                 # loop 快照，带成本列
 roll loop status --days 7        # 看过去 7 天每个周期的成本
 ```
 
@@ -280,27 +286,25 @@ roll loop status --days 7   # 历史 cycle 用的是固化成本
 
 ---
 
-### A12. 人不在本机时，怎么在手机上看 loop 状态？
+### A12. 一次运行正在跑，怎么在手机上看它的状态？
 
 **短答：** 配置 `roll_meta_dir`，然后把 `.roll/prompts/remote-watch.md` 粘贴进手机或
 浏览器里的 Claude Code。
 
 **细节：** 在 `~/.roll/config.yaml` 配好 `roll_meta_dir` 后，本机会在每轮 cycle 结束
-后把 `status/loop.md` 快照 push 到 roll-meta 仓库（≤35min 新鲜，idle cycle 也推，充当
-心跳）。remote-watch prompt 读这份快照 + GitHub API，汇报 loop 健康、backlog 进度、
-Dream 结果和 CI 状态——只读，不需要本地 `roll`。配置与排障见
-[远程监控](loop.md#远程监控remote-monitoring)。
+后把 `status/loop.md` 快照 push 到 roll-meta 仓库。remote-watch prompt 读这份快照 +
+GitHub API，汇报 loop 健康、backlog 进度和 CI 状态——只读，不需要本地 `roll`。快照的
+新鲜度取决于你启动的那次运行的最后一轮 cycle；那次运行结束后就不再有新快照。配置与
+排障见 [远程监控](loop.md#远程监控remote-monitoring)。
 
-### A13. `.command` 窗口里那段彩色摘要是什么？
+### A13. 怎么看某一轮 cycle 的时间花在哪了？
 
-**短答：** 那是 cycle 退出摘要——本轮做了什么的复盘，打印在 `press enter to close`
-之前。
+**短答：** `roll loop runs --detail <cycle_id>` 打印这一轮各阶段的耗时拆解。
 
-**细节：** cycle 结束时，`.command` 窗口会渲染一段 `─── Cycle <id> Summary ───` 块，
-覆盖五类信号：TerminalOutcome 处理结果、CI 状态（`green` / `red` /
-`heal-attempting`）、Todo 剩余、按耗时排序的前几个阶段，以及失败 / 告警高亮（失败 `✗`
-红色，告警 `⚠` 黄色）。全绿状态以默认色输出。设 `NO_COLOR=1` 关闭颜色。`press enter
-to close` 提示不变。完整说明见 [Cycle 退出摘要](loop.md#cycle-退出摘要cycle-exit-summary)。
+**细节：** 每轮 cycle 都记录了各个命名阶段的耗时。detail 视图渲染一段
+`─── Cycle <id> Phase Breakdown ───` 块，按耗时降序，秒数 + 占比 + 条形图都有，
+一眼能看出时间是花在 agent、worktree 准备还是推送上。设 `NO_COLOR=1` 关闭颜色。
+怎么读这个结果见下面 C6。
 
 ---
 
@@ -315,8 +319,9 @@ plan mode（执行前 review）、`/loop`（按时间间隔触发 prompt 的定�
 
 - **Backlog 持久化在 git 里**。Roll 的 `.roll/backlog.md` 跨 session、
   跨重启、跨模型都在。Claude Code 的 tasks 一个 session 就没了。
-- **是交付管线，不是定时器**。`/loop` 每 N 分钟重发一个 prompt。Roll 的
-  loop 选下一条 ready 的 story，走完 DDD → TCR → PR → CI，等绿了再下一条。
+- **是交付管线，不是定时器**。`/loop` 每 N 分钟重发一个 prompt。`roll loop go`
+  选下一条 ready 的 story，走完 DDD → TCR → PR → CI，等绿了再下一条 ——
+  会话开着就一轮接一轮。
 - **TCR 是硬闸**。Claude Code 的 skill 是建议性的，Roll 在 commit 时刻
   强制 `test && commit || revert`。
 - **跨 agent**。同一份 backlog 和 skill，可以在 Codex / Kimi / DeepSeek /
@@ -325,7 +330,7 @@ plan mode（执行前 review）、`/loop`（按时间间隔触发 prompt 的定�
 **怎么选：**
 
 - 交互式 session，临时任务 → Claude Code 单独用就够
-- 长期项目，要无人值守推进、有 CI 闸 → 在 Claude Code 上加一层 Roll
+- 长期项目，一次坐下要推很多条 story、要硬 CI 闸 → 在 Claude Code 上加一层 Roll
 
 Roll 的 `roll-*` skill **本身就是** Claude Code skill。Roll 不替代
 Claude Code，它在上面叠一层。
@@ -342,8 +347,9 @@ Roll 几个工作流模式从它借鉴而来。
 
 **Roll 的差异：**
 
-- **持久 backlog + 自动 loop**。superpowers 是 session 驱动 —— 每个周期
-  你自己启动。Roll 有 `roll loop on` 跑无人值守循环，自动挑下一条。
+- **持久 backlog + 多故事连跑**。superpowers 是 session 驱动 —— 每个周期
+  你自己启动。Roll 也是 session 驱动，但一条 `roll loop go` 会一轮接一轮
+  自动挑下一条 ready 的 story，直到这次运行结束。
 - **CI 作为终态闸门**。Roll 等 GitHub Actions 绿了才标 Done；
   superpowers 把 CI 集成留给你。
 - **PR-centric**。每条 Roll story 最后是一个挂上你 CI 的 PR；
@@ -351,8 +357,8 @@ Roll 几个工作流模式从它借鉴而来。
 
 **怎么选：**
 
-- 你想自己驱动每个 session，要一套强方法论压阵 → **superpowers**
-- 你要在 backlog 上无人值守推进，要硬 CI 闸 → **Roll**
+- 你想自己驱动每个周期，要一套强方法论压阵 → **superpowers**
+- 你要启动一次运行就让它啃完一片 backlog，还要硬 CI 闸 → **Roll**
 
 也可以一起用 —— 两者有重叠但不冲突。
 
@@ -403,14 +409,14 @@ agent 团队（`$ralplan`、`$ralph`、`$ultragoal`）、`.omx/` 持久状态、
 **解决：**
 
 ```bash
-roll loop status        # 看 LOCK + 持有它的 PID
-roll loop watch         # 只读实时视图；Ctrl-C 只停止视图
-roll loop runs          # 上一个周期的结果和告警
-roll loop alert         # 有没有 CI 或 TCR 告警
-roll loop reset         # 实在卡死了清状态 + LOCK
-roll loop now           # 立即触发新周期
+roll loop status              # 看 LOCK + 持有它的 PID
+roll loop watch               # 只读实时视图；Ctrl-C 只停止视图
+roll loop runs                # 上一个周期的结果和告警
+roll loop alert               # 有没有 CI 或 TCR 告警
+roll loop reset               # 实在卡死了清状态 + LOCK
+roll loop go --max-cycles 1   # 干净地跑一轮新周期
 # 如果代码确实做完了、测试也过，但 Phase 11 没走完：
-$roll-build US-XXX      # 手动重跑这条 story
+$roll-build US-XXX            # 手动重跑这条 story
 ```
 
 ---
@@ -421,11 +427,11 @@ $roll-build US-XXX      # 手动重跑这条 story
 `roll loop runs` 报告 rebase 失败告警。
 
 **原因：** Loop 在 worktree 里构建期间，另一个 commit 合到了 `main`，
-和 PR 冲突。Loop 的 PR inbox 会尝试 rebase；如果双方动了同一行，rebase
-失败。
+动了和 PR 同一行。
 
-**原理：** Rebase 熔断器追踪每个 PR 的尝试次数 —— 24 小时内失败 3 次后
-阻止继续尝试并写 ALERT。这防止结构性冲突导致的无限 rebase 循环。
+**原理：** `roll loop reconcile` 把 awaiting-merge 的 cycle 对着 `main` 探测，
+遇到冲突就把 PR 报成 stuck 并给出 `conflict` 原因，而不是盲目重试。结构性冲突
+归你解决 —— loop 不会替你改写分支去猜合并结果。
 
 **解决：**
 
@@ -442,7 +448,7 @@ git push --force-with-lease
 
 ### C3. 怎么看 Loop 做了什么 + 花了多少钱？
 
-**现象：** Loop 在你不在时跑了，你想快速看清楚发生了什么、花了多少。
+**现象：** 一次运行刚跑完，你想快速看清楚发生了什么、花了多少。
 
 **为什么重要：** Roll 每个周期都写结构化记录，但根据需求有多个查看入口。
 
@@ -483,9 +489,9 @@ tmux 观测 pane 使用同一个 watch 入口。
 
 **原因：** 每轮 cycle 在内部被切成 6 个命名阶段
 （`startup` / `preflight` / `worktree_setup` / `agent_invoke` /
-`publish_push` / `cleanup`）。主 loop 不再等合并（US-AUTO-044）：它记录
+`publish_push` / `cleanup`）。主 loop 不等合并：它记录
 `awaiting_merge`，随后由 Delivery Reconciler 在 cycle 边界、读路径或显式
-`roll loop reconcile` 时推进。因此现在几乎每轮都是 `agent_invoke` 占大头。
+`roll loop reconcile` 时推进。因此几乎每轮都是 `agent_invoke` 占大头。
 
 **怎么办：**
 
@@ -496,7 +502,7 @@ tmux 观测 pane 使用同一个 watch 入口。
    - `agent_invoke` 占绝大头 → 多文件故事的正常表现；除非能拆故事
      否则没什么可调的。
    - PR 一直开着没合 → 运行 `roll loop reconcile --json`，再查 CI、draft/
-     评审、冲突或权限原因。这已不再是主 loop 的阶段。
+     评审、冲突或权限原因。这不属于主 loop 的阶段。
    - `worktree_setup` > 30 秒 → `git fetch origin` 慢；通常是临时网络
      抖动。
    - `preflight` > 30 秒 → 上轮留下了孤儿 worktree，loop 正在回收；
@@ -509,17 +515,17 @@ tmux 观测 pane 使用同一个 watch 入口。
 
 ### C4. 多个项目同时跑 Loop 会互相干扰吗？
 
-**现象：** 两个项目都开了 `roll loop on`，怀疑它们互相影响。
+**现象：** 你同时给两个项目开着 `roll loop go`，怀疑它们互相影响。
 
 **原因：** 不会。每个项目有自己的 LOCK
-（`~/.shared/roll/loop/.LOCK-<project-slug>`）、自己的 `state.yaml`、自己
-的 launchd plist。Slug 由 `basename + md5(绝对路径)` 生成，即便两个项目
+（`~/.shared/roll/loop/.LOCK-<project-slug>`）和自己的 `state.yaml`。
+Slug 由 `basename + md5(绝对路径)` 生成，即便两个项目
 目录名一样，路径不同也得不同 slug 和不同锁。
 
 **解决：**
 
 ```bash
-# 在每个项目目录跑一下，看各自的 scheduler + LOCK
+# 在每个项目目录跑一下，看各自的运行状态 + LOCK
 roll loop status
 
 # 看所有活着的锁
@@ -536,7 +542,10 @@ roll loop reset
 **Loop 的原则：清楚的工作往前推；模糊的工作或坏掉的环境停下来告诉你 ——
 不会猜。**
 
-**自动恢复（不需要你）：**
+下面说的"自动恢复"都是指*在你启动的这次运行之内* —— 由同一条 `roll loop go`
+的下一轮 cycle 收拾干净。运行一结束，就什么都不会再自动恢复了。
+
+**自动恢复（不需要你插手）：**
 
 - 网络超时 → 指数退避重试（2s、4s、8s、16s）
 - 角色候选 agent 离线（不在 PATH / 断 auth / 断网 / 账号不可用）或 token 耗尽 →
@@ -548,7 +557,7 @@ roll loop reset
 
 - 所需角色没有剩余可用候选 → 写 ALERT 停下；修环境或调整 role binding 后
   `roll loop resume`
-- CI 持续红 → 修测试 / build，然后 `roll loop now`
+- CI 持续红 → 修测试 / build，然后重新起一次 `roll loop go`
 - PR 合并冲突 → 手动解决，push
 - `gh` 认证过期 → `gh auth login`
 - Story 反复回滚（每次 TCR commit 数 = 0）→ story 规格不清晰；重写 AC
@@ -556,81 +565,6 @@ roll loop reset
 
 更细的操作话题（pause/resume、切换 agent、gh scope 等）见
 [loop.md](loop.md) 和 [configuration.md](configuration.md)。
-
-### C5b. `roll loop on` 报 launchd bootstrap 错误怎么办？
-
-**简答：** 此时排程未激活。优先修复 launchd；实在修不好再使用 owner
-明示确认的进程 fallback。
-
-**原因：** macOS launchd 有时会以 `Bootstrap failed: 5: Input/output error`
-（或类似域错误）拒绝 bootstrap。Roll 会重试一次、用 `launchctl print`
-验证挂载，若仍失败就以非零码退出，不会假装调度器已启用。
-
-**先修 launchd：**
-
-```bash
-UID=$(id -u)
-LABEL=$(launchctl list | awk '$3 ~ /^com\.roll\.loop\./ {print $3; exit}')
-# 如果 launchctl list 没有输出，请使用错误信息里的精确 label。
-launchctl bootout gui/$UID/$LABEL
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist
-launchctl print gui/$UID/$LABEL
-roll loop on
-roll loop status
-```
-
-**如果 launchd 无法修复：**
-
-```bash
-roll loop fallback start --confirm
-roll loop fallback status
-```
-
-fallback 不是 launchd 的等价替代，不会跨过重启/登出。重启或重新登录后
-必须重新确认：
-
-```bash
-roll loop fallback stop
-roll loop fallback start --confirm
-```
-
-脱敏、无需 root 的现场验证流程见
-[从 launchd bootstrap 失败中恢复](loop.md#从-launchd-bootstrap-失败中恢复)。
-
-### C7. 改了 loop_schedule 但 loop 还是按旧频次跑
-
-**症状：** 更新了 `.roll/local.yaml` 的 `loop_schedule`，但 `roll loop status`
-显示的触发时间仍然是旧的。
-
-**原因：** launchd plist 只在 `roll loop on` 时写入一次。修改配置文件不会自动
-更新 plist。
-
-**解决：**
-
-```bash
-roll loop off && roll loop on     # 用新 schedule 重装 plist
-roll loop status                  # 确认新触发时间
-```
-
-### C8. period_minutes 设置不生效
-
-**症状：** `.roll/local.yaml` 里写了 `period_minutes: 0` 或 `1441`，loop 还是每小时
-触发，`roll loop alert` 显示一条 schedule ALERT。
-
-**原因：** `period_minutes` 必须在 1–1440 范围。
-超出范围的值会被拒绝。
-
-**底层：** `调度校验器` 在每次读取时校验这组值。不合法时写 ALERT 到
-`~/.shared/roll/loop/ALERT-<slug>.md` 并回退到默认值（period=60，项目路径推导的偏移）。
-
-**解决：**
-
-```bash
-roll loop alert                   # 看具体错误信息
-# 编辑 .roll/local.yaml — 改用 1–1440 范围内的值
-roll loop off && roll loop on     # 重装
-roll loop status                  # 确认新频次
-```
 
 ### C9. dashboard 显示 "sync: offline" 是什么意思？
 
@@ -791,10 +725,10 @@ gh issue create --title "Safari 上登录失败" --body "复现步骤: ..."
 `<project>/.roll/loop/ALERT-<slug>.md`，状态是 `state-<slug>.yaml`，运行
 历史是 `runs.jsonl`。
 
-**需要手动迁移吗？** 只有从这次搬迁之前的版本升级才需要。自动迁移和它的 7 天双路回退
-已随常驻调度一起退役，cycle 不再在启动时改写路径 —— Roll 只读项目本地路径。要把老项目
-搬过来，手工把 `state-<slug>.yaml`、`ALERT-<slug>.md`、`PAUSE-<slug>`、`mute-<slug>`
-以及该项目在 `runs.jsonl` 里的行复制进 `<project>/.roll/loop/`。
+**需要手动迁移吗？** 只有从这次搬迁之前的版本升级才需要。Roll 只读项目本地路径，
+cycle 不会在启动时改写路径。要把老项目搬过来，手工把 `state-<slug>.yaml`、
+`ALERT-<slug>.md`、`PAUSE-<slug>`、`mute-<slug>` 以及该项目在 `runs.jsonl` 里的行
+复制进 `<project>/.roll/loop/`。
 
 **清残骸：** `roll loop gc` 退役孤儿 slug（项目已删）、清扫过期 `.migrated-*`、
 `runs.jsonl.tmp.*` 与旧备份；`roll loop gc --dry-run` 预览。完整说明见

@@ -13,8 +13,8 @@ in your journey with Roll:
 
 > **Roll has two surfaces.** Keep them straight as you read this FAQ:
 >
-> - **CLI commands** — run in your terminal: `roll init`, `roll loop on`,
->   `roll status`, `roll loop cycle`, etc. These manage state, scheduling, and
+> - **CLI commands** — run in your terminal: `roll init`, `roll loop go`,
+>   `roll status`, `roll loop cycle`, etc. These manage state, execution, and
 >   observability. They do not write code themselves.
 > - **Skills** — invoked inside your AI agent (Claude Code, Cursor, Codex,
 >   Pi, etc.): `$roll-build`, `$roll-design`, `$roll-fix`, `$roll-onboard`,
@@ -22,9 +22,13 @@ in your journey with Roll:
 >   tool-agnostic way we write them in docs. These are where the agent
 >   actually does work.
 >
-> When you see `roll loop on` in this FAQ, that's a shell command. When you
+> When you see `roll loop go` in this FAQ, that's a shell command. When you
 > see `$roll-build US-001`, that's a skill you invoke from your agent's
 > prompt.
+>
+> **Nothing in Roll advances on its own.** Delivery moves forward only while
+> you have an agent session open running `roll loop go`. Close the session and
+> the loop stops.
 
 ### A1. Will Roll modify my code or break my main branch?
 
@@ -45,7 +49,7 @@ in either mode. This is the foundation everything else builds on.
 - Your remote CI is the last net: if it goes red after push, you see it
   immediately and fix or revert
 
-**Loop mode (`roll loop on`):**
+**Loop mode (`roll loop go`, from an agent session you open):**
 
 - Builds on a branch (`loop/cycle-${CYCLE_ID}`) in a worktree
 - Opens a PR with `gh pr create --base main`
@@ -66,7 +70,7 @@ $roll-build US-001         # in Claude Code: /roll-build US-001
 ```
 
 Watch design → TCR → local CI → review → push happen in front of you. See
-exactly what Roll touches before you trust it with the autonomous loop.
+exactly what Roll touches before you hand it a whole epic with `roll loop go`.
 
 ---
 
@@ -93,12 +97,14 @@ story you wrote.
 
 ---
 
-### A3. I don't want autonomous runs. Can I drive Roll manually, one story at a time?
+### A3. I don't want long runs. Can I drive Roll manually, one story at a time?
 
-**Short answer:** Yes. The loop is opt-in.
+**Short answer:** Yes. That's the default — the loop only runs when you ask
+for it.
 
-**Details:** Without `roll loop on`, Roll is a CLI + skill library. You write a
-story in `.roll/backlog.md`, then invoke a skill from inside your AI agent:
+**Details:** Until you run `roll loop go`, Roll is a CLI + skill library. You
+write a story in `.roll/backlog.md`, then invoke a skill from inside your AI
+agent:
 
 ```text
 $roll-build US-001         # execute a single user story end-to-end
@@ -109,25 +115,27 @@ $roll-fix   FIX-002        # execute a single bugfix story
 
 Each invocation runs design → TCR → local CI gate → agent self-review → push
 to `main` in your foreground; you see every step and can stop at any point.
-When the workflow earns your trust, run `roll loop on` in your terminal to
-let it pick stories itself (loop mode goes through a PR instead of pushing
-to `main` directly — see A1).
+When the workflow earns your trust, run `roll loop go --max-cycles 1` from an
+agent session to let it pick a story itself, then widen the run from there
+(loop mode goes through a PR instead of pushing to `main` directly — see A1).
 
 ---
 
 ### A4. What does Roll change on my system, and how do I uninstall cleanly?
 
-**Short answer:** Three places, and `./uninstall.sh` reverses all of them.
+**Short answer:** Two places, and `./uninstall.sh` reverses both.
 
 **Details:**
 
-- **Global:** `~/.roll/` (your config), `~/.shared/roll/` (loop
+- **Global:** `~/.roll/` (your config), `~/.shared/roll/` (shared loop
   state, `runs.jsonl`). Per-project agent routing lives in `.roll/agents.yaml`.
   The npm binary lives where your global npm packages do.
 - **Per project:** `.roll/`, plus symlinks under `.claude/skills/` (or
   equivalent for other agents).
-- **Per project, only with `roll loop on`:** a `launchd` plist on macOS that
-  triggers cycles.
+
+Everything Roll does happens inside a command you start, in the foreground,
+for as long as you keep it running. Nothing is installed that keeps running
+after you walk away.
 
 To remove everything:
 
@@ -188,7 +196,7 @@ new agent does not appear automatically; it ships as a small per-agent plugin
 **Try it:**
 
 ```bash
-roll loop status                 # scheduler snapshot with cost column
+roll loop status                 # loop snapshot with cost column
 roll loop status --days 7        # last 7 days of cycles with cost
 ```
 
@@ -317,31 +325,29 @@ roll loop status --days 7   # historical cycles use frozen costs
 
 ---
 
-### A12. How do I watch the loop from my phone while I'm away?
+### A12. How do I watch a run from my phone while it's in progress?
 
 **Short answer:** Configure `roll_meta_dir`, then paste
 `.roll/prompts/remote-watch.md` into Claude Code on your phone or browser.
 
 **Details:** Once `roll_meta_dir` is set in `~/.roll/config.yaml`, your machine
-pushes a `status/loop.md` snapshot to the roll-meta repo after every cycle
-(≤35min fresh, idle cycles included as a heartbeat). The remote-watch prompt
-reads that snapshot plus the GitHub API and reports loop health, backlog
-progress, Dream results, and CI state — read-only, no local `roll` needed. See
+pushes a `status/loop.md` snapshot to the roll-meta repo after every cycle. The
+remote-watch prompt reads that snapshot plus the GitHub API and reports loop
+health, backlog progress, and CI state — read-only, no local `roll` needed. The
+snapshot is only as fresh as the last cycle of the run you started; once that
+run ends, nothing new is pushed. See
 [Remote Monitoring](loop.md#remote-monitoring) for setup and troubleshooting.
 
-### A13. What's that coloured summary block in the `.command` window?
+### A13. How do I see where a cycle spent its time?
 
-**Short answer:** It's the cycle exit summary — a recap of what the cycle just
-did, printed right before `press enter to close`.
+**Short answer:** `roll loop runs --detail <cycle_id>` prints the per-phase
+breakdown for one cycle.
 
-**Details:** When a cycle ends, the `.command` window renders a
-`─── Cycle <id> Summary ───` block covering five signals: the TerminalOutcome
-result, CI status (`green` / `red` / `heal-attempting`), todo remaining, the
-top phases by time, and any failure / alert highlights (`✗` red for failures,
-`⚠` yellow for warnings). A fully green cycle prints in the default colour.
-Set `NO_COLOR=1` to disable colour. The `press enter to close` prompt is
-unchanged. See
-[Cycle exit summary](loop.md#cycle-exit-summary) for the full breakdown.
+**Details:** Each cycle records how long every named phase took. The detail
+view prints a `─── Cycle <id> Phase Breakdown ───` block sorted descending
+with seconds, percentage, and a bar chart, so you can see at a glance whether
+the time went into the agent, the worktree setup, or the push. Set
+`NO_COLOR=1` to disable colour. See C6 below for how to read the result.
 
 ---
 
@@ -357,9 +363,10 @@ on an interval).
 
 - **Persistent backlog in git.** Roll's `.roll/backlog.md` survives sessions,
   restarts, and model swaps. Claude Code tasks live for one session.
-- **Delivery pipeline, not a scheduler.** `/loop` re-fires a prompt every N
-  minutes. Roll's loop selects the next ready story, runs DDD → TCR → PR → CI,
-  waits for green, then moves on.
+- **Delivery pipeline, not a timer.** `/loop` re-fires a prompt every N
+  minutes. `roll loop go` selects the next ready story, runs DDD → TCR → PR →
+  CI, waits for green, then moves on to the next one — as many cycles as the
+  session lasts.
 - **TCR as a hard gate.** Claude Code's skills are advisory; Roll enforces
   `test && commit || revert` at commit time.
 - **Cross-agent.** The same backlog and skills run on Codex, Kimi, DeepSeek,
@@ -368,7 +375,7 @@ on an interval).
 **Who picks what:**
 
 - Quick interactive sessions, ad-hoc work → Claude Code alone is plenty.
-- Long-running projects, unattended progress, hard CI gates → add Roll.
+- Long-running projects, many stories per sitting, hard CI gates → add Roll.
 
 Roll's `roll-*` skills *are* Claude Code skills. Roll layers on top of Claude
 Code; it doesn't replace it.
@@ -385,9 +392,9 @@ already acknowledges it — several Roll workflow patterns were inspired by it.
 
 **Where Roll differs:**
 
-- **Persistent backlog + autonomous loop.** Superpowers is session-driven —
-  you initiate each cycle. Roll has `roll loop on` for unattended runs where
-  the next story is picked automatically.
+- **Persistent backlog + multi-story runs.** Superpowers is session-driven —
+  you initiate each cycle. Roll is session-driven too, but one `roll loop go`
+  keeps picking the next ready story cycle after cycle until the run ends.
 - **CI as a terminal gate.** Roll waits for GitHub Actions green before
   marking a story Done; superpowers leaves CI integration to you.
 - **PR-centric output.** Every Roll story ends in a PR linked to your CI.
@@ -395,10 +402,10 @@ already acknowledges it — several Roll workflow patterns were inspired by it.
 
 **Who picks what:**
 
-- You want to drive each session yourself with a strong methodology behind
+- You want to drive each cycle yourself with a strong methodology behind
   you → **superpowers**.
-- You want unattended forward progress on a backlog with hard CI gates →
-  **Roll**.
+- You want to start one run and have it chew through a backlog with hard CI
+  gates → **Roll**.
 
 You can also run Roll alongside superpowers — they overlap but don't conflict.
 
@@ -453,14 +460,14 @@ cycles.
 **Fix:**
 
 ```bash
-roll loop status        # check LOCK + PID
-roll loop watch         # read-only live view; Ctrl-C stops only the view
-roll loop runs          # last cycle outcomes and alerts
-roll loop alert         # any CI or TCR alerts?
-roll loop reset         # clear state + LOCK if truly stuck
-roll loop now           # trigger a fresh cycle
+roll loop status              # check LOCK + PID
+roll loop watch               # read-only live view; Ctrl-C stops only the view
+roll loop runs                # last cycle outcomes and alerts
+roll loop alert               # any CI or TCR alerts?
+roll loop reset               # clear state + LOCK if truly stuck
+roll loop go --max-cycles 1   # run one fresh cycle
 # If code is done and tests pass but Phase 11 didn't complete:
-$roll-build US-XXX      # finish the story manually
+$roll-build US-XXX            # finish the story manually
 ```
 
 ---
@@ -471,12 +478,12 @@ $roll-build US-XXX      # finish the story manually
 `roll loop runs` reports a rebase-failure alert.
 
 **Why this happens:** While the loop built in a worktree, another commit
-landed on `main` that conflicts with the PR. The loop's PR inbox tries to
-rebase; if both sides touched the same lines, rebase fails.
+landed on `main` that touches the same lines as the PR.
 
-**Under the hood:** A rebase circuit breaker tracks attempts per PR — after 3
-failures within 24 hours, further attempts are blocked and an ALERT is
-written. This prevents infinite rebase loops on structural conflicts.
+**Under the hood:** `roll loop reconcile` probes awaiting-merge cycles against
+`main` and reports the PR as stuck with a `conflict` reason rather than
+retrying blindly. Structural conflicts are yours to resolve — the loop will
+not rewrite your branch to guess at a merge.
 
 **Fix:**
 
@@ -493,8 +500,8 @@ git push --force-with-lease
 
 ### C3. How do I see what loop did and how much it cost?
 
-**Symptoms:** Loop ran while you were away; you want a quick read of what
-happened and what it cost.
+**Symptoms:** A run just finished and you want a quick read of what happened
+and what it cost.
 
 **Why this matters:** Roll writes structured records every cycle, but there
 are multiple surfaces depending on what you need.
@@ -539,10 +546,10 @@ to know which step ate the time before deciding whether to tune anything.
 
 **Why this matters:** Every cycle is sliced into six named phases
 (`startup` / `preflight` / `worktree_setup` / `agent_invoke` / `publish_push` /
-`cleanup`). The main loop no longer waits for merge (US-AUTO-044): it records
-`awaiting_merge`, then the Delivery Reconciler advances the PR on cycle
-boundaries, read paths, or an explicit `roll loop reconcile`. The top-line
-duration is therefore dominated by `agent_invoke` in almost every cycle.
+`cleanup`). The main loop does not wait for merge: it records `awaiting_merge`,
+then the Delivery Reconciler advances the PR on cycle boundaries, read paths,
+or an explicit `roll loop reconcile`. The top-line duration is therefore
+dominated by `agent_invoke` in almost every cycle.
 
 **What to do:**
 
@@ -553,8 +560,8 @@ duration is therefore dominated by `agent_invoke` in almost every cycle.
    - `agent_invoke` dominating → expected for a multi-file story; nothing
      to tune unless you can split the story.
    - PR sitting open / not merging → run `roll loop reconcile --json`, then
-     inspect its CI, draft/review, conflict, or permission reason. This is no
-     longer a main-loop phase.
+     inspect its CI, draft/review, conflict, or permission reason. This is not
+     a main-loop phase.
    - `worktree_setup` > 30 s → likely a slow `git fetch origin`; transient
      network issue.
    - `preflight` > 30 s → previous cycles left orphan worktrees; loop is
@@ -567,19 +574,18 @@ The phase tracing data also lives in `runs.jsonl` under the `phases` key
 
 ### C4. Multiple projects running loop — are they interfering?
 
-**Symptoms:** Two projects both have `roll loop on` and you suspect they're
-stepping on each other.
+**Symptoms:** You have `roll loop go` running for two projects at once and you
+suspect they're stepping on each other.
 
 **Why this happens:** They shouldn't. Each project gets its own LOCK file
-(`~/.shared/roll/loop/.LOCK-<project-slug>`), its own `state.yaml` entries,
-and its own launchd plist. The slug is `basename + md5(abs-path)`, so even
-two projects with the same directory name on different paths get different
-locks.
+(`~/.shared/roll/loop/.LOCK-<project-slug>`) and its own `state.yaml` entries.
+The slug is `basename + md5(abs-path)`, so even two projects with the same
+directory name on different paths get different locks.
 
 **Fix:**
 
 ```bash
-# Run in each project directory to see its scheduler + LOCK
+# Run in each project directory to see its run state + LOCK
 roll loop status
 
 # See all active locks across projects
@@ -596,7 +602,10 @@ roll loop reset
 **Loop optimizes for forward progress on clear work. It pauses and tells you
 when the work is ambiguous or the environment is broken — never guesses.**
 
-**Auto-recovers (no human needed):**
+"Auto-recovers" below means *within the run you started* — the next cycle of
+that same `roll loop go` cleans it up. Nothing recovers after the run ends.
+
+**Auto-recovers (no intervention needed):**
 
 - Network timeout → retries with backoff (2s, 4s, 8s, 16s)
 - Role candidate unavailable (no PATH / auth / network / account) or token
@@ -609,7 +618,8 @@ when the work is ambiguous or the environment is broken — never guesses.**
 
 - No candidate remains for the required role → an ALERT is written and the loop
   stops. Fix env or narrow/update the role binding, then `roll loop resume`.
-- CI persistently red → fix the failing test/build, then `roll loop now`
+- CI persistently red → fix the failing test/build, then start a fresh
+  `roll loop go`
 - Merge conflict on PR → resolve manually, push
 - `gh` auth expired → `gh auth login`
 - Story keeps reverting (TCR commit count = 0 every attempt) → the story
@@ -618,85 +628,6 @@ when the work is ambiguous or the environment is broken — never guesses.**
 
 For deeper operational topics (pause/resume, agent switching, gh scopes), see
 [loop.md](loop.md) and [configuration.md](configuration.md).
-
-### C5b. What do I do when `roll loop on` fails with a launchd bootstrap error?
-
-**Short answer:** The loop is unarmed. Repair launchd first; use the
-owner-confirmed process fallback only if launchd cannot be fixed.
-
-**Why this happens:** macOS launchd sometimes rejects the bootstrap with
-`Bootstrap failed: 5: Input/output error` (or a similar domain error). Roll
-retries once, verifies the mount with `launchctl print`, and exits non-zero
-rather than pretending the scheduler is active.
-
-**Fix launchd first:**
-
-```bash
-UID=$(id -u)
-LABEL=$(launchctl list | awk '$3 ~ /^com\.roll\.loop\./ {print $3; exit}')
-# If launchctl list returns nothing, use the exact label from the error output.
-launchctl bootout gui/$UID/$LABEL
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist
-launchctl print gui/$UID/$LABEL
-roll loop on
-roll loop status
-```
-
-**If launchd cannot be repaired:**
-
-```bash
-roll loop fallback start --confirm
-roll loop fallback status
-```
-
-The fallback is not a launchd replacement — it does not survive reboot/login.
-After a reboot or logout you must re-confirm:
-
-```bash
-roll loop fallback stop
-roll loop fallback start --confirm
-```
-
-See [Recovering from a launchd bootstrap failure](loop.md#recovering-from-a-launchd-bootstrap-failure)
-for a sanitized, non-root verification procedure.
-
-### C7. I changed loop_schedule but loop still runs at the old frequency
-
-**Symptoms:** You updated `.roll/local.yaml` `loop_schedule`, but
-`roll loop status` still shows the old trigger times.
-
-**Why this happens:** The launchd plist is written once when you run
-`roll loop on`. Changing the config file does not automatically update
-the plist.
-
-**Fix:**
-
-```bash
-roll loop off && roll loop on     # re-install the plist with new schedule
-roll loop status                  # verify the new trigger times
-```
-
-### C8. My period_minutes setting is not taking effect
-
-**Symptoms:** You set `period_minutes: 0` or `period_minutes: 1441` in
-`.roll/local.yaml`, the loop still runs every hour, and `roll loop alert` shows
-a scheduling ALERT.
-
-**Why this happens:** `period_minutes` must be 1–1440.
-Values outside this range are rejected.
-
-**Under the hood:** `the schedule validator` validates the pair on every read.
-An invalid pair triggers an ALERT to `~/.shared/roll/loop/ALERT-<slug>.md`
-and falls back to the default (period=60, project-derived offset).
-
-**Fix:**
-
-```bash
-roll loop alert                   # check the exact error
-# Edit .roll/local.yaml — use a value 1–1440
-roll loop off && roll loop on     # re-install
-roll loop status                  # confirm the new schedule
-```
 
 ### C9. What does "sync: offline" mean on the dashboard?
 
@@ -872,11 +803,10 @@ ALERT is now `<project>/.roll/loop/ALERT-<slug>.md`, state is
 `state-<slug>.yaml`, run history is `runs.jsonl`.
 
 **Do I need to migrate manually?** Only if you are upgrading from before this
-move. The automatic migration and its 7-day dual-path fallback retired together
-with the resident scheduler, so a cycle no longer rewrites paths on the way in —
-Roll reads the project-local paths and nothing else. To bring an old project
-across, copy `state-<slug>.yaml`, `ALERT-<slug>.md`, `PAUSE-<slug>`, `mute-<slug>`
-and that project's `runs.jsonl` rows into `<project>/.roll/loop/` by hand.
+move. Roll reads the project-local paths and nothing else — a cycle never
+rewrites paths on the way in. To bring an old project across, copy
+`state-<slug>.yaml`, `ALERT-<slug>.md`, `PAUSE-<slug>`, `mute-<slug>` and that
+project's `runs.jsonl` rows into `<project>/.roll/loop/` by hand.
 
 **Cleaning up debris:** `roll loop gc` retires orphan slugs (project deleted) and
 sweeps expired `.migrated-*` markers, `runs.jsonl.tmp.*`, and old backups. Use

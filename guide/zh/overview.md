@@ -11,8 +11,8 @@ cd my-project
 roll setup && roll init
 
 roll next           # 接续 design/apply/repair/migrate/loop/status
-roll loop on        # AI 按可配置频次执行 BACKLOG
-roll loop status    # 查看调度状态和最近 cycle
+roll loop go        # AI 在本会话里连续执行 BACKLOG
+roll loop status    # 查看运行态和最近 cycle
 roll loop watch     # 可选：CLI-first 实时旁观当前 cycle
 ```
 
@@ -23,19 +23,23 @@ Roll 以 V4 Supervisor 执行系统运行：
 - **Supervisor** —— 项目级 observe/advise 角色。它读取 backlog、merge truth、open PR、scoped role bindings、重复失败、发布就绪和 owner 问题。它协调跨 Story 工作；不实现具体 Story，也不覆盖证据闸。
 - **Delta Unit** —— 一张 Story 在需要时先由 `design` 产出 Designer contract，再通过 `execute` 交付，并在配置后由 `evaluate` 评审。
 - **角色与绑定** —— `supervise`、`design`、`execute`、`evaluate` 是稳定角色；具体 agent 和可选 model 由 `Scope -> Role -> Binding -> Agent -> Model` 解析。请求的绑定不可用时，Roll 记录并 fail loud，不冒充成另一个 agent。
-- **Loop** —— 按可配置频次从 BACKLOG 摘取最高优先级故事，在隔离 worktree 里执行。CI 通过后才会落到 `main`。
-- **Dream** — 凌晨 3 点扫描代码库，发现死代码、文档缺口和架构漂移，将 `REFACTOR-NNN` 条目排队交给 loop 领取。
+- **Loop** —— 只要有会话在驱动，就从 BACKLOG 摘取最高优先级故事、在隔离 worktree 里执行，做完接着下一张。CI 通过后才会落到 `main`。会话之间不会有任何推进。
+- **Dream** —— `roll dream run-once` 扫描代码库，发现死代码、文档缺口和架构漂移，将 `REFACTOR-NNN` 条目排队交给 loop 领取。
 - **Skills** —— 仍然是能力层。角色调用 `$roll-design`、`$roll-build`、`$roll-fix`、`$roll-peer`、`$roll-.qa` 等技能。
 
 你负责提需求、审 PR、执行发布。中间的一切交给 Roll。
 
-## 运行模式
+## 交付怎么被驱动
 
-Roll 有两个模式，它们共用同一套 backlog、路由剖面、证据、Evaluator 和发布闸。
-`guided` 表示 owner 通过 `roll supervisor status/next/why` 理解状态，并显式启动工作，通常是
-`roll loop go --cards <id>`。`autonomous` 表示 `roll loop on` 已安装 scheduler，合格 Todo
-可以在既有闸内被调度。`roll loop pause` / `roll loop off` 回到 guided；`roll loop resume` /
-`roll loop on` 显式切回 autonomous。
+只有一种方式:你打开一个 agent 会话,在里面跑 `roll loop go`。那个会话就是 Supervisor,
+它会在同一套 backlog、路由剖面、证据、Evaluator 和发布闸之内,一张接一张地领合格的卡,
+直到范围做完、预算用尽,或者会话结束。**没有会话在驱动时,什么都不会推进。**
+
+范围可以收得很紧:`roll loop go --epic <name>`、`--cards <id,...>`、`--max-cycles N`、
+`--for <duration>`。想先看清理由再定范围,就先问 `roll supervisor status/next/why`。
+
+`roll loop pause` 停自主选卡,`roll loop resume` 放开;熔断器跳闸也会暂停。显式限定卡片的
+一次性运行(`roll loop go --cards <id>`)在暂停下仍然执行 —— 那是你当场的决定,不是自主推进。
 
 ### 接入样例
 
@@ -46,7 +50,7 @@ mkdir my-product && cd my-product
 roll init
 roll next
 roll design --from-file .roll/brief.md
-roll loop on
+roll loop go
 ```
 
 从一句需求、PRD 或几条笔记开始。Roll 说明下一步设计动作，而不是静默创建假工作；Designer 创建 backlog，Supervisor 为每张 Story 选择 `standard`、`verified` 或 `designed` 执行剖面，owner 查看按 Story 收口的 attest 证据。
@@ -58,7 +62,7 @@ cd existing-codebase
 roll init
 roll next
 roll init --apply
-roll loop on
+roll loop go
 ```
 
 Roll 无破坏地诊断现有代码，审阅后才创建或更新 Roll metadata，然后基于已有 backlog/docs/context 推理。当前状态通过 CLI-first 可观测入口查看：`roll status`、`roll loop watch`、`roll loop runs`、`roll loop cycle <id>`、告警和 Story 报告。
@@ -80,10 +84,10 @@ defaults:
 
 ## 功能一览
 
-### 自主执行
+### 会话驱动执行
 
-- `roll loop on` — AI 从 BACKLOG 领取故事，按可配置频次在隔离 worktree 里执行 `[core]`
-- `roll loop status` — 查看调度、最近 cycle、队列、告警和成本 `[core]`
+- `roll loop go` — AI 从 BACKLOG 领取故事，在隔离 worktree 里一张接一张地执行，只要这个会话还在驱动 `[core]`
+- `roll loop status` — 查看运行态、最近 cycle、队列、告警和成本 `[core]`
 - `roll loop watch` — 默认只读实时状态；排查事件用 `--events`，审计/底层排障才用 `--raw-events` `[highlight]`
 - `roll loop pause / resume` — 手动编码时暂停，完成后让 AI 继续
 
