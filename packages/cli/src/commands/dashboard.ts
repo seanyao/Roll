@@ -1636,13 +1636,19 @@ function render(
       c("dim", " in this session") +
       c("dim", waitReasonEn);
     ebZh = c("dim", "  会话驱动 · 在本会话运行 ") + c("fg", "roll loop go") + c("dim", waitReasonZh);
-    if (loopLaneLeftover()) {
-      // US-LOOP-113 (codex r5): a plist on disk is a LEFTOVER from an older
-      // install, not something to repair — Roll installs no timers. Point at the
-      // disarm path (`roll doctor` lists every lane with the command to remove it).
-      ebL += c("amber", "   ◌ leftover plist — run ") + c("fg", "roll doctor", { bold: true });
-      ebZh += c("amber", " · 旧版安装留下的 plist,运行 ") + c("fg", "roll doctor");
-    }
+  }
+
+  // US-LOOP-118 (codex r7): debris is independent of run state. Nested inside the
+  // idle branch, a real loop/pr/dream plist stayed hidden whenever a cycle was
+  // RUNNING or the project was PAUSED — the two states an owner is most likely to
+  // be looking at. A leftover lane is a fact about the machine, not about this
+  // cycle, so it is appended whatever the banner says.
+  if (loopLaneLeftover()) {
+    // US-LOOP-113 (codex r5): a plist on disk is a LEFTOVER from an older install,
+    // not something to repair — Roll installs no timers. Point at the disarm path
+    // (`roll doctor` lists every lane with the command to remove it).
+    ebL += c("amber", "   ◌ leftover plist — run ") + c("fg", "roll doctor", { bold: true });
+    ebZh += c("amber", " · 旧版安装留下的 plist,运行 ") + c("fg", "roll doctor");
   }
 
   // 'last' actionable cycle

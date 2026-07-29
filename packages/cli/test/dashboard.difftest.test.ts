@@ -508,6 +508,35 @@ describe("frozen: roll loop status (live)", () => {
     expect(tsRun(env, ["--no-color"], proj)).toContain("leftover plist");
   });
 
+  /**
+   * codex r7 — debris is a fact about the MACHINE, not about this cycle.
+   *
+   * The leftover note was nested inside the idle/session-driven branch, so a real
+   * plist stayed hidden while a cycle was RUNNING or the project was PAUSED — the
+   * two states an owner is most likely to be staring at.
+   */
+  it("US-LOOP-118: a leftover lane is reported even while PAUSED", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const la = env["_LAUNCHD_DIR"] as string;
+    mkdirSync(la, { recursive: true });
+    writeFileSync(join(la, `com.roll.loop.${env["ROLL_MAIN_SLUG"] as string}.plist`), "<plist/>\n");
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-paused-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+    // Pause the project so the idle branch — which used to OWN the leftover note —
+    // is skipped. The marker is resolved under the PROJECT path (resolveLoopRunState),
+    // not the runtime dir.
+    mkdirSync(join(proj, ".roll", "loop"), { recursive: true });
+    writeFileSync(join(proj, ".roll", "loop", `PAUSE-${env["ROLL_MAIN_SLUG"] as string}`), "paused by owner\n");
+
+    // resolveProjectPath needs ROLL_MAIN_PROJECT for the marker to be found.
+    const ts = tsRun({ ...env, ROLL_MAIN_PROJECT: proj }, ["--no-color"], proj);
+    expect(ts).toContain("leftover plist");
+    // And the pause is still reported — the note is additive, not a replacement.
+    expect(ts.toLowerCase()).toContain("paused");
+  });
+
   it("US-LOOP-118: a clean machine says nothing about leftovers", () => {
     const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
     installLaunchctlShim(env);
