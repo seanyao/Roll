@@ -755,10 +755,13 @@ export async function loopPauseCommand(_args: string[], deps: LoopSchedDeps = re
   process.stdout.write(
     already
       ? `Loop already paused\nLoop 已处于暂停\n`
-      : `Loop paused — next scheduled cycles will skip\nLoop 已暂停 — 后续排程周期将跳过\n`,
+      : `Loop paused — no card will be picked autonomously\nLoop 已暂停 — 不再自动摘取卡片\n`,
   );
+  // US-LOOP-116 (codex review r2): there is no scheduler to describe. Pause stops
+  // AUTONOMOUS card selection by the session; it does not stop a session that names
+  // its card explicitly (below).
   process.stdout.write(
-    "mode: guided — scheduler will not start long-running Story execution until `roll loop resume`\n",
+    "a session driving `roll loop go` will stop at the next cycle boundary until `roll loop resume`\n",
   );
   // FIX-1472: pause stops AUTONOMOUS scheduling only. A supervisor can still run
   // one explicitly-scoped card without resuming (which would re-enable
@@ -850,11 +853,13 @@ export async function loopResumeCommand(_args: string[], deps: LoopSchedDeps = r
 
   process.stdout.write(
     existed
-      ? `Loop resumed — scheduling active again\nLoop 已恢复 — 排程重新生效\n`
+      ? `Loop resumed — autonomous card selection re-enabled\nLoop 已恢复 — 重新允许自动摘取卡片\n`
       : `Loop was not paused\nLoop 本就未暂停\n`,
   );
+  // US-LOOP-116: nothing starts on its own. Resume only clears the gate; a session
+  // still has to drive, and every other gate still applies.
   process.stdout.write(
-    "mode: autonomous — scheduler can pick eligible Todo within pause/budget/route/evidence/Evaluator/release gates\n",
+    "`roll loop go` can now pick eligible Todo within budget/route/evidence/Evaluator/release gates\n",
   );
   return 0;
 }

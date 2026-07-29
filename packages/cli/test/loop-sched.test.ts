@@ -159,7 +159,11 @@ describe("loop pause/resume (marker file)", () => {
 
     const p = await captureStdout(() => loopPauseCommand([], deps));
     expect(p.code).toBe(0);
-    expect(p.out).toContain("mode: guided");
+    // US-LOOP-112/116: no guided/autonomous mode and no scheduler to describe —
+    // pause stops autonomous card selection by a driving session.
+    expect(p.out).toContain("no card will be picked autonomously");
+    expect(p.out).toContain("stop at the next cycle boundary");
+    expect(p.out).not.toContain("scheduler");
     expect(existsSync(marker)).toBe(true);
 
     const p2 = await captureStdout(() => loopPauseCommand([], deps));
@@ -167,7 +171,9 @@ describe("loop pause/resume (marker file)", () => {
 
     const r = await captureStdout(() => loopResumeCommand([], deps));
     expect(r.code).toBe(0);
-    expect(r.out).toContain("mode: autonomous");
+    expect(r.out).toContain("autonomous card selection re-enabled");
+    expect(r.out).toContain("roll loop go");
+    expect(r.out).not.toContain("mode: autonomous");
     expect(existsSync(marker)).toBe(false);
 
     const r2 = await captureStdout(() => loopResumeCommand([], deps));
