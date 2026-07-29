@@ -1,6 +1,10 @@
 /**
  * `roll loop pause|resume` — the PAUSE gate, and the run-state read that goes with it.
  *
+ * US-LOOP-119: renamed from `loop-sched.ts`. The old name described what the file
+ * no longer does — scheduling — and the rename waited until last so that a
+ * path change could not hide the behaviour changes in cards 110-118.
+ *
  * US-LOOP-117: this file used to be the scheduling surface — it generated the shell
  * runner a launchd lane invoked, wrote the plist, mounted and verified the lane, and
  * reaped what the lane spawned. All of that is gone: Roll installs no timers, and
@@ -174,10 +178,10 @@ export function listRollLaneLabels(slug: string): string[] {
   return listRollLaneLabelsByFilter((n) => n.endsWith(`.${slug}.plist`));
 }
 
-/** Every leftover com.roll.* lane label found on this machine. */
-export function listAllRollLaneLabels(): string[] {
-  return listRollLaneLabelsByFilter(() => true);
-}
+// US-LOOP-119: `listAllRollLaneLabels()` (every com.roll.* label on the machine,
+// regardless of project) is deleted — nothing referenced it, in src or in tests.
+// `roll doctor` does its own machine-wide scan of the LaunchAgents dir; this was a
+// second, unused way to ask the same question.
 
 // ─── US-LOOP-116: `loop on` / `loop off` are gone ───────────────────────────
 // Their entry points were cut in US-LOOP-113 and nothing routes to them, so the

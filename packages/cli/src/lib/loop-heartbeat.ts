@@ -15,7 +15,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LEFTOVER_LANE_STATUS, parseEventLine, parseGoalYaml, type GoalScope, type GoalStatus, type TruthSnapshotLoop, type TruthSnapshotLoopLane } from "@roll/spec";
-import { resolveLoopRunState } from "../commands/loop-sched.js";
+import { resolveLoopRunState } from "../commands/loop-state.js";
 
 export interface HeartbeatDeps {
   /**
