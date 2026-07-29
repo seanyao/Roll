@@ -581,7 +581,14 @@ export function statusTruthJson(snapshot: TruthSnapshot | undefined, stale: bool
     exit,
     snapshot: true,
     stale,
-    loop: { lanes: lanes.length, running: lanes.filter((l) => l.running).length },
+    // US-LOOP-118 (codex r6): was `{ lanes, running }` — a count of retired lanes
+    // where an OLD snapshot's `running: true` launchd rows inflated "running".
+    // The machine view now mirrors the human line: is a session driving, and how
+    // much debris is left.
+    loop: {
+      sessionsDriving: lanes.filter((l) => l.source === "goal" && l.running).length,
+      leftoverLanes: lanes.filter(isLeftoverLane).length,
+    },
     cycle:
       snapshot.cycle !== undefined
         ? { cycles3d: snapshot.cycle.cycles3d, failed3d: snapshot.cycle.failed3d, costUsd3d: snapshot.cycle.costUsd3d }

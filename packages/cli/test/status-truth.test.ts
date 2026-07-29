@@ -163,7 +163,7 @@ describe("roll status truth summary — US-DOSSIER-035", () => {
 describe("roll status --json — US-DOSSIER-036", () => {
   interface StatusJson {
     verdict: string; exit: number; snapshot: boolean; stale: boolean;
-    loop: { lanes: number; running: number };
+    loop: { sessionsDriving: number; leftoverLanes: number };
     cycle: { cycles3d: number; failed3d: number; costUsd3d: number } | null;
     release: { latestTag: string | null; verdict: string; fail: number | null; warn: number | null; unknown: number | null; merged: number; pending: number } | null;
     story: { attestCoveragePct: number; fail: number; done: number; unknown: number; todo: number };
@@ -178,7 +178,13 @@ describe("roll status --json — US-DOSSIER-036", () => {
     expect(j.exit).toBe(1);
     expect(human.trimStart().split("\n")[0]).toContain("exit 1");
     // LOOP/CYCLE/RELEASE numbers identical to the rendered lines.
-    expect(j.loop).toEqual({ lanes: 2, running: 1 });
+    // US-LOOP-118 (codex r6): was `{ lanes: 2, running: 1 }` — a retired-lane count
+    // in which an old snapshot's `running: true` launchd row inflated "running".
+    // The machine view mirrors the human LOOP line: session driving + debris.
+    expect(j.loop).toEqual({ sessionsDriving: 1, leftoverLanes: 1 });
+    // 口径 parity: the human line says the same two things.
+    expect(human).toContain("go session open");
+    expect(human).toContain("1 leftover lane(s)");
     expect(j.cycle).toEqual({ cycles3d: 17, failed3d: 12, costUsd3d: 0.59 });
     expect(j.release?.fail).toBe(0);
     expect(j.release?.warn).toBe(44);

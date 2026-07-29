@@ -58,23 +58,27 @@ const RETIRED_LANES: Array<{ svc: string; name: string; mode: string }> = [
 
 export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAgentsDir: string): HeartbeatDeps {
   const lastRunAt = (svc: string): string | null => {
-    const file = svc === "dream" ? "dream.log" : "runs.jsonl";
-    const path = join(projectPath, ".roll", "loop", file);
+    // codex r6: the FILE and the FORMAT must be chosen together. `dream` reads a
+    // bracketed text log; everything else reads JSONL rows with a `ts` field.
+    // Keying the format on `svc === "loop"` while keying the file on
+    // `svc === "dream"` left `pr` reading runs.jsonl through the dream regex, so a
+    // real PR leftover could never keep its lastAt.
+    const dreamLog = svc === "dream";
+    const path = join(projectPath, ".roll", "loop", dreamLog ? "dream.log" : "runs.jsonl");
     try {
       const lines = readFileSync(path, "utf8").trim().split("\n");
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i] ?? "";
         if (line.trim() === "") continue;
-        if (svc === "loop") {
-          const row = JSON.parse(line) as { ts?: string };
-          if (typeof row.ts === "string" && row.ts !== "") return row.ts;
-        } else {
+        if (dreamLog) {
           const m = /\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})([+-]\d{4})\]/.exec(line);
           if (m?.[1] !== undefined && m[2] !== undefined) {
             const tz = `${m[2].slice(0, 3)}:${m[2].slice(3)}`;
-            const iso = new Date(`${m[1]}${tz}`).toISOString().replace(/\.\d{3}Z$/, "Z");
-            return iso;
+            return new Date(`${m[1]}${tz}`).toISOString().replace(/\.\d{3}Z$/, "Z");
           }
+        } else {
+          const row = JSON.parse(line) as { ts?: string };
+          if (typeof row.ts === "string" && row.ts !== "") return row.ts;
         }
       }
     } catch {

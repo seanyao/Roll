@@ -12,7 +12,7 @@ import { leftoverAndSessionCount, renderTruthConsole, renderMachineStubPage, rol
 import { collectLoopLiveFeed } from "../src/commands/index-gen.js";
 import { renderAgentsMachinePage } from "../src/lib/page-agents.js";
 import { renderSkillsPage } from "../src/lib/page-skills.js";
-import { collectLoopHeartbeat } from "../src/lib/loop-heartbeat.js";
+import { collectLoopHeartbeat, defaultHeartbeatDeps } from "../src/lib/loop-heartbeat.js";
 import { collectCasting } from "../src/lib/casting.js";
 import { collectGitHooks, type GitHooksVM } from "../src/lib/git-hooks.js";
 import { parseProjectsRegistry, reachableProjects } from "../src/lib/projects-registry.js";
@@ -642,6 +642,27 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
     expect(prOnly.lanes).toHaveLength(1);
     expect(prOnly.lanes[0]?.mode).toBe("pr");
     expect(prOnly.lanes[0]?.running).toBe(false);
+  });
+
+  it("US-LOOP-118: pr reads runs.jsonl as JSONL, not as a dream text log (codex r6)", () => {
+    // The file choice keyed on `svc === "dream"` while the PARSE keyed on
+    // `svc === "loop"`, so pr read runs.jsonl through the dream bracket-timestamp
+    // regex and a real PR leftover could never keep its lastAt.
+    const dir = mkdtempSync(join(tmpdir(), "roll-hb-pr-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      writeFileSync(join(rt, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-12T23:35:00Z" })}\n`);
+      const la = join(dir, "la");
+      mkdirSync(la, { recursive: true });
+      writeFileSync(join(la, "com.roll.pr.hb-probe.plist"), "<plist/>\n");
+      const hb = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-probe", la));
+      const pr = hb.lanes.find((l) => l.mode === "pr");
+      expect(pr).toBeDefined();
+      expect(pr?.lastAt).toBe("2026-06-12T23:35:00Z");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("US-DOSSIER-042: collects backlog, PR, dream launchd lanes and an active go session", () => {
