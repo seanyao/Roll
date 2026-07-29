@@ -264,6 +264,11 @@ function defaultCollectLoopHeartbeat(cwd: string, nowSec: number): TruthSnapshot
   // that earlier run aged past the staleness window. While streaming, the last
   // activity IS the stream's own write time.
   const activityAt = running ? liveAt : lastAt;
+  // codex r12: no signal at all ⇒ NO lane. The CLI collector already worked this
+  // way (US-LOOP-118: a clean project reports zero lanes rather than an idle one);
+  // emitting an unconditional "go session" here contradicted that same contract on
+  // the fallback path, so a project that had never run still showed a session lane.
+  if (!running && activityAt === undefined) return { lanes: [] };
   return {
     lanes: [{
       name: "go session",

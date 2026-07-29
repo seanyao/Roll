@@ -68,6 +68,18 @@ const RETIRED_LANES: Array<{ svc: string; name: string; mode: string }> = [
   { svc: "dream", name: "Dream loop (leftover lane)", mode: "dream" },
 ];
 
+/**
+ * The loop runtime dir for a project.
+ *
+ * codex r12: `ROLL_PROJECT_RUNTIME_DIR` is the established override — run-once,
+ * the live-feed collector, alerts and the scoped route all honour it. This module
+ * hardcoded `<project>/.roll/loop`, so with an overridden runtime dir the UI could
+ * show a live stream while the heartbeat reported no running session.
+ */
+function loopRuntimeDir(projectPath: string): string {
+  return (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() || join(projectPath, ".roll", "loop");
+}
+
 export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAgentsDir: string): HeartbeatDeps {
   const lastRunAt = (svc: string): string | null => {
     // codex r6: the FILE and the FORMAT must be chosen together. `dream` reads a
@@ -76,7 +88,7 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
     // `svc === "dream"` left `pr` reading runs.jsonl through the dream regex, so a
     // real PR leftover could never keep its lastAt.
     const dreamLog = svc === "dream";
-    const path = join(projectPath, ".roll", "loop", dreamLog ? "dream.log" : "runs.jsonl");
+    const path = join(loopRuntimeDir(projectPath), dreamLog ? "dream.log" : "runs.jsonl");
     try {
       const lines = readFileSync(path, "utf8").trim().split("\n");
       for (let i = lines.length - 1; i >= 0; i--) {
@@ -109,14 +121,14 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
     lastRunAt,
     goalText: () => {
       try {
-        return readFileSync(join(projectPath, ".roll", "loop", "goal.yaml"), "utf8");
+        return readFileSync(join(loopRuntimeDir(projectPath), "goal.yaml"), "utf8");
       } catch {
         return null;
       }
     },
     eventsText: () => {
       try {
-        return readFileSync(join(projectPath, ".roll", "loop", "events.ndjson"), "utf8");
+        return readFileSync(join(loopRuntimeDir(projectPath), "events.ndjson"), "utf8");
       } catch {
         return null;
       }
@@ -125,7 +137,7 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
       // Same rule and window collectLoopLiveFeed applies: live.log is never
       // deleted, so only a RECENT write means a cycle is streaming.
       try {
-        const st = statSync(join(projectPath, ".roll", "loop", "live.log"));
+        const st = statSync(join(loopRuntimeDir(projectPath), "live.log"));
         const at = new Date(st.mtimeMs).toISOString().replace(/\.\d{3}Z$/, "Z");
         const fresh = Math.floor(Date.now() / 1000) - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
         return fresh ? { running: true, at } : { running: false };

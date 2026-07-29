@@ -693,6 +693,35 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
     }
   });
 
+  it("US-LOOP-118: defaultHeartbeatDeps honours ROLL_PROJECT_RUNTIME_DIR (codex r12)", () => {
+    // run-once, the live-feed collector, alerts and the scoped route all honour this
+    // override. This module hardcoded <project>/.roll/loop, so with an overridden
+    // runtime dir the UI could show a live stream while the heartbeat said nothing
+    // was running.
+    const projectDir = mkdtempSync(join(tmpdir(), "roll-hb-rt-proj-"));
+    const runtimeDir = mkdtempSync(join(tmpdir(), "roll-hb-rt-runtime-"));
+    const saved = process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    try {
+      // The stream lives ONLY in the overridden runtime dir.
+      writeFileSync(join(runtimeDir, "live.log"), "streaming\n");
+      writeFileSync(join(runtimeDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-19T12:00:00Z" })}\n`);
+      process.env["ROLL_PROJECT_RUNTIME_DIR"] = runtimeDir;
+      const hb = collectLoopHeartbeat(defaultHeartbeatDeps(projectDir, "hb-rt", join(projectDir, "la")));
+      expect(hb.lanes.find((l) => l.source === "goal")?.running).toBe(true);
+
+      // Without the override the same project sees nothing — proving the override
+      // is what made it visible, not some path that happens to exist anyway.
+      delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+      const blind = collectLoopHeartbeat(defaultHeartbeatDeps(projectDir, "hb-rt", join(projectDir, "la")));
+      expect(blind.lanes.some((l) => l.source === "goal")).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+      else process.env["ROLL_PROJECT_RUNTIME_DIR"] = saved;
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
   it("US-LOOP-118: pr reads runs.jsonl as JSONL, not as a dream text log (codex r6)", () => {
     // The file choice keyed on `svc === "dream"` while the PARSE keyed on
     // `svc === "loop"`, so pr read runs.jsonl through the dream bracket-timestamp

@@ -317,7 +317,10 @@ describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane
     // ROLL_RENDER_NOW is frozen at 2026-06-20T12:00:00Z; age this log a day.
     const oldSec = Date.parse("2026-06-19T12:00:00Z") / 1000;
     utimesSync(live, oldSec, oldSec);
-    expect(collectDossierState(cwd).loop?.lanes?.[0]?.running).toBe(false);
+    // codex r12: with no completed run either, there is no signal at all — so no
+    // lane, rather than an idle one. (The "ran but not streaming" case is covered
+    // separately above.)
+    expect(collectDossierState(cwd).loop?.lanes ?? []).toEqual([]);
 
     // A log touched inside the freshness window IS a running session.
     const freshSec = Date.parse("2026-06-20T11:59:00Z") / 1000;
@@ -355,12 +358,26 @@ describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane
     expect(cold?.lastAt).toBe("2026-06-19T12:00:00Z");
   });
 
-  it("without live.log the session lane is not running, and still not a launchd lane", () => {
+  it("US-LOOP-118: no signal at all means NO lane, matching the CLI collector (codex r12)", () => {
+    // A project that never ran has nothing to report. Emitting an unconditional
+    // "go session" lane here contradicted the CLI collector's own contract, where a
+    // clean project reports zero lanes rather than an idle one.
     const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-idle-"));
     dirs.push(cwd);
     mkdirSync(join(cwd, ".roll", "loop"), { recursive: true });
+    expect(collectDossierState(cwd).loop?.lanes ?? []).toEqual([]);
+  });
+
+  it("US-LOOP-118: a completed run (no live stream) still yields an idle lane", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-ran-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    writeFileSync(join(loopDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-19T12:00:00Z" })}\n`);
     const lanes = collectDossierState(cwd).loop?.lanes ?? [];
+    expect(lanes).toHaveLength(1);
     expect(lanes[0]?.running).toBe(false);
     expect(lanes[0]?.source).toBe("goal");
+    expect(lanes[0]?.lastAt).toBe("2026-06-19T12:00:00Z");
   });
 });
