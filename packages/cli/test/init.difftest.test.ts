@@ -22,7 +22,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { confirmInitProjectForTest, initCommand } from "../src/commands/init.js";
 import { collectInitFacts } from "../src/lib/init-diagnosis.js";
 import { computeInitFactsHash } from "../src/lib/onboard-plan.js";
-import { collectProjectsRegistry } from "../src/lib/projects-registry.js";
+import { collectProjectsRegistry, resolveProjectName } from "../src/lib/projects-registry.js";
 
 const REPO = resolve(__dirname, "../../..");
 const dirs: string[] = [];
@@ -1113,7 +1113,7 @@ describe("frozen: roll init", () => {
     const rows = collectProjectsRegistry(fx.home);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.path).toBe(fx.proj);
-    expect(rows[0]?.name).toBe("roll");
+    expect(rows[0]?.name).toBe(resolveProjectName(fx.proj));
     expect(typeof rows[0]?.lastIndexedAt).toBe("string");
   });
 

@@ -7,19 +7,28 @@
  */
 import { parseEventLine, resolveLang, type CycleRoleSummary, type RollEvent } from "@roll/spec";
 import {
+  aggregateRounds,
   analyzeCycleActivity,
   buildCycleRoleSummary,
   cycleActivitySignalsFromEvents,
+  EVENTS_FILE,
+  formatRoundReadout,
   projectCollabCycle,
+  readRoundEntries,
   renderCycleRolesForTerminal,
+  renderRoundJournalMd,
+  serializeEvent,
   type ActivitySignal,
   type CycleActivityAnalysis,
 } from "@roll/core";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 import { join } from "node:path";
+import { cardArchiveDir } from "../lib/archive.js";
+import { analyzeRepairRounds, listPendingSplitAdvice, writeSplitAdvice } from "../lib/split-advice.js";
+import { cycleModelSwapCommand } from "./cycle-model-swap.js";
 import { collectCycleLedger, formatBuilderIdentity, type CycleLedgerRow, type CycleTapeSegment } from "../lib/cycle-ledger.js";
 import { collectGitDossierFacts } from "../lib/story-dossier.js";
 import { cycleNo } from "./cycles.js";
@@ -35,8 +44,13 @@ export const CYCLE_USAGE =
   "       roll cycle <id> --collab [--json] [--no-color]\n" +
   "       roll cycle --legend [--no-color]\n" +
   "       roll cycle watch [<id>] [--once] [--since <lines>] [--json]\n" +
+  "       roll cycle journal <card-id> [--json]\n" +
+  "       roll cycle split-advice [<card-id>] [--generate] [--json]\n" +
+  "       roll cycle model-swap [<card-id>] [--adjudicate] [--json]\n" +
   "  One cycle's full trace tape, a read-only ActivitySignal watch window, a\n" +
   "  supervisor-facing activity explanation, or a collaboration relay view.\n" +
+  "  journal <card>  Round-journal readout for a card: median/mean/p90 duration +\n" +
+  "                  gate-time share, split by era window (US-CYCLE-004).\n" +
   "  --activity  Explain why this cycle is active, silent, or advisory (US-OBS-042).\n" +
   "  --roles     Show the execution cast (builder, reviewers, evaluators, gates).\n" +
   "  --collab    Show the cycle as a protocol relay (assign → build → peer → score → gate).\n" +
@@ -607,12 +621,144 @@ function cycleActivityCommand(handle: string, json: boolean): number {
   return 0;
 }
 
+/**
+ * US-CYCLE-004 — `roll cycle journal <cardId> [--json]`: read a card's
+ * round-journal and print the readout (median/mean/p90 duration + gate share,
+ * split by era window). Data source is `.roll/features/<epic>/<cardId>/
+ * round-journal.jsonl`; malformed lines are skipped + counted.
+ */
+export function cycleJournalCommand(args: string[], lang: "en" | "zh"): number {
+  const json = args.includes("--json");
+  const cardId = args.find((a) => !a.startsWith("-"));
+  if (cardId === undefined || cardId === "") {
+    process.stderr.write(
+      lang === "zh"
+        ? "用法：roll cycle journal <卡号> [--json]\n"
+        : "Usage: roll cycle journal <card-id> [--json]\n",
+    );
+    return 1;
+  }
+  const cardDir = cardArchiveDir(process.cwd(), cardId);
+  // Regenerate the derived human `.md` table on demand (append is kept O(1) on
+  // the hot path, so the .md is produced here from the jsonl source of truth).
+  try {
+    renderRoundJournalMd(cardDir, readRoundEntries(cardDir).entries);
+  } catch {
+    /* .md is derived; a render failure never blocks the readout */
+  }
+  const agg = aggregateRounds(cardDir);
+  if (json) {
+    process.stdout.write(`${JSON.stringify(agg, null, 2)}\n`);
+    return 0;
+  }
+  if (agg.overall.count === 0) {
+    process.stdout.write(
+      lang === "zh"
+        ? `${cardId}: 暂无 round-journal 记录\n`
+        : `${cardId}: no round-journal entries yet\n`,
+    );
+    return 0;
+  }
+  process.stdout.write(`${cardId} round-journal\n${formatRoundReadout(agg)}\n`);
+  return 0;
+}
+
+/**
+ * US-CYCLE-006 — `roll cycle split-advice [<card>] [--generate] [--json]`.
+ *   • no card (or --list): list every card carrying a pending split-advice.md.
+ *   • <card> --generate: analyze the card's round-journal; if repair rounds >
+ *     threshold, write split-advice.md (idempotent) and emit a `split:advice`
+ *     event. Signal only — never touches backlog or spec.
+ *   • <card> (no --generate): preview whether the card would produce advice.
+ */
+export function cycleSplitAdviceCommand(args: string[], lang: "en" | "zh"): number {
+  const json = args.includes("--json");
+  const generate = args.includes("--generate");
+  const cardId = args.find((a) => !a.startsWith("-"));
+  const cwd = process.cwd();
+
+  if (cardId === undefined || cardId === "" || args.includes("--list")) {
+    const pending = listPendingSplitAdvice(cwd);
+    if (json) {
+      process.stdout.write(`${JSON.stringify(pending, null, 2)}\n`);
+      return 0;
+    }
+    if (pending.length === 0) {
+      process.stdout.write(lang === "zh" ? "暂无待处理的拆分建议\n" : "no pending split advice\n");
+      return 0;
+    }
+    process.stdout.write((lang === "zh" ? "待处理拆分建议:\n" : "pending split advice:\n") + pending.map((p) => `  ${p.card}  ${p.path}`).join("\n") + "\n");
+    return 0;
+  }
+
+  const cardDir = cardArchiveDir(cwd, cardId);
+  const advice = analyzeRepairRounds(cardDir, cardId);
+  if (advice === null) {
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ card: cardId, advice: null }, null, 2)}\n`);
+      return 0;
+    }
+    process.stdout.write(
+      lang === "zh"
+        ? `${cardId}: repair 轮数未超阈值,无需拆分建议\n`
+        : `${cardId}: repair rounds within threshold — no split advice\n`,
+    );
+    return 0;
+  }
+
+  if (!generate) {
+    if (json) {
+      process.stdout.write(`${JSON.stringify(advice, null, 2)}\n`);
+      return 0;
+    }
+    process.stdout.write(
+      (lang === "zh"
+        ? `${cardId}: ${advice.roundCount} 轮 (超阈值) — 用 --generate 生成 split-advice.md\n`
+        : `${cardId}: ${advice.roundCount} rounds (over threshold) — pass --generate to write split-advice.md\n`),
+    );
+    return 0;
+  }
+
+  const { path, written } = writeSplitAdvice(cardDir, advice);
+  if (written) {
+    // Emit the signal event (best-effort) — idempotent write means a re-run that
+    // changes nothing does NOT re-emit.
+    try {
+      const loopDir = join(cwd, ".roll", "loop");
+      mkdirSync(loopDir, { recursive: true });
+      const ev: RollEvent = { type: "split:advice", card: cardId, rounds: advice.roundCount, path, ts: Date.now() };
+      appendFileSync(join(loopDir, EVENTS_FILE), serializeEvent(ev) + "\n");
+    } catch {
+      /* event emission is best-effort observability */
+    }
+  }
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ ...advice, path, written }, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(
+    written
+      ? (lang === "zh" ? `${cardId}: 已生成 ${path} (${advice.roundCount} 轮)\n` : `${cardId}: wrote ${path} (${advice.roundCount} rounds)\n`)
+      : (lang === "zh" ? `${cardId}: split-advice.md 已是最新 (幂等,未改动)\n` : `${cardId}: split-advice.md already current (idempotent, unchanged)\n`),
+  );
+  return 0;
+}
+
 export function cycleCommand(args: string[]): number | Promise<number> {
   const noColor = args.includes("--no-color") || !process.stdout.isTTY || (process.env["NO_COLOR"] ?? "") !== "";
   renderState.useColor = !noColor;
   const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
   if (args[0] === "watch") {
     return cycleWatchCommand(args.slice(1).filter((a) => a !== "--no-color"));
+  }
+  if (args[0] === "journal") {
+    return cycleJournalCommand(args.slice(1), lang);
+  }
+  if (args[0] === "split-advice") {
+    return cycleSplitAdviceCommand(args.slice(1), lang);
+  }
+  if (args[0] === "model-swap") {
+    return cycleModelSwapCommand(args.slice(1), lang);
   }
   if (args.includes("--help") || args.includes("-h") || args.length === 0) {
     process.stdout.write(`${CYCLE_USAGE}\n`);

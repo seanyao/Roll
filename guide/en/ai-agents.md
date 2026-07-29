@@ -193,12 +193,12 @@ into one of four operational categories:
 - **network_block** — `ECONNREFUSED`, `ETIMEDOUT`, DNS failure → `continue`
   (transient; loop retries or breathes)
 - **setup_skill_root_pollution** — Reasonix auxiliary-dir warnings, skills with no
-  description → `create_fix` → routed to the delta team as a FIX
+  description → `create_fix` → routed to the delivery team as a FIX
 - **worktree_permission_failure** — `EACCES` / "permission denied" on a worktree
   path → `pause_for_owner`
 
 When the signal is setup/skill-root pollution, Supervisor must **not** label it
-as auth-blocked. It routes the repair to the backlog/delta team as a FIX,
+as auth-blocked. It routes the repair to the backlog/delivery team as a FIX,
 instead of asking the owner to debug ad hoc. Supervisor coordinates and
 diagnoses these issues but does not become the Builder or Evaluator, and it does
 not auto-delete global files.
@@ -216,6 +216,57 @@ route slots in `.roll/agents.yaml`. These are not runtime inputs. Run
 `roll agent migrate --dry-run` to preview their one-time conversion, then
 `roll agent migrate` to write scoped bindings. A loop that encounters v3 route
 slots fails loudly instead of silently using a second configuration model.
+
+## Delta Team & Full Delta Team
+
+Roll separates two named delivery topologies. Do not conflate them, and do not
+confuse either with the health-remediation **delivery team** (the FIX-routing
+target above).
+
+- **Delta Team** (ordinary, host-guided) is the *current host main session*
+  acting as the **implicit Supervisor**, plus **host-native sub-agent sessions**
+  for the Designer, Builder, and Evaluator roles. The host (Pi, Cursor, …)
+  requests and attests those sub-agents through its own facility; Roll never
+  spawns, resumes, or configures any session, including yours. Roll only manages
+  the protocol — evidence frames, schema validation, events, projections, and
+  fail-closed gates — through `roll delta`.
+- **Full Delta Team** is an *independently orchestrated* multi-agent / multi-host
+  topology. It shares the same protocol but launches distinct role sessions
+  through Roll's generic agent adapters. Independent agents/hosts are never
+  described as an ordinary Delta Team.
+
+Roles hand off through named, checksummed artifacts and the event stream — never
+raw chat. The Builder is the sole worktree writer; Designer, Evaluator, and Peer
+are read-only except for their own artifact directory. Peer is optional advisory
+input to the Evaluator, never a substitute for it.
+
+**Honest boundaries — these are stated by the protocol and must not be
+overclaimed:**
+
+- **Terminal binding is Option C, handoff-only.** A structurally valid Evaluator
+  report reaches only `delta:terminal(handoff_ready)`. That is **not** Done, a
+  merge, an attest verdict, or a DeliveryRecord. After `handoff_ready`, the owner
+  **manually** runs the existing delivery/PR/attest procedure; Roll auto-binds
+  nothing and makes no delivery/Done claim. The sole Done terminal remains the
+  Story path (accepted evidence via `roll attest`; delivery reconciled from a PR
+  merged into `main`).
+- **Host attestation is structural validation only.** `roll delta validate`
+  checks that the host-supplied tokens (`hostId`, `roleInstanceId`, `sessionId`,
+  `modelId`) are non-empty, unique where required, and correspond across
+  resolution/event/manifest. It **never** proves that a fresh session was
+  created, that the stated role/model was honored, or that any model executed.
+- **Local preset is host-local config.** Composition preferences live in
+  `~/.roll/delta-team/presets.yaml` (machine-local), never in project config,
+  `.roll/agents.yaml`, `.roll/policy.yaml`, or `@roll/core`.
+- **Host-guided cost is unobservable.** Status renders `? (host_unobservable)`;
+  Roll never estimates, prices, or emits zero for host-guided sub-agent work.
+
+**Loop admission.** The loop has no implicit host main session, so a
+`loop-autonomous + delta-team` request is deterministically blocked
+`host_supervisor_required` — never silently converted to solo or Full Delta.
+`loop-autonomous + full-delta-team` is an explicit opt-in. Default autonomous
+solo delivery is unchanged. See the `roll-delta-team` skill for the full
+host-guided procedure.
 
 ## See Also
 

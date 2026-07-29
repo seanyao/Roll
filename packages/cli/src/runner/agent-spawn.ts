@@ -115,6 +115,15 @@ export interface AgentProfile {
   };
   secretEnv?: readonly string[];
   childEnv?(home?: string): Record<string, string>;
+  /** FIX-1482: when true, this adapter TRULY enforces a `readOnly` spawn at the OS
+   *  level — codex via `--sandbox read-only`, reasonix via its generated Seatbelt
+   *  reasonix.toml. Only enforcing adapters may run a `readOnly:true` spawn; the
+   *  spawn boundary ({@link assertReadOnlyEnforceable}) fails LOUD for any other
+   *  adapter rather than silently running an advisory-only (prompt + no product
+   *  write roots) pseudo-read-only. Deliberately distinct from
+   *  {@link usesWorkspaceSandbox} — reasonix enforces readOnly but does NOT use a
+   *  workspace-write sandbox (it writes a per-cycle Seatbelt config instead). */
+  enforcesReadOnly?: boolean;
   /** FIX-1231: when true, the child gets NO git env vars (GIT_DIR/GIT_WORK_TREE
    *  etc.) and GIT_CEILING_DIRECTORIES is set to block git repo discovery from
    *  the CWD. Use for agents (codex) whose internal git mechanisms write refs and
@@ -348,6 +357,8 @@ const AGENT_PROFILES: Readonly<Record<string, AgentProfile>> = {
   codex: {
     name: "codex",
     usesWorkspaceSandbox: true,
+    // FIX-1482: codex OS-enforces readOnly via `--sandbox read-only` (below).
+    enforcesReadOnly: true,
     ptyWhenPiped: false,
     acceptance: { canReviewHeadless: getAgentSpec("codex")?.canReviewHeadless === true },
     /** FIX-1231: codex's internal curated-sync / turn-diffs mechanism writes
@@ -355,10 +366,16 @@ const AGENT_PROFILES: Readonly<Record<string, AgentProfile>> = {
      *  repo, poisoning the host checkout. Isolate its git access. */
     isolateGit: true,
     buildSpawnCommand: (opts) => {
-      const args = ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write"];
+      // US-DELTA-006: a read-only spawn (e.g. the Full Delta Designer) runs under
+      // codex's `read-only` sandbox so it CANNOT write product code; the explicit
+      // `--add-dir` roots below (its own artifact dir) stay writable. A normal
+      // Builder keeps `workspace-write`.
+      const sandboxMode = opts.readOnly === true ? "read-only" : "workspace-write";
+      const args = ["exec", "--skip-git-repo-check", "--sandbox", sandboxMode];
       // FIX-1065: sandboxed PR-heal agents need write access to the linked
       // worktree gitdir (and any other explicitly-granted roots) even though it
-      // lives outside the workspace. Pass each root as --add-dir.
+      // lives outside the workspace. Pass each root as --add-dir. For a read-only
+      // spawn these are the ONLY writable paths (e.g. the Designer's artifact dir).
       for (const root of writableRootsForSpawn(opts)) {
         args.push("--add-dir", root);
       }
@@ -385,6 +402,12 @@ const AGENT_PROFILES: Readonly<Record<string, AgentProfile>> = {
   reasonix: {
     name: "reasonix",
     usesWorkspaceSandbox: false,
+    // FIX-1482: reasonix OS-enforces readOnly via its own Seatbelt sandbox — the
+    // per-cycle reasonix.toml (writeReasonixSandboxConfig) limits writes to the
+    // explicit writableRoots. usesWorkspaceSandbox stays false (it is NOT a
+    // codex-style workspace-write sandbox), so enforcesReadOnly is tracked
+    // separately.
+    enforcesReadOnly: true,
     ptyWhenPiped: true,
     acceptance: { canReviewHeadless: getAgentSpec("reasonix")?.canReviewHeadless === true },
     secretEnv: ["DEEPSEEK_API_KEY"],
@@ -404,8 +427,16 @@ const AGENT_PROFILES: Readonly<Record<string, AgentProfile>> = {
       // FIX-1036: write a per-cycle reasonix.toml so the Seatbelt sandbox
       // allows writes to the git common dir (outside the worktree root).
       // The file is cleaned up via opts.cleanup after the child exit.
+      // FIX-1482: a `readOnly` spawn MUST always write the restrictive
+      // `[sandbox]` block (bash=enforce, allow_write limited to the explicit
+      // roots — EMPTY ⇒ nothing writable = fully read-only), even when no extra
+      // roots were granted. Otherwise a readOnly reasonix spawn with empty
+      // writableRoots would skip the config and fall back to reasonix's default
+      // (possibly unsandboxed), silently defeating the enforcesReadOnly claim.
       const roots = writableRootsForSpawn(opts);
-      if (roots.length > 0) opts.cleanup = chainCleanup(opts.cleanup, writeReasonixSandboxConfig(opts.cwd, roots));
+      if (roots.length > 0 || opts.readOnly === true) {
+        opts.cleanup = chainCleanup(opts.cleanup, writeReasonixSandboxConfig(opts.cwd, roots));
+      }
       return {
         bin: opts.bin ?? "reasonix",
         args: ["run", "--max-steps", String(maxSteps), ...modelArgs, "--dir", opts.cwd, agentPrompt(opts)],
@@ -540,6 +571,13 @@ export interface AgentSpawnOptions {
   /** Extra writable roots for agents with an explicit workspace sandbox. (No
    *  current pool agent declares one; retained for a future sandboxed engine.) */
   writableRoots?: string[];
+  /** US-DELTA-006: run the spawn READ-ONLY on its cwd. Sandbox-capable adapters
+   *  (codex → `--sandbox read-only`; reasonix/Seatbelt → writes limited to
+   *  `writableRoots`) then cannot write product code — only the explicitly
+   *  granted `writableRoots` (e.g. the Designer's own artifact dir) stay
+   *  writable. Used for the Full Delta Designer/Evaluator so only the Builder
+   *  gets product worktree write access. */
+  readOnly?: boolean;
   /** Routed model, consumed by agent profiles whose CLI accepts an explicit model. */
   model?: string;
   /** The resolved agent×model assignment; kept alongside legacy fields while call sites migrate. */
@@ -596,8 +634,36 @@ export function agentSpawnSupportsPurpose(spawn: AgentSpawn, purpose: AgentSpawn
  * The child runs with CWD = the worktree, where the agent makes its TCR commits
  * (exactly as v2: the loop hands the agent the worktree and it commits inside).
  */
-/** Build the spawn argv for a resolved agent — exported for unit tests. */
+/**
+ * FIX-1482 — the read-only ENFORCEMENT gate, evaluated at the single spawn
+ * boundary every adapter passes through ({@link buildSpawnCommand}).
+ *
+ * US-DELTA-006 (#1500) introduced `readOnly` spawns for the Full Delta
+ * Designer/Evaluator. Only SANDBOX-ENFORCING adapters actually jail product
+ * writes at the OS level: codex (`--sandbox read-only`) and reasonix (its
+ * generated Seatbelt reasonix.toml). For every other adapter (pi/kimi/agy/
+ * cursor/claude) `readOnly` was merely ADVISORY — prompt framing + no granted
+ * product write roots — with NO kernel block. Silently running that pseudo-
+ * read-only would let a misconfigured read-only role write product code.
+ *
+ * So: a `readOnly:true` spawn whose resolved adapter does not enforce read-only
+ * FAILS LOUD here (throws, naming the agent + the supported adapters) rather
+ * than degrading to advisory. This satisfies FIX-1482 AC4 and reframes AC1/AC3
+ * as "enforced OR refused" — never silently advisory.
+ */
+export function assertReadOnlyEnforceable(agent: string, opts: AgentSpawnOptions): void {
+  if (opts.readOnly !== true) return;
+  const profile = agentProfile(agent);
+  if (profile.enforcesReadOnly === true) return;
+  throw new Error(
+    `readOnly isolation is not enforceable for agent '${profile.name}' — assign a sandbox-enforcing adapter (codex or reasonix) to read-only roles (Designer/Evaluator)`,
+  );
+}
+
+/** Build the spawn argv for a resolved agent — exported for unit tests.
+ *  FIX-1482: refuses (fail-loud) a `readOnly` spawn on a non-enforcing adapter. */
 export function buildSpawnCommand(agent: string, opts: AgentSpawnOptions): { bin: string; args: string[] } {
+  assertReadOnlyEnforceable(agent, opts);
   return agentProfile(agent).buildSpawnCommand(opts);
 }
 
@@ -849,8 +915,9 @@ function spawnAndWait(bin: string, args: string[], opts: AgentSpawnOptions, pty 
 }
 
 export const realAgentSpawn: AgentSpawn = (agent, opts) => {
-  const profile = agentProfile(agent);
-  const { bin, args, pty } = withPtyWrap(profile.buildSpawnCommand(opts), agent);
+  // FIX-1482: route through the exported buildSpawnCommand so the readOnly
+  // enforcement gate (assertReadOnlyEnforceable) fires before any child spawns.
+  const { bin, args, pty } = withPtyWrap(buildSpawnCommand(agent, opts), agent);
   return spawnAndWait(bin, args, withAgentProfileEnv(agent, opts), pty);
 };
 realAgentSpawn.supportedPurposes = ["pick_ranking"];

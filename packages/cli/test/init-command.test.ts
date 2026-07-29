@@ -5,10 +5,35 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { dispatch } from "../src/bridge.js";
 import { registerAll } from "../src/commands/index.js";
-import { initCommand } from "../src/commands/init.js";
+import { initCommand, seedBacklogRow } from "../src/commands/init.js";
 import { offboardCommand } from "../src/commands/offboard.js";
 
 const dirs: string[] = [];
+
+describe("seedBacklogRow — FIX-1475 exact id-cell existence", () => {
+  const HEAD = "## Epic: Initial Setup";
+  function backlogFile(body: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "roll-seedrow-"));
+    dirs.push(dir);
+    const p = join(dir, "backlog.md");
+    writeFileSync(p, body, "utf8");
+    return p;
+  }
+
+  it("a row whose DESCRIPTION cell equals the id does NOT block a real seed", () => {
+    const p = backlogFile([HEAD, "", "| ID | Description | Status |", "|----|----|----|", "| US-OTHER | US-NEW | 📋 Todo |", ""].join("\n"));
+    const appended = seedBacklogRow(p, HEAD, "| US-NEW | real card | 📋 Todo |", "US-NEW");
+    expect(appended).toBe(true);
+    expect(readFileSync(p, "utf8")).toContain("| US-NEW | real card | 📋 Todo |");
+  });
+
+  it("an EXISTING id row (bare or linked) is a no-op — no duplicate append", () => {
+    const bare = backlogFile([HEAD, "", "| ID | Description | Status |", "|----|----|----|", "| US-NEW | already here | 📋 Todo |", ""].join("\n"));
+    expect(seedBacklogRow(bare, HEAD, "| US-NEW | dup | 📋 Todo |", "US-NEW")).toBe(false);
+    const linked = backlogFile([HEAD, "", "| ID | Description | Status |", "|----|----|----|", "| [US-NEW](.roll/features/x/US-NEW/spec.md) | already here | 📋 Todo |", ""].join("\n"));
+    expect(seedBacklogRow(linked, HEAD, "| US-NEW | dup | 📋 Todo |", "US-NEW")).toBe(false);
+  });
+});
 const REPO = resolve(__dirname, "../../..");
 
 interface Run {

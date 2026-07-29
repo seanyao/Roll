@@ -11,6 +11,7 @@ import {
   renderScopedExecuteRoute,
   resolveScopedCastRole,
   resolveScopedStoryExecute,
+  roleToScopeRole,
   scopedExecuteRouteTrace,
 } from "../src/runner/scoped-route.js";
 
@@ -386,5 +387,94 @@ defaults:
       recentUse: { claude: 100, agy: 9000 },
     });
     expect(route!.previousBuilder).toBeNull();
+  });
+});
+
+// US-DELTA-006 — the Designer is a first-class `design` scope role, not a
+// Builder alias, and a missing `design` binding fails closed (no fallback).
+describe("US-DELTA-006 — roleToScopeRole mapping", () => {
+  it("maps each cast role to its distinct scope role", () => {
+    expect(roleToScopeRole("designer")).toBe("design");
+    expect(roleToScopeRole("builder")).toBe("execute");
+    expect(roleToScopeRole("evaluator")).toBe("evaluate");
+    expect(roleToScopeRole("peer_reviewer")).toBe("evaluate");
+  });
+
+  it("NEVER maps the designer to execute (no quiet Builder-alias fallback)", () => {
+    expect(roleToScopeRole("designer")).not.toBe("execute");
+  });
+});
+
+const PROJECT_WITH_DESIGN = `schema: roll-agents/v1
+scope: project
+inherits: machine
+defaults:
+  story:
+    roles:
+      design:
+        kind: select
+        from: [claude, agy, kimi]
+        require: [design]
+        strategy: first-available
+      execute:
+        kind: select
+        from: [claude, agy, kimi, pi, reasonix, codex]
+        require: [execute]
+        strategy: least-recent
+`;
+
+const MACHINE_WITH_DESIGN = `schema: roll-agents/v1
+scope: machine
+agents:
+  claude:
+    capabilities: [supervise, design, execute, evaluate]
+  agy:
+    capabilities: [supervise, design, execute, evaluate]
+  kimi:
+    capabilities: [supervise, design, execute, evaluate]
+  pi:
+    capabilities: [supervise, execute, evaluate]
+  reasonix:
+    capabilities: [supervise, execute, evaluate]
+  codex:
+    capabilities: [supervise, execute, evaluate]
+roles:
+  supervise:
+    kind: fixed
+    agent: codex
+`;
+
+describe("US-DELTA-006 — resolveScopedCastRole('designer') → design role", () => {
+  it("resolves the designer to the `design` scope role (independent of execute)", () => {
+    const rollHome = mkdtempSync(join(tmpdir(), "roll-home-des-"));
+    const repoCwd = mkdtempSync(join(tmpdir(), "roll-proj-des-"));
+    dirs.push(rollHome, repoCwd);
+    writeFileSync(join(rollHome, "agents.yaml"), MACHINE_WITH_DESIGN);
+    mkdirSync(join(repoCwd, ".roll"), { recursive: true });
+    writeFileSync(join(repoCwd, ".roll", "agents.yaml"), PROJECT_WITH_DESIGN);
+
+    const route = resolveScopedCastRole(repoCwd, "designer", { rollHome, installed: ALL_INSTALLED, recentUse: {} });
+    expect(route).not.toBeNull();
+    expect(route!.castRole).toBe("designer");
+    expect(route!.scopeRole).toBe("design");
+    expect(route!.resolution.ok).toBe(true);
+    if (route!.resolution.ok) {
+      // A design-capable agent — NOT forced to the builder's execute pool.
+      expect(["claude", "agy", "kimi"]).toContain(route!.resolution.resolved.agent);
+    }
+  });
+
+  it("FAILS CLOSED when no `design` binding exists — no fallback to execute", () => {
+    // The default PROJECT fixture declares only an execute binding.
+    const { rollHome, repoCwd } = fixture();
+    const route = resolveScopedCastRole(repoCwd, "designer", { rollHome, installed: ALL_INSTALLED, recentUse: {} });
+    expect(route).not.toBeNull();
+    expect(route!.scopeRole).toBe("design");
+    // No design binding → the resolution FAILS (the caller fails Full Delta
+    // before the Builder), rather than quietly resolving an execute agent.
+    expect(route!.resolution.ok).toBe(false);
+    if (!route!.resolution.ok) {
+      expect(route!.resolution.failure.errors.join(" ")).toContain("design");
+    }
   });
 });

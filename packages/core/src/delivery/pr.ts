@@ -110,6 +110,14 @@ export interface PublishPlanInput {
   manualMerge?: boolean;
   /** FIX-909: visible needs-review work opens as a draft PR for independent review. */
   draft?: boolean;
+  /**
+   * US-CYCLE-009: the branch's real tip sha (from the git plane — the sha just
+   * pushed / a `git ls-remote` read), used to head-sha-pin the auto-merge attach
+   * (`--match-head-commit`). Guards the PR-API-head-lag trap: GitHub refuses the
+   * merge if the branch tip has moved past this sha. Omitted ⇒ no pin
+   * (backwards-compatible).
+   */
+  headSha?: string;
 }
 
 /**
@@ -160,12 +168,18 @@ export function planPublishPr(input: PublishPlanInput): PublishStep[] {
     },
   ];
   if (input.manualMerge === true) return steps;
+  // US-CYCLE-009: head-sha-pin the auto-merge attach when the caller resolved the
+  // branch tip (--match-head-commit). GitHub then refuses the merge if the tip
+  // moved past this sha — closing the PR-API-head-lag window.
+  const pin = input.headSha !== undefined && input.headSha !== ""
+    ? ["--match-head-commit", input.headSha]
+    : [];
   return [
     ...steps,
     {
       tool: "gh",
       kind: "gh-pr-merge-auto",
-      argv: ["-R", input.slug, "pr", "merge", input.branch, "--auto", "--squash", "--delete-branch"],
+      argv: ["-R", input.slug, "pr", "merge", input.branch, "--auto", "--squash", "--delete-branch", ...pin],
     },
   ];
 }
@@ -180,11 +194,15 @@ export function planPublishDocPr(input: PublishPlanInput): PublishStep[] {
   const title = input.title ?? `doc update ${branchTitleSuffix(input.branch)}`;
   const steps = planPublishPr({ ...input, title });
   if (input.manualMerge === true) return steps;
-  // Replace the auto-merge tail with the admin merge.
+  // Replace the auto-merge tail with the admin merge (US-CYCLE-009: sha-pinned
+  // when the tip is known, same head-lag guard as the auto path).
+  const pin = input.headSha !== undefined && input.headSha !== ""
+    ? ["--match-head-commit", input.headSha]
+    : [];
   steps[steps.length - 1] = {
     tool: "gh",
     kind: "gh-pr-merge-admin",
-    argv: ["-R", input.slug, "pr", "merge", input.branch, "--admin", "--squash", "--delete-branch"],
+    argv: ["-R", input.slug, "pr", "merge", input.branch, "--admin", "--squash", "--delete-branch", ...pin],
   };
   return steps;
 }

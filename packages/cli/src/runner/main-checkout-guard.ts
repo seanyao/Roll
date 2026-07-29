@@ -285,6 +285,55 @@ export function readMainDirtyBaseline(runtimeDir: string, cycleId: string): stri
   }
 }
 
+// ─── FIX-1475: persisted pre-spawn main-HEAD baseline ────────────────────────
+//
+// The E10 dirty baseline scopes the DIRT probe to the cycle; this is the same
+// move for the AHEAD probe. The shared main checkout may legitimately carry
+// pre-existing local ahead commits (owner WIP, a concurrent dispatch) — the
+// cycle worktree (based on the integration branch) is the isolation boundary,
+// so those commits never leak into the cycle and must NEVER be reset away.
+// Only a HEAD that MOVED while the cycle was running is a leak, and telling
+// the two apart requires knowing where HEAD stood at pre-spawn.
+
+function mainHeadBaselinePath(runtimeDir: string, cycleId: string): string {
+  return join(runtimeDir, `${cycleId}.main-head-baseline`);
+}
+
+/**
+ * FIX-1475: persist the main checkout's current HEAD sha for a cycle at
+ * pre-spawn. Best-effort (mirrors {@link writeMainDirtyBaseline}): a failure
+ * degrades later phases to the legacy absolute-ahead behavior — detection
+ * still fires, but the shared ref is still never reset.
+ */
+export function captureMainHeadBaseline(repoCwd: string, runtimeDir: string, cycleId: string): void {
+  try {
+    const head = git(repoCwd, ["rev-parse", "HEAD"]);
+    // SHA-1 (40 hex) or SHA-256 (64 hex) — a sha256 repo's HEAD must not be
+    // rejected here, else the baseline is lost and a pre-existing ahead commit
+    // is misclassified as a cycle leak.
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head)) return;
+    const path = mainHeadBaselinePath(runtimeDir, cycleId);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${head}\n`, "utf8");
+  } catch {
+    /* best-effort; absence degrades to absolute-ahead detection (no reset either way) */
+  }
+}
+
+/**
+ * FIX-1475: read back the persisted pre-spawn HEAD sha. Missing / unreadable /
+ * malformed → "" (caller falls back to absolute-ahead detection).
+ */
+export function readMainHeadBaseline(runtimeDir: string, cycleId: string): string {
+  try {
+    const sha = readFileSync(mainHeadBaselinePath(runtimeDir, cycleId), "utf8").trim();
+    // SHA-1 (40 hex) or SHA-256 (64 hex).
+    return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) ? sha : "";
+  } catch {
+    return "";
+  }
+}
+
 function collectProtectionEntries(repoCwd: string): ProtectionEntry[] {
   const entries: ProtectionEntry[] = [];
   const seen = new Set<string>();
@@ -700,14 +749,30 @@ async function quarantineDirty(opts: QuarantineOptions, files: string[]): Promis
 async function quarantineAhead(opts: QuarantineOptions): Promise<QuarantineResult | null> {
   const integrationBranch = resolveIntegrationBranch(opts.repoCwd);
   if (aheadCount(opts.repoCwd, integrationBranch) === 0) return null;
+  // FIX-1475: the supervised path NEVER moves the shared main ref. The cycle
+  // worktree is created from the integration branch (origin/main), so ahead
+  // commits on the shared checkout cannot leak into the cycle — resetting them
+  // away only broke the main checkout and any concurrent dispatch. When HEAD
+  // still matches this cycle's pre-spawn baseline the ahead state PRE-DATES
+  // the cycle (owner WIP / concurrent dispatch): legitimate — leave the ref,
+  // the tree, and the event stream alone.
+  const baselineHead = readMainHeadBaseline(opts.runtimeDir, opts.cycleId);
+  let head = "";
+  try {
+    head = git(opts.repoCwd, ["rev-parse", "HEAD"]);
+  } catch {
+    head = "";
+  }
+  if (baselineHead !== "" && head === baselineHead) return null;
   const id = quarantineId(opts, "ahead");
   const ref = refName(id);
   const files = aheadFiles(opts.repoCwd, integrationBranch);
+  // HEAD moved mid-cycle (or no baseline — legacy fallback): a genuine leak.
+  // Bookmark the moved tip for audit and fail LOUD (event + manifest + the
+  // caller's alert), but still NEVER reset — the shared ref stays exactly
+  // where it is; recovery is an explicit human decision.
   if (!gitQuiet(opts.repoCwd, ["branch", ref, "HEAD"])) return null;
-  // E1: reset the main checkout back onto the configured integration branch
-  // (default origin/main). The leaked commits are preserved on `ref` above.
-  if (!gitQuiet(opts.repoCwd, ["reset", "--hard", integrationBranch])) return null;
-  const restoreCommand = `git cherry-pick ${ref}`;
+  const restoreCommand = `# FIX-1475: main was NOT moved — the ahead commits remain on main (bookmarked at ${ref}); to drop them manually: git reset --hard ${integrationBranch}`;
   const path = manifestPath(opts.runtimeDir, id);
   const ev = toEvent(opts, "ahead", ref, files, path, restoreCommand);
   writeManifest(path, {

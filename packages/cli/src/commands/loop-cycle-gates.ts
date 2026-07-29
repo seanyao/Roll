@@ -129,16 +129,20 @@ function realEnforceTcrDeps(): EnforceTcrDeps {
   };
 }
 
-/** Revert a story's `✅ Done` cell to `📋 Todo` (matched by `[<id>]`). Markers come
- *  from the single source (@roll/spec) so the gate can never drift (FIX-300). */
+/** Revert a story's `✅ Done` cell to `📋 Todo`. Markers come from the single
+ *  source (@roll/spec) so the gate can never drift (FIX-300). FIX-1475: the row
+ *  is matched by an EXACT id-cell (link-stripped) — never `line.includes([id])`,
+ *  which also hit any OTHER row whose description linked to `[<id>]`. */
 export function revertStoryDone(content: string, storyId: string): string {
   return content
     .split("\n")
-    .map((line) =>
-      line.includes(`[${storyId}]`)
-        ? line.replace(` | ${STATUS_MARKER.done} |`, ` | ${STATUS_MARKER.todo} |`)
-        : line,
-    )
+    .map((line) => {
+      if (!line.startsWith("|")) return line;
+      const cell = (line.split("|")[1] ?? "").trim();
+      const id = cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
+      if (id !== storyId) return line;
+      return line.replace(` | ${STATUS_MARKER.done} |`, ` | ${STATUS_MARKER.todo} |`);
+    })
     .join("\n");
 }
 

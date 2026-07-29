@@ -103,3 +103,37 @@ more-enforced than it is.
   consensus confirmation of exemptions + the enforced substitute-evidence
   requirement (US-EVID-025). Until those land, "no give-nothing path" and
   "harness owns the binding" are the DESIGN intent, not a runtime guarantee.
+
+## 5. Delta Team 证据期望 / Delta Team evidence expectations
+
+A **Delta Team** delivery (host-guided Designer → Builder → Evaluator, driven
+through `roll delta`) does **not** get a stronger acceptance guarantee than an
+ordinary Story — it gets a narrower, honestly-labelled one. Do not read Delta
+protocol events as delivery or Done.
+
+- **The Evaluator report is the acceptance judgment surface**, authored by a
+  host-attested Evaluator sub-agent whose opaque session token differs from the
+  Builder's. It carries the usual separate dimensions (blocking findings,
+  advisory findings, independent score where available, attest/evidence status,
+  design-contract-vs-delivered mapping, recommendation) plus explicit
+  `## Inputs checked` and `## Rationale` sections, so it is demonstrably authored
+  judgment, not a mechanical assembly. Roll never synthesizes it from
+  score/attest fields.
+- **Host attestation is structural validation only.** `roll delta validate`
+  checks that the host-supplied tokens are non-empty, unique where required, and
+  correspond across resolution/event/manifest. It is **never** proof of a fresh
+  session, honored role/model, or actual model execution. Verification language
+  is "host-attested / structurally valid," never "Roll proved a fresh session ran"
+  or "the model executed."
+- **Terminal binding is Option C (handoff-only).** `delta:terminal(handoff_ready)`
+  is not Done, a merge, an attest verdict, or a DeliveryRecord. The sole Done
+  terminal remains the Story path in §1–§4: accepted evidence via `roll attest`,
+  delivery reconciled from a PR merged into `main`. An Evaluator recommendation
+  never changes those facts; after handoff the owner runs the existing procedure
+  manually.
+- **Host-guided cost is unobservable.** Status renders `? (host_unobservable)`;
+  no host-guided delegation writes a usage row or derives a per-role/total cost.
+- **Full Delta Team** shares this contract but uses adapter-launched distinct
+  role sessions and adapter-observed provenance; its multi-role cost stays
+  `? (usage_authority_unavailable)` until a usage-authority schema is approved.
+  Independent agents/hosts are never described as an ordinary Delta Team.

@@ -176,12 +176,12 @@ worktree 权限失败，并把它们归类为以下四类之一：
 - **network_block** — `ECONNREFUSED`、`ETIMEDOUT`、DNS 失败 → `continue`
   （瞬态；loop 会重试或呼吸）
 - **setup_skill_root_pollution** — Reasonix 辅助目录警告、skill 缺少 description
-  → `create_fix` → 作为 FIX 路由给 delta team
+  → `create_fix` → 作为 FIX 路由给 delivery team
 - **worktree_permission_failure** — worktree 路径上的 `EACCES` / "permission denied"
   → `pause_for_owner`
 
 当信号是 setup/skill-root 污染时，Supervisor **不会**把它标成 auth-blocked，
-而是把修复路由到 backlog/delta team 作为 FIX，而不是让 owner 临时救火。
+而是把修复路由到 backlog/delivery team 作为 FIX，而不是让 owner 临时救火。
 Supervisor 负责协调和诊断这些问题，但它不会变成 Builder 或 Evaluator，
 也不会自动删除全局文件。
 
@@ -197,6 +197,46 @@ roll supervisor next               # 下一张卡 + agent health 摘要
 `.roll/agents.yaml` 里的 v3 route slots。它们不再是运行时输入。先用
 `roll agent migrate --dry-run` 预览一次性迁移，再用 `roll agent migrate`
 写入 scoped binding。loop 遇到 v3 route slots 会明确失败，不会悄悄启用第二套配置模型。
+
+## Delta Team 与 Full Delta Team
+
+Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要与上面健康修复用的
+**delivery team**（FIX 路由目标）混淆。
+
+- **Delta Team**（普通的、host-guided）= *当前宿主主会话* 作为**隐式 Supervisor**，
+  加上由该宿主 native 能力创建的 **host-native 子会话**担任 Designer、Builder、
+  Evaluator 角色。宿主（Pi、Cursor…）用自己的能力请求并 attest 这些子会话；Roll
+  从不 spawn、resume 或配置任何会话，包括你自己的会话。Roll 只通过 `roll delta`
+  管理协议本身——证据帧、schema 校验、事件、投影与 fail-closed 闸。
+- **Full Delta Team** = *独立编排* 的多 agent / 多宿主拓扑。它共用同一套协议，但通过
+  Roll 的通用 agent 适配器启动各自独立的角色会话。独立的 agent/宿主永远不叫普通
+  Delta Team。
+
+角色之间只通过命名、带校验和的 artifact 与事件流交接，绝不传递原始会话。Builder 是
+唯一的 worktree 写者；Designer、Evaluator、Peer 除自己的 artifact 目录外均只读。Peer
+只是 Evaluator 的可选咨询输入，绝不替代 Evaluator。
+
+**诚实边界——这些是协议明说的限制，绝不可夸大：**
+
+- **终止绑定是 Option C，仅 handoff。** 结构上有效的 Evaluator 报告最多只能到
+  `delta:terminal(handoff_ready)`。它**不是** Done、不是 merge、不是 attest 裁定、
+  也不是 DeliveryRecord。`handoff_ready` 之后由 owner **手动**走既有的
+  delivery/PR/attest 流程；Roll 不自动绑定任何东西，也不做 delivery/Done 声明。唯一的
+  Done 终止仍是 Story 路径（经 `roll attest` 接受证据；交付由合入 `main` 的 PR 对账）。
+- **宿主 attestation 只是结构校验。** `roll delta validate` 只检查宿主提供的 token
+  （`hostId`、`roleInstanceId`、`sessionId`、`modelId`）非空、在需要处唯一，且在
+  resolution/事件/manifest 间互相对应。它**绝不**证明会话是新起的、声明的角色/模型被
+  遵守，或任何模型真的执行过。
+- **本地 preset 是宿主本地配置。** 组合偏好放在 `~/.roll/delta-team/presets.yaml`
+  （machine-local），绝不进项目配置、`.roll/agents.yaml`、`.roll/policy.yaml` 或
+  `@roll/core`。
+- **Host-guided 成本不可观测。** 状态渲染 `? (host_unobservable)`；Roll 绝不为
+  host-guided 子会话工作估算、定价或写零。
+
+**Loop 准入。** loop 没有隐式的宿主主会话，因此 `loop-autonomous + delta-team` 请求会
+被确定性地阻塞为 `host_supervisor_required`——绝不静默转成 solo 或 Full Delta。
+`loop-autonomous + full-delta-team` 是显式 opt-in。默认的自主 solo 交付保持不变。完整的
+host-guided 流程见 `roll-delta-team` 技能。
 
 ## 另见
 

@@ -12,7 +12,7 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatus, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, removeLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
 import { createScheduler, isOwnerHeld, launchdLabel, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
 import { dormantMarkerPath, resolveLoopRunState, writeDormantMarker } from "./loop-sched.js";
@@ -237,7 +237,10 @@ export function cycleSignalTeardown(
     const terminalStoryId = ctx.storyId ?? "";
     if (terminalStoryId !== "") {
       try {
-        removeLease(resolveStoryLeasePath(paths), terminalStoryId, "cycle");
+        releaseStoryLease(resolveStoryLeasePath(paths), terminalStoryId, {
+          source: "cycle",
+          pid: deps.pid ?? process.pid,
+        });
       } catch {
         /* lease cleanup must never block signal teardown */
       }
@@ -1027,7 +1030,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     heartbeatPath: join(rt, "heartbeat"),
     ...(workspaceBinding === undefined
       ? {}
-      : { storyLeasePath: join(rt, "locks", "story-leases.json") }),
+      : { storyLeasePath: join(rt, "locks", "leases") }),
     worktreePath: join(rt, "worktrees", `cycle-${cycleId}`),
   };
 
@@ -1499,7 +1502,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
             remarkTodo: (storyId) => {
               try {
                 const content = readFileSync(backlogFile, "utf8");
-                const r = markStatus(content, storyId, STATUS_MARKER.todo);
+                const r = markStatusExact(content, storyId, STATUS_MARKER.todo);
                 if (r.count > 0) writeFileSync(backlogFile, r.content, "utf8");
               } catch {
                 /* best-effort: a missed re-mark just leaves the row as-is */

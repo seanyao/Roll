@@ -27,7 +27,7 @@
  * event STILL written, lock released, and a fresh runCycleOnce takes over cleanly.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -161,6 +161,15 @@ function makeFixture(tag: string): { repo: string; remote: string } {
   // US-LOOP-098 test above.
   git(repo, ["config", "user.email", "t@t"]);
   git(repo, ["config", "user.name", "t"]);
+  // US-CYCLE-011: the round-tail `roll test --full` proof (`.roll/last-test-pass`)
+  // is a TRANSIENT — production always gitignores it (roll's own `.gitignore` has
+  // `.roll/`), so it never dirties the worktree or enters `git write-tree`. This
+  // tracked-.roll fixture (FIX-198) commits `.roll/*`, so replicate the real
+  // ignore for JUST the transient proof via the worktree-shared `.git/info/exclude`
+  // (no committed-tree change). Without it the untracked proof → worktreeDirty →
+  // handoff_without_tcr. The gitignored-.roll (symlink) layout already excludes
+  // all of `.roll`, so it needs nothing extra.
+  appendFileSync(join(repo, ".git", "info", "exclude"), "\n.roll/last-test-pass\n", "utf8");
   return { repo, remote };
 }
 
@@ -246,6 +255,22 @@ const shimAgentTcr: AgentSpawn = async (_agent, opts): Promise<AgentSpawnResult>
   }
   git(wt, [...GIT_ID, "add", "-A"]);
   git(wt, [...GIT_ID, "commit", "-q", "--no-verify", "-m", `tcr: deliver ${storyId}`]);
+  // US-CYCLE-011: mint the round-tail FULL-verify proof exactly as the real
+  // builder does (`roll test --full`) — as the FINAL act, AFTER the last commit.
+  // `evaluateEvidenceGate` now blocks a publish that lacks a fresh `mode:"full"`
+  // proof whose tree matches the delivered tree. The tree is `git write-tree`
+  // right after the commit (== HEAD tree); the proof file is written UNSTAGED, so
+  // it never enters `git write-tree` — the gate computes the identical tree at
+  // publish time (the in-repo evidence commit runs AFTER the gate). Works for
+  // BOTH .roll layouts: gitignored/symlinked .roll is excluded from write-tree,
+  // and for tracked .roll the proof file is simply never staged.
+  const proofTree = git(wt, ["write-tree"]).trim();
+  mkdirSync(join(wt, ".roll"), { recursive: true });
+  writeFileSync(
+    join(wt, ".roll", "last-test-pass"),
+    JSON.stringify({ ts: Math.floor(Date.now() / 1000), tree: proofTree, mode: "full" }) + "\n",
+    "utf8",
+  );
   return { stdout: CLAUDE_STREAM_JSON, stderr: "", exitCode: 0, timedOut: false };
 };
 
@@ -791,13 +816,16 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // A FRESH runCycleOnce takes over cleanly (lock free, new terminal).
     const cycleId2 = "20260605-222222-3333";
     const p2 = paths(rt, cycleId2);
-    const fc2 = fixedClock(2_000_000);
+    // US-CYCLE-011: the takeover cycle actually PUBLISHES, so its evidence gate
+    // reads the shim's round-tail proof (ts = real wall clock). Use the DEFAULT
+    // real clock (as every other publishing test here does) rather than an
+    // artificial ~1970 fixed clock — otherwise the real-time proof looks "in the
+    // future" to the gate's anti-replay freshness check and blocks the publish.
     const base2 = nodePorts({
       repoCwd: repo,
       paths: p2,
       skillBody: "deliver",
       routeDeps,
-      clock: fc2.clock,
     });
     const ports2: Ports = { ...base2, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result2 = await runCycleOnce({

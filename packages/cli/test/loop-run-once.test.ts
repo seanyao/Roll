@@ -753,9 +753,11 @@ describe("FIX-204D — signal teardown keeps I8 on the kill paths", () => {
       JSON.stringify({ type: "cycle:start", cycleId, storyId: "FIX-LEASE", agent: "pi", model: "", ts: 1 }) + "\n",
       "utf8",
     );
+    const ld = join(rt, "leases");
+    mkdirSync(ld, { recursive: true });
     writeFileSync(
-      join(rt, "story-leases.json"),
-      JSON.stringify({ "FIX-LEASE": { pid: process.pid, claimedAt: 1780680000000, source: "cycle" } }) + "\n",
+      join(ld, "FIX-LEASE.lease"),
+      JSON.stringify({ pid: process.pid, claimedAt: 1780680000000, source: "cycle" }) + "\n",
       "utf8",
     );
 
@@ -765,7 +767,7 @@ describe("FIX-204D — signal teardown keeps I8 on the kill paths", () => {
       now: () => 1780680123,
     });
 
-    expect(existsSync(join(rt, "story-leases.json"))).toBe(false);
+    expect(existsSync(join(ld, "FIX-LEASE.lease"))).toBe(false);
   });
 
   it("foreign lock (skip-on-contention path): touches NOTHING, still exits with the signal code", async () => {

@@ -15,6 +15,7 @@ import {
   type PickRankingEntry,
 } from "@roll/core";
 import { agentSpawnSupportsPurpose, type AgentSpawn } from "./agent-spawn.js";
+import { spawnWatched } from "./spawn-watchdog.js";
 import type { Ports } from "./ports.js";
 import { eventTs } from "./runner-time.js";
 
@@ -217,7 +218,6 @@ export async function resolvePickRanking(
   items: readonly BacklogItem[],
   eligibility: PickOptions,
 ): Promise<{ ranking: PickRankingEntry[]; source: "agent" | "cache" } | undefined> {
-  void ctx;
   if (semanticRankingPolicy(ports.repoCwd) === "off") return undefined;
   const candidates = candidateRowsForRanking(items, eligibility);
   if (candidates.length < 2) return undefined;
@@ -235,15 +235,30 @@ export async function resolvePickRanking(
   }
   const prompt = pickRankingPrompt(ports.repoCwd, backlogContent, candidates);
   let result: Awaited<ReturnType<AgentSpawn>>;
+  const rankingCwd = pickRankingCwd(ports);
   try {
-    result = await ports.agentSpawn(route.agent, {
-      purpose: "pick_ranking",
-      cwd: pickRankingCwd(ports),
-      skillBody: prompt,
-      timeoutMs: PICK_RANKING_TIMEOUT_MS,
-      bare: true,
-      model: route.model,
-    });
+    // US-CYCLE-002: even the pre-cycle pick-ranking spawn is watchdog-wrapped
+    // (evaluator role) so NO spawn path bypasses the watchdog; its own short
+    // PICK_RANKING_TIMEOUT_MS stays the primary cap for this quick harness call.
+    result = (
+      await spawnWatched({
+        ports,
+        ctx,
+        purpose: "pick_ranking",
+        agent: route.agent,
+        ...(route.model !== undefined ? { model: route.model } : {}),
+        observeCwd: rankingCwd,
+        run: () =>
+          ports.agentSpawn(route.agent, {
+            purpose: "pick_ranking",
+            cwd: rankingCwd,
+            skillBody: prompt,
+            timeoutMs: PICK_RANKING_TIMEOUT_MS,
+            bare: true,
+            model: route.model,
+          }),
+      })
+    ).result;
   } catch {
     appendPickRankingFailure(ports, "spawn_failed");
     return undefined;

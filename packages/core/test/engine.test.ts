@@ -307,6 +307,20 @@ describe("inProgressStories + applyStuckReverts", () => {
     ];
     expect(reconcileStuckBacklog(backlog, events, now).map((r) => r.storyId)).toEqual(["US-1"]);
   });
+
+  it("FIX-1475: identity is the FULL id, not the UNSTICK_ID_RE-truncated capture (US-WS-011a ≠ US-WS-011)", () => {
+    const backlog = [
+      "| [US-WS-011](.roll/features/ws/US-WS-011/spec.md) | parent | 🔨 In Progress |",
+      "| [US-WS-011a](.roll/features/ws/US-WS-011a/spec.md) | suffixed child | 🔨 In Progress |",
+      "",
+    ].join("\n");
+    // The regex capture truncates both to US-WS-011; identity must be the full cell.
+    expect(inProgressStories(backlog).map((s) => s.id)).toEqual(["US-WS-011", "US-WS-011a"]);
+    // Reverting the suffixed child must NOT touch the parent row (and vice-versa).
+    const out = applyStuckReverts(backlog, [{ storyId: "US-WS-011a", outcome: "failed", ageHours: 6 }]);
+    expect(out).toContain("| [US-WS-011](.roll/features/ws/US-WS-011/spec.md) | parent | 🔨 In Progress |");
+    expect(out).toContain("| [US-WS-011a](.roll/features/ws/US-WS-011a/spec.md) | suffixed child | 📋 Todo |");
+  });
 });
 
 describe("decideClaimReconcile — FIX-211: Done ≡ merged (no publish-time抢跑)", () => {

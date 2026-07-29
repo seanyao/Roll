@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { pairScore, type PairScoreCmdDeps } from "../src/commands/pair.js";
+import { pairScore, resolveSummary, type PairScoreCmdDeps } from "../src/commands/pair.js";
 import { readStoryReviewScores, writeReviewScoreNote } from "../src/lib/review-score.js";
 
 const dirs: string[] = [];
@@ -149,6 +149,29 @@ describe("codex pair-review fixes — US-PAIR-010", () => {
     writeFileSync(join(p, ".roll", "backlog.md"), "| US-T-0010 | the other story | Todo |\n| US-T-001 | the right story | Todo |\n");
     const r = await run(p, ["US-T-001"]);
     expect(r.code).toBe(0);
+  });
+
+  it("FIX-1475: resolveSummary picks the EXACT id-cell row, not a `<id>-` descendant sorted first", () => {
+    const p = project(SCORE_CFG);
+    writeFileSync(
+      join(p, ".roll", "backlog.md"),
+      [
+        "| Story | Description | Status |",
+        "|--|--|--|",
+        "| [FIX-300-legacy](.roll/features/ep/FIX-300-legacy/spec.md) | the WRONG descendant row | 📋 Todo |",
+        "| [FIX-300](.roll/features/ep/FIX-300/spec.md) | the RIGHT row | 🔨 In Progress |",
+        "",
+      ].join("\n"),
+    );
+    const old = process.cwd();
+    process.chdir(p);
+    try {
+      const summary = resolveSummary("FIX-300");
+      expect(summary).toContain("the RIGHT row");
+      expect(summary).not.toContain("WRONG descendant");
+    } finally {
+      process.chdir(old);
+    }
   });
 
   it("a retry that adds an audit field (fallback-reason) writes a new audited note, not a dedup", () => {

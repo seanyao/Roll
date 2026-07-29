@@ -478,8 +478,8 @@ export const v3Catalog: Catalog = {
   // a human decision). Both en and zh present so the single-language contract
   // (output follows ROLL_LANG, never mixes) holds.
   "releasev3.usage": {
-    en: "Usage: roll release [--dry-run|--yes|--showcase|--json]\n  The ONE release flow: bump → changelog fold → package gate → commit-push → consistency gate → PR → auto-merge → tag push.\n  Drives the merge itself via GitHub auto-merge (needs \"Allow auto-merge\" on the repo); prints progress while it waits and nudges CI if it stalls.\n  The consistency gate runs BEFORE the PR — a drifting release aborts before anything merges. Stops at the tag push; npm publish stays yours. No subcommands remain.\n  --showcase  After a successful release, run the golden-path showcase (real models; recommended, non-blocking — never fails the release).",
-    zh: "用法：roll release [--dry-run|--yes|--showcase|--json]\n  唯一发版流：版本号 → 折叠 changelog → 包闸 → 提交推送 → 一致性闸 → PR → 自动合并 → 推 tag。\n  自驱合并（GitHub auto-merge，需仓库开启 “Allow auto-merge”）；等待期间打印进度，CI 卡住时自动推一下。\n  一致性闸在开 PR 之前先跑——漂移的发版会在任何东西合并前中止。止步于推 tag；npm publish 仍由你执行。不再有子命令。\n  --showcase  发版成功后跑一次黄金路径 showcase（真模型；建议、非硬卡——绝不让发版失败）。",
+    en: "Usage: roll release [--dry-run|--yes|--showcase|--json] | roll release verify <version> [--no-latest]\n  The ONE release flow: bump → changelog fold → package gate → commit-push → consistency gate → PR → auto-merge → tag push.\n  Drives the merge itself via GitHub auto-merge (needs \"Allow auto-merge\" on the repo); prints progress while it waits and nudges CI if it stalls.\n  The consistency gate runs BEFORE the PR — a drifting release aborts before anything merges. Stops at the tag push; the tag push creates a DRAFT GitHub Release. npm publish stays yours (2FA).\n  release verify <version>  Phase 2 (FIX-1480): after you `npm publish`, confirm npm has the version (npm is the truth source) and promote the draft GitHub Release to latest; fails loud and leaves the draft untouched if npm lacks it. --no-latest skips the dist-tags.latest check.\n  --showcase  After a successful release, run the golden-path showcase (real models; recommended, non-blocking — never fails the release).",
+    zh: "用法：roll release [--dry-run|--yes|--showcase|--json] | roll release verify <版本> [--no-latest]\n  唯一发版流：版本号 → 折叠 changelog → 包闸 → 提交推送 → 一致性闸 → PR → 自动合并 → 推 tag。\n  自驱合并（GitHub auto-merge，需仓库开启 “Allow auto-merge”）；等待期间打印进度，CI 卡住时自动推一下。\n  一致性闸在开 PR 之前先跑——漂移的发版会在任何东西合并前中止。止步于推 tag；推 tag 只会创建**草稿** GitHub Release。npm publish 仍由你执行（2FA）。\n  release verify <版本>  第二阶段（FIX-1480）：你 `npm publish` 之后,核对 npm 上确有该版本（npm 是真相源）并把草稿 GitHub Release 提升为正式；npm 上没有则响亮报错、草稿原样保留。--no-latest 跳过 dist-tags.latest 检查。\n  --showcase  发版成功后跑一次黄金路径 showcase（真模型；建议、非硬卡——绝不让发版失败）。",
   },
   "releasev3.title": {
     en: "Release plan",
@@ -1202,5 +1202,67 @@ export const v3Catalog: Catalog = {
   "capture.readiness.migration": {
     en: "  · next migration — %s (%s)",
     zh: "  · 下次迁移 — %s（%s）",
+  },
+
+  // US-DELTA-003 — protocol-only `roll delta` CLI
+  "delta.help.usage": {
+    en: "Usage: roll delta <prepare|validate|conclude|status|help>\n\n  Delta Team (host-guided) = the current host main session (implicit Supervisor)\n  plus host-native Designer/Builder/Evaluator sub-agent sessions, driven through\n  roll delta. Full Delta Team = an independently orchestrated multi-agent/host\n  topology using Roll's generic adapters. Roll never spawns, resumes, or\n  configures any session, including yours.\n\n  Boundaries (honest, never overclaimed):\n    - Terminal binding is Option C, handoff-only: delta:terminal(handoff_ready) is\n      NOT Done, a merge, an attest verdict, or a DeliveryRecord. After handoff the\n      owner manually runs the existing delivery/PR/attest procedure.\n    - Host attestation is structural validation only (non-empty/unique tokens that\n      correspond across resolution/event/manifest); never proof of a fresh session\n      or that a model executed.\n    - Presets live in ~/.roll/delta-team/presets.yaml (host-local config only).\n    - Host-guided cost renders ? (host_unobservable) — never estimated or zeroed.\n    - loop-autonomous + delta-team blocks host_supervisor_required (no silent\n      conversion); loop-autonomous + full-delta-team is explicit opt-in.\n\n  Host-guided delegation lifecycle commands (protocol-only; no agent spawning).\n\n  roll delta prepare <story-id> --trigger host-guided|loop-autonomous --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]\n    Atomically claim a delegation frame and host-delegation lease.\n\n  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]\n    Validate a role-stage submission through the protocol-validator boundary.\n\n  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--json]\n    Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).\n\n  roll delta status [--story <id>|--delegation <id>] [--json]\n    Read-only delegation status projection from event truth.\n\n  roll delta help\n    Print this help.\n",
+    zh: "用法：roll delta <prepare|validate|conclude|status|help>\n\n  Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native\n  能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Full Delta\n  Team = 用 Roll 通用适配器独立编排的多 agent / 多宿主拓扑。Roll 从不 spawn、\n  resume 或配置任何会话（包括你自己的）。\n\n  诚实边界（绝不夸大）：\n    - 终止绑定是 Option C，仅 handoff：delta:terminal(handoff_ready) 不是 Done、\n      不是 merge、不是 attest 裁定、也不是 DeliveryRecord。handoff 后由 owner 手动\n      走既有的 delivery/PR/attest 流程。\n    - 宿主 attestation 仅结构校验（token 非空/唯一且在 resolution/事件/manifest 间\n      对应）；绝不证明会话新起或模型执行过。\n    - preset 放在 ~/.roll/delta-team/presets.yaml（仅宿主本地配置）。\n    - host-guided 成本渲染 ? (host_unobservable)——绝不估算或写零。\n    - loop-autonomous + delta-team 阻塞 host_supervisor_required（不静默转换）；\n      loop-autonomous + full-delta-team 是显式 opt-in。\n\n  宿主导引的委派生命周期命令（仅协议层；不启任何 agent）。\n\n  roll delta prepare <story-id> --trigger host-guided|loop-autonomous --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]\n    原子化申领委派帧与 host-delegation 租约。\n\n  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]\n    经过协议校验边界验证角色阶段提交。\n\n  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--json]\n    记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。\n\n  roll delta status [--story <id>|--delegation <id>] [--json]\n    从事件真相只读投影委派状态。\n\n  roll delta help\n    打印此帮助。\n",
+  },
+  "delta.error.unknown_subcommand": {
+    en: "roll delta: unknown subcommand '%s'. Try: prepare, validate, conclude, status, help",
+    zh: "roll delta：未知子命令 '%s'。可用：prepare、validate、conclude、status、help",
+  },
+  "delta.error.missing_story": {
+    en: "roll delta: <story-id> is required",
+    zh: "roll delta：需要提供 <story-id>",
+  },
+  "delta.error.duplicate_flag": {
+    en: "roll delta: duplicate flag '%s'",
+    zh: "roll delta：重复标志 '%s'",
+  },
+  "delta.error.unexpected_positional": {
+    en: "roll delta: unexpected positional argument '%s'",
+    zh: "roll delta：非预期的位置参数 '%s'",
+  },
+  "delta.error.unknown_flag": {
+    en: "roll delta: unknown flag '%s'",
+    zh: "roll delta：未知标志 '%s'",
+  },
+  "delta.error.missing_required": {
+    en: "roll delta: missing required flag '%s'",
+    zh: "roll delta：缺少必需标志 '%s'",
+  },
+  "delta.error.missing_value": {
+    en: "roll delta: missing value for '%s'",
+    zh: "roll delta：'%s' 缺少值",
+  },
+  "delta.error.invalid_value": {
+    en: "roll delta: invalid value '%s' for '%s'. Expected: %s",
+    zh: "roll delta：值 '%s' 对 '%s' 无效。应为：%s",
+  },
+  "delta.error.cycle_rejected": {
+    en: "roll delta: --cycle is not supported for host-guided prepare (no cycle allocation)",
+    zh: "roll delta：host-guided prepare 不支持 --cycle（无 cycle 分配）",
+  },
+  "delta.error.status_selector": {
+    en: "roll delta status: provide --story <id> or --delegation <id>",
+    zh: "roll delta status：请提供 --story <id> 或 --delegation <id>",
+  },
+  "delta.status.orphan_header": {
+    en: "Uncommitted frames:",
+    zh: "未提交帧：",
+  },
+  "delta.status.orphan_status": {
+    en: "unknown: uncommitted_delegation_frame",
+    zh: "unknown: 未提交委派帧",
+  },
+  "delta.status.orphan_recovery": {
+    en: "release the host-delegation lease then re-prepare or remove the orphan frame",
+    zh: "释放 host-delegation 租约后重新 prepare，或清理孤立帧",
+  },
+  "delta.status.no_delegation": {
+    en: "No delegation found.",
+    zh: "未找到委派。",
   },
 };

@@ -98,6 +98,41 @@ Roll V4 separates project coordination from story delivery:
 - **Skills remain** the capability layer. Roles invoke `$roll-design`, `$roll-build`, `$roll-fix`, `$roll-peer`, `$roll-.qa`, and related skills instead of rewriting those contracts into TypeScript.
 - **Fallback is fail-loud**. If a requested agent or rig is unavailable, Roll records that unavailability and pauses or asks for owner action; it does not silently pretend another agent was used.
 
+### Delta Team & Full Delta Team
+
+Two named delivery topologies, distinct from each other and from the
+health-remediation **delivery team** (the FIX-routing target):
+
+- **Delta Team** (ordinary, host-guided) is the *current host main session*
+  acting as the **implicit Supervisor**, plus **host-native sub-agent sessions**
+  for the Designer, Builder, and Evaluator roles, driven through `roll delta`.
+  The host requests and attests those sub-agents itself; **Roll never spawns,
+  resumes, or configures any session**, including yours.
+- **Full Delta Team** is an *independently orchestrated* multi-agent / multi-host
+  topology that shares the same protocol but launches distinct role sessions
+  through Roll's generic adapters.
+
+Honest boundaries the protocol states and never overclaims:
+
+- **Terminal binding is Option C, handoff-only.** A valid Evaluator report reaches
+  only `delta:terminal(handoff_ready)` — not Done, a merge, an attest verdict, or
+  a DeliveryRecord. The owner then **manually** runs the existing
+  delivery/PR/attest procedure; Roll auto-binds nothing. Done still comes only
+  from a PR merged into `main`.
+- **Host attestation is structural validation only** — non-empty/unique opaque
+  tokens that correspond across resolution/event/manifest. It never proves a
+  fresh session, honored role/model, or actual model execution.
+- **Local preset** (`~/.roll/delta-team/presets.yaml`) is host-local config, never
+  project config.
+- **Host-guided cost is `? (host_unobservable)`** — never estimated, priced, or
+  zeroed.
+
+Loop admission: `loop-autonomous + delta-team` is blocked
+`host_supervisor_required` (never silently converted);
+`loop-autonomous + full-delta-team` is explicit opt-in; default autonomous solo
+delivery is unchanged. See the `roll-delta-team` skill and
+[guide/en/ai-agents.md](guide/en/ai-agents.md) for the full procedure.
+
 ### Supervisor backlog-clearing standard
 
 When the owner asks Roll to clear a backlog, Supervisor treats the scope as every

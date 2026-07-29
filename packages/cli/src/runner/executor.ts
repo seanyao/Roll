@@ -50,7 +50,7 @@ export {
   recordExecutionProfile,
   routerEstMin,
   runDesignerStage,
-  writeEvaluatorArtifact,
+  runEvaluatorStage,
 } from "./execution-profile.js";
 export {
   RESUME_DISABLED_ENV,

@@ -252,8 +252,8 @@ describe("US-WS-009 Workspace backlog reads", () => {
     mkdirSync(issueCwd, { recursive: true });
     const claimed = await runCli(["backlog", "claim", "US-1"], f, { cwd: issueCwd });
     expect(claimed.status).toBe(0);
-    expect(readFileSync(join(beta, "runtime", "locks", "story-leases.json"), "utf8")).toContain("US-1");
-    expect(existsSync(join(alpha, "runtime", "locks", "story-leases.json"))).toBe(false);
+    expect(readFileSync(join(beta, "runtime", "locks", "leases", "US-1.lease"), "utf8")).toContain('"source":"human"');
+    expect(existsSync(join(alpha, "runtime", "locks", "leases", "US-1.lease"))).toBe(false);
 
     const linted = await runCli(["backlog", "lint", "--workspace", "ws-beta"], f);
     expect(linted.status).toBe(0);

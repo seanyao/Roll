@@ -10,14 +10,55 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { ReleaseStep } from "@roll/core";
+import type { ReleaseVerifySeams } from "@roll/core";
 import {
   commitPushWithGate,
   enableAutoMergeResilient,
   openPrResilient,
   releaseCommand,
   runReleaseFlow,
+  runReleaseVerify,
   type ReleaseFlowDeps,
 } from "../src/commands/release.js";
+
+describe("runReleaseVerify (FIX-1480 two-phase promote)", () => {
+  const seams = (over: Partial<ReleaseVerifySeams> = {}): ReleaseVerifySeams => ({
+    tagExists: () => true,
+    npmHasVersion: () => true,
+    npmLatest: () => "4.724.1",
+    getRelease: () => ({ isDraft: true }),
+    promoteRelease: () => {},
+    ...over,
+  });
+  function capture(args: string[], s: ReleaseVerifySeams): { code: number; out: string; err: string } {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = runReleaseVerify(args, { out: (x) => out.push(x), err: (x) => err.push(x) }, s, process.cwd());
+    return { code, out: out.join(""), err: err.join("") };
+  }
+
+  it("promotes and exits 0 when npm+tag+latest+draft all agree", () => {
+    let promoted = "";
+    const r = capture(["4.724.1"], seams({ promoteRelease: (t) => { promoted = t; } }));
+    expect(r.code).toBe(0);
+    expect(promoted).toBe("v4.724.1");
+    expect(r.out).toContain("promoted to latest");
+  });
+
+  it("exits 1 and does NOT promote when npm lacks the version", () => {
+    let called = false;
+    const r = capture(["4.724.1"], seams({ npmHasVersion: () => false, promoteRelease: () => { called = true; } }));
+    expect(r.code).toBe(1);
+    expect(called).toBe(false);
+    expect(r.err).toContain("npm has no");
+    expect(r.err).toContain("NOT promoted");
+  });
+
+  it("--no-latest skips the dist-tags check", () => {
+    const r = capture(["4.724.1", "--no-latest"], seams({ npmLatest: () => "9.9.9" }));
+    expect(r.code).toBe(0);
+  });
+});
 
 function uniqueInOrder(steps: ReleaseStep[]): ReleaseStep[] {
   const seen = new Set<ReleaseStep>();

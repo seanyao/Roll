@@ -72,6 +72,10 @@ function makePorts(runtimeDir: string, repoCwd: string, publishPlan: () => Promi
       worktreePath: join(repoCwd, "wt"),
     },
     clock: () => 42,
+    // US-CYCLE-011: satisfy the round-tail full-verify half of the evidence gate
+    // (a fresh mode:"full" proof matching the delivered tree). The publish-path
+    // assertions here predate that gate; other gate reasons still enforce.
+    fullVerify: { proofBody: () => '{"ts":42,"tree":"T","mode":"full"}', deliveredTree: () => "T" },
     skillBody: "work",
     github: {
       repoSlug: vi.fn(async () => "o/r"),

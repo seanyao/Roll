@@ -879,6 +879,24 @@ describe("US-ATTEST-013 — self-contained card context wiring", () => {
     expect(row.status).toBe("🔨 In Progress");
   });
 
+  it("FIX-1475: readBacklogRow matches the EXACT id, not a `<id>-` descendant (even when it sorts first)", () => {
+    const proj = project();
+    writeFileSync(
+      join(proj, ".roll", "backlog.md"),
+      [
+        "| Story | Description | Status |",
+        "|--|--|--|",
+        "| [FIX-300-legacy](.roll/features/demo/FIX-300-legacy/spec.md) | descendant sorts FIRST | ✅ Done |",
+        "| [FIX-300](.roll/features/demo/FIX-300/spec.md) | the real card | 🔨 In Progress |",
+        "",
+      ].join("\n"),
+    );
+    const row = readBacklogRow(proj, "FIX-300");
+    // Substring/fallback matching would have returned the descendant's row.
+    expect(row.description).toContain("the real card");
+    expect(row.status).toBe("🔨 In Progress");
+  });
+
   it("buildCardContext assembles one-liner / epic / summary / status / cycle id", () => {
     const proj = project();
     writeFileSync(

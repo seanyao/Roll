@@ -2,6 +2,7 @@ import {
   assessBacklog,
   buildClaimedByOther,
   buildHasOpenPr,
+  claimStoryLease,
   cleanDeadLeases,
   decideClaimReconcile,
   hasMergedDelivery,
@@ -16,7 +17,6 @@ import {
   reconcileBranchName,
   removeLease,
   runRowHasPublishedPr,
-  setLease,
   type BacklogItem,
   type CycleCommand,
   type CycleContext,
@@ -28,7 +28,7 @@ import {
 import { classifyStatus, parseEventLine, STATUS_MARKER, type LoopType, type RollEvent } from "@roll/spec";
 import { isScreenLocked, readWorkspace, resolveIntegrationBranch } from "@roll/infra";
 import { dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { storySpecPath } from "./attest-gate.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
 import { createSubmoduleWorktreeIfDeclared } from "./submodule-worktree.js";
@@ -484,18 +484,25 @@ export async function executeSetupCommand(
       // 🔨 we are about to write. Best-effort: an absent status leaves it unset
       // (no revert target — the terminal then leaves the row untouched).
       const preCycleStatus = (story as { status?: string }).status;
-      // FIX-1211: stamp a live cycle lease so another loop instance (or a later
-      // preflight after a crash) can tell this claim is owned by a running cycle
-      // and not reclaim it until the cycle ends or the PID is proven dead.
+      if (ports.repositories === undefined) {
+        ports.backlog.markStatus?.(ports.repoCwd, story.id, STATUS_MARKER.in_progress);
+      }
+      // FIX-1211 / US-DELTA-003: atomically claim the cycle lease so another
+      // loop or host delegation cannot overwrite this owner.
       try {
-        mkdirSync(dirname(storyLeasePath), { recursive: true });
-        setLease(storyLeasePath, story.id, {
+        const claimResult = claimStoryLease(storyLeasePath, story.id, {
           pid: process.pid,
           source: "cycle",
           claimedAt: Date.now(),
         });
+        if (claimResult.status !== "claimed") {
+          ports.events.appendAlert(
+            ports.paths.alertsPath,
+            `[FIX-1211] claimStoryLease for ${story.id} returned ${claimResult.status} (source: ${claimResult.existingSource}) — another owner holds the lease`,
+          );
+        }
       } catch {
-        /* lease is observability-only; a write failure must not block the pick */
+        /* lease claim is a safety guard; a write failure must not block the pick */
       }
       let repositoryExecution;
       if (ports.repositories !== undefined) {

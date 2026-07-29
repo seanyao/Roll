@@ -24,6 +24,7 @@
 import { type CaptureReceiptV2, type CaptureClass, type CaptureSource, type EvidenceVisualState, type CycleRoleSummary, type CycleRoleName, type CycleRoleAttemptState, type OutwardVerificationStatus } from "@roll/spec";
 import { CHROME_CONTROLS, CHROME_CSS, CHROME_SCRIPT, bi } from "../html/chrome.js";
 import { ANSI_CSS } from "./ansi-html.js";
+import type { DeliveryCiFact } from "../delivery/delivery-ci.js";
 import { buildExecutionCastProjection, type ExecutionCastRow } from "./execution-cast.js";
 
 export type AcStatus = "pass" | "pass-with-evidence" | "readonly" | "partial" | "fail" | "blocked" | "claimed" | "missing";
@@ -250,6 +251,12 @@ export interface ReportInput {
   afterOnly?: EvidenceRef[];
   /** Summary facts row (counts come from evidence.json). */
   facts?: { tcrCount: number; ciConclusion: string; testPassAge: string };
+  /**
+   * US-EVID-033 — this card's delivery-time CI truth (its own PR's checks at the
+   * sha they ran on). Absent ⇒ the block is trimmed; a `red`/`unknown` state is
+   * rendered as-is with its reason, never softened.
+   */
+  deliveryCi?: DeliveryCiFact;
   /** US-ATTEST-009 — same-story Review Score entries from .roll/notes/; the
    *  whole collapsed block is SKIPPED when none exist (no placeholder). */
   reviewScores?: ReviewScoreReportEntry[];
@@ -697,6 +704,85 @@ function docGapBlock(warning: ReportInput["docGap"]): string {
 </section>`;
 }
 
+/**
+ * US-EVID-033 — delivery-time facts: THIS card's own PR, the head sha its checks
+ * ran on, each check's conclusion, and the merge commit. A `red` or `unknown`
+ * state is stated as such with its reason — never softened, never omitted. When
+ * the fact was collected after the merge the block says so (post-hoc), so nobody
+ * mistakes a reconstruction for cycle-time evidence.
+ */
+function deliveryCiBlock(fact: ReportInput["deliveryCi"]): string {
+  if (fact === undefined) return "";
+  const verdict =
+    fact.state === "verified"
+      ? `<span class="badge dci-verified">✅ ${bi("verified", "已核实")}</span>`
+      : fact.state === "red"
+        ? `<span class="badge dci-red">❌ ${bi("red", "红")}</span>`
+        : `<span class="badge dci-unknown">❔ ${bi("unknown", "未知")}</span>`;
+  const rows: string[] = [];
+  if (fact.prNumber !== undefined) rows.push(`<li>PR <code>#${fact.prNumber}</code></li>`);
+  if (fact.headSha !== undefined) rows.push(`<li>${bi("head sha", "head sha")} <code>${esc(fact.headSha)}</code></li>`);
+  if (fact.mergeCommit !== undefined)
+    rows.push(`<li>${bi("merge commit", "合并提交")} <code>${esc(fact.mergeCommit)}</code></li>`);
+  if (fact.mergedAt !== undefined) rows.push(`<li>${bi("merged at", "合并时间")} <code>${esc(fact.mergedAt)}</code></li>`);
+  const checks =
+    fact.checks.length > 0
+      ? `<ul>${fact.checks
+          .map(
+            (c) =>
+              `<li><code>${esc(c.name)}</code> → <b>${esc(c.conclusion !== "" ? c.conclusion : bi("running", "进行中"))}</b></li>`,
+          )
+          .join("\n")}</ul>`
+      : `<p class="note">${bi("No check runs were reported for this sha.", "该 sha 上没有任何检查记录。")}</p>`;
+  const reason =
+    fact.reason !== undefined
+      ? `<p class="note">${bi("reason", "原因")}: <code>${esc(fact.reason)}</code></p>`
+      : "";
+  // Codex r4: the requirement set this verdict was measured against, WHICH surface
+  // declared it, and the honest caveat that GitHub only exposes the CURRENT
+  // configuration — all surfaced to the human reader, not just the JSON.
+  const requirements =
+    fact.requiredChecksSource !== undefined
+      ? `<p class="note">${bi("required checks", "必需检查")}: ${
+          fact.requiredChecks !== undefined && fact.requiredChecks.length > 0
+            ? fact.requiredChecks
+                .map((r) => `<code>${esc(r.context)}${r.appId !== undefined ? `@app${r.appId}` : ""}</code>`)
+                .join(" ")
+            : `<em>${bi("none declared", "未声明")}</em>`
+        } · ${bi("source", "来源")} <code>${esc(fact.requiredChecksSource)}</code></p>
+<p class="note">${bi(
+          "Requirements reflect the CURRENT branch configuration — GitHub exposes no historical view, so a requirement relaxed after the merge cannot be detected here.",
+          "必需检查取自分支的当前配置 —— GitHub 不提供历史视图，因此合并之后被放宽的要求在这里无法察觉。",
+        )}</p>`
+      : "";
+  // Tri-state (codex r1): a timing we cannot establish is SAID to be unknown —
+  // never rendered as if the evidence were collected during the cycle.
+  const postHoc =
+    fact.postHoc === "yes"
+      ? `<p class="note">${bi(
+          "Collected AFTER the merge — this is a post-hoc reconstruction of delivery-time truth, not cycle-time evidence.",
+          "采集时间晚于合并 —— 这是对交付时真相的事后重建，不是周期内证据。",
+        )}</p>`
+      : fact.postHoc === "unknown"
+        ? `<p class="note">${bi(
+            "Merge time unknown — whether this was collected during the cycle or reconstructed afterwards cannot be established.",
+            "合并时间未知 —— 无法判定这份证据是周期内采集还是事后重建。",
+          )}</p>`
+        : "";
+  // Machine-stable markers so downstream readers (and the release gate) can read
+  // the state without parsing prose.
+  return `<section class="delivery-ci" data-state="${fact.state}" data-posthoc="${fact.postHoc}"><h2>${bi("Delivery-time facts", "交付时事实")} ${verdict}</h2>
+<p class="note">${bi(
+    "The checks that ran on this card's own PR, at the sha they ran on.",
+    "这张卡自己的 PR 在其 head sha 上跑过的检查。",
+  )}</p>
+${rows.length > 0 ? `<ul>${rows.join("\n")}</ul>` : ""}
+${checks}
+${requirements}${reason}${postHoc}
+<p class="note">${bi("collected at", "采集时间")} <code>${esc(fact.collectedAt)}</code></p>
+</section>`;
+}
+
 /** Format whole seconds as `+MM:SS` (minutes grow past 59; timezone-free). */
 function fmtOffset(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -946,11 +1032,12 @@ ${scoreIssues.length > 0 ? `<p><strong>Review-score discrepancy</strong></p><ul>
   // → discrepancies → evidence index → review-score. Assembled then wrapped only
   // when non-empty (trim, no hollow section).
   const gate = facts !== "" ? `<h2>${bi("Quality gate", "质量门禁")}</h2>\n${facts}` : "";
+  const deliveryCi = deliveryCiBlock(input.deliveryCi);
   const docGap = docGapBlock(input.docGap);
   const evDelta = evidenceDeltaBlock(input.evidenceDeltaSummary);
   const evIndex = evidenceIndexBlock(items, input.beforeAfter, input.selfCaptures);
   const reviewScore = reviewScoreBlock(input.reviewScores, input.reviewScoreTrend);
-  const closingInner = [gate, docGap, disc, evDelta, evIndex, reviewScore].filter((s) => s !== "").join("\n");
+  const closingInner = [gate, deliveryCi, docGap, disc, evDelta, evIndex, reviewScore].filter((s) => s !== "").join("\n");
   const closing = closingInner !== "" ? `<section class="closing">\n${closingInner}\n</section>` : "";
 
   return `<!doctype html>
@@ -981,6 +1068,8 @@ figure.shot figcaption { color:var(--muted); font-size:12.5px; }
 .cast-replay summary { cursor:pointer; color:var(--muted); font-size:12.5px; font-weight:600; }
 .replay-video { margin:10px 0; } .replay-video video { width:100%; max-width:760px; border:1px solid var(--line); border-radius:6px; background:#000; }
 .replay-video figcaption { color:var(--muted); font-size:12.5px; }
+.delivery-ci { border:1px solid var(--line); border-radius:8px; padding:8px 16px; margin-top:28px; }
+.dci-verified { color:var(--pass); } .dci-red { color:var(--fail); } .dci-unknown { color:var(--muted); }
 .doc-gap { border:1px dashed var(--warn); border-radius:8px; padding:8px 16px; margin-top:28px; }
 .doc-gap h2 { color:var(--warn); }
 .discrepancies { border:1px dashed var(--claim); border-radius:8px; padding:8px 16px; margin-top:28px; }

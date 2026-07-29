@@ -28,6 +28,10 @@ import { workspaceSchedulerPaths } from "../src/lib/operating-mode.js";
 
 const dirs: string[] = [];
 
+function leaseRecordPath(leaseDir: string, storyId: string): string {
+  return join(leaseDir, `${storyId}.lease`);
+}
+
 function workspaceRoot(id: string): string {
   const root = mkdtempSync(join(tmpdir(), `roll-${id}-`));
   dirs.push(root);
@@ -235,7 +239,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     workspaceIssue(root, "ws-alpha", storyId);
     const backlogPath = join(root, "backlog", "index.md");
     const runtimeRoot = join(root, "runtime");
-    const leasePath = join(runtimeRoot, "locks", "story-leases.json");
+    const leasePath = join(runtimeRoot, "locks", "leases");
     mkdirSync(join(root, "backlog"), { recursive: true });
     writeFileSync(
       backlogPath,
@@ -273,7 +277,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     });
 
     expect(result.event).toEqual({ type: "no_story" });
-    expect(JSON.parse(readFileSync(leasePath, "utf8"))[storyId]).toEqual({
+    expect(JSON.parse(readFileSync(leaseRecordPath(leasePath, storyId), "utf8"))).toEqual({
       source: "human",
       claimedAt,
     });
@@ -615,12 +619,11 @@ describe("US-WS-016 Workspace scheduler contract", () => {
         expect(readFileSync(backlogPath, "utf8")).toContain(
           `${storyId} | Workspace production story | 🔨 In Progress`,
         );
-        const leasePath = join(root, "runtime", "locks", "story-leases.json");
-        leaseObserved = existsSync(leasePath) && JSON.parse(readFileSync(leasePath, "utf8"))[storyId]?.source === "cycle";
-        mkdirSync(join(root, "runtime", "locks"), { recursive: true });
-        writeFileSync(leasePath, `${JSON.stringify({
-          [storyId]: { source: "human", claimedAt: humanClaimedAt },
-        }, null, 2)}\n`);
+        const leasePath = join(root, "runtime", "locks", "leases");
+        const recordPath = leaseRecordPath(leasePath, storyId);
+        leaseObserved = existsSync(recordPath) && JSON.parse(readFileSync(recordPath, "utf8")).source === "cycle";
+        mkdirSync(leasePath, { recursive: true });
+        writeFileSync(recordPath, `${JSON.stringify({ source: "human", claimedAt: humanClaimedAt }, null, 2)}\n`);
       }
       return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
     });
@@ -671,7 +674,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     expect(leaseObserved).toBe(true);
     expect(existsSync(join(issue.issueRoot, "evidence"))).toBe(true);
     expect(existsSync(join(root, ".roll", "features", "workspace-orchestration", storyId))).toBe(false);
-    expect(JSON.parse(readFileSync(join(root, "runtime", "locks", "story-leases.json"), "utf8"))[storyId]).toEqual({
+    expect(JSON.parse(readFileSync(leaseRecordPath(join(root, "runtime", "locks", "leases"), storyId), "utf8"))).toEqual({
       source: "human",
       claimedAt: humanClaimedAt,
     });

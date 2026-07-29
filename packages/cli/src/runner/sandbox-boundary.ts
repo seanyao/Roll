@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 import type { CycleContext } from "@roll/core";
-import { quarantineBundlePath, resolveIntegrationBranch } from "@roll/infra";
+import { quarantineBundlePath } from "@roll/infra";
 import { killLiveAgents } from "./agent-spawn.js";
-import { checkMainDirty, quarantineEventToRollEvent, quarantineMainCheckout, writeMainDirtyBaseline, type QuarantineResult, type WriteProtectionResult } from "./main-checkout-guard.js";
+import { captureMainHeadBaseline, checkMainDirty, quarantineEventToRollEvent, quarantineMainCheckout, writeMainDirtyBaseline, type QuarantineResult, type WriteProtectionResult } from "./main-checkout-guard.js";
 import type { CleanupResult } from "./environment-cleanup.js";
 import { recordRootCauseFailure } from "./failure-attribution.js";
 import type { Ports } from "./ports.js";
@@ -17,9 +17,12 @@ export async function rescueLeakedMain(
   repoCwd: string,
   refName: string,
 ): Promise<{ code: number; rescuedSha: string }> {
-  // FIX-903: capture the current main HEAD SHA, then create a rescue branch
-  // and reset main to origin/main so the leaked commits are reachable via
-  // the rescue ref but main is clean again.
+  // FIX-903/US-LOOP-095: capture the current main HEAD into a quarantine BUNDLE
+  // under the file-retention dir (loop_gc) — the audit/recovery evidence for a
+  // main checkout that drifted while a cycle ran (`git bundle unbundle` to
+  // inspect). FIX-1475: the shared main ref is NEVER reset — the commits stay
+  // exactly where they are and recovery (`git reset --hard origin/main`) is an
+  // explicit human decision surfaced by the caller's alert.
   let rescuedSha = "";
   try {
     const headR = await execFileAsync("git", ["rev-parse", "HEAD"], {
@@ -31,52 +34,15 @@ export async function rescueLeakedMain(
     return { code: 1, rescuedSha: "" };
   }
   let code = 0;
-  // US-LOOP-095: save the leaked commits to a quarantine BUNDLE instead of a
-  // `rescue/leaked-*` branch. Those branches accumulated and were never GC'd
-  // (retro: 51 local); the bundle holds `rescuedSha`, lands in the existing
-  // file-retention dir (loop_gc), and is recovered with `git bundle unbundle`.
   try {
     const bundlePath = quarantineBundlePath(repoCwd, refName);
     mkdirSync(dirname(bundlePath), { recursive: true });
-    // Bundle HEAD (still the leaked commit here — the reset below happens after);
-    // `git bundle` needs a ref, not a bare SHA, or it refuses an "empty" bundle.
     await execFileAsync("git", ["bundle", "create", bundlePath, "HEAD"], {
       cwd: repoCwd,
       encoding: "utf8",
     });
   } catch {
     code = 1;
-  }
-  let backlogWorktreeContent: string | undefined;
-  const backlogPath = join(repoCwd, ".roll", "backlog.md");
-  try {
-    const status = await execFileAsync("git", ["status", "--porcelain", "--", ".roll/backlog.md"], {
-      cwd: repoCwd,
-      encoding: "utf8",
-    });
-    if ((status.stdout ?? "").trim() !== "") {
-      backlogWorktreeContent = readFileSync(backlogPath, "utf8");
-    }
-  } catch {
-    backlogWorktreeContent = undefined;
-  }
-  try {
-    // E1: restore the main checkout to the configured integration branch
-    // (default origin/main). The leaked commits are already bundled above.
-    await execFileAsync("git", ["reset", "--hard", resolveIntegrationBranch(repoCwd)], {
-      cwd: repoCwd,
-      encoding: "utf8",
-    });
-  } catch {
-    code = 1;
-  }
-  if (backlogWorktreeContent !== undefined) {
-    try {
-      mkdirSync(dirname(backlogPath), { recursive: true });
-      writeFileSync(backlogPath, backlogWorktreeContent, "utf8");
-    } catch {
-      code = 1;
-    }
   }
   return { code, rescuedSha };
 }
@@ -122,6 +88,11 @@ export async function quarantineMainCheckoutForCycle(
   if (phase === "pre-spawn") {
     const preSpawnDirty = await checkMainDirty(ports.repoCwd);
     writeMainDirtyBaseline(guardRuntimeDir(ports), ctx.cycleId ?? "", preSpawnDirty);
+    // FIX-1475: also freeze WHERE the shared main ref stood at pre-spawn, so
+    // later phases can tell pre-existing ahead commits (legitimate — never
+    // touched) from a mid-cycle leak (HEAD moved — fail-loud quarantine,
+    // still no reset).
+    captureMainHeadBaseline(ports.repoCwd, guardRuntimeDir(ports), ctx.cycleId ?? "");
   }
   const results = await quarantineMainCheckout({
     repoCwd: ports.repoCwd,

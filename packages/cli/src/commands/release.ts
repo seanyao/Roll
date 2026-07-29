@@ -32,7 +32,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, planRelease, resolveVersionScheme, type ReleaseDate, type ReleaseStep } from "@roll/core";
+import { EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, planRelease, releaseTagForVersion, resolveVersionScheme, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
 import { isTransientGhError } from "@roll/infra";
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { c, renderState } from "../render.js";
@@ -138,6 +138,120 @@ function ghSync(cwd: string, args: string[]): { code: number; stdout: string; st
       stderr: err.stderr != null ? String(err.stderr) : "",
     };
   }
+}
+
+/**
+ * FIX-1480: production seams for `roll release verify` — git tag, npm registry,
+ * and gh release. npm is the truth source; promoteRelease flips the draft to a
+ * normal (latest) release only after the pure `verifyRelease` gate agrees.
+ */
+function realVerifySeams(cwd: string): ReleaseVerifySeams {
+  return {
+    tagExists: (tag) => {
+      try {
+        execFileSync("git", ["rev-parse", "-q", "--verify", `refs/tags/${tag}`], {
+          cwd,
+          stdio: ["ignore", "ignore", "ignore"],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    npmHasVersion: (pkg, version) => {
+      try {
+        const out = execFileSync("npm", ["view", `${pkg}@${version}`, "version"], {
+          cwd,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 60_000,
+        }).trim();
+        return out !== "";
+      } catch {
+        return false;
+      }
+    },
+    npmLatest: (pkg) => {
+      try {
+        const out = execFileSync("npm", ["view", pkg, "dist-tags.latest"], {
+          cwd,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 60_000,
+        }).trim();
+        return out === "" ? undefined : out;
+      } catch {
+        return undefined;
+      }
+    },
+    getRelease: (tag) => {
+      const r = ghSync(cwd, ["release", "view", tag, "--json", "isDraft", "--jq", ".isDraft"]);
+      if (r.code !== 0) return undefined;
+      return { isDraft: r.stdout.trim() === "true" };
+    },
+    promoteRelease: (tag) => {
+      const r = ghSync(cwd, ["release", "edit", tag, "--draft=false", "--latest"]);
+      if (r.code !== 0) throw new Error(`gh release edit ${tag} failed: ${r.stderr.trim()}`);
+    },
+  };
+}
+
+/**
+ * `roll release verify [version]` (FIX-1480) — the second phase of the two-phase
+ * release. After the maintainer's manual 2FA `npm publish`, confirm npm has the
+ * version (npm is the truth source), the git tag and draft GitHub Release exist,
+ * and npm's `dist-tags.latest` matches, then promote the draft to a normal
+ * release. Any gap exits non-zero and leaves the draft untouched. Never runs
+ * `npm publish`. `seamsOverride` is the unit-test seam.
+ */
+export function runReleaseVerify(
+  args: string[],
+  io: { out: (s: string) => void; err: (s: string) => void } = {
+    out: (s) => process.stdout.write(s),
+    err: (s) => process.stderr.write(s),
+  },
+  seamsOverride?: ReleaseVerifySeams,
+  cwd: string = process.cwd(),
+): number {
+  const versionArg = args.find((a) => !a.startsWith("-"));
+  let version = versionArg;
+  if (version === undefined || version === "") {
+    try {
+      version = String(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).version ?? "").trim();
+    } catch {
+      version = "";
+    }
+  }
+  if (version === undefined || version === "") {
+    io.err("[roll] release verify: no version given and package.json version unreadable\n");
+    return 1;
+  }
+  let pkg = "";
+  try {
+    pkg = String(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).name ?? "").trim();
+  } catch {
+    pkg = "";
+  }
+  if (pkg === "") {
+    io.err("[roll] release verify: package.json name unreadable\n");
+    return 1;
+  }
+  const requireLatest = !args.includes("--no-latest");
+  const tag = releaseTagForVersion(version);
+  const seams = seamsOverride ?? realVerifySeams(cwd);
+  const result = verifyRelease(pkg, version, tag, seams, { requireLatest });
+  if (!result.ok) {
+    io.err(`[roll] release verify FAILED for ${pkg}@${version} — GitHub Release NOT promoted:\n`);
+    for (const gap of result.gaps) io.err(`  ✗ ${gap}\n`);
+    io.err("  fix the gap (publish npm first if needed) and re-run — draft left untouched.\n");
+    return 1;
+  }
+  io.out(
+    result.promoted
+      ? `✓ ${pkg}@${version} verified on npm — GitHub Release ${tag} promoted to latest\n`
+      : `✓ ${pkg}@${version} already verified and promoted (${tag}) — no change\n`,
+  );
+  return 0;
 }
 
 /** The `owner/repo` slug from the cwd's git remote (gh resolves it the same way;
@@ -784,6 +898,12 @@ export async function releaseCommand(args: string[], depsOverride?: ReleaseFlowD
         ? ["check", ...rest]
         : rest;
     return await runConsistencyCheck(runnerArgs, "roll release consistency", { renderMode: "table" });
+  }
+  if (sub === "verify") {
+    // FIX-1480: two-phase release phase 2 — promote the draft only once npm has
+    // the version (npm is the truth source). Never publishes.
+    const idx = args.indexOf("verify");
+    return runReleaseVerify(args.slice(idx + 1));
   }
 
   if (args.includes("--help") || args.includes("-h")) {

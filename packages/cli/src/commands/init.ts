@@ -1132,10 +1132,20 @@ function maybeFailApplyAfter(label: string): void {
   }
 }
 
-function seedBacklogRow(backlog: string, heading: string, row: string, id: string): boolean {
+export function seedBacklogRow(backlog: string, heading: string, row: string, id: string): boolean {
   if (!existsSync(backlog)) return false;
   const text = readFileSync(backlog, "utf8");
-  if (text.includes(`| ${id} |`)) return false;
+  // FIX-1475: existence by an EXACT id-cell match (bare or linked). The old
+  // `text.includes("| ${id} |")` both false-positived (a row whose DESCRIPTION
+  // cell equalled the id skipped a real seed) and false-negatived (a linked
+  // `| [id](...) |` row was re-appended as a duplicate).
+  const exists = text.split("\n").some((l) => {
+    if (!l.startsWith("|")) return false;
+    const cell = (l.split("|")[1] ?? "").trim();
+    const cellId = cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
+    return cellId === id;
+  });
+  if (exists) return false;
   const lines = text.split("\n");
   let seen = false;
   let inserted = false;

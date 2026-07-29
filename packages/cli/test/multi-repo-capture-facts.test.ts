@@ -508,6 +508,12 @@ defaults:
     const agentSpawn: AgentSpawn = vi.fn(async (agent, options) => {
       spawned.push(agent);
       if (options.skillBody.includes("SCORE:")) scorePrompts.push(options.skillBody);
+      if (options.readOnly === true && options.runDir !== undefined) {
+        writeFileSync(
+          join(options.runDir, "eval-report.md"),
+          "# Evaluation\n\n## Inputs checked\n\n- repository verification\n- acceptance report\n\n## Rationale\n\nThe exact repository heads and shared contract evidence are sufficient.\n",
+        );
+      }
       return options.skillBody.includes("SCORE:")
         ? { stdout: "SCORE: 9\nVERDICT: good\nRATIONALE: repository-scoped verification is complete", stderr: "", exitCode: 0, timedOut: false }
         : { stdout: "VERDICT: agree", stderr: "", exitCode: 0, timedOut: false };
@@ -553,7 +559,7 @@ defaults:
     expect(scorePrompts.join("\n")).toContain("API and Web changes satisfy the shared contract.");
     expect(scorePrompts.join("\n")).toContain("Judge the shared contract and exact-head integration.");
     expect(readFileSync(join(evidenceRunDir, "role-artifacts", "evaluator", "eval-report.md"), "utf8"))
-      .toContain("- 9 (good)");
+      .toContain("The exact repository heads and shared contract evidence are sufficient.");
     expect(result.event?.type === "facts_captured" && result.event.facts).not.toHaveProperty("gateBlocked");
   });
 

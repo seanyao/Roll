@@ -84,6 +84,21 @@ describe("pure helpers", () => {
     expect(out).toContain("| [US-1](x) | a | 📋 Todo |");
     expect(out).toContain("| [US-2](x) | b | ✅ Done |");
   });
+
+  it("FIX-1475: reverts only the EXACT id-cell — a `<id>-` descendant and a row that merely LINKS to [id] are untouched", () => {
+    const c = [
+      "| [FIX-300-legacy](x) | descendant | ✅ Done |",
+      "| [US-9](x) | supersedes [FIX-300](x) in its description | ✅ Done |",
+      "| [FIX-300](x) | the real card | ✅ Done |",
+      "",
+    ].join("\n");
+    const out = revertStoryDone(c, "FIX-300");
+    // Only the exact FIX-300 row flips …
+    expect(out).toContain("| [FIX-300](x) | the real card | 📋 Todo |");
+    // … the descendant and the row that only links to [FIX-300] stay Done.
+    expect(out).toContain("| [FIX-300-legacy](x) | descendant | ✅ Done |");
+    expect(out).toContain("| [US-9](x) | supersedes [FIX-300](x) in its description | ✅ Done |");
+  });
 });
 
 describe("loop notify", () => {

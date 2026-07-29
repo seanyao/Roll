@@ -212,7 +212,7 @@ function writeManualScoreRawArtifact(projectPath: string, cycleId: string, peer:
 }
 
 /** Summary precedence: --summary > --file > the story's backlog row. */
-function resolveSummary(storyId: string, summaryFlag?: string, fileFlag?: string): string | null {
+export function resolveSummary(storyId: string, summaryFlag?: string, fileFlag?: string): string | null {
   if (summaryFlag !== undefined && summaryFlag.trim() !== "") return summaryFlag.trim();
   if (fileFlag !== undefined) {
     try {
@@ -223,10 +223,16 @@ function resolveSummary(storyId: string, summaryFlag?: string, fileFlag?: string
   }
   try {
     const backlog = readFileSync(join(process.cwd(), ".roll", "backlog.md"), "utf8");
-    // ID-boundary match (codex pair-review): a bare includes() would let
-    // US-X-1 swallow US-X-10's row.
-    const idRe = new RegExp(`${storyId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`);
-    const row = backlog.split("\n").find((l) => idRe.test(l));
+    // FIX-1475: select the row by an EXACT id-cell match (link-stripped) — never a
+    // whole-line boundary regex. The prior `${id}(?![A-Za-z0-9])` still allowed a
+    // trailing `-`, so FIX-300 matched a FIX-300-legacy row (and any row whose
+    // DESCRIPTION merely mentioned the id), feeding the wrong summary to scoring.
+    const row = backlog.split("\n").find((l) => {
+      if (!l.startsWith("|")) return false;
+      const cell = (l.split("|")[1] ?? "").trim();
+      const id = cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
+      return id === storyId;
+    });
     return row !== undefined ? `Story ${storyId} — backlog row:\n${row.trim()}` : null;
   } catch {
     return null;

@@ -23,6 +23,7 @@ import { c, renderState } from "../render.js";
 import { STORY_ID_RE } from "../lib/story-page.js";
 import { DuplicateStoryIdError, declaresAnySurface, screenshotExemption, storySpecPath } from "../runner/attest-gate.js";
 import { validateStoryVisualEvidence } from "../lib/design-visual-evidence.js";
+import { isNewRegimeCard, lintCardGranularity } from "../lib/card-granularity.js";
 
 const green = (s: string): string => c("green", s);
 const red = (s: string): string => c("red", s);
@@ -105,6 +106,19 @@ export function storyValidateCommand(args: string[]): number {
   if (visual.exemptSubstituteMissing === true) {
     fails.push("screenshot_exempt without a substitute capturable evidence (declare deliverable_cmd or name the tests) — 免截图 ≠ 免证据");
   }
+  // US-CYCLE-005 — design-time granularity gate. Self-scoping by the card's
+  // intrinsic `created:` date (>= the cutover): the 900+ legacy cards are never
+  // retroactively failed, and a NEW card cannot bypass the lint by omitting
+  // est_min/risk_tier (the created date is not dodgeable). A new-regime card that
+  // is too big / missing the contract (incl. risk_tier) is rejected here.
+  const granularity = isNewRegimeCard(specText, id) ? lintCardGranularity(specText) : null;
+  if (granularity !== null && !granularity.ok) {
+    for (const v of granularity.violations) {
+      fails.push(`granularity: ${v.message}`);
+      fails.push(`  ↳ ${v.fix}`);
+    }
+  }
+
   // An exempt card owes no visual-evidence AC (the contract is waived); only a
   // non-exempt card must carry one.
   if (!exempt && !visual.ok) {
@@ -134,6 +148,9 @@ export function storyValidateCommand(args: string[]): number {
   } else {
     lines.push(`  must-declare:    ${declares ? green("ok") : amber("warning")}${declares ? "" : " — 缺声明面 (deliverable_url/cmd/exempt)"}`);
     lines.push(`  visual-evidence: ${mark(visual.ok)}${visual.ok ? ` (surface: ${visual.surface})` : ` — 缺可视 AC: ${visual.code ?? "flagged"}`}`);
+  }
+  if (granularity !== null) {
+    lines.push(`  granularity:     ${granularity.ok ? green("ok") : red("FAIL")}${granularity.ok ? "" : ` — ${granularity.violations.length} 违规 (卡太大/契约缺失)`}`);
   }
   for (const w of warnings) lines.push(`  • warning: ${w}`);
   for (const f of fails) lines.push(`  • ${f}`);

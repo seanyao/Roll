@@ -22,7 +22,7 @@
  * PR/branch close side-effects.
  */
 import { STATUS_MARKER, type RollEvent } from "@roll/spec";
-import { appendBacklogRow, markStatus } from "../backlog/store.js";
+import { appendBacklogRow, markStatusExact } from "../backlog/store.js";
 
 /**
  * A story chain may auto-split at most this many times; the (cap+1)-th attempt
@@ -132,7 +132,9 @@ export function applySelfDowngradeToBacklog(
   parentId: string,
   children: ResolvedChild[],
 ): string {
-  let next = markStatus(content, parentId, STATUS_MARKER.hold).content;
+  // FIX-1475: exact id — the docstring promises ONLY the parent is parked; a
+  // prefix match would also flip a pre-existing `<parentId>-` descendant to Hold.
+  let next = markStatusExact(content, parentId, STATUS_MARKER.hold).content;
   for (const c of children) {
     next = appendBacklogRow(next, {
       id: c.id,

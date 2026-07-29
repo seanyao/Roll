@@ -755,8 +755,13 @@ describe("US-WS-010 repository Builder context", () => {
     expect(existsSync(fixturePaths.lockPath)).toBe(false);
     expect(markStatus).toHaveBeenCalledWith(fixture.root, fixture.storyId, expect.any(String));
     expect(statSync(fixture.root).mode & 0o777).toBe(rootModeBefore);
-    for (const spy of [...Object.values(globalGit), ...Object.values(globalProvider)]) {
-      expect(spy).not.toHaveBeenCalled();
+    for (const [name, spy] of Object.entries(globalGit)) {
+      if (name !== "commitsAhead") expect(spy).not.toHaveBeenCalled();
+    }
+    for (const spy of Object.values(globalProvider)) expect(spy).not.toHaveBeenCalled();
+    expect(globalGit.commitsAhead).toHaveBeenCalledTimes(3);
+    for (const [cwd] of globalGit.commitsAhead.mock.calls) {
+      expect(cwd).toBe(realpathSync(fixture.repositories[0]!.path));
     }
     expect(nodeExecCalls).toHaveLength(0);
     const issueEvents = readFileSync(join(fixture.issueRoot, "events.jsonl"), "utf8")
@@ -889,9 +894,10 @@ describe("US-WS-010 repository Builder context", () => {
       alertsPath: join(runtimeRoot, "alerts.log"),
     };
     const leasePath = join(runtimeRoot, "story-leases.json");
-    writeFileSync(leasePath, `${JSON.stringify({
+    const legacyLease = `${JSON.stringify({
       "US-WS-010": { pid: 4242, claimedAt: 1, source: "cycle" },
-    })}\n`);
+    })}\n`;
+    writeFileSync(leasePath, legacyLease);
     const ports = nodePorts({
       repoCwd: "/project",
       paths: scopedPaths,
@@ -937,7 +943,7 @@ describe("US-WS-010 repository Builder context", () => {
     expect(readFileSync(scopedPaths.runsPath, "utf8")).toContain(
       '"story_id":"US-WS-010","cycle_id":"cycle-terminal"',
     );
-    expect(existsSync(leasePath)).toBe(false);
+    expect(readFileSync(leasePath, "utf8")).toBe(legacyLease);
     expect(appendAlert).toHaveBeenCalledWith(
       scopedPaths.alertsPath,
       expect.stringContaining("workspace_repository_scope_required: cleanup_worktree"),

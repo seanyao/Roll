@@ -9,6 +9,11 @@ import { executeSetupCommand } from "../src/runner/setup-handlers.js";
 import { executeTerminalCommand } from "../src/runner/terminal-handlers.js";
 import { repositoryAgentWritableRoots } from "../src/runner/worktree-bootstrap.js";
 
+function leaseRecordPath(paths: RunnerPaths, storyId: string): string {
+  if (paths.storyLeasePath === undefined) throw new Error("fixture requires storyLeasePath");
+  return join(paths.storyLeasePath, `${storyId}.lease`);
+}
+
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], {
     cwd,
@@ -83,7 +88,7 @@ repositories:
     lockPath: join(runtime, "cycle.lock"),
     heartbeatPath: join(runtime, "heartbeat"),
     worktreePath: join(runtime, "legacy-worktree"),
-    storyLeasePath: join(runtime, "locks", "story-leases.json"),
+    storyLeasePath: join(runtime, "locks", "leases"),
   };
   return { workspace, rollHome, storyId, paths, remotes };
 }
@@ -140,7 +145,7 @@ repositories:
       lockPath: join(runtime, "cycle.lock"),
       heartbeatPath: join(runtime, "heartbeat"),
       worktreePath: join(runtime, "legacy-worktree"),
-      storyLeasePath: join(runtime, "locks", "story-leases.json"),
+      storyLeasePath: join(runtime, "locks", "leases"),
     };
     return { workspaceId, workspace, paths };
   };
@@ -263,7 +268,7 @@ describe("US-WS-011 Workspace repository preparation", () => {
 
       expect(result.event).toEqual({ type: "repository_setup_failed", storyId: f.storyId });
       expect(readFileSync(join(f.workspace, "backlog", "index.md"), "utf8")).toContain("📋 Todo");
-      expect(existsSync(f.paths.storyLeasePath!)).toBe(false);
+      expect(existsSync(leaseRecordPath(f.paths, f.storyId))).toBe(false);
       expect(existsSync(join(issueRoot, "sot"))).toBe(true);
       const event = readFileSync(f.paths.eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).at(-1);
       expect(event).toMatchObject({
@@ -297,8 +302,9 @@ describe("US-WS-011 Workspace repository preparation", () => {
       ports.repositories = {
         ...repositories,
         async prepare(request) {
-          leaseObservedBeforePrepare = existsSync(f.paths.storyLeasePath!)
-            && JSON.parse(readFileSync(f.paths.storyLeasePath!, "utf8"))[f.storyId]?.source === "cycle";
+          const recordPath = leaseRecordPath(f.paths, f.storyId);
+          leaseObservedBeforePrepare = existsSync(recordPath)
+            && JSON.parse(readFileSync(recordPath, "utf8")).source === "cycle";
           expect(readFileSync(join(f.workspace, "backlog", "index.md"), "utf8")).toContain("📋 Todo");
           return repositories.prepare(request);
         },
@@ -342,7 +348,7 @@ describe("US-WS-011 Workspace repository preparation", () => {
 
       expect(result.event).toEqual({ type: "repository_setup_failed", storyId: f.storyId });
       expect(readFileSync(join(f.workspace, "backlog", "index.md"), "utf8")).toContain("📋 Todo");
-      expect(existsSync(f.paths.storyLeasePath!)).toBe(false);
+      expect(existsSync(leaseRecordPath(f.paths, f.storyId))).toBe(false);
       expect(existsSync(join(f.workspace, "issues", f.storyId))).toBe(false);
       const event = readFileSync(f.paths.eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).at(-1);
       expect(event).toMatchObject({
@@ -375,10 +381,9 @@ describe("US-WS-011 Workspace repository preparation", () => {
       if (execution === undefined) throw new Error("repository execution must resolve");
       // Stamp a live Cycle lease and leave unpushed work in the writable leg so
       // teardown must NOT touch it (only setup rollback / explicit reclamation may).
-      mkdirSync(dirname(f.paths.storyLeasePath!), { recursive: true });
-      writeFileSync(f.paths.storyLeasePath!, `${JSON.stringify({
-        [f.storyId]: { pid: process.pid, claimedAt: 1, source: "cycle" },
-      })}\n`);
+      const recordPath = leaseRecordPath(f.paths, f.storyId);
+      mkdirSync(dirname(recordPath), { recursive: true });
+      writeFileSync(recordPath, `${JSON.stringify({ pid: process.pid, claimedAt: 1, source: "cycle" })}\n`);
       const writable = Object.values(execution.repositories).find((entry) => entry.access === "write");
       if (writable === undefined) throw new Error("fixture must expose a writable leg");
       writeFileSync(join(writable.worktreePath, "unpushed.txt"), "in-flight work\n", "utf8");
@@ -409,9 +414,7 @@ describe("US-WS-011 Workspace repository preparation", () => {
       expect(readFileSync(join(writable.worktreePath, "unpushed.txt"), "utf8")).toBe("in-flight work\n");
       // Only the Cycle-owned lease is released (removeLease drops the file once
       // its last entry is gone, so an absent file also means "released").
-      const leaseReleased = !existsSync(f.paths.storyLeasePath!)
-        || JSON.parse(readFileSync(f.paths.storyLeasePath!, "utf8"))[f.storyId] === undefined;
-      expect(leaseReleased).toBe(true);
+      expect(existsSync(recordPath)).toBe(false);
       const alerts = readFileSync(f.paths.alertsPath, "utf8");
       // The teardown records the exact preserved Issue worktree facts so an
       // owner can recover the dirty/unpushed leg rather than seeing only a

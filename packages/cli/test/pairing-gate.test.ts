@@ -1869,3 +1869,77 @@ describe("FIX-1054 — serial cost-aware score dispatch", () => {
     expect(fan.limit).toBe(3);
   });
 });
+
+describe("US-CYCLE-008 — risk-tier-driven evaluation panel", () => {
+  it("high tier fans the score stage out into a PARALLEL panel of distinct fresh sessions", async () => {
+    const { dir, rt } = project(SCORE_CFG);
+    const tried: string[] = [];
+    const { d, events } = scoreDeps({
+      fanout: "high_risk_tier_card",
+      scorePeer: async (peer: string) => {
+        tried.push(peer);
+        return { score: 8, verdict: "good" as const, rationale: "panel review", cost: 0.02 };
+      },
+    });
+    const r = await runScorePairing(dir, rt, "c-tier-high", "kimi", "US-C008-1", "roll-build", "s", d);
+    expect(r.status).toBe("scored");
+    // The fan-out is auditable + tier-attributed.
+    const fan = events.find((e) => e.type === "pair:fanout") as Extract<PairEvent, { type: "pair:fanout" }>;
+    expect(fan).toBeDefined();
+    expect(fan.reason).toBe("high_risk_tier_card");
+    expect(fan.stage).toBe("score");
+    expect(fan.limit).toBe(3);
+    // Multiple evaluators ran IN PARALLEL, each a distinct panel member (no member
+    // is spawned twice → no shared session across the panel).
+    const distinct = new Set(tried);
+    expect(tried.length).toBeGreaterThanOrEqual(2);
+    expect(distinct.size).toBe(tried.length);
+    // The actual panel composition is reported for the declared-vs-actual audit.
+    expect(r.panel.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(r.panel).size).toBe(r.panel.length);
+    expect(r.panel).toEqual([...distinct]);
+    // Every fan-out selection is labelled fanout (not the serial reasons).
+    const selecteds = events.filter((e) => e.type === "pair:selected") as Extract<PairEvent, { type: "pair:selected" }>[];
+    expect(selecteds.every((e) => e.reason === "fanout")).toBe(true);
+    // Each panel member is selected under its OWN entry (a per-peer fresh session),
+    // never one shared session reused across members.
+    expect(new Set(selecteds.map((e) => e.peer)).size).toBe(selecteds.length);
+  });
+
+  it("low tier keeps the DEFAULT serial single-evaluator path — NO fan-out", async () => {
+    const { dir, rt } = project(SCORE_CFG);
+    const tried: string[] = [];
+    const { d, events } = scoreDeps({
+      // low tier ⇒ tierFanoutReason(undefined)/serial ⇒ NO fanout dep supplied.
+      scorePeer: async (peer: string) => {
+        tried.push(peer);
+        return { score: 8, verdict: "good" as const, rationale: "single evaluator", cost: 0.02 };
+      },
+    });
+    const r = await runScorePairing(dir, rt, "c-tier-low", "kimi", "US-C008-2", "roll-build", "s", d);
+    expect(r.status).toBe("scored");
+    expect(events.some((e) => e.type === "pair:fanout")).toBe(false); // never fans out
+    expect(tried).toHaveLength(1); // exactly ONE evaluator (serial take-first)
+    expect(r.panel).toEqual([tried[0]]); // panel = the single evaluator that ran
+  });
+
+  it("high tier fans the CODE review stage out with the tier reason", async () => {
+    const { dir, rt } = project(ENABLED);
+    const tried: string[] = [];
+    const { d, events } = deps({
+      fanout: "high_risk_tier_card",
+      reviewPeer: async (peer) => {
+        tried.push(peer);
+        return { verdict: "agree", findings: [], cost: 0.02 };
+      },
+    });
+    const res = await runPairing(dir, dir, rt, "c-tier-code", "kimi", "code", d);
+    expect(res.status).toBe("reviewed");
+    const fan = events.find((e) => e.type === "pair:fanout") as Extract<PairEvent, { type: "pair:fanout" }>;
+    expect(fan).toBeDefined();
+    expect(fan.reason).toBe("high_risk_tier_card");
+    expect(fan.limit).toBe(3);
+    expect(tried.length).toBeGreaterThanOrEqual(2); // parallel panel
+    expect(tried.length).toBeLessThanOrEqual(3); // bounded
+  });
+});

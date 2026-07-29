@@ -14,7 +14,7 @@ import { AGENTS } from "../../core/src/agent/specs.js";
 import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { classifyComplexity, cycleStep, initialCycleState, mapV2Status } from "@roll/core";
 import { AWAITING_REVIEW_STATUS_MARKER, STATUS_MARKER } from "@roll/spec";
-import { agentWritableRoots, checkMainDirty, planAdversarial, recordExecutionProfile, writeEvaluatorArtifact, runDesignerStage } from "../src/runner/executor.js";
+import { agentWritableRoots, checkMainDirty, planAdversarial, recordExecutionProfile, runEvaluatorStage, runDesignerStage } from "../src/runner/executor.js";
 import { submoduleAgentWritableRoots } from "../src/runner/worktree-bootstrap.js";
 import { evaluateReviewScoreGate, readLatestStoryPeerScore, writeReviewScoreNote } from "../src/lib/review-score.js";
 import { buildLowScoreFixForwardPrompt } from "../src/runner/project-map.js";
@@ -63,7 +63,7 @@ import {
 } from "../src/runner/index.js";
 import { suspendRig, readRigLifecycleState } from "../src/runner/agent-liveness.js";
 import { startMainCheckoutLeakWatchdog } from "../src/runner/sandbox-boundary.js";
-import { writeMainDirtyBaseline } from "../src/runner/main-checkout-guard.js";
+import { captureMainHeadBaseline, writeMainDirtyBaseline } from "../src/runner/main-checkout-guard.js";
 
 /** Temp dirs created by FIX-207 attest-gate executor tests; cleaned at end. */
 const execDirs: string[] = [];
@@ -196,6 +196,20 @@ describe("buildSpawnCommand — US-PORT-010 agent argv shapes", () => {
       "/repo/.git",
       prompt,
     ]);
+  });
+
+  it("US-DELTA-006: codex readOnly spawn uses --sandbox read-only (product code not writable), keeps --add-dir for its artifact dir", () => {
+    const { args } = buildSpawnCommand("codex", {
+      cwd: "/wt",
+      skillBody: "DESIGN",
+      readOnly: true,
+      writableRoots: ["/wt/.roll/run/role-artifacts/designer"],
+    });
+    expect(args).toContain("read-only");
+    expect(args).not.toContain("workspace-write");
+    // its own artifact dir stays writable via --add-dir
+    expect(args).toContain("--add-dir");
+    expect(args).toContain("/wt/.roll/run/role-artifacts/designer");
   });
 
   it("FIX-1065: codex ignores empty/duplicate writableRoots", () => {
@@ -1008,6 +1022,10 @@ function fakePorts(over: Partial<Ports> = {}): { ports: Ports; calls: Record<str
     },
     skillBody: "work",
     clock: () => 42,
+    // US-CYCLE-011: satisfy the round-tail full-verify half of the evidence gate
+    // (fresh mode:"full" proof matching the delivered tree) over the faked
+    // worktree; the publish-dispatch assertions here predate that gate.
+    fullVerify: { proofBody: () => '{"ts":42,"tree":"T","mode":"full"}', deliveredTree: () => "T" },
     // FIX-343: default to NO installed agents so the now-mandatory score stage is
     // hermetic (no real-env scorer spawns). Tests that exercise the peer gate /
     // scorer pool pin their own installedAgents.
@@ -1044,6 +1062,9 @@ function fakePorts(over: Partial<Ports> = {}): { ports: Ports; calls: Record<str
       branchMergedIntoMain: vi.fn(async () => false),
       branchCleanlyRebasesOntoMain: vi.fn(async () => true),
       resetWorktreeHard: vi.fn(async () => ({ code: 0 })),
+      // US-CYCLE-009: the real tip resolves (production node-ports has this) so
+      // the auto-merge attach is head-sha-pinned in these publish tests.
+      remoteBranchTip: vi.fn(async () => "cafebabecafebabecafebabecafebabecafebabe"),
     },
     github: {
       repoSlug: vi.fn(async () => "o/r"),
@@ -1842,6 +1863,13 @@ describe("executeCommand — command → executor mapping", () => {
         },
       });
       if (leaseContent !== undefined) {
+        // Write per-story lease files for backward compat with readLeases
+        const leaseDir = join(dir, "leases");
+        mkdirSync(leaseDir, { recursive: true });
+        for (const [storyId, entry] of Object.entries(leaseContent)) {
+          writeFileSync(join(leaseDir, `${storyId}.lease`), JSON.stringify(entry) + "\n", "utf8");
+        }
+        // Also write legacy for backward compat with direct reads
         writeFileSync(join(dir, "story-leases.json"), JSON.stringify(leaseContent, null, 2) + "\n", "utf8");
       }
       return { ports, calls, dir };
@@ -1937,15 +1965,16 @@ describe("executeCommand — command → executor mapping", () => {
       });
       const pick = await executeCommand({ kind: "pick_story" }, ports, CTX);
       expect(pick.event).toEqual({ type: "story_picked", storyId: "US-RUN-001" });
-      const leasePath = join(dir, "story-leases.json");
-      expect(existsSync(leasePath)).toBe(true);
-      const lease = JSON.parse(readFileSync(leasePath, "utf8"));
-      expect(lease["US-RUN-001"]).toMatchObject({ source: "cycle", pid: process.pid });
-      expect(typeof lease["US-RUN-001"].claimedAt).toBe("number");
+      const leaseDir = join(dir, "leases");
+      const leaseRecordPath = join(leaseDir, "US-RUN-001.lease");
+      expect(existsSync(leaseRecordPath)).toBe(true);
+      const lease = JSON.parse(readFileSync(leaseRecordPath, "utf8"));
+      expect(lease).toMatchObject({ source: "cycle", pid: process.pid });
+      expect(typeof lease.claimedAt).toBe("number");
 
       const terminal = await executeCommand({ kind: "append_run", cycleId: CTX.cycleId, status: "idle" }, ports, CTX);
       expect(terminal.event).toBeUndefined();
-      expect(existsSync(leasePath)).toBe(false);
+      expect(existsSync(leaseRecordPath)).toBe(false);
     });
   });
 
@@ -3464,6 +3493,7 @@ describe("executeCommand — command → executor mapping", () => {
     writeFileSync(join(main, "escaped.txt"), "leaked\n", "utf8");
     execFileSync("git", ["add", "escaped.txt"], { cwd: main });
     execFileSync("git", ["commit", "-q", "-m", "tcr: leaked main checkout commit"], { cwd: main });
+    const leakedHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: main, encoding: "utf8" }).trim();
 
     const base = fakePorts();
     const count = (cwd: string, range: string): number =>
@@ -3490,14 +3520,81 @@ describe("executeCommand — command → executor mapping", () => {
         commitsAhead: 0,
       },
     });
-    expect((r.event as { facts: { mainAhead?: number } }).facts.mainAhead ?? 0).toBe(0);
+    // FIX-1475: quarantine still DETECTS the leak (event below) but never
+    // resets main — so the capture-phase probe now honestly reports the leak
+    // (no pre-spawn baseline here → absolute count, the legacy fallback).
+    expect((r.event as { facts: { mainAhead?: number } }).facts.mainAhead ?? 0).toBe(1);
     const quarantined = (calls["event"] ?? [])
       .map((a) => (a as unknown[])[1] as RollEvent)
       .find((e) => e.type === "sandbox:quarantined");
     expect(quarantined).toMatchObject({ phase: "capture", reason: "ahead", files: ["<commit>:tcr: leaked main checkout commit"] });
+    // FIX-1475: the shared main ref was NOT moved — the leaked commit is still
+    // HEAD (byte-identical), bookmarked on the quarantine ref for audit.
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: main, encoding: "utf8" }).trim()).toBe(leakedHead);
+    if (quarantined?.type === "sandbox:quarantined") {
+      expect(execFileSync("git", ["rev-parse", quarantined.ref], { cwd: main, encoding: "utf8" }).trim()).toBe(leakedHead);
+    }
     expect(execFileSync("git", ["status", "--short", "--", "."], { cwd: main, encoding: "utf8" }).trim()).toBe("?? .roll/");
     expect(execFileSync("git", ["status", "--porcelain", "--", "escaped.txt", "README.md"], { cwd: main, encoding: "utf8" }).trim()).toBe("");
     expect(execFileSync("git", ["rev-list", "--count", "origin/main..HEAD"], { cwd: wt, encoding: "utf8" }).trim()).toBe("0");
+  });
+
+  it("FIX-1475: capture_facts ignores PRE-EXISTING ahead commits that match the pre-spawn baseline (no false leak, main untouched)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "roll-fix1475-capture-")));
+    execDirs.push(root);
+    const remote = join(root, "remote.git");
+    const main = join(root, "main");
+    const wt = join(root, "cycle-wt");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    execFileSync("git", ["clone", "-q", remote, main]);
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: main });
+    execFileSync("git", ["config", "user.name", "Roll Test"], { cwd: main });
+    writeFileSync(join(main, "README.md"), "base\n", "utf8");
+    execFileSync("git", ["add", "README.md"], { cwd: main });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: main });
+    execFileSync("git", ["push", "-q", "-u", "origin", "main"], { cwd: main });
+
+    // Pre-existing LOCAL ahead commit on the shared checkout (owner WIP), then
+    // the cycle's pre-spawn hook freezes THIS head as the baseline.
+    writeFileSync(join(main, "owner-wip.txt"), "owner work in progress\n", "utf8");
+    execFileSync("git", ["add", "owner-wip.txt"], { cwd: main });
+    execFileSync("git", ["commit", "-q", "-m", "owner local WIP (unpushed)"], { cwd: main });
+    const aheadHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: main, encoding: "utf8" }).trim();
+    const runtimeDir = join(main, ".roll", "loop");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "cycle", wt, "origin/main"], { cwd: main });
+    captureMainHeadBaseline(main, runtimeDir, CTX.cycleId);
+
+    const base = fakePorts();
+    const count = (cwd: string, range: string): number =>
+      Number(execFileSync("git", ["rev-list", "--count", range], { cwd, encoding: "utf8" }).trim());
+    const { ports, calls } = fakePorts({
+      repoCwd: main,
+      paths: {
+        ...base.ports.paths,
+        worktreePath: wt,
+        eventsPath: join(runtimeDir, "events.ndjson"),
+        alertsPath: join(runtimeDir, "alerts.log"),
+      },
+      git: {
+        ...base.ports.git,
+        commitsAhead: vi.fn(async (cwd) => count(cwd, "origin/main..HEAD")),
+        mainAhead: vi.fn(async (cwd) => count(cwd, "origin/main..main")),
+      },
+    });
+
+    const r = await executeCommand({ kind: "capture_facts" }, ports, CTX);
+
+    // The pre-existing ahead state is NOT a leak: no mainAhead fact, no
+    // quarantine event, and the shared ref + tree are byte-identical.
+    expect((r.event as { facts: { mainAhead?: number } }).facts.mainAhead ?? 0).toBe(0);
+    const quarantined = (calls["event"] ?? [])
+      .map((a) => (a as unknown[])[1] as RollEvent)
+      .find((e) => e.type === "sandbox:quarantined" && e.reason === "ahead");
+    expect(quarantined).toBeUndefined();
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: main, encoding: "utf8" }).trim()).toBe(aheadHead);
+    expect(execFileSync("git", ["rev-parse", "main"], { cwd: main, encoding: "utf8" }).trim()).toBe(aheadHead);
+    expect(readFileSync(join(main, "owner-wip.txt"), "utf8")).toBe("owner work in progress\n");
+    expect(execFileSync("git", ["branch", "--list", "rescue/*"], { cwd: main, encoding: "utf8" }).trim()).toBe("");
   });
 
   it("E4 (end-to-end): capture_facts observes a REAL tcr commit made in the submodule worktree, not the empty superproject worktree", async () => {
@@ -3559,7 +3656,7 @@ describe("executeCommand — command → executor mapping", () => {
     expect(rSuper.ctxPatch?.tcrCount).toBe(0);
   });
 
-  it("FIX-903: rescue_leaked saves leaked main commits to a rescue ref and resets main", async () => {
+  it("FIX-903: rescue_leaked saves leaked main commits to a quarantine bundle (never resets main)", async () => {
     const { ports, calls } = fakePorts({
       git: {
         ...fakePorts().ports.git,
@@ -3577,7 +3674,7 @@ describe("executeCommand — command → executor mapping", () => {
     expect(calls["event"]?.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("FIX-402: rescue_leaked preserves uncommitted tracked backlog Done while resetting leaked main commits", async () => {
+  it("FIX-402/FIX-1475: rescue_leaked bundles the leaked HEAD but NEVER resets main — uncommitted backlog edits and leaked commits survive byte-identically", async () => {
     const remote = realpathSync(mkdtempSync(join(tmpdir(), "roll-fix402-remote-")));
     execDirs.push(remote);
     execFileSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
@@ -3607,9 +3704,14 @@ describe("executeCommand — command → executor mapping", () => {
 
     expect(res.code).toBe(0);
     expect(res.rescuedSha).toBe(leakedHead);
-    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()).toBe(originHead);
-    // US-LOOP-095: leaked commits are saved to a quarantine BUNDLE (not a
-    // rescue/leaked-* branch), holding rescuedSha; no local branch is created.
+    // FIX-1475: the shared main ref did NOT move — HEAD stays on the leaked
+    // commit (byte-identical), NOT back on origin/main. The FIX-402 backlog
+    // preservation is now structural: without a reset there is nothing to
+    // clobber, so the uncommitted Done flip simply stays in the tree.
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()).toBe(leakedHead);
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()).not.toBe(originHead);
+    // US-LOOP-095: the leaked HEAD is saved to a quarantine BUNDLE (audit
+    // evidence); no local branch is created.
     const bundlePath = join(repo, ".roll", "loop", "quarantine", "rescue-leaked-FIX-402.bundle");
     expect(existsSync(bundlePath)).toBe(true);
     expect(execFileSync("git", ["bundle", "list-heads", bundlePath], { cwd: repo, encoding: "utf8" })).toContain(leakedHead);
@@ -6891,99 +6993,247 @@ describe("US-V4-004 — execution profile selection + durable recording", () => 
   });
 });
 
-describe("US-V4-005 — verified execution: evaluator artifact boundary", () => {
-  function repoWithScore(id: string, sessionId: string, verdict: "good" | "ok" | "regression", score: number): string {
-    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-v4-005-")));
-    execDirs.push(repo);
-    const notesDir = join(repo, ".roll", "features", "uncategorized", id, "notes");
-    mkdirSync(notesDir, { recursive: true });
-    writeFileSync(
-      join(notesDir, `2026-06-28-roll-build-${id}-${score}.md`),
-      ["---", "skill: roll-build", `story: ${id}`, `score: ${score}`, `verdict: ${verdict}`, "ts: 2026-06-28T12:00:00Z", "scoring: pair", "scored-by: reasonix", `session-id: ${sessionId}`, "---", "", "peer rationale."].join("\n"),
-    );
-    return repo;
-  }
-  function ctxFor(repo: string, id: string, profile: "standard" | "verified" | "designed", builderSession: string): Parameters<typeof writeEvaluatorArtifact>[1] {
+describe("US-DELTA-007 — Full Delta Evaluator authors its own report (no assembly)", () => {
+  // A GENUINE Evaluator-authored report: the ONLY shape that gates success.
+  const AUTHORED_REPORT = [
+    "# Evaluator report",
+    "",
+    "## Inputs checked",
+    "- builder committed diff",
+    "- ac-map.json",
+    "- attest report",
+    "",
+    "## Rationale",
+    "- Every AC is covered by a test; no regressions. Recommend merge.",
+    "",
+  ].join("\n");
+  // A historical ASSEMBLED report (the RETIRED writer's shape) — must be
+  // recognised, labeled legacy, and REJECTED as a new authored evaluation.
+  const LEGACY_ASSEMBLED_REPORT = [
+    "# Evaluator report — US-E",
+    "",
+    "## Blocking findings",
+    "- (none)",
+    "",
+    "## Advisory findings",
+    "- (none)",
+    "",
+    "## Score",
+    "- 8 (good)",
+    "",
+    "## Attest / evidence status",
+    "- produced",
+    "",
+    "## Recommendation",
+    "- merge",
+    "",
+  ].join("\n");
+  // A peer-review-only artifact — an INPUT, never an Evaluator report.
+  const PEER_ONLY = ["# Peer review", "", "Looks good, ship it.", ""].join("\n");
+
+  function evalCtx(repo: string, id: string, profile: "standard" | "verified" | "designed"): Parameters<typeof runEvaluatorStage>[1] {
     const runDir = join(repo, ".roll", "features", "uncategorized", id, "run-1");
     mkdirSync(runDir, { recursive: true });
-    return { cycleId: "C-1", branch: "b", loop: "x", storyId: id, selectedProfile: profile, evidenceRunDir: runDir, builderSessionId: builderSession };
+    return { cycleId: "C-7", branch: "b", loop: "x", storyId: id, selectedProfile: profile, evidenceRunDir: runDir, agent: "pi", builderSessionId: "C-7:build:pi:0" };
   }
-
-  it("standard profile writes no evaluator artifact", () => {
-    const repo = repoWithScore("US-E1", "C-1:score:reasonix:1", "good", 8);
-    const { ports } = fakePorts({ repoCwd: repo });
-    const r = writeEvaluatorArtifact(ports, ctxFor(repo, "US-E1", "standard", "C-1:build:codex:0"), { attestStatus: "produced", blockingFindings: [] });
-    expect(r.written).toBe(false);
-    expect(r.valid).toBe(true);
-  });
-
-  it("verified profile writes eval-report.md + manifest from a fresh-session score → valid", () => {
-    const repo = repoWithScore("US-E2", "C-1:score:reasonix:1", "good", 8);
-    const { ports } = fakePorts({ repoCwd: repo });
-    const ctx = ctxFor(repo, "US-E2", "verified", "C-1:build:codex:0");
-    const r = writeEvaluatorArtifact(ports, ctx, { attestStatus: "produced", blockingFindings: [] });
-    expect(r.written).toBe(true);
-    expect(r.valid).toBe(true);
-    const reportPath = join(ctx.evidenceRunDir as string, "role-artifacts", "evaluator", "eval-report.md");
-    expect(readFileSync(reportPath, "utf8")).toContain("## Recommendation");
-    expect(readFileSync(reportPath, "utf8")).toContain("merge");
-    const man = JSON.parse(readFileSync(join(ctx.evidenceRunDir as string, "role-artifacts", "evaluator", "artifact-manifest.json"), "utf8"));
-    expect(man.role).toBe("evaluator");
-  });
-
-  it("BUILDER SELF-GRADE: evaluator session == builder session → written but fails closed (invalid)", () => {
-    const shared = "C-1:build:codex:0";
-    const repo = repoWithScore("US-E3", shared, "good", 8);
-    const { ports } = fakePorts({ repoCwd: repo });
-    const r = writeEvaluatorArtifact(ports, ctxFor(repo, "US-E3", "verified", shared), { attestStatus: "produced", blockingFindings: [] });
-    expect(r.written).toBe(true);
-    expect(r.valid).toBe(false);
-    expect(r.reasons.join(" ")).toContain("self-grade");
-  });
-
-  it("a blocking finding → repair recommendation in the eval report", () => {
-    const repo = repoWithScore("US-E4", "C-1:score:reasonix:1", "ok", 7);
-    const { ports } = fakePorts({ repoCwd: repo });
-    const ctx = ctxFor(repo, "US-E4", "verified", "C-1:build:codex:0");
-    writeEvaluatorArtifact(ports, ctx, { attestStatus: "produced", blockingFindings: ["AC2 has no test"] });
-    expect(readFileSync(join(ctx.evidenceRunDir as string, "role-artifacts", "evaluator", "eval-report.md"), "utf8")).toContain("repair");
-  });
-
-  // FIX-1262 — the evaluator manifest's rig.agent must come from the ACTUAL
-  // scorer (`scored-by`), never a source-baked 'reasonix' fabrication.
-  function repoWithScoreBy(id: string, sessionId: string, score: number, scoredBy: string | undefined): string {
-    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-fix1262-")));
+  const EVAL_DEPS: Parameters<typeof runEvaluatorStage>[2] = {
+    resolveEvaluator: () => ({ ok: true, agent: "reasonix", source: "availability-fallback", reasons: ["cast"] }),
+  };
+  function eventsOfType(calls: Record<string, unknown[]>, type: string): Record<string, unknown>[] {
+    return (calls["event"] ?? []).map((a) => (a as unknown[])[1] as Record<string, unknown>).filter((e) => e.type === type);
+  }
+  function newRepo(): string {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-delta-007-")));
     execDirs.push(repo);
-    const notesDir = join(repo, ".roll", "features", "uncategorized", id, "notes");
-    mkdirSync(notesDir, { recursive: true });
-    const lines = ["---", "skill: roll-build", `story: ${id}`, `score: ${score}`, "verdict: good", "ts: 2026-07-15T12:00:00Z", "scoring: pair"];
-    if (scoredBy !== undefined) lines.push(`scored-by: ${scoredBy}`);
-    lines.push(`session-id: ${sessionId}`, "---", "", "peer rationale.");
-    writeFileSync(join(notesDir, `2026-07-15-roll-build-${id}-${score}.md`), lines.join("\n"));
     return repo;
   }
+  function spawnWriting(sink: { agent: string; opts: AgentSpawnOptions }[], content: string | null): Ports["agentSpawn"] {
+    return (async (agent: string, opts: AgentSpawnOptions) => {
+      sink.push({ agent, opts });
+      if (content !== null) writeFileSync(join(opts.runDir as string, "eval-report.md"), content);
+      return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+    }) as unknown as Ports["agentSpawn"];
+  }
 
-  it("FIX-1262: manifest.rig.agent is the ACTUAL scorer (scored-by), never a baked 'reasonix'", () => {
-    const repo = repoWithScoreBy("US-E5", "C-1:score:kimi:1", 8, "kimi");
-    const { ports } = fakePorts({ repoCwd: repo });
-    const ctx = ctxFor(repo, "US-E5", "verified", "C-1:build:codex:0");
-    const r = writeEvaluatorArtifact(ports, ctx, { attestStatus: "produced", blockingFindings: [] });
-    expect(r.valid).toBe(true);
-    const man = JSON.parse(readFileSync(join(ctx.evidenceRunDir as string, "role-artifacts", "evaluator", "artifact-manifest.json"), "utf8"));
-    expect(man.rig.agent).toBe("kimi");
-    expect(JSON.stringify(man)).not.toContain("reasonix");
+  it("AC guardrail: standard profile runs NO evaluator stage (byte-unchanged builder-only path)", async () => {
+    const repo = newRepo();
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports, calls } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    const r = await runEvaluatorStage(ports, evalCtx(repo, "US-E0", "standard"), EVAL_DEPS);
+    expect(r.ran).toBe(false);
+    expect(r.ok).toBe(true);
+    expect(spawns).toHaveLength(0);
+    expect(eventsOfType(calls, "delta:role_started")).toHaveLength(0);
   });
 
-  it("FIX-1262: a score note with NO scored-by → rig.agent absent + fails closed (no fabricated 'reasonix')", () => {
-    const repo = repoWithScoreBy("US-E6", "C-1:score:anon:1", 8, undefined);
-    const { ports } = fakePorts({ repoCwd: repo });
-    const ctx = ctxFor(repo, "US-E6", "verified", "C-1:build:codex:0");
-    const r = writeEvaluatorArtifact(ports, ctx, { attestStatus: "produced", blockingFindings: [] });
+  it("AC3: Evaluator is cast INDEPENDENTLY (distinct session, read-only) and authors report + v2 manifest → ok", async () => {
+    const repo = newRepo();
+    const ctx = evalCtx(repo, "US-E1", "verified");
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports, calls } = fakePorts({ repoCwd: repo, clock: () => 77, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    const r = await runEvaluatorStage(ports, ctx, { ...EVAL_DEPS, hostId: "host-A" });
+    expect(r.ran).toBe(true);
+    expect(r.ok).toBe(true);
+    expect(r.evaluatorAgent).toBe("reasonix");
+    // AC4: the evaluator session is distinct from the builder's session shape.
+    expect(r.evaluatorSessionId).toBe("C-7:evaluate:reasonix:77");
+    expect(r.evaluatorSessionId).not.toBe(ctx.builderSessionId);
+    // Cast as "reasonix" (its own agent), not the builder "pi".
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0]!.agent).toBe("reasonix");
+    // AC3: READ-ONLY — its only writable root is its own artifact dir.
+    expect(spawns[0]!.opts.readOnly).toBe(true);
+    const roots = spawns[0]!.opts.writableRoots ?? [];
+    expect(roots).not.toContain(ports.paths.worktreePath);
+    expect(roots.every((p) => p.includes("role-artifacts"))).toBe(true);
+    // AC3: its OWN v2 manifest, role="evaluator", read-only access.
     const man = JSON.parse(readFileSync(join(ctx.evidenceRunDir as string, "role-artifacts", "evaluator", "artifact-manifest.json"), "utf8"));
-    expect(man.rig.agent).toBeUndefined();
-    expect(JSON.stringify(man)).not.toContain("reasonix");
-    expect(r.valid).toBe(false);
-    expect(r.reasons.join(" ")).toContain("rig.agent");
+    expect(man.schemaVersion).toBe(2);
+    expect(man.role).toBe("evaluator");
+    expect(man.worktreeAccess).toBe("read-only");
+    expect(man.executionIdentity.roleInstanceId).toBe("C-7:evaluator:reasonix");
+    // AC3: separate role_resolved + role_started facts, adapter-observed, read-only.
+    const resolvedEv = eventsOfType(calls, "delta:role_resolved");
+    const startedEv = eventsOfType(calls, "delta:role_started");
+    expect(resolvedEv).toHaveLength(1);
+    expect(startedEv).toHaveLength(1);
+    expect(resolvedEv[0]!.role).toBe("evaluator");
+    expect(startedEv[0]!.role).toBe("evaluator");
+    expect(startedEv[0]!.sessionId).toBe("C-7:evaluate:reasonix:77");
+    expect(startedEv[0]!.identityProvenance).toBe("adapter-observed");
+    expect(startedEv[0]!.worktreeAccess).toBe("read-only");
+  });
+
+  it("AC1/AC2: score/attest-only inputs CANNOT finish — no authored report → BLOCKED artifact_invalid", async () => {
+    const repo = newRepo();
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    // The evaluator spawn writes NOTHING (mirrors score/attest fields alone).
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, null) });
+    const r = await runEvaluatorStage(ports, evalCtx(repo, "US-E2", "verified"), EVAL_DEPS);
+    expect(r.ran).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(r.reasons.join(" ")).toContain("eval-report.md missing");
+  });
+
+  it("codex-r1 finding 2: a PLANTED report can NEVER satisfy the gate — the Evaluator ALWAYS spawns and authorship is required THIS run", async () => {
+    const repo = newRepo();
+    const ctx = evalCtx(repo, "US-E2b", "verified");
+    // Pre-plant a fully-valid authored report BEFORE the stage runs.
+    const evalDir = join(ctx.evidenceRunDir as string, "role-artifacts", "evaluator");
+    mkdirSync(evalDir, { recursive: true });
+    writeFileSync(join(evalDir, "eval-report.md"), AUTHORED_REPORT);
+    // The real evaluator spawn writes NOTHING → the planted file is discarded.
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, null) });
+    const r = await runEvaluatorStage(ports, ctx, EVAL_DEPS);
+    // The stage STILL spawned the independent Evaluator (no existsSync skip)...
+    expect(spawns).toHaveLength(1);
+    // ...and the planted report did NOT satisfy the gate.
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(r.reasons.join(" ")).toContain("eval-report.md missing");
+  });
+
+  it("codex-r1 finding 1: an UNWRITABLE on-disk manifest FAILS CLOSED (validation reads disk, not the in-memory object)", async () => {
+    const repo = newRepo();
+    const ctx = evalCtx(repo, "US-E2c", "verified");
+    // Plant a FILE where the evaluator artifact DIR must be → mkdir + manifest
+    // write both fail on disk; the in-memory manifest is well-formed but must NOT
+    // be trusted as the gate.
+    const roleArtifacts = join(ctx.evidenceRunDir as string, "role-artifacts");
+    mkdirSync(roleArtifacts, { recursive: true });
+    writeFileSync(join(roleArtifacts, "evaluator"), "not a directory");
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    const r = await runEvaluatorStage(ports, ctx, EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(r.reasons.join(" ")).toContain("could not be written");
+  });
+
+  it("AC5/AC6: a LEGACY assembled report is recognised, labeled legacy, and REJECTED (never satisfies the Evaluator)", async () => {
+    const repo = newRepo();
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, LEGACY_ASSEMBLED_REPORT) });
+    const r = await runEvaluatorStage(ports, evalCtx(repo, "US-E3", "verified"), EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(r.reasons.join(" ")).toContain("legacy ASSEMBLED report");
+  });
+
+  it("AC5: a peer-only artifact is an INPUT and can NEVER satisfy the Evaluator requirement", async () => {
+    const repo = newRepo();
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, PEER_ONLY) });
+    const r = await runEvaluatorStage(ports, evalCtx(repo, "US-E4", "verified"), EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(r.reasons.join(" ")).toMatch(/Inputs checked|Rationale/);
+  });
+
+  it("AC4: identity_collision — evaluator sessionId == builder sessionId is rejected BEFORE any spawn", async () => {
+    const repo = newRepo();
+    const ctx = { ...evalCtx(repo, "US-E5", "verified"), builderSessionId: "C-7:evaluate:reasonix:42" };
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    // Default clock is 42 → evaluatorSessionId "C-7:evaluate:reasonix:42" collides.
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    const r = await runEvaluatorStage(ports, ctx, EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("identity_collision");
+    expect(spawns).toHaveLength(0); // rejected before spawn — no self-grade
+  });
+
+  it("AC3: role facts are REQUIRED — a failure to record them FAILS CLOSED (no spawn)", async () => {
+    const repo = newRepo();
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    ports.events.appendEvent = () => {
+      throw new Error("events volume full");
+    };
+    const r = await runEvaluatorStage(ports, evalCtx(repo, "US-E6", "verified"), EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(spawns).toHaveLength(0);
+    expect(r.reasons.join(" ")).toContain("role facts");
+  });
+
+  it("AC3: FAIL CLOSED when no scoped evaluate binding exists (no fallback to the Builder)", async () => {
+    const repo = newRepo();
+    let spawned = false;
+    const { ports } = fakePorts({
+      repoCwd: repo,
+      agentSpawn: (async () => {
+        spawned = true;
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }) as unknown as Ports["agentSpawn"],
+    });
+    const r = await runEvaluatorStage(ports, evalCtx(repo, "US-E7", "verified"), { resolveEvaluator: () => null });
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("artifact_invalid");
+    expect(spawned).toBe(false);
+    expect(r.reasons.join(" ")).toContain("no scoped agents.yaml evaluate binding");
+  });
+
+  it("AC2/AC8: capture_facts BLOCKS a verified delivery with no valid evaluator artifact + emits a fail-loud alert", async () => {
+    const repo = newRepo();
+    mkdirSync(join(repo, ".roll"), { recursive: true });
+    const wt = join(repo, "wt");
+    mkdirSync(wt, { recursive: true });
+    // No agents.yaml in repo → defaultResolveEvaluator returns null → blocked.
+    const { ports, calls } = fakePorts({
+      repoCwd: repo,
+      paths: { ...fakePorts().ports.paths, worktreePath: wt, eventsPath: join(repo, ".roll", "events.ndjson") },
+      github: { ...fakePorts().ports.github, prState: vi.fn(async () => "NONE") },
+    });
+    const r = await executeCommand({ kind: "capture_facts" }, ports, { ...CTX, startSec: 1, selectedProfile: "verified" });
+    // Delivery is gate-blocked → NOT Done.
+    expect(r.event).toMatchObject({ type: "facts_captured", facts: { gateBlocked: true } });
+    // AC8: a clear fail-loud evaluator block alert was emitted.
+    const alerts = (calls["alert"] ?? []).map((a) => (a as unknown[])[1] as string);
+    const evalAlert = alerts.find((m) => m.includes("evaluator artifact") && m.includes("BLOCKED"));
+    expect(evalAlert).toBeDefined();
+    expect(evalAlert).toContain("artifact_invalid");
   });
 });
 
@@ -7009,11 +7259,17 @@ describe("US-V4-006 — designed execution: Designer contract before the Builder
     return { cycleId: "C-1", branch: "b", loop: "x", storyId: id, selectedProfile: "designed", evidenceRunDir: runDir };
   }
 
+  // US-DELTA-006: the Designer is cast INDEPENDENTLY via the scoped `design`
+  // role; inject a fixed resolution to "codex" so these tests are hermetic.
+  const DESIGNER_DEPS: Parameters<typeof runDesignerStage>[2] = {
+    resolveDesigner: () => ({ ok: true, agent: "codex", source: "availability-fallback", reasons: [] }),
+  };
+
   it("no-op for non-designed profiles", async () => {
     const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-v4-006-")));
     execDirs.push(repo);
     const { ports } = fakePorts({ repoCwd: repo });
-    const r = await runDesignerStage(ports, { ...designedCtx(repo, "US-P0"), selectedProfile: "verified" }, "codex");
+    const r = await runDesignerStage(ports, { ...designedCtx(repo, "US-P0"), selectedProfile: "verified" }, DESIGNER_DEPS);
     expect(r.ran).toBe(false);
     expect(r.ok).toBe(true);
   });
@@ -7030,7 +7286,7 @@ describe("US-V4-006 — designed execution: Designer contract before the Builder
         return { exitCode: 0, timedOut: false };
       }) as unknown as Ports["agentSpawn"],
     });
-    const r = await runDesignerStage(ports, ctx, "codex");
+    const r = await runDesignerStage(ports, ctx, DESIGNER_DEPS);
     expect(r.ran).toBe(true);
     expect(r.ok).toBe(true);
     const dir = join(ctx.evidenceRunDir as string, "role-artifacts", "designer");
@@ -7047,28 +7303,210 @@ describe("US-V4-006 — designed execution: Designer contract before the Builder
       repoCwd: repo,
       agentSpawn: (async () => ({ exitCode: 0, timedOut: false })) as unknown as Ports["agentSpawn"], // writes nothing
     });
-    const r = await runDesignerStage(ports, ctx, "codex");
+    const r = await runDesignerStage(ports, ctx, DESIGNER_DEPS);
     expect(r.ran).toBe(true);
     expect(r.ok).toBe(false);
     expect(r.reasons.join(" ")).toContain("design-contract.md missing or malformed");
   });
 
-  it("Evaluator reports design-contract-vs-delivered when a designer contract exists", () => {
-    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-v4-006-")));
-    execDirs.push(repo);
-    const id = "US-P3";
+  // NOTE (US-DELTA-007): the former "Evaluator reports design-contract-vs-delivered"
+  // test was REMOVED — it asserted the RETIRED `writeEvaluatorArtifact` assembler
+  // (score/attest → eval-report.md). Full Delta now requires a REAL Evaluator to
+  // author its own report; the assembly path no longer exists. See the
+  // "US-DELTA-007 — Full Delta Evaluator authors its own report" describe block.
+});
+
+describe("US-DELTA-006 — Full Delta Designer routing + stage isolation", () => {
+  const VALID_CONTRACT = [
+    "# Designer contract",
+    "## Scope boundary",
+    "- picker only",
+    "## Acceptance contract",
+    "- picker prefers est_min",
+    "## Expected evidence",
+    "- unit test",
+    "## Risks",
+    "- legacy cards",
+    "## Out of scope",
+    "- spawn changes",
+    "",
+  ].join("\n");
+
+  function designedCtx(repo: string, id: string): Parameters<typeof runDesignerStage>[1] {
     const runDir = join(repo, ".roll", "features", "uncategorized", id, "run-1");
-    mkdirSync(join(runDir, "role-artifacts", "designer"), { recursive: true });
-    writeFileSync(join(runDir, "role-artifacts", "designer", "design-contract.md"), VALID_CONTRACT);
-    // an ac-map delivering the designed acceptance item
-    mkdirSync(join(repo, ".roll", "features", "uncategorized", id), { recursive: true });
-    writeFileSync(join(repo, ".roll", "features", "uncategorized", id, "ac-map.json"), JSON.stringify([{ ac: "picker prefers est_min", status: "pass" }]));
+    mkdirSync(runDir, { recursive: true });
+    return { cycleId: "C-9", branch: "b", loop: "x", storyId: id, selectedProfile: "designed", evidenceRunDir: runDir };
+  }
+
+  function eventsOfType(calls: Record<string, unknown[]>, type: string): Record<string, unknown>[] {
+    return (calls["event"] ?? [])
+      .map((a) => (a as unknown[])[1] as Record<string, unknown>)
+      .filter((e) => e.type === type);
+  }
+
+  it("AC2/AC5: Designer is cast INDEPENDENTLY (own agent, distinct session, read-only)", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-delta-006-")));
+    execDirs.push(repo);
+    const ctx = designedCtx(repo, "US-D1");
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports, calls } = fakePorts({
+      repoCwd: repo,
+      clock: () => 77,
+      agentSpawn: (async (agent: string, opts: AgentSpawnOptions) => {
+        spawns.push({ agent, opts });
+        writeFileSync(join(opts.runDir as string, "design-contract.md"), VALID_CONTRACT);
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }) as unknown as Ports["agentSpawn"],
+    });
+    // The Builder for this cycle is "pi"; the Designer must NOT be "pi".
+    const r = await runDesignerStage(ports, ctx, {
+      resolveDesigner: () => ({ ok: true, agent: "kimi", source: "availability-fallback", reasons: ["cast"] }),
+      hostId: "host-A",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.designerAgent).toBe("kimi");
+    // The designer spawn ran as "kimi", not the builder "pi".
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0]!.agent).toBe("kimi");
+    // AC5: read-only — the designer spawn runs `readOnly` and its ONLY writable
+    // root is its own artifact dir, never the product worktree (execCwd).
+    expect(spawns[0]!.opts.readOnly).toBe(true);
+    const dRoots = spawns[0]!.opts.writableRoots ?? [];
+    expect(dRoots).not.toContain(ports.paths.worktreePath);
+    expect(dRoots.every((p) => p.includes("role-artifacts"))).toBe(true);
+    // The designer session is distinct from the builder's session shape.
+    expect(r.designerSessionId).toBe("C-9:design:kimi:77");
+    const builderSession = `${ctx.cycleId}:build:pi:77`;
+    expect(r.designerSessionId).not.toBe(builderSession);
+
+    // AC3: separate role_resolved + role_started facts, recorded BEFORE the stage.
+    const resolvedEv = eventsOfType(calls, "delta:role_resolved");
+    const startedEv = eventsOfType(calls, "delta:role_started");
+    expect(resolvedEv).toHaveLength(1);
+    expect(startedEv).toHaveLength(1);
+    expect(resolvedEv[0]!.role).toBe("designer");
+    expect(resolvedEv[0]!.modelId).toBe("kimi");
+    expect(startedEv[0]!.role).toBe("designer");
+    expect(startedEv[0]!.sessionId).toBe("C-9:design:kimi:77");
+    expect(startedEv[0]!.identityProvenance).toBe("adapter-observed");
+    expect(startedEv[0]!.worktreeAccess).toBe("read-only");
+  });
+
+  it("AC1/AC4: FAIL CLOSED when no scoped design binding exists (Builder never starts)", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-delta-006-")));
+    execDirs.push(repo);
+    const ctx = designedCtx(repo, "US-D2");
+    let spawned = false;
+    const { ports } = fakePorts({
+      repoCwd: repo,
+      agentSpawn: (async () => {
+        spawned = true;
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }) as unknown as Ports["agentSpawn"],
+    });
+    // resolveDesigner returns null → no scoped agents.yaml design binding.
+    const r = await runDesignerStage(ports, ctx, { resolveDesigner: () => null });
+    expect(r.ok).toBe(false);
+    expect(spawned).toBe(false);
+    expect(r.reasons.join(" ")).toContain("no scoped agents.yaml design binding");
+  });
+
+  it("AC1: FAIL CLOSED on an unresolved design binding — no quiet fallback to execute", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-delta-006-")));
+    execDirs.push(repo);
+    const ctx = designedCtx(repo, "US-D3");
     const { ports } = fakePorts({ repoCwd: repo });
-    const ctx = { cycleId: "C-1", branch: "b", loop: "x", storyId: id, selectedProfile: "designed" as const, evidenceRunDir: runDir, builderSessionId: "C-1:build:codex:0" };
-    writeEvaluatorArtifact(ports, ctx, { attestStatus: "produced", blockingFindings: [] });
-    const report = readFileSync(join(runDir, "role-artifacts", "evaluator", "eval-report.md"), "utf8");
-    expect(report).toContain("## Design contract vs delivered");
-    expect(report).toContain("satisfied");
+    const r = await runDesignerStage(ports, ctx, {
+      resolveDesigner: () => ({ ok: false, source: "availability-fallback", reasons: [], error: "story.design: no binding found" }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join(" ")).toContain("no binding found");
+  });
+
+  it("AC3: role facts are REQUIRED — a failure to record them FAILS CLOSED (Builder never starts)", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-delta-006-")));
+    execDirs.push(repo);
+    const ctx = designedCtx(repo, "US-D3b");
+    let spawned = false;
+    const { ports } = fakePorts({
+      repoCwd: repo,
+      agentSpawn: (async () => {
+        spawned = true;
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }) as unknown as Ports["agentSpawn"],
+    });
+    // The required audit facts cannot be written → the stage must fail closed.
+    ports.events.appendEvent = () => {
+      throw new Error("events volume full");
+    };
+    const r = await runDesignerStage(ports, ctx, {
+      resolveDesigner: () => ({ ok: true, agent: "kimi", source: "availability-fallback", reasons: [] }),
+    });
+    expect(r.ok).toBe(false);
+    expect(spawned).toBe(false); // Designer never spawned → Builder never starts
+    expect(r.reasons.join(" ")).toContain("role facts");
+  });
+
+  it("AC7: Designer / Builder / Evaluator are three independent spawns with DISTINCT sessions", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-delta-006-")));
+    execDirs.push(repo);
+    const ctx = designedCtx(repo, "US-D4");
+    const cycleId = ctx.cycleId as string;
+    // One shared injected agentSpawn records EVERY role spawn.
+    const spawns: { agent: string; session: string; writable: boolean }[] = [];
+    const { ports } = fakePorts({
+      repoCwd: repo,
+      clock: () => 200,
+      agentSpawn: (async (agent: string, opts: AgentSpawnOptions) => {
+        // The designer spawn's session is derived by runDesignerStage; the
+        // builder/evaluator sessions are stamped by the caller (below).
+        const session =
+          agent === "kimi"
+            ? `${cycleId}:design:kimi:200`
+            : ((opts.env?.["ROLL_ROLE_SESSION"] as string | undefined) ?? "");
+        // "writable" = has PRODUCT write access: a read-only spawn (Designer /
+        // Evaluator) is sandboxed off product code even if it may write its own
+        // artifact dir. Only a non-readOnly spawn (the Builder) is product-writable.
+        spawns.push({ agent, session, writable: opts.readOnly !== true });
+        if (agent === "kimi") writeFileSync(join(opts.runDir as string, "design-contract.md"), VALID_CONTRACT);
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      }) as unknown as Ports["agentSpawn"],
+    });
+
+    // Stage 1 — Designer (independent cast, read-only).
+    const design = await runDesignerStage(ports, ctx, {
+      resolveDesigner: () => ({ ok: true, agent: "kimi", source: "availability-fallback", reasons: [] }),
+    });
+    expect(design.ok).toBe(true);
+
+    // Stage 2 — Builder (execute; the ONLY role that receives write roots).
+    const builderSession = `${cycleId}:build:pi:200`;
+    await ports.agentSpawn("pi", {
+      cwd: repo,
+      skillBody: "build",
+      writableRoots: [join(repo, "wt")],
+      env: { ROLL_ROLE_SESSION: builderSession },
+    });
+
+    // Stage 3 — Evaluator (evaluate; read-only, independent session).
+    const evalSession = `${cycleId}:evaluate:reasonix:200`;
+    await ports.agentSpawn("reasonix", {
+      cwd: repo,
+      skillBody: "review",
+      bare: true,
+      readOnly: true, // AC5: the Evaluator is read-only — no product write access.
+      env: { ROLL_ROLE_SESSION: evalSession },
+    });
+
+    expect(spawns).toHaveLength(3);
+    const agents = spawns.map((s) => s.agent);
+    expect(new Set(agents).size).toBe(3); // three independent agents
+    expect(agents).toEqual(["kimi", "pi", "reasonix"]);
+    const sessions = spawns.map((s) => s.session);
+    expect(new Set(sessions).size).toBe(3); // three DISTINCT sessions
+    expect(sessions).toEqual([design.designerSessionId, builderSession, evalSession]);
+    // Only the Builder is write-enabled; Designer + Evaluator are read-only.
+    expect(spawns.map((s) => s.writable)).toEqual([false, true, false]);
   });
 });
 
@@ -7366,5 +7804,64 @@ describe("FIX-1267 — resolve_route enforces the builder no-consecutive-repeat 
     expect(result.event).toMatchObject({ type: "route_pending" });
     expect((result.event as { reason: string }).reason).toContain("no-consecutive-repeat");
     expect((result.event as { reason: string }).reason).toContain("pi");
+  });
+});
+
+describe("US-CYCLE-008 — a tier-blocked cycle skips the evaluation dispatch (no run-then-block)", () => {
+  function captureRepo(id: string, specText: string): string {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "roll-c008-")));
+    execDirs.push(repo);
+    const specDir = join(repo, ".roll", "features", "uncategorized", id);
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(join(specDir, "spec.md"), specText);
+    return repo;
+  }
+  const evalEvents = (calls: Record<string, unknown[]>): RollEvent[] =>
+    (calls["event"] ?? []).map((a) => (a as unknown[])[1] as RollEvent);
+  const alertText = (calls: Record<string, unknown[]>): string =>
+    (calls["alert"] ?? []).map((a) => String((a as unknown[])[1])).join("\n");
+  // A card that IS subject to the new-regime granularity contract (declares est_min)
+  // but declares NO risk_tier — the fail-loud case.
+  const NEW_REGIME_NO_TIER = `---\nid: US-RUN-001\nest_min: 5\n---\n\n# US-RUN-001\n\n## Evaluation contract\n**Expected evidence:**\n- test\n`;
+  const LOW_TIER = `---\nid: US-RUN-001\nest_min: 5\nrisk_tier: low\n---\n\n# US-RUN-001\n\n## Evaluation contract\n**Expected evidence:**\n- test\n`;
+
+  it("new-regime card with NO risk_tier: BLOCKS and NEVER dispatches an evaluator", async () => {
+    const repo = captureRepo("US-RUN-001", NEW_REGIME_NO_TIER);
+    const spawn = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }));
+    const { ports, calls } = fakePorts({
+      repoCwd: repo,
+      paths: { ...fakePorts().ports.paths, alertsPath: join(repo, "alerts.log") },
+      // A full scorer pool IS available — yet nothing must be spawned.
+      installedAgents: () => ["kimi", "pi"],
+      agentSpawn: spawn,
+    });
+    const r = await executeCommand({ kind: "capture_facts" }, ports, CTX);
+    // The score/pairing dispatch was NOT invoked (proof beyond the end-state block):
+    expect(spawn).not.toHaveBeenCalled();
+    const evs = evalEvents(calls);
+    expect(evs.some((e) => e.type === "pair:selected")).toBe(false);
+    expect(evs.some((e) => e.type === "pair:score")).toBe(false);
+    // The cycle fails loud (blocked + auditable alert/event), never defaulting to low.
+    expect((r.event as { facts?: { gateBlocked?: boolean } }).facts?.gateBlocked).toBe(true);
+    expect(evs.some((e) => e.type === "eval:tier-missing")).toBe(true);
+    expect(alertText(calls)).toContain("risk_tier");
+    expect(alertText(calls)).toContain("fail-loud");
+  });
+
+  it("low-tier card is NOT blocked and DOES dispatch the serial single evaluator", async () => {
+    const repo = captureRepo("US-RUN-001", LOW_TIER);
+    const spawn = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }));
+    const { ports, calls } = fakePorts({
+      repoCwd: repo,
+      paths: { ...fakePorts().ports.paths, alertsPath: join(repo, "alerts.log") },
+      installedAgents: () => ["kimi", "pi"],
+      agentSpawn: spawn,
+    });
+    const r = await executeCommand({ kind: "capture_facts" }, ports, CTX);
+    // The evaluate stage ran: a scorer was selected (dispatch invoked) and no tier block.
+    const evs = evalEvents(calls);
+    expect(evs.some((e) => e.type === "pair:selected")).toBe(true);
+    expect(evs.some((e) => e.type === "eval:tier-missing")).toBe(false);
+    expect((r.event as { facts?: { gateBlocked?: boolean } }).facts?.gateBlocked ?? false).toBe(false);
   });
 });

@@ -248,6 +248,19 @@ function findCardSpec(sandbox: string, card: string): string | undefined {
  * delivered pulse command/badge so the run always starts from a clean to-deliver
  * state. Best-effort + honest — reports what it could / could not reset.
  */
+/**
+ * FIX-1475: does this backlog table row belong to EXACTLY `card`? Matches the
+ * row's id cell (link-stripped, trimmed, case-insensitive) — never a substring,
+ * so `US-X` does not also hit `US-X-legacy` or a row that merely mentions the id
+ * in its description.
+ */
+function rowIsCard(line: string, card: string): boolean {
+  if (!line.startsWith("|")) return false;
+  const cell = (line.split("|")[1] ?? "").trim();
+  const id = cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
+  return id.toUpperCase() === card.toUpperCase();
+}
+
 export function resetSandbox(sandbox: string, card: string): { ok: boolean; reset: boolean; notes: string[] } {
   const notes: string[] = [];
   // `reset` records whether we actually flipped a status token; `ok` records
@@ -263,7 +276,7 @@ export function resetSandbox(sandbox: string, card: string): { ok: boolean; rese
     // Does the card's row already carry a status token, and is it already Todo?
     const cardRow = before
       .split("\n")
-      .find((line) => line.startsWith("|") && line.includes(card));
+      .find((line) => rowIsCard(line, card));
     // Status-marker recognition is single-source (FIX-300): every canonical
     // marker AND every legacy alias (🚧 WIP / 🔄 In Progress / ⏳ Hold / ✔️ Done)
     // comes from @roll/spec, so the reset can never diverge from the picker /
@@ -274,7 +287,7 @@ export function resetSandbox(sandbox: string, card: string): { ok: boolean; rese
     // Flip the card's row status to the canonical 📋 Todo regardless of its
     // current marker (canonical or legacy).
     const lines = before.split("\n").map((line) => {
-      if (!line.includes(card) || !line.startsWith("|")) return line;
+      if (!rowIsCard(line, card)) return line;
       return line.replace(statusMarkerRe(true), STATUS_MARKER.todo);
     });
     const after = lines.join("\n");
@@ -370,7 +383,7 @@ function readBacklogStatus(sandbox: string, card: string): string | undefined {
   const backlogPath = join(sandbox, ".roll", "backlog.md");
   if (!existsSync(backlogPath)) return undefined;
   for (const line of readFileSync(backlogPath, "utf8").split("\n")) {
-    if (line.startsWith("|") && line.includes(card)) {
+    if (rowIsCard(line, card)) {
       // Single-source marker extraction (FIX-300): canonical + legacy aliases.
       const marker = findStatusMarker(line);
       if (marker !== undefined) return marker;

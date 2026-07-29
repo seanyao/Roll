@@ -180,6 +180,7 @@ export const TRUTH_FIELD_REGISTRY: readonly RegisteredField[] = [
   { field: "source", surface: "event:delta", anchor: "delegation_provenance", writer: "host resolution algorithm", kind: "authoritative" },
   { field: "reasons", surface: "event:delta", anchor: "delegation_provenance", writer: "host resolution algorithm", kind: "authoritative" },
   { field: "inventorySha256", surface: "event:delta", anchor: "delegation_provenance", writer: "host resolution algorithm", kind: "authoritative" },
+  { field: "inventoryObservedAt", surface: "event:delta", anchor: "delegation_provenance", writer: "host resolution algorithm", kind: "authoritative" },
   // delta:role_started fields — accepted structural protocol fact
   { field: "sessionId", surface: "event:delta", anchor: "delegation_provenance", writer: "host skill (opaque claim)", kind: "authoritative" },
   { field: "identityProvenance", surface: "event:delta", anchor: "delegation_provenance", writer: "roll delta validate", kind: "authoritative" },

@@ -42,6 +42,22 @@ describe("appendBacklogRow", () => {
     expect(r.content).toBe(BASE);
   });
 
+  it("FIX-1475: de-dup is by EXACT id-cell — a row whose DESCRIPTION links to [id] does NOT block the append", () => {
+    const withLinkInDesc = [
+      "## Epic: loop-engine",
+      "",
+      "| ID | Description | Status |",
+      "|----|----|----|",
+      "| [US-9](.roll/features/loop-engine/US-9/spec.md) | supersedes [FIX-300](.roll/features/loop-engine/FIX-300/spec.md) | 📋 Todo |",
+      "",
+    ].join("\n");
+    const r = appendBacklogRow(withLinkInDesc, { id: "FIX-300", title: "the real card", epic: "loop-engine" });
+    // The substring guard would have seen "| [FIX-300]" inside US-9's description
+    // and wrongly reported the card as already present.
+    expect(r.appended).toBe(true);
+    expect(r.content).toContain("| [FIX-300](.roll/features/loop-engine/FIX-300/spec.md) | the real card | 📋 Todo |");
+  });
+
   it("a backlog with no tables grows a minimal section", () => {
     const r = appendBacklogRow("# Backlog\n", { id: "US-A-1", title: "t", epic: "e" });
     expect(r.appended).toBe(true);

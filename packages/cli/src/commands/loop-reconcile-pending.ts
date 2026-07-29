@@ -222,7 +222,7 @@ export async function loopReconcilePendingCommand(
               const backlogPath = join(projectCwd, ".roll", "backlog.md");
               const store = new BacklogStore();
               const snap = store.readBacklog(backlogPath);
-              store.mark(backlogPath, snap.hash, id, doneStatusWithDeliveryRef(status, prNumber, state.mergeCommit));
+              store.markExact(backlogPath, snap.hash, id, doneStatusWithDeliveryRef(status, prNumber, state.mergeCommit));
             },
             alert: (message) =>
               bus.appendEvent(eventsPath, {

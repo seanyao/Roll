@@ -168,6 +168,47 @@ export type RollEvent =
   // killed, the inflight lock released, and the worktree branch PRESERVED
   // (work salvageable). `elapsedSec`/`idleSec` make the trip auditable.
   | { type: "cycle:timeout"; cycleId: string; reason: "wall" | "no-progress" | "no-state-change"; elapsedSec: number; idleSec: number; ts: number }
+  // US-CYCLE-006 — a card needed more repair rounds than the threshold, so a
+  // `split-advice.md` was generated (from round-journal FACTS, not model guess)
+  // to feed the sizing error back to the design side. Signal only: no backlog /
+  // spec mutation. `rounds` is the distinct-round count observed in the journal.
+  | { type: "split:advice"; card: string; rounds: number; path: string; ts: number }
+  // US-CYCLE-008 — a NEW-regime card reached the evaluate stage without a valid
+  // risk_tier in its lint-validated spec, so the tier gate FAILED CLOSED and
+  // blocked evaluation before any evaluator ran (never a silent default to low).
+  | { type: "eval:tier-missing"; cycleId: string; card: string; ts: number }
+  // US-CYCLE-012 — a (role × model) rig failed the same card >= threshold times
+  // in a row, so a MODEL-SWAP CANDIDATE was surfaced (candidate file written).
+  // Signal only — never an automatic swap; a heterogeneous consensus adjudicates.
+  | { type: "model:swap_candidate"; card: string; role: string; model: string; streak: number; path: string; ts: number }
+  // US-CYCLE-012 — a heterogeneous consensus adjudicated a swap candidate.
+  // `decision` is `agree` (unanimous — recorded as approved, still owner-applied)
+  // or `escalate` (any disagreement / no valid verdicts → owner decides). The
+  // model binding is NEVER rewritten automatically.
+  | { type: "model:swap_decision"; card: string; role: string; model: string; decision: "agree" | "escalate"; path: string; ts: number }
+  // US-CYCLE-002 — a SUB-agent spawn (designer / evaluator / adversarial builder
+  // role / pick-ranking) was killed by the shared run-watchdog after breaching
+  // its per-role timeout cap. Unlike `cycle:timeout` (the main builder cycle),
+  // this carries role/agent/model so a supervisor delegating to sequential
+  // heterogeneous subagents can read WHICH role died, on WHICH model, WHY, and
+  // for HOW LONG — the terminal-visible accounting the epic requires. `reason`
+  // adds `external` (the run ended by something other than the watchdog).
+  | {
+      type: "spawn:kill";
+      cycleId: string;
+      role: string;
+      agent: string;
+      model?: string;
+      reason: "wall" | "no-progress" | "no-state-change" | "external";
+      durationSec: number;
+      ts: number;
+    }
+  // US-CYCLE-002 — the shared watchdog renewed a sub-agent spawn's liveness on
+  // observed git-state progress (a new commit or a worktree dirty-state change)
+  // in the run's own cwd, so a long PRODUCTIVE subagent is never mis-killed.
+  // Emitted only on git-state bumps (not per stdout chunk) to keep the stream
+  // legible; `idleSec` is how long the run had been idle before this renewal.
+  | { type: "spawn:renew"; cycleId: string; role: string; agent: string; signal: "commit" | "dirty"; idleSec: number; ts: number }
   // FIX-1474 — the builder child process was detected DEAD/MISSING by the
   // runner's liveness probe while its spawn await had NOT settled: an
   // out-of-band death (external SIGKILL of a process-tree member, PTY leader
@@ -190,7 +231,9 @@ export type RollEvent =
   // restored before applying protection for the new cycle.
   | { type: "sandbox:write_protected"; cycleId: string; status: "applied" | "released" | "recovered"; repoCwd: string; markerPath: string; paths: number; ts: number }
   // US-LOOP-089: main checkout pollution was moved to an auditable rescue ref
-  // and quarantine manifest, then the checkout was restored before continuing.
+  // and quarantine manifest. FIX-1475: for reason "ahead" the shared main ref
+  // is NEVER moved — the commits are bookmarked on `ref` and left in place;
+  // restoreCommand is then a manual-recovery note, not an applied action.
   | {
       type: "sandbox:quarantined";
       cycleId: string;
@@ -321,6 +364,12 @@ export type RollEvent =
   | { type: "delivery:published"; cycleId: string; storyId: string; branch: string; prNumber: number; prUrl: string; ts: number }
   // Self-driven merge attempt (emitter lands with US-DELIV-003).
   | { type: "delivery:merge_attempt"; cycleId: string; prNumber: number; method: "squash"; outcome: "merged" | "ci_red" | "blocked" | "gh_down"; ts: number }
+  // US-CYCLE-009: the git plane (git fetch / ls-remote — NEVER a `gh` stdout
+  // grep) confirmed the cycle branch is merged into main. This is the event that
+  // drives the async reconcile write-back off the critical path; `signal` records
+  // WHICH git-plane fact confirmed it (branch tip is an ancestor of main, or the
+  // branch's net patch-id is present on main).
+  | { type: "delivery:merge_confirmed"; cycleId: string; storyId: string; branch: string; prNumber?: number; signal: "ancestor" | "patch_id" | "merge_commit"; mergeCommit?: string; ts: number }
   // A published PR was closed without merging. This is terminal for the
   // cycle and releases its delivery lease without claiming delivery.
   | { type: "delivery:abandoned"; cycleId: string; storyId: string; reason: "pr_closed_unmerged"; ts: number }
@@ -686,6 +735,7 @@ export type RollEvent =
       source: ResolutionSource;
       reasons: string[];
       inventorySha256: string;
+      inventoryObservedAt: string;
       ts: number;
     }
   | {

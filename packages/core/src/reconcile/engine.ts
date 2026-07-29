@@ -291,6 +291,17 @@ export interface StuckDetectInput {
  */
 const UNSTICK_ID_RE = /^\s*\[?([A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-\d+)/;
 
+/**
+ * FIX-1475: the FULL story id from an id cell (link-stripped, trimmed). The
+ * {@link UNSTICK_ID_RE} capture only GATES that a row is id-bearing; its group
+ * truncates a suffixed id (`US-WS-011a` → `US-WS-011`, `FIX-300-legacy` →
+ * `FIX-300`), which would let unstick decide + revert the WRONG row. Identity
+ * must come from the whole cell, never the truncating capture.
+ */
+function fullIdCell(cell: string): string {
+  return cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
+}
+
 export function inProgressStories(backlogContent: string): { id: string; item: BacklogItem }[] {
   const out: { id: string; item: BacklogItem }[] = [];
   // We must mirror the py's RAW-line scan (it requires the literal
@@ -304,7 +315,7 @@ export function inProgressStories(backlogContent: string): { id: string; item: B
     if (parts.length < 4) continue;
     const m = UNSTICK_ID_RE.exec(parts[1] ?? "");
     if (m === null || m[1] === undefined) continue;
-    const id = m[1];
+    const id = fullIdCell(parts[1] ?? "");
     out.push({
       id,
       item: { id, desc: parts[2] ?? "", status: IN_PROGRESS_MARK },
@@ -597,7 +608,8 @@ export function applyStuckReverts(backlogContent: string, reverts: readonly Stuc
     if (!line.startsWith("|")) return raw;
     const parts = line.split("|").map((p) => p.trim());
     const m = UNSTICK_ID_RE.exec(parts[1] ?? "");
-    if (m === null || m[1] === undefined || !ids.has(m[1])) return raw;
+    if (m === null || m[1] === undefined) return raw;
+    if (!ids.has(fullIdCell(parts[1] ?? ""))) return raw;
     // Python str.replace replaces ALL occurrences; a row carries the marker once.
     return raw.replace(`| ${IN_PROGRESS_MARK} |`, `| ${TODO_STATUS} |`);
   });

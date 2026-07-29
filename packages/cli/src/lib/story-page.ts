@@ -36,6 +36,10 @@ export interface StoryCardMeta {
   epic?: string;
   /** Extra blockquote line under the spec.md heading (e.g. backfill provenance). */
   note?: string;
+  /** US-CYCLE-005 — estimated builder minutes (granularity contract; ≤25). */
+  estMin?: number;
+  /** US-CYCLE-005 — risk tier (low|high; drives US-CYCLE-008 evaluation depth). */
+  riskTier?: "low" | "high";
 }
 
 /** Lifecycle phases every story page carries, addressed by stable key. */
@@ -55,10 +59,18 @@ export function renderSpecMd(meta: StoryCardMeta): string {
     (meta.title !== undefined ? `title: ${meta.title}\n` : "") +
     `type: ${type}\n` +
     (meta.epic !== undefined ? `epic: ${meta.epic}\n` : "") +
+    (meta.estMin !== undefined ? `est_min: ${meta.estMin}\n` : "") +
+    (meta.riskTier !== undefined ? `risk_tier: ${meta.riskTier}\n` : "") +
     `created: ${meta.created}\n` +
     `---\n\n` +
     `# ${meta.id}${meta.title !== undefined ? ` — ${meta.title}` : ""}\n` +
-    (meta.note !== undefined ? `\n> ${meta.note}\n` : "")
+    (meta.note !== undefined ? `\n> ${meta.note}\n` : "") +
+    // US-CYCLE-005 — seed the Evaluation-contract skeleton so a new-regime card
+    // (one minted with est_min/risk_tier) starts with the granularity contract
+    // visible for the designer to fill (≤3 evidence, ≤6 AC).
+    (meta.estMin !== undefined
+      ? `\n## Evaluation contract\n\n**Expected evidence:**\n- \`test\` — \n\n**Scorer focus:** \n`
+      : "")
   );
 }
 

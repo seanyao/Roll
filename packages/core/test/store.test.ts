@@ -11,6 +11,7 @@ import {
   extractAnnotation,
   idMatchesPattern,
   markStatus,
+  markStatusExact,
   parseBacklog,
 } from "../src/index.js";
 
@@ -197,6 +198,31 @@ describe("markStatus", () => {
         "| US-Y | task | ✅ Done · evidence_debt |",
       );
     });
+  });
+});
+
+describe("markStatusExact (FIX-1475)", () => {
+  it("marks only the exact-id row, never a `<id>-` descendant sibling", () => {
+    const content = [
+      "| ID | Description | Status |",
+      "|----|-------------|--------|",
+      "| FIX-1475 | never reset shared main | 📋 Todo |",
+      "| FIX-1475-followup | later cleanup | 📋 Todo |",
+    ].join("\n");
+    const r = markStatusExact(content, "FIX-1475", DONE);
+    // Exactly one row flips — the descendant must remain Todo (markStatus, by
+    // contrast, would flip BOTH via idMatchesPattern prefix rules).
+    expect(r.count).toBe(1);
+    expect(r.content).toContain("| FIX-1475 | never reset shared main | ✅ Done |");
+    expect(r.content).toContain("| FIX-1475-followup | later cleanup | 📋 Todo |");
+    // Contrast: prefix markStatus flips both (proves the divergence is real).
+    expect(markStatus(content, "FIX-1475", DONE).count).toBe(2);
+  });
+
+  it("is case-insensitive on the id and a no-op when the row is absent", () => {
+    const content = "| FIX-1475 | x | 📋 Todo |";
+    expect(markStatusExact(content, "fix-1475", DONE).count).toBe(1);
+    expect(markStatusExact(content, "FIX-9999", DONE).count).toBe(0);
   });
 });
 

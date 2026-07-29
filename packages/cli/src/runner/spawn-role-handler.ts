@@ -37,7 +37,8 @@ import type { CycleCommand, CycleContext } from "@roll/core";
 import { adversarialRolePrompt, agentSpawnEnvironment } from "./agent-spawn.js";
 import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection } from "./main-checkout-guard.js";
 import { appendWriteProtectionEvent, quarantineMainCheckoutForCycle, startMainCheckoutLeakWatchdog } from "./sandbox-boundary.js";
-import { readCycleTimeoutThresholds } from "./spawn-observers.js";
+import { spawnWatched } from "./spawn-watchdog.js";
+import { resolveIntegrationBranch } from "@roll/infra";
 import { eventTs, guardRuntimeDir } from "./runner-time.js";
 import { submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
 import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktree.js";
@@ -87,11 +88,6 @@ export async function executeSpawnRoleCommand(
 
   const startSec = ports.clock();
   const rolePrompt = adversarialRolePrompt(cmd.role);
-  // Spawn-local hard-kill belt: the whole cycle wall budget bounds a single
-  // role, so a lone hung role can never block the driver (which cannot check
-  // its between-step watchdog while awaiting one spawn). The real cycle timeout
-  // still preempts earlier; this only backstops an in-flight hang.
-  const wallSec = readCycleTimeoutThresholds(ports.repoCwd).wallSec;
   // US-LOOP-106: guard the shared main checkout for the role's whole lifetime,
   // exactly as the standard builder does — write-protect + watch for a leak,
   // quarantine any pollution pre/post. A detected active leak forces a failure
@@ -117,22 +113,37 @@ export async function executeSpawnRoleCommand(
     // targetSubmodule ⇒ ports.paths.worktreePath / ports.repoCwd, unchanged.
     const execCwd = resolveExecutionCwd(ports, ctx);
     const execRepoCwd = resolveExecutionRepoCwd(ports, ctx);
-    res = await ports.agentSpawn(cmd.agent, {
-      purpose: cmd.role,
-      cwd: execCwd,
-      skillBody: `${rolePrompt}\n\n${ports.skillBody}`,
-      writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath),
-      timeoutMs: wallSec * 1000,
-      ...(ctx.model !== undefined && ctx.model !== "" ? { model: ctx.model } : {}),
-      ...(ctx.storyId !== undefined && ctx.storyId !== "" ? { storyId: ctx.storyId } : {}),
-      ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-      env: {
-        ...process.env,
-        ROLL_LOOP_ALERT: ports.paths.alertsPath,
-        ROLL_ADVERSARIAL_MARKER: markerPath,
-        ...agentSpawnEnvironment(cmd.agent),
-      },
-    });
+    // US-CYCLE-002: the code-writing adversarial role (test_author/implementer/
+    // attacker) goes through the shared run-watchdog with the BUILDER cap — the
+    // in-await liveness belt the between-step orchestrator watchdog cannot be for
+    // (FIX-907). Renews on git-state progress in execCwd; a silent role dies on
+    // schedule with a structured spawn:kill. Replaces the old cycle-wall belt.
+    res = (
+      await spawnWatched({
+        ports,
+        ctx,
+        purpose: cmd.role,
+        agent: cmd.agent,
+        observeCwd: execCwd,
+        observeBase: resolveIntegrationBranch(execRepoCwd),
+        run: () =>
+          ports.agentSpawn(cmd.agent, {
+            purpose: cmd.role,
+            cwd: execCwd,
+            skillBody: `${rolePrompt}\n\n${ports.skillBody}`,
+            writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath),
+            ...(ctx.model !== undefined && ctx.model !== "" ? { model: ctx.model } : {}),
+            ...(ctx.storyId !== undefined && ctx.storyId !== "" ? { storyId: ctx.storyId } : {}),
+            ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
+            env: {
+              ...process.env,
+              ROLL_LOOP_ALERT: ports.paths.alertsPath,
+              ROLL_ADVERSARIAL_MARKER: markerPath,
+              ...agentSpawnEnvironment(cmd.agent),
+            },
+          }),
+      })
+    ).result;
   } finally {
     if (mainLeakWatchdog !== undefined) activeMainLeak = await mainLeakWatchdog.stop();
     appendWriteProtectionEvent(

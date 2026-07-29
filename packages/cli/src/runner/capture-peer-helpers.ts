@@ -14,6 +14,7 @@ import { classifyBlockSignature } from "./agent-liveness.js";
 import { blockIfAgentCredentialsMissing } from "./agent-routing.js";
 import { buildReviewPrompt, type PairReview } from "./pairing-gate.js";
 import { resolveExecutionCwd } from "./submodule-worktree.js";
+import { spawnWatched } from "./spawn-watchdog.js";
 import type { Ports } from "./ports.js";
 import { eventTs } from "./runner-time.js";
 
@@ -173,16 +174,28 @@ export function createCapturePeerHelpers(params: {
       // Belt-and-braces hard timeout: race the spawn against a wall clock so
       // the cap is enforced even if an agent's spawn path ignores its own
       // timeoutMs. Whichever loses, the cycle is never stalled.
+      // E4: the reviewer inspects the committed delivery, so it runs in the
+      // execution worktree (submodule cycle worktree for a submodule story).
+      const reviewCwd = params.reviewCwd ?? resolveExecutionCwd(ports, ctx);
+      // US-CYCLE-002: the peer-review sub-spawn is watchdog-wrapped (evaluator
+      // role) for uniform accounting + no bypass; its own short `timeoutMs` race
+      // stays the primary cap for this quick read-only consult.
       res = await Promise.race([
-        ports.agentSpawn(peer, {
-          // E4: the reviewer inspects the committed delivery, so it runs in the
-          // execution worktree (submodule cycle worktree for a submodule story).
-          cwd: params.reviewCwd ?? resolveExecutionCwd(ports, ctx),
-          skillBody: prompt,
-          timeoutMs,
-          bare: true, // FIX-319: review-only framing, no worker autorun directive
-          ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-        }),
+        spawnWatched({
+          ports,
+          ctx,
+          purpose: "peer",
+          agent: peer,
+          observeCwd: reviewCwd,
+          run: () =>
+            ports.agentSpawn(peer, {
+              cwd: reviewCwd,
+              skillBody: prompt,
+              timeoutMs,
+              bare: true, // FIX-319: review-only framing, no worker autorun directive
+              ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
+          }),
+        }).then((r) => r.result),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs).unref()),
       ]);
     } catch (e) {

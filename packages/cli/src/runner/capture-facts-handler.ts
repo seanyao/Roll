@@ -22,14 +22,15 @@ import { realAgentEnv } from "../commands/agent-list.js";
 import { cardArchiveDir } from "../lib/archive.js";
 import { formatEvaluationContractForScorer, parseEvaluationContract } from "../lib/evaluation-contract.js";
 import { evaluateReviewScoreGate } from "../lib/review-score.js";
+import { applyEvaluationTierGate, recordEvaluatorPanelRound } from "./evaluation-tier-stage.js";
 import { blockIfAgentCredentialsMissing, projectAllowedAgents } from "./agent-routing.js";
 import { readAttestGateMode, runAttestGate, verificationReportHasContent } from "./attest-gate.js";
 import { acMapPath, runAcMapSelfHeal } from "./attest-remediation.js";
 import { applyCorrectionAction } from "./correction-actuator.js";
-import { writeEvaluatorArtifact } from "./execution-profile.js";
-import { checkMainDirty, readMainDirtyBaseline } from "./main-checkout-guard.js";
+import { runEvaluatorStage } from "./execution-profile.js";
+import { checkMainDirty, readMainDirtyBaseline, readMainHeadBaseline } from "./main-checkout-guard.js";
 import { buildPairScorePrompt, diagnosePairScoreOutput, enabledPairingStages, retryPeerConsult, runPairing, runScorePairing, type PairEvent, type PairScore } from "./pairing-gate.js";
-import { cycleChangedFiles, peerEvidencePresent, readPeerGateMode, readPeerOnPoolTimeout, runPeerGate } from "./peer-gate.js";
+import { cycleChangedFiles, peerEvidencePresent, readPeerGateMode, readPeerOnPoolTimeout, runPeerGate, type PeerGateResult } from "./peer-gate.js";
 import { createCapturePeerHelpers } from "./capture-peer-helpers.js";
 import { recordPeerPoolUnavailable } from "./capture-peer-unavailable.js";
 import { collectDraftEvidence, collectWorkspaceDiffEvidence } from "./capture-diff-evidence.js";
@@ -41,6 +42,7 @@ import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktr
 import { resolveIntegrationBranch, resolveWorkspaceBacklogStorySpec } from "@roll/infra";
 import { executeRepositoryCaptureFactsCommand } from "./repository-verification.js";
 import { writeWorkspaceAcceptanceArtifacts } from "./workspace-acceptance.js";
+import { spawnWatched } from "./spawn-watchdog.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -99,6 +101,24 @@ export async function executeCaptureFactsCommand(
           mainAhead = await ports.git.mainAhead(ports.repoCwd);
         } catch {
           /* drift probe is best-effort */
+        }
+      }
+      // FIX-1475: scope the ahead probe to THIS cycle, exactly like E10 scopes
+      // the dirt probe below. Pre-existing ahead commits on the shared main
+      // checkout are legitimate state (they are never reset now), so only a
+      // HEAD that MOVED since the pre-spawn baseline counts as a leak. A
+      // missing baseline (old cycle / first run) keeps the absolute count —
+      // the prior behavior.
+      if (mainAhead > 0) {
+        const baselineHead = readMainHeadBaseline(guardRuntimeDir(ports), ctx.cycleId ?? "");
+        if (baselineHead !== "") {
+          let head = "";
+          try {
+            head = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ports.repoCwd, encoding: "utf8" })).stdout.trim();
+          } catch {
+            head = "";
+          }
+          if (head !== "" && head === baselineHead) mainAhead = 0;
         }
       }
       // E10: symmetric completion of E7. The LIVE watchdog already diffs the
@@ -187,6 +207,11 @@ export async function executeCaptureFactsCommand(
       // project-config allowlist. Scoring and pairing must not auto-enable
       // machine-detected agents outside this set (e.g. codex or claude).
       const peerGateAllowedAgents = projectAllowedAgents(ports.repoCwd);
+      // US-CYCLE-008 — evaluation depth from the card's lint-validated risk_tier
+      // (high → panel, low/legacy → serial default, missing-on-new-regime →
+      // fail-loud). Read ONLY from the spec — see evaluation-tier-stage.ts.
+      const tierInfo = applyEvaluationTierGate(ports, ctx, { commitsAhead, cycleId: cycleIdStr, now: () => eventTs(ports) });
+      const evalFanout = tierInfo.fanout;
       // FIX-312: hetero-availability drives the gate (owner ruling: "hetero
       // available → must use it; self only when hetero is truly impossible").
       // Computed uniformly by vendor through the standard model (no per-agent
@@ -259,10 +284,13 @@ export async function executeCaptureFactsCommand(
           now: () => eventTs(ports),
           // FIX-935: respect project-config agent allowlist.
           allowedAgents: peerGateAllowedAgents,
+          // US-CYCLE-008: high-tier → parallel review panel; else serial default.
+          ...(evalFanout !== undefined ? { fanout: evalFanout } : {}),
         };
         // Iterate the enabled stages (config order). file-absent/disabled → [] →
         // the loop body never runs, so a repo without pairing.yaml is untouched.
-        for (const stage of enabledPairingStages(ports.repoCwd)) {
+        // US-CYCLE-008: a tier-blocked cycle dispatches NO evaluators (fail-loud).
+        for (const stage of tierInfo.blocked ? [] : enabledPairingStages(ports.repoCwd)) {
           // E4: the pairing reviewer diffs + reviews the delivery in the execution
           // worktree (the submodule cycle worktree for a submodule story).
           await runPairing(ports.repoCwd, execCwd, dirname(ports.paths.eventsPath), ctx.cycleId ?? "", ctx.agent ?? "", stage, pairingDeps);
@@ -272,7 +300,9 @@ export async function executeCaptureFactsCommand(
       // (.pair.json), so a genuinely hetero-reviewed delivery reads as `consulted`
       // and is NOT blocked. When pairing is OFF (no pairing.yaml) no evidence exists,
       // so the gate's own retryPeerConsult fallback runs (single-agent path, unchanged).
-      let peerGate = await runPeerGate(execCwd, runtimeDir, cycleIdStr, peerGateMode, peerGateSinks, peerGateOpts);
+      let peerGate: PeerGateResult = tierInfo.blocked
+        ? { verdict: "skipped", mode: peerGateMode, reasons: ["eval_tier_unresolved: evaluate stage skipped"], blocked: false }
+        : await runPeerGate(execCwd, runtimeDir, cycleIdStr, peerGateMode, peerGateSinks, peerGateOpts);
       if (workspaceDiffFailure !== undefined) {
         peerGate = {
           verdict: "skipped",
@@ -345,7 +375,7 @@ export async function executeCaptureFactsCommand(
       // interest). When no peer can score (no candidate / timeout / error) NO note is
       // written: the attest gate then fails loud (`missing peer review score`)
       // and the cycle honestly fails — there is no runner-derived fallback.
-      if (commitsAhead > 0 && storyId !== "" && workspaceDiffFailure === undefined) {
+      if (commitsAhead > 0 && storyId !== "" && workspaceDiffFailure === undefined && !tierInfo.blocked) {
         // FIX-910 — emit a per-attempt score-stage failure event so every null
         // return from a scorer is OBSERVABLE (no more silently swallowed nulls).
         // The cause distinguishes unparseable / timeout / auth-block / exit-error.
@@ -379,15 +409,26 @@ export async function executeCaptureFactsCommand(
           if (credentialBlock !== null) return { outcome: "auth-block", detail: credentialBlock };
           let res;
           try {
+            // US-CYCLE-002: the scorer sub-spawn is watchdog-wrapped (evaluator
+            // role) for uniform accounting + no bypass; its own short `timeoutMs`
+            // race remains the primary cap for this read-only scoring call.
             res = await Promise.race([
-              ports.agentSpawn(peer, {
-                // E4: the scorer inspects the committed delivery, so it runs in the
-                // execution worktree (submodule cycle worktree for a submodule story).
-                cwd: execCwd,
-                skillBody: prompt,
-                timeoutMs,
-                ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-              }),
+              spawnWatched({
+                ports,
+                ctx,
+                purpose: "scorer",
+                agent: peer,
+                observeCwd: execCwd,
+                run: () =>
+                  ports.agentSpawn(peer, {
+                    // E4: the scorer inspects the committed delivery, so it runs in the
+                    // execution worktree (submodule cycle worktree for a submodule story).
+                    cwd: execCwd,
+                    skillBody: prompt,
+                    timeoutMs,
+                    ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
+                  }),
+              }).then((r) => r.result),
               new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs).unref()),
             ]);
           } catch (e) {
@@ -516,6 +557,7 @@ export async function executeCaptureFactsCommand(
         // (work preserved) rather than plain `failed` + orphaned branch. The score
         // note itself is still written ONLY by runScorePairing — we synthesize
         // nothing here (the independence red line stands).
+        const scoreStartMs = Date.now();
         const scoreResult = await runScorePairing(ports.repoCwd, dirname(ports.paths.eventsPath), ctx.cycleId ?? "", ctx.agent ?? "", storyId, skill, summary, {
           installed: ports.installedAgents?.() ?? agentsInstalled(realAgentEnv()),
           // Historical auth streaks do not shrink the fair candidate pool.
@@ -525,8 +567,17 @@ export async function executeCaptureFactsCommand(
           now: () => eventTs(ports),
           // FIX-935: respect project-config agent allowlist.
           allowedAgents: peerGateAllowedAgents,
+          // US-CYCLE-008: high-tier → parallel adversarial panel; else serial default.
+          ...(evalFanout !== undefined ? { fanout: evalFanout } : {}),
         });
         scoreStatus = scoreResult.status;
+        recordEvaluatorPanelRound(ports, ctx, {
+          tier: tierInfo.tier,
+          panel: scoreResult.panel,
+          outcome: scoreStatus,
+          startMs: scoreStartMs,
+          endMs: Date.now(),
+        });
         if (workspaceExecution !== undefined && scoreStatus === "scored") {
           const quality = evaluateReviewScoreGate(
             ports.repoCwd,
@@ -542,6 +593,7 @@ export async function executeCaptureFactsCommand(
         workspaceExecution === undefined &&
         commitsAhead > 0 &&
         storyId !== "" &&
+        !tierInfo.blocked &&
         ctx.evidenceRunDir !== undefined &&
         ctx.evidenceRunDir !== ""
       ) {
@@ -571,22 +623,7 @@ export async function executeCaptureFactsCommand(
           },
           canSpawnRemediation: () => blockIfAgentCredentialsMissing(remediationAgent, "build", ports, ctx) === null,
           agentSpawn: ports.agentSpawn,
-          // E4: a submodule cycle's remediation agent commits into the SUBMODULE's
-          // object store, so it needs write access to the submodule's git-common-dir
-          // (as well as the superproject `.roll`). No targetSubmodule ⇒ exactly
-          // agentWritableRoots(ports.repoCwd, …), unchanged.
           writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath),
-          // E9 (PR9): the attest RENDER reads the story SPEC (design truth) to build
-          // the acceptance report, so it must render from the LIVE `.roll`
-          // (ports.repoCwd) — the same tree the picker/designer read
-          // (`storySpecPath(ports.repoCwd, id)`). Rendering from the worktree
-          // snapshot fataled ("story not found") on a project that TRACKS `.roll`
-          // whenever the new spec was still uncommitted (linkRollIntoWorktree keeps
-          // the committed snapshot, not a symlink). For a NON-tracked-`.roll`
-          // project the worktree `.roll` is symlinked to repoCwd's `.roll`, so this
-          // is byte-identical. Evidence output still lands under the card's `.roll`
-          // per the existing archive convention (the gate reads it worktree-first,
-          // repoCwd-fallback), so the render output location is unchanged.
           renderAttest: () => ports.attest.render(ports.repoCwd, storyId, ctx.evidenceRunDir ?? ""),
           appendEvent: (event) => ports.events.appendEvent(ports.paths.eventsPath, event),
           now: () => eventTs(ports),
@@ -607,11 +644,11 @@ export async function executeCaptureFactsCommand(
       // Done without acceptance evidence.
       // Scoped to actual deliveries: an idle cycle has nothing to attest.
       let attestBlocked = false;
-      // US-V4-005: capture the attest verdict + reasons so the Evaluator artifact
-      // (verified/designed) can record evidence status + blocking findings.
       let attestVerdict: "produced" | "skipped" | "unknown" = "unknown";
+      // Capture the attest reasons so the Full Delta repair decision can frame
+      // the Evaluator→Builder signal with the cycle's blocking findings.
       let attestReasons: readonly string[] = [];
-      if (commitsAhead > 0 && storyId !== "") {
+      if (commitsAhead > 0 && storyId !== "" && !tierInfo.blocked) {
         if (workspaceExecution !== undefined) {
           attestBlocked = repositoryFacts?.repositoryVerificationPending === true || workspaceAcceptance?.produced !== true ||
             workspaceDiffFailure !== undefined || scoreQualityFailure !== undefined;
@@ -670,32 +707,34 @@ export async function executeCaptureFactsCommand(
           attestReasons = res.reasons;
         }
       }
-      // US-V4-005: for verified/designed profiles, write the Evaluator artifact
-      // (eval-report.md + artifact-manifest.json) into the run dir, ASSEMBLED from
-      // the cycle's separate review/score/attest signals (never one pass/fail).
-      // FAIL-CLOSED (US-V4-005): a malformed/missing evaluator artifact, or one
-      // whose session is the builder's (self-grade), BLOCKS the cycle — it never
-      // marks Done. US-V4-007: the bounded repair DECISION (decideRepair) frames
-      // the Evaluator→Builder repair signal with a structured reason; the live
+      // US-DELTA-007: for verified/designed (Full Delta) profiles, an
+      // independently-cast Evaluator must AUTHOR its own eval-report.md
+      // (## Inputs checked + ## Rationale) and v2 manifest. capture-facts only
+      // VALIDATES that output — it NEVER assembles the report from score/attest
+      // fields. A missing/malformed/legacy-assembled report, an unresolved
+      // Evaluator, or a same-session evaluation BLOCKS delivery (fail-closed,
+      // `artifact_invalid`/`identity_collision`) before any publish/merge — the
+      // story is never marked Done. US-V4-007: the bounded repair DECISION
+      // (decideRepair) frames the Evaluator→Builder repair signal; the live
       // re-spawn loop that consumes a `repair` action is v4.1.
       let evaluatorBlocked = false;
       if (
         (ctx.selectedProfile === "verified" || ctx.selectedProfile === "designed") &&
         commitsAhead > 0 &&
-        storyId !== ""
+        storyId !== "" &&
+        // US-CYCLE-008: the Full Delta Evaluator spawns — skip on a tier-blocked cycle.
+        !tierInfo.blocked
       ) {
-        const blocking = [
-          ...(attestBlocked || peerBlocked ? attestReasons : []),
-          ...(workspaceExecution !== undefined && scoreStatus !== "scored" ? ["missing_workspace_review_score"] : []),
-        ];
-        const ev = writeEvaluatorArtifact(ports, ctx, { attestStatus: attestVerdict, blockingFindings: blocking });
-        if (ev.written && !ev.valid) {
+        const ev = await runEvaluatorStage(ports, ctx);
+        const evReasons = attestBlocked || peerBlocked ? attestReasons : [];
+        if (!ev.ok) {
           evaluatorBlocked = true;
           ports.events.appendAlert(
             ports.paths.alertsPath,
-            `evaluator artifact (${ctx.selectedProfile}) failed closed for ${storyId}: ${ev.reasons.join("; ")} — cycle ${ctx.cycleId ?? "?"}`,
+            `evaluator artifact (${ctx.selectedProfile}) BLOCKED [${ev.blockReason ?? "artifact_invalid"}] for ${storyId}: ${ev.reasons.join("; ")} — Full Delta delivery held (no publish/merge); an independently authored eval-report.md (## Inputs checked + ## Rationale) with its own v2 manifest is REQUIRED — cycle ${ctx.cycleId ?? "?"}`,
           );
         }
+        const blocking = [...evReasons, ...(evaluatorBlocked ? ev.reasons : [])];
         const repair = decideRepair(blocking, initialRepairState(), { maxRounds: DEFAULT_MAX_REPAIR_ROUNDS });
         if (repair.action !== "done") {
           ports.events.appendAlert(
@@ -723,6 +762,7 @@ export async function executeCaptureFactsCommand(
       // US-V4-005: a verified/designed cycle with an invalid Evaluator artifact is
       // gate-blocked (fail-closed) alongside the attest/peer gates.
       const gateBlocked = attestBlocked || peerBlocked || evaluatorBlocked ||
+        tierInfo.blocked ||
         (workspaceExecution !== undefined && commitsAhead > 0 && (scoreStatus !== "scored" || scoreQualityFailure !== undefined));
       // FIX-908: a gate-blocked cycle that did REAL work (≥1 commit AND ≥1 tcr:
       // commit) but is only missing a REQUIRED acceptance artifact — the

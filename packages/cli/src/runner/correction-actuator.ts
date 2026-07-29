@@ -111,7 +111,7 @@ function markStoryTodo(projectPath: string, storyId: string): CorrectionMutation
     const row = snap.items.find((it) => it.id === storyId);
     if (row === undefined) return "alert_only";
     if (classifyStatus(row.status) === "hold") return "human_override";
-    store.mark(path, snap.hash, storyId, STATUS_MARKER.todo);
+    store.markExact(path, snap.hash, storyId, STATUS_MARKER.todo);
     return "returned_story";
   } catch {
     return "alert_only";
@@ -238,7 +238,7 @@ function markStoryHold(projectPath: string, storyId: string, reason: string): Co
     const row = snap.items.find((it) => it.id === storyId);
     if (row === undefined) return "alert_only";
     if (classifyStatus(row.status) === "hold") return "human_override";
-    store.mark(path, snap.hash, storyId, `${STATUS_MARKER.hold} [low-review-score: ${reason.slice(0, 80)}]`);
+    store.markExact(path, snap.hash, storyId, `${STATUS_MARKER.hold} [low-review-score: ${reason.slice(0, 80)}]`);
     return "returned_story";
   } catch {
     return "alert_only";

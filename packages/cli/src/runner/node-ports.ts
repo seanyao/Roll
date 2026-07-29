@@ -32,6 +32,7 @@ import {
   fetchRemoteBranch,
   ghRepoSlug,
   landLocalDelivery,
+  lsRemote,
   openEvidenceFrame,
   prListOpenTitles,
   prViewMergeInfo,
@@ -608,6 +609,17 @@ export function nodePorts(opts: {
       async landLocalDelivery(repoCwd, worktreeCwd, integrationBranch) {
         return landLocalDelivery(repoCwd, worktreeCwd, integrationBranch);
       },
+      // US-CYCLE-009: the real tip of origin/<branch> from the git plane, used to
+      // head-sha-pin the auto-merge attach. LENIENT — undefined on any failure.
+      async remoteBranchTip(repoCwd, branch) {
+        try {
+          const refs = await lsRemote(repoCwd, "origin", [`refs/heads/${branch}`]);
+          const tip = refs.find((r) => r.ref === `refs/heads/${branch}`) ?? refs[0];
+          return tip !== undefined && tip.sha !== "" ? tip.sha : undefined;
+        } catch {
+          return undefined;
+        }
+      },
     },
     github: {
       async repoSlug(repoCwd) {
@@ -622,6 +634,7 @@ export function nodePorts(opts: {
           ok: r.ok,
           degraded: r.degraded,
           rootCauseKey: r.rootCauseKey,
+          autoMergeUnavailable: r.autoMergeUnavailable,
         };
       },
       async prState(repoCwd, branch) {
@@ -670,23 +683,17 @@ export function nodePorts(opts: {
         if (!existsSync(backlogPath)) return [];
         return parseBacklog(readFileSync(backlogPath, "utf8"));
       },
-      // FIX-198: the production binding was MISSING entirely (the optional
-      // chain made every In-Progress claim a silent no-op). ID-anchored mark
-      // under optimistic concurrency; best-effort — a conflict/IO failure must
-      // never kill the cycle, the reconcile pass is the safety net.
       markStatus(_projectCwd, id, status) {
         try {
           if (!existsSync(backlogPath)) return;
           const store = new BacklogStore();
           const snap = store.readBacklog(backlogPath);
-          store.mark(backlogPath, snap.hash, id, status);
+          store.markExact(backlogPath, snap.hash, id, status);
         } catch {
           /* best-effort: reconcile owns the fallback */
         }
       },
     },
-    // FIX-306: the runner commits + pushes the `.roll` metadata repo. See the
-    // {@link MetadataPort} doc for WHY this is the runner's job, not the agent's.
     metadata: {
       async commit(projectCwd, message) {
         return commitRollMetadataRepo(projectCwd, message);
@@ -696,30 +703,15 @@ export function nodePorts(opts: {
       ? {
           resolve(storyId, estMin) {
             const scoped = scopedStoryExecuteRoute(opts.repoCwd, repositories === undefined ? undefined : opts.repoCwd);
-            // FIX-1267: the scoped route already carries the rotation exclusion
-            // (excluded / rotationBlocked); return it verbatim so the handler can
-            // enforce the no-consecutive-repeat constraint.
             if (scoped !== null) return scoped;
             const tier: Tier = classifyComplexity(estMin);
             const routeDeps = opts.routeDeps;
-            // Compatibility fallback for legacy tier slots. FIX-930: a story
-            // re-picked after a zero-TCR self-heal swap carries a tried-agent
-            // set; route the NEXT untried agent (resolveRouteExcluding) so the
-            // swap actually changes who builds. Empty set => plain resolveRoute.
-            // The store lives at the MAIN runtime dir (repoCwd is the main
-            // project; .roll is symlink-resolved either way).
             const rt = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() || join(opts.repoCwd, ".roll", "loop");
             const tried = storyId !== "" ? readSelfHeal(rt, storyId).triedAgents : [];
             const dec =
               tried.length > 0
                 ? (resolveRouteExcluding(tier, routeDeps, tried) ?? resolveRoute(tier, routeDeps))
                 : resolveRoute(tier, routeDeps);
-            // Thread the routed slot's native --model through to the spawn; absent => ""
-            // (the orchestrator's `ctx.model !== ""` guard then omits --model and
-            // the agent uses its own default). FIX-1249: when the slot supplied no
-            // model (nudge/firstInstalled hop, or an agent-only rig), backfill from
-            // config rigs so the agent still runs its CONFIGURED model rather than a
-            // source-baked default.
             const routedModel = dec.model ?? "";
             return {
               agent: dec.agent,

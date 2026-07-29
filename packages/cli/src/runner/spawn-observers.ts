@@ -7,7 +7,6 @@ import {
   CYCLE_WALL_TIMEOUT_SEC,
   STALL_STARTUP_GRACE_SEC,
   baselineCommits,
-  cycleTimeoutVerdict,
   maybeBuildHeartbeat,
   newCycleObserverState,
   newNormalizerState,
@@ -20,6 +19,8 @@ import {
   type CycleContext,
   type CycleObserverState,
   type NormalizerState,
+  type RunKillReason,
+  watchRun,
 } from "@roll/core";
 import type { RollEvent } from "@roll/spec";
 import { parseCaptureMarker, type CaptureMarker, type ScreenshotResult } from "@roll/infra";
@@ -159,10 +160,8 @@ export async function startCycleObserver(
   };
 }
 
-/** Workspace build observer. Git is read exclusively through repository-bound
- * ports; the Issue root is a Builder coordination cwd and is never treated as a
- * repository. Repository commit facts are written once to the Issue stream,
- * while Story lifecycle/heartbeat events remain one per Cycle. */
+/** Observe a Workspace cycle through repository-bound ports rather than treating
+ * the Issue coordination root as a Git checkout. */
 export async function startRepositoryCycleObserver(
   ports: Ports,
   ctx: CycleContext,
@@ -344,7 +343,7 @@ export function readStallThreshold(repoCwd: string): StallThresholdConfig {
  *  `timedOut`). */
 export interface SpawnTimeoutWatchdog {
   markProgress(): void;
-  stop(): { firedReason: "wall" | "no-progress" | "no-state-change" | null };
+  stop(opts?: { external?: boolean }): { firedReason: RunKillReason | null };
 }
 
 /**
@@ -387,145 +386,69 @@ export function startSpawnTimeoutWatchdog(opts: {
   thresholds: CycleTimeoutThresholds;
   /** Epoch SECONDS (injected — the runner's ProcessClock). */
   clock: () => number;
-  /** Observe commits-ahead on the worktree branch (progress signal). */
-  commitCount: () => Promise<number>;
-  /** Make a failed progress probe observable without converting it to zero. */
+  /** Observe commits-ahead on the branch at the observed cwd (progress signal).
+   *  US-CYCLE-001: the watchdog HANDS this probe `observeCwd` — the run's
+   *  worktree — so the observation point is chosen by the watchdog, never baked
+   *  into the closure against the main checkout. */
+  commitCount: (cwd: string) => Promise<number>;
+  /** Surface commit-probe failures while preserving the shared watchdog's
+   *  fail-soft behavior (the failed tick is still skipped). */
   onCommitProbeError?: (error: unknown) => void;
-  /** FIX-1477 — fingerprint the worktree DIRTY state (e.g. raw
+  /** FIX-1477 — fingerprint the DIRTY state of the observed cwd (e.g. raw
    *  `git status --porcelain` output); a CHANGE is progress. Optional: without
    *  it the state fuse tracks commits only. A thrown error is a blip — skipped,
-   *  never progress, never a kill. */
-  stateSignature?: () => Promise<string>;
+   *  never progress, never a kill. Handed `observeCwd` like {@link commitCount}. */
+  stateSignature?: (cwd: string) => Promise<string>;
   /** Append the cycle:timeout event (best-effort). */
   appendEvent: (ev: RollEvent) => void;
   /** Kill the in-flight agent process tree (returns count signalled). */
   kill?: () => number;
   /** Poll cadence ms (default {@link TIMEOUT_POLL_MS}; tests pin a small value). */
   pollMs?: number;
+  /** US-CYCLE-001: the run's worktree cwd. LOAD-BEARING — the watchdog hands it
+   *  to commitCount/stateSignature, so liveness is observed HERE, never on the
+   *  main checkout. Defaults to "" (the process cwd) only for legacy callers. */
+  observeCwd?: string;
 }): SpawnTimeoutWatchdog {
   const { cycleId, thresholds, clock, commitCount, appendEvent } = opts;
   const stateSignature = opts.stateSignature;
   const kill = opts.kill ?? ((): number => killLiveAgents("SIGKILL"));
   const pollMs = opts.pollMs ?? (Number((process.env["ROLL_TIMEOUT_POLL_MS"] ?? "").trim()) || TIMEOUT_POLL_MS);
-  // All criteria disabled → an inert handle (no timer, never fires).
-  if (thresholds.wallSec <= 0 && thresholds.noProgressSec <= 0 && thresholds.noStateChangeSec <= 0) {
-    return { markProgress: () => {}, stop: () => ({ firedReason: null }) };
-  }
-  const startSec = clock();
-  let lastProgressSec = startSec;
-  let lastStateSec = startSec;
-  let lastCommitCount = -1;
-  let lastSignature: string | undefined;
-  let firedReason: "wall" | "no-progress" | "no-state-change" | null = null;
-  let running = false;
-
-  const markProgress = (): void => {
-    // stdout feeds ONLY the true-silence fuse (FIX-1477) — it is proof of
-    // liveness, not of work; the state clock (lastStateSec) is untouched.
-    lastProgressSec = clock();
-  };
-
-  const tick = async (): Promise<void> => {
-    if (running || firedReason !== null) return; // don't stack ticks / re-fire
-    running = true;
-    try {
-      // A NEW commit on the worktree branch is GIT-STATE progress — it bumps
-      // BOTH the silence clock and the state clock.
-      try {
-        const n = await commitCount();
-        if (n > lastCommitCount) {
-          lastCommitCount = n;
-          const now = clock();
-          lastProgressSec = now;
-          lastStateSec = now;
-        }
-      } catch (error) {
+  // US-CYCLE-001: delegate to the shared @roll/core run-watchdog — ONE
+  // implementation, observed on the run's worktree cwd. The loop runner binds
+  // commitCount/stateSignature to the worktree (via ports); the goal/supervisor
+  // + subagent path reuses the same watchRun with its own cwd-bound signals.
+  const handle = watchRun({
+    cwd: opts.observeCwd ?? "",
+    clock,
+    thresholds,
+    progressSignals: {
+      commitCount: async (cwd) => {
         try {
+          return await commitCount(cwd);
+        } catch (error) {
           opts.onCommitProbeError?.(error);
-        } catch {
-          /* observability failure must not topple the watchdog */
+          throw error;
         }
-      }
-      // FIX-1477 — a dirty-state signature CHANGE (files written/edited before
-      // or between commits) is also git-state progress: it bumps BOTH clocks.
-      // The first observation only establishes the baseline (never a bump).
-      if (stateSignature !== undefined) {
-        try {
-          const sig = await stateSignature();
-          if (lastSignature !== undefined && sig !== lastSignature) {
-            const now = clock();
-            lastProgressSec = now;
-            lastStateSec = now;
-          }
-          lastSignature = sig;
-        } catch {
-          /* a signature-probe blip is NOT progress and NOT a kill — skip */
-        }
-      }
-      const now = clock();
-      const verdict = cycleTimeoutVerdict({
-        elapsedSec: now - startSec,
-        idleSec: now - lastProgressSec,
-        stateIdleSec: now - lastStateSec,
-        wallLimitSec: thresholds.wallSec,
-        noProgressLimitSec: thresholds.noProgressSec,
-        noStateChangeLimitSec: thresholds.noStateChangeSec,
-      });
-      if (verdict.timedOut) {
-        firedReason = verdict.reason;
-        clearInterval(timer);
-        // Record FIRST (durable), then kill — so the trip is observable even if
-        // the kill races the process exiting on its own.
-        try {
-          appendEvent({
-            type: "cycle:timeout",
-            cycleId,
-            reason: verdict.reason,
-            elapsedSec: verdict.elapsedSec,
-            idleSec: verdict.idleSec,
-            ts: epochMs(now),
-          });
-        } catch {
-          /* event append is best-effort; the kill below is the point */
-        }
-        try {
-          kill();
-        } catch {
-          /* the spawn's exit handler still settles the promise */
-        }
-      }
-    } finally {
-      running = false;
-    }
-  };
-  // Seed the baselines once up front so the first real change counts.
-  void (async () => {
-    try {
-      lastCommitCount = await commitCount();
-    } catch (error) {
-      try {
-        opts.onCommitProbeError?.(error);
-      } catch {
-        /* observability failure must not topple the watchdog */
-      }
-    }
-    if (stateSignature !== undefined) {
-      try {
-        lastSignature = await stateSignature();
-      } catch {
-        /* baseline best-effort */
-      }
-    }
-  })();
-  const timer = setInterval(() => void tick(), pollMs);
-  timer.unref?.();
-  return {
-    markProgress,
-    stop: () => {
-      clearInterval(timer);
-      return { firedReason };
+      },
+      ...(stateSignature !== undefined ? { stateSignature } : {}),
     },
-  };
+    onTimeout: (info) => {
+      // Record FIRST (durable), then kill — so the trip is observable even if
+      // the kill races the process exiting on its own.
+      appendEvent({
+        type: "cycle:timeout",
+        cycleId,
+        reason: info.reason,
+        elapsedSec: info.elapsedSec,
+        idleSec: info.idleSec,
+        ts: epochMs(clock()),
+      });
+    },
+    kill,
+    pollMs,
+  });
+  return { markProgress: handle.markProgress, stop: handle.stop };
 }
 
 /** FIX-929 — agent stall detector. Monitors agent output (stdout token stream)
@@ -625,9 +548,138 @@ export function startStallDetector(opts: {
   };
 }
 
-// FIX-1474 liveness probe lives beside the block-signature/rig lifecycle logic
-// it belongs to; re-exported here so runner call sites keep one observer import.
-export { startBuilderLivenessProbe, type BuilderLivenessProbe } from "./agent-liveness.js";
+// ── FIX-1474: builder-child LIVENESS probe (the lost-child killer) ──────────
+
+/** Default poll cadence (ms) for the builder-child liveness probe. Cheap (one
+ *  `kill(pid, 0)` per tick). Overridable via ROLL_LIVENESS_POLL_MS for tests. */
+const LIVENESS_POLL_MS = 5_000;
+
+/** Consecutive DEAD observations required before a child is declared lost. One
+ *  tick can race the OS reap/`close` handshake (a just-exited child can read
+ *  as a zombie for a moment), so a single dead read is a blip, never a verdict. */
+const LIVENESS_CONFIRM_TICKS = 2;
+
+/** A live liveness-probe handle. `stop()` clears the timer and returns whether
+ *  the probe declared the child lost (so the caller can fold it into the
+ *  returned `agent_exited` event). */
+export interface BuilderLivenessProbe {
+  stop(): { lost: boolean };
+}
+
+/** Default liveness check: signal 0. ESRCH (no such process) ⇒ dead; EPERM
+ *  means the process EXISTS but is owned by someone else ⇒ alive. */
+function defaultIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as { code?: string }).code === "EPERM";
+  }
+}
+
+/**
+ * FIX-1474 — start the bounded liveness probe around a blocking builder spawn.
+ * The FIX-907 timeout watchdog covers a child that is ALIVE (hung / silent /
+ * thrashing); it CANNOT see a child that DIED out-of-band while the spawn
+ * await never settled (external SIGKILL of a process-tree member, PTY leader
+ * death, lost exit delivery) — the exact shape that hung supervised cycles
+ * forever with no terminal state.
+ *
+ * Each tick it reads the spawned child's pid (reported via the `onSpawn`
+ * spawn seam; `undefined` until the spawn starts — nothing to accuse yet) and
+ * asks the injected `isAlive`. After {@link LIVENESS_CONFIRM_TICKS} consecutive
+ * dead observations it declares the child LOST:
+ *   1. records the auditable `cycle:agent_lost` event FIRST (durable, so the
+ *      death is observable even if the kill races),
+ *   2. reaps the leftover process tree ({@link killLiveAgents} SIGKILL — a
+ *      no-op when the tree is already gone),
+ *   3. fires `onLost` so the caller can resolve its spawn race and converge
+ *      the cycle to the explicit `aborted` terminal.
+ *
+ * The probe stands down the moment the spawn settles (`spawnPending()` false)
+ * so a finished cycle is never accused. Best-effort throughout: a probe blip
+ * (a throwing `isAlive`) reads as ALIVE — never a death verdict. Injectable
+ * seams (`pid`, `spawnPending`, `isAlive`, `appendEvent`, `kill`, `onLost`,
+ * `pollMs`, `confirmTicks`) keep it unit-testable with no real process/timer.
+ */
+export function startBuilderLivenessProbe(opts: {
+  cycleId: string;
+  agent: string;
+  /** The spawned child's pid; `undefined` until the spawn reports it. */
+  pid: () => number | undefined;
+  /** True while the spawn await is unsettled; a settled spawn ⇒ inert probe. */
+  spawnPending: () => boolean;
+  /** Liveness check (default: `kill(pid, 0)`). A THROW is a blip ⇒ alive. */
+  isAlive?: (pid: number) => boolean;
+  /** Append the cycle:agent_lost event (best-effort). */
+  appendEvent: (ev: RollEvent) => void;
+  /** Reap the leftover agent process tree (returns count signalled). */
+  kill?: () => number;
+  /** Fired once when the child is declared lost (drives the spawn race). */
+  onLost?: (info: { pid: number }) => void;
+  /** Poll cadence ms (default {@link LIVENESS_POLL_MS}; tests pin a small value). */
+  pollMs?: number;
+  /** Consecutive dead observations before declaring lost (default
+   *  {@link LIVENESS_CONFIRM_TICKS}). */
+  confirmTicks?: number;
+}): BuilderLivenessProbe {
+  const { cycleId, agent, appendEvent } = opts;
+  const isAlive = opts.isAlive ?? defaultIsAlive;
+  const kill = opts.kill ?? ((): number => killLiveAgents("SIGKILL"));
+  const pollMs = opts.pollMs ?? (Number((process.env["ROLL_LIVENESS_POLL_MS"] ?? "").trim()) || LIVENESS_POLL_MS);
+  const confirmTicks = opts.confirmTicks ?? LIVENESS_CONFIRM_TICKS;
+  let lost = false;
+  let deadStreak = 0;
+
+  const tick = (): void => {
+    if (lost || !opts.spawnPending()) return;
+    const pid = opts.pid();
+    if (pid === undefined) {
+      deadStreak = 0;
+      return;
+    }
+    let alive = true;
+    try {
+      alive = isAlive(pid);
+    } catch {
+      /* a probe blip is NOT a death — skip */
+    }
+    if (alive) {
+      deadStreak = 0;
+      return;
+    }
+    deadStreak += 1;
+    if (deadStreak < confirmTicks) return;
+    lost = true;
+    clearInterval(timer);
+    // Record FIRST (durable), then reap + signal — the death must be
+    // observable even if the kill races the cycle's own teardown.
+    try {
+      appendEvent({ type: "cycle:agent_lost", cycleId, agent, pid, ts: Date.now() });
+    } catch {
+      /* event append is best-effort */
+    }
+    try {
+      kill();
+    } catch {
+      /* the tree may already be gone — the verdict stands */
+    }
+    try {
+      opts.onLost?.({ pid });
+    } catch {
+      /* the caller's race resolve must never crash the probe */
+    }
+  };
+
+  const timer = setInterval(tick, pollMs);
+  timer.unref?.();
+  return {
+    stop: () => {
+      clearInterval(timer);
+      return { lost };
+    },
+  };
+}
 
 export function createCaptureMarkerSink(runDir: string, capture: CapturePort): { onChunk(chunk: Buffer): void; flush(): Promise<void> } {
   let buf = "";

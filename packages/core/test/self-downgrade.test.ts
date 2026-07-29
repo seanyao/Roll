@@ -126,6 +126,22 @@ describe("applySelfDowngradeToBacklog", () => {
     expect(out).toContain("| big story depends-on:US-1 | 🚫 Hold |");
     expect(out).not.toContain("📋 Todo");
   });
+
+  it("FIX-1475: parks ONLY the exact parent — a pre-existing `<id>-` descendant is untouched", () => {
+    const withSibling = [
+      "| ID | Description | Status |",
+      "|----|----|----|",
+      "| [US-X](.roll/features/ep/US-X/spec.md) | big story | 🔨 In Progress |",
+      "| [US-X-legacy](.roll/features/ep/US-X-legacy/spec.md) | unrelated descendant | 📋 Todo |",
+      "",
+    ].join("\n");
+    const out = applySelfDowngradeToBacklog(withSibling, "US-X", []);
+    // The exact parent is parked …
+    expect(out).toContain("| [US-X](.roll/features/ep/US-X/spec.md) | big story | 🚫 Hold |");
+    // … but the descendant row keeps its status (prefix markStatus would have
+    // wrongly flipped it to Hold too).
+    expect(out).toContain("| [US-X-legacy](.roll/features/ep/US-X-legacy/spec.md) | unrelated descendant | 📋 Todo |");
+  });
 });
 
 describe("buildStorySplitEvent", () => {

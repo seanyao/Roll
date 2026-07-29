@@ -6,7 +6,7 @@ import {
   nodeDeliveryStore,
   planPublishDocPr,
   planPublishPr,
-  removeLease,
+  releaseStoryLease,
   type CycleCommand,
   type CycleContext,
   type PublishResult,
@@ -14,6 +14,7 @@ import {
 } from "@roll/core";
 import { AWAITING_REVIEW_STATUS_MARKER, STATUS_MARKER, absent, present } from "@roll/spec";
 import { prNumberFromUrl, resolvePublishMode, submoduleWorktreePath } from "@roll/infra";
+import { commitInRepoBacklog, isInRepoRollLayout } from "./in-repo-backlog.js";
 import { writeCycleRoleSummaryBestEffort } from "./cycle-role-artifact-writer.js";
 import { evaluateEvidenceGate, executeLocalPublish } from "./local-publish.js";
 import { markDoneGuarded } from "./done-guard.js";
@@ -27,7 +28,6 @@ import { eventTs } from "./runner-time.js";
 import { cleanStaleEvidence, isParkedAtHold, resetStaleSpecTruth, revertPrematureDone } from "./resume-truth.js";
 import { appendCleanupEvent, cleanupGuardResult, recordCleanupFailures } from "./sandbox-boundary.js";
 import { resolveStoryLeasePath } from "./story-lease-path.js";
-import { commitInRepoBacklog, isInRepoRollLayout } from "./in-repo-backlog.js";
 
 type TerminalCommand = Extract<CycleCommand, { kind:
   | "publish_pr"
@@ -106,7 +106,10 @@ export async function executeTerminalCommand(
       ports.events.upsertRun(ports.paths.runsPath, key, buildRunRow(cmd, ctx, ports.clock()));
       if ((ctx.storyId ?? "") !== "") {
         try {
-          removeLease(resolveStoryLeasePath(ports.paths), ctx.storyId ?? "", "cycle");
+          releaseStoryLease(resolveStoryLeasePath(ports.paths), ctx.storyId ?? "", {
+            source: "cycle",
+            pid: process.pid,
+          });
         } catch {
           /* lease cleanup must never block terminal bookkeeping */
         }
@@ -132,14 +135,8 @@ export async function executeTerminalCommand(
     }
   }
   switch (cmd.kind) {
-    // delivery/pr planPublishPr → github.runPublishPlan → published result.
     case "publish_pr": {
       const manualMerge = cmd.manualMerge === true || storyRequiresManualMerge(ports.repoCwd, ctx.storyId);
-      // E3: local-only delivery mode. A `publish_mode: local` project lands the
-      // cycle on its LOCAL integration branch and skips push→PR→CI→merge — but
-      // the evidence gate STILL runs (a gate-block is a fault, publish or not).
-      // Resolved from the MAIN checkout's project config (like E1's integration
-      // branch). Default `remote` ⇒ the entire block below is byte-identical.
       if (resolvePublishMode(ports.repoCwd) === "local") {
         return executeLocalPublish(cmd, ports, ctx, manualMerge);
       }
@@ -149,10 +146,6 @@ export async function executeTerminalCommand(
         const pub: PublishResult = { status: 2, mergedBack: false, orphanPushed: false, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
         return { event: { type: "published", result: pub } };
       }
-      // FIX-245 AC2: an agent that opened its own PR inside the cycle bypassed
-      // every runner gate (observed: PR #578, single un-prefixed commit). The
-      // runner detects it at publish time, ADOPTS the registration (the PR is
-      // real — the books must say published) and logs the discipline breach.
       const preState = await ports.github.prState(ports.repoCwd, cmd.branch).catch(() => "UNKNOWN");
       if (preState === "OPEN" || preState === "MERGED") {
         ports.events.appendAlert(
@@ -162,15 +155,6 @@ export async function executeTerminalCommand(
         const pub: PublishResult = { status: 0, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
         return { event: { type: "published", result: pub } };
       }
-      // US-DELIV-004 — push-time evidence gate (fail-loud): verify the
-      // acceptance evidence (attest report + ac-map) was produced BEFORE the
-      // branch leaves the machine. Missing evidence ⇒ blocked_no_evidence:
-      // the branch is NEVER pushed and no PR is opened — "pushed a branch but
-      // opened no PR" (裸分支无 PR) stops being a normal outcome and becomes a
-      // fault state (zero-TCR class). The checkpoint moves earlier; the attest
-      // judgement itself is unchanged (FIX-329). Doc-only PRs and story-less
-      // publishes skip the gate (nothing to attest); the FIX-245 adoption
-      // short-circuit above already returned for branches that have a PR.
       const gateStoryId = ctx.storyId ?? "";
       if (gateStoryId !== "" && cmd.docOnly !== true) {
         if (!evaluateEvidenceGate(ports, ctx, gateStoryId)) {
@@ -187,10 +171,6 @@ export async function executeTerminalCommand(
           return { event: { type: "published", result: pub } };
         }
       }
-      // US-LOOP-094: the cycle worktree is DETACHED (no local branch). Push its
-      // HEAD to the remote ref explicitly, FROM THE WORKTREE CWD — this replaces
-      // the git-push step formerly in planPublishPr. Same short-circuit as
-      // before: a push failure is a status-1 publish (PR steps never run).
       const pushed = await ports.git.push(ports.paths.worktreePath, `HEAD:refs/heads/${cmd.branch}`);
       if (pushed.code !== 0) {
         const pub: PublishResult = { status: 1, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
@@ -201,10 +181,38 @@ export async function executeTerminalCommand(
         const pub: PublishResult = { status: 1, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
         return { event: { type: "published", result: pub } };
       }
-      const plan = cmd.docOnly
-        ? planPublishDocPr({ branch: cmd.branch, slug, body, manualMerge, draft: cmd.draft })
-        : planPublishPr({ branch: cmd.branch, slug, body, manualMerge, draft: cmd.draft });
+      // US-CYCLE-009: resolve the branch's real tip from the git plane (the sha
+      // just pushed to origin) so the auto-merge attach is head-sha-pinned —
+      // GitHub refuses the merge if the tip moves past it (PR-API-head-lag
+      // guard).
+      const headSha = ports.git.remoteBranchTip !== undefined
+        ? await ports.git.remoteBranchTip(ports.repoCwd, cmd.branch).catch(() => undefined)
+        : undefined;
+      let plan = cmd.docOnly
+        ? planPublishDocPr({ branch: cmd.branch, slug, body, manualMerge, draft: cmd.draft, headSha })
+        : planPublishPr({ branch: cmd.branch, slug, body, manualMerge, draft: cmd.draft, headSha });
+      // US-CYCLE-009: if the real tip could NOT be resolved, refuse to arm an
+      // UNPINNED auto-merge — an unpinned squash can merge a stale head. Strip
+      // the merge step (the PR still opens) and alert; the reconcile path
+      // self-merges once CI is green. (manualMerge plans already carry no merge
+      // step, so this only affects the auto/admin merge tail.)
+      if (headSha === undefined && !manualMerge) {
+        plan = plan.filter((s) => s.kind !== "gh-pr-merge-auto" && s.kind !== "gh-pr-merge-admin");
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `US-CYCLE-009: could not resolve origin/${cmd.branch} tip via ls-remote — auto-merge NOT armed (refusing an unpinned merge); PR opened, reconcile self-merges once CI is green (cycle ${ctx.cycleId ?? "?"})`,
+        );
+      }
       const r = await ports.github.runPublishPlan(plan);
+      // US-CYCLE-009: the repo does not have auto-merge enabled — the PR is open
+      // and healthy; the reconcile path self-merges it once CI is green. Alert
+      // (graceful degrade) instead of crashing or silently dropping the merge.
+      if (r.autoMergeUnavailable === true) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `US-CYCLE-009: auto-merge is not enabled for ${slug} — PR for ${cmd.branch} (${ctx.storyId ?? "?"}) left open; reconcile will self-merge once CI is green (cycle ${ctx.cycleId ?? "?"})`,
+        );
+      }
       // US-V4-001: publish no longer mounts a PR link onto a story `index.html`
       // dossier page — the global dossier/story-page refresh is not a v4 delivery
       // side effect. The PR fact lives in the DeliveryRecord + events below and is
@@ -353,13 +361,14 @@ export async function executeTerminalCommand(
       return {};
     }
 
-    // FIX-903: save leaked main commits to a rescue ref, then reset main.
+    // FIX-903: save leaked main commits to a quarantine bundle for audit.
+    // FIX-1475: the shared main ref is NEVER reset — recovery is manual.
     case "rescue_leaked": {
       const refName = `rescue/leaked-${cmd.cycleId}`;
       const r = await ports.git.rescueLeaked(ports.repoCwd, refName);
       ports.events.appendAlert(
         ports.paths.alertsPath,
-        `rescue_leaked ${cmd.cycleId}: saved ${r.rescuedSha.slice(0, 8)} to quarantine bundle ${refName}.bundle; main reset ${r.code === 0 ? "ok" : "failed"}`,
+        `rescue_leaked ${cmd.cycleId}: saved ${r.rescuedSha.slice(0, 8)} to quarantine bundle ${refName}.bundle; shared main NOT reset (FIX-1475) — recover manually: git reset --hard origin/main`,
       );
       // FIX-903 AC3: emit an audit event so the rescue is observable.
       ports.events.appendEvent(ports.paths.eventsPath, {
@@ -530,12 +539,25 @@ export async function executeTerminalCommand(
       // keep its soft-lease protection past this cycle's terminal (kimi review).
       if (terminalStoryId !== "") {
         try {
-          removeLease(resolveStoryLeasePath(ports.paths), terminalStoryId, "cycle");
+          releaseStoryLease(resolveStoryLeasePath(ports.paths), terminalStoryId, {
+            source: "cycle",
+            pid: process.pid,
+          });
         } catch {
           /* lease cleanup must never block terminal */
         }
       }
       let terminalMerged = false;
+      // FIX-1475: in the in-repo layout (`.roll` tracked by the product repo, not
+      // its own nested git), the pre-FIX path made the Done flip durable by
+      // committing it onto the shared checkout's HEAD and pushing `HEAD:main` —
+      // which advanced the local `main` ref and clobbered owner WIP / concurrent
+      // dispatch. `markDoneGuarded` still writes Done into the shared working-tree
+      // backlog (the loop legitimately tracks status there; setup already marked
+      // it In Progress), but durability is now pushed as an ORIGIN-BASED object
+      // (see commitInRepoBacklog) so the shared main ref/HEAD/index never move.
+      const inRepoLayout = isInRepoRollLayout(ports.paths.worktreePath);
+      let inRepoDurableFlip: { id: string; status: string } | null = null;
       if (
         (cmd.status === "done" || cmd.status === "published") &&
         terminalStoryId !== "" &&
@@ -577,10 +599,20 @@ export async function executeTerminalCommand(
               );
             }
           }
-          markDoneGuarded(ports.repoCwd, terminalStoryId, { mergedToMain: true }, {
+          const doneResult = markDoneGuarded(ports.repoCwd, terminalStoryId, { mergedToMain: true }, {
             markStatus: (projectCwd, id, status) => ports.backlog.markStatus?.(projectCwd, id, status),
             alert: (m) => ports.events.appendAlert(ports.paths.alertsPath, m),
           });
+          // FIX-1475: when the guard actually marked Done, mirror the EXACT status
+          // it wrote (Done vs Done · evidence_debt) onto the remote as an
+          // origin-based object — the durable-commit trigger. Skipped when the
+          // guard rejected the flip (missing evidence): nothing to make durable.
+          if (doneResult.ok && inRepoLayout) {
+            const durableStatus = doneResult.debt
+              ? `${STATUS_MARKER.done} · evidence_debt`
+              : STATUS_MARKER.done;
+            inRepoDurableFlip = { id: terminalStoryId, status: durableStatus };
+          }
         } else {
           // FIX-304: done ≡ merged. The PR did NOT merge (still OPEN / closed /
           // gh down), yet the agent may have ALREADY flipped this row ✅ Done in
@@ -736,8 +768,8 @@ export async function executeTerminalCommand(
       // FIX-1238: for in-repo layout (`.roll` tracked by main repo, not its own
       // git), commitRollMetadata is a no-op. Commit and push the backlog.md flip
       // to origin/main so the Done status is durable on the remote.
-      if (terminalStoryId !== "" && isInRepoRollLayout(ports.paths.worktreePath)) {
-        await commitInRepoBacklog(ports, ctx, terminalStoryId);
+      if (terminalStoryId !== "" && inRepoLayout && inRepoDurableFlip !== null) {
+        await commitInRepoBacklog(ports, ctx, inRepoDurableFlip.id, inRepoDurableFlip.status);
       }
       // US-OBS-032: best-effort cycle role summary from the event stream
       if (ctx.cycleId !== undefined) {

@@ -361,4 +361,28 @@ describe("resetSandbox — already-Todo is a benign success, not a failure (FIX-
       expect(after, legacy).not.toContain(legacy);
     }
   });
+
+  it("FIX-1475: resets ONLY the exact card — a `<id>-` descendant row is untouched", () => {
+    const sandbox = sandboxWithBacklog(
+      "| US-DEMO-001 | demo | ✅ Done |\n| US-DEMO-001-legacy | sibling | ✅ Done |\n",
+    );
+    const r = resetSandbox(sandbox, "US-DEMO-001");
+    expect(r.ok).toBe(true);
+    expect(r.reset).toBe(true);
+    const after = readFileSync(join(sandbox, ".roll", "backlog.md"), "utf8");
+    // The exact card flipped to Todo …
+    expect(after).toContain("| US-DEMO-001 | demo | 📋 Todo |");
+    // … the descendant (substring `line.includes` would have hit) stays Done.
+    expect(after).toContain("| US-DEMO-001-legacy | sibling | ✅ Done |");
+  });
+
+  it("FIX-1475: readBacklogStatus reads only the exact card, not a descendant", () => {
+    const sandbox = sandboxWithBacklog(
+      "| US-DEMO-001 | demo | 📋 Todo |\n| US-DEMO-001-legacy | sibling | ✅ Done |\n",
+    );
+    // Resetting US-DEMO-001 (already Todo) must not be confused by the Done sibling.
+    const r = resetSandbox(sandbox, "US-DEMO-001");
+    expect(r.ok).toBe(true);
+    expect(r.notes.join(" ")).toContain("already Todo");
+  });
 });

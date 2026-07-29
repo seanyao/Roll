@@ -1,15 +1,27 @@
 name: Create GitHub Release
 
+# FIX-1480 — two-phase release. npm is the single publish/install truth source.
+#  Phase 1 (push a `v*` tag): create the GitHub Release as a DRAFT only — the
+#    version is NOT declared complete until npm actually has it.
+#  Phase 2 (workflow_dispatch, after the maintainer's manual 2FA `npm publish`):
+#    `roll release verify <version>` confirms npm has the version (and it is
+#    dist-tags.latest) and only THEN promotes the draft to a normal release.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to verify on npm and promote (draft → latest), e.g. 4.724.1'
+        required: true
 
 jobs:
   # US-CONSIST-005 — the release gate: any consistency dimension out of line
   # ABORTS the release before anything is published, with the gap list in the
   # job log. `roll release --gate-check` exits 0 only when every dimension passes.
   consistency-gate:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -26,6 +38,7 @@ jobs:
         run: node packages/cli/bin/roll.js release --gate-check
 
   release:
+    if: github.event_name == 'push'
     needs: consistency-gate
     runs-on: ubuntu-latest
     permissions:
@@ -60,10 +73,14 @@ jobs:
           # Same-day prefix: v2026.517.5 -> v2026.517
           DAY_PREFIX="${TAG%.*}"
 
-          # Find existing releases for today (excluding the just-pushed tag, in case
-          # the workflow somehow re-ran on an existing tag).
+          # Find existing DRAFT releases for today (excluding the just-pushed tag,
+          # in case the workflow somehow re-ran on an existing tag). FIX-1480:
+          # only DRAFTS are eligible for same-day merge/delete — a release that
+          # was already verified + promoted (isDraft=false) is completed, immutable
+          # history and must never be merged away or deleted here.
           EXISTING=$(gh release list --limit 50 \
-            --json tagName --jq ".[].tagName | select(startswith(\"${DAY_PREFIX}.\")) | select(. != \"${TAG}\")")
+            --json tagName,isDraft \
+            --jq ".[] | select(.tagName | startswith(\"${DAY_PREFIX}.\")) | select(.tagName != \"${TAG}\") | select(.isDraft == true) | .tagName")
 
           NEW_NOTES=$(cat release_notes.txt)
           MERGED=$(mktemp)
@@ -90,6 +107,38 @@ jobs:
           fi
 
           mv "$MERGED" release_notes.txt
+          # FIX-1480: create as a DRAFT. The version is not declared complete
+          # until `roll release verify` confirms npm has it and promotes it
+          # (workflow_dispatch / the maintainer's post-2FA-publish step).
           gh release create "${TAG}" \
+            --draft \
             --title "${TAG}" \
             --notes-file release_notes.txt
+
+  # FIX-1480 phase 2: after the maintainer's manual 2FA `npm publish`, verify npm
+  # has the version (npm is the truth source) and promote the draft → latest.
+  # `npm publish` is NEVER run here.
+  promote:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          # FIX-1480: fetch tags so `roll release verify` can resolve
+          # refs/tags/v<version> (checkout fetches only HEAD, no tags, by default).
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Verify npm truth + promote draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packages/cli/bin/roll.js release verify "${{ inputs.version }}"

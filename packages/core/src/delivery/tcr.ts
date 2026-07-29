@@ -151,22 +151,156 @@ export interface TestPassProof {
   ts: number;
   /** The `git write-tree` hash tests passed against (`"tree":"<sha>"`). */
   tree: string;
+  /**
+   * US-CYCLE-011 — which suite scope minted this proof (`"mode":"<v>"`). Canonical
+   * values: `"full"` (the WHOLE suite ran → this proof is eligible to satisfy the
+   * round-tail / pre-PR full-verify gate) or `"changed"` (only the affected /
+   * `--changed` subset ran → a per-commit gate only, NOT a full verify).
+   *
+   * ADDITIVE + fail-closed: the `ts`/`tree` parse is byte-unchanged; `mode` is
+   * optional. Legacy proofs (no `mode`), and ANY value other than `"full"` (e.g.
+   * a legacy `"vitest"`, an `"affected"`, or a `"changed"`), are treated by
+   * {@link fullVerifyProofValid} as NOT a full verify. `mode` is never consulted
+   * by the per-commit {@link freshnessVerdict} — that gate is unchanged.
+   */
+  mode?: string;
 }
 
 /**
  * Parse a `.roll/last-test-pass` proof body, mirroring the hook's `grep -o`
  * extraction: `"ts":<digits>` and `"tree":"<value>"`. Returns `undefined` when
  * either field is absent (the hook's "malformed" branch fails the commit, which
- * the caller maps from this `undefined`).
+ * the caller maps from this `undefined`). US-CYCLE-011 additively extracts the
+ * optional `"mode":"<v>"` scope tag; its absence never changes the ts/tree
+ * verdict (a malformed proof is still malformed on ts/tree alone).
  */
 export function parseTestPassProof(body: string): TestPassProof | undefined {
   const tsMatch = /"ts":(\d+)/.exec(body);
   const treeMatch = /"tree":"([^"]*)"/.exec(body);
+  const modeMatch = /"mode":"([^"]*)"/.exec(body);
   const ts = tsMatch ? Number(tsMatch[1]) : NaN;
   const tree = treeMatch ? (treeMatch[1] ?? "") : "";
   if (!Number.isFinite(ts) || !tsMatch) return undefined;
   if (tree === "" || !treeMatch) return undefined;
-  return { ts, tree };
+  const mode = modeMatch ? (modeMatch[1] ?? "") : undefined;
+  return { ts, tree, ...(mode !== undefined && mode !== "" ? { mode } : {}) };
+}
+
+// ── Full-verify gate (US-CYCLE-011): round-tail / pre-PR full-suite proof ──────
+
+/**
+ * Freshness window (seconds) for the full-verify proof at the PR/publish
+ * chokepoint. Deliberately MUCH wider than {@link FRESHNESS_LIMIT_SECONDS} (the
+ * 60 s per-commit gate): the round-tail full run is followed by acceptance
+ * evidence, capture, and push before the gate reads the proof, so a tight window
+ * would false-block honest deliveries. The UNFORGEABLE guard is the tree match
+ * (`proof.tree === headTree` ⇒ the full suite ran against EXACTLY the delivered
+ * code); freshness is only the secondary anti-replay bound.
+ */
+export const FULL_VERIFY_LIMIT_SECONDS = 1800;
+
+/** Verdict of the full-verify gate: valid, or blocked with a human reason. */
+export type FullVerifyVerdict = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Decide whether a `.roll/last-test-pass` proof body constitutes a VALID
+ * full-suite verification of the tree being delivered. FAIL-CLOSED at every
+ * branch — the only `ok:true` is a proof that PARSES, is `mode:"full"`, whose
+ * `tree` equals the delivered `headTree`, and is within `limitSeconds`.
+ *
+ *   - `proofBody === undefined`      → blocked (no proof: round-tail full never ran)
+ *   - proof malformed (ts/tree)      → blocked
+ *   - `mode !== "full"`              → blocked (a `--changed` per-commit proof is
+ *                                       not a full verify — the backstop AC4 pins)
+ *   - `headTree === ""`              → blocked (delivered tree uncomputable ⇒ fail-closed)
+ *   - `proof.tree !== headTree`      → blocked (code changed since the full run)
+ *   - `now - proof.ts > limit`       → blocked (stale full run)
+ *
+ * Pure: the proof body, the delivered tree hash, and `now` (epoch seconds) are
+ * all injected. `mode` is additive — a legacy proof with no `mode` fails closed.
+ */
+export function evaluateFullVerify(
+  proofBody: string | undefined,
+  headTree: string,
+  now: number,
+  limitSeconds: number = FULL_VERIFY_LIMIT_SECONDS,
+): FullVerifyVerdict {
+  if (proofBody === undefined) {
+    return {
+      ok: false,
+      reason: "no full-suite test proof (round-tail `roll test` never ran) — a full verify is required before PR",
+    };
+  }
+  // Multi-record guard (does NOT weaken parseTestPassProof / freshnessVerdict):
+  // parseTestPassProof runs INDEPENDENT regexes for ts/tree/mode, so a crafted
+  // body like `{"mode":"full"}\n{"ts":1000,"tree":"T","mode":"changed"}` would
+  // read `mode:"full"` from the first line and ts/tree from the second. The
+  // full-verify path demands a SINGLE, clean record — reject any body carrying
+  // more than one non-empty line, or a duplicated `"ts":` / `"mode":` field.
+  // (This only closes the parse ambiguity; a one-line local proof written by the
+  // shell is inherently forgeable — the attest screenshot chain is the real
+  // anti-forgery layer, not this file.)
+  if (!isSingleRecordProof(proofBody)) {
+    return { ok: false, reason: "proof body is not a single well-formed record — refusing an ambiguous full-verify proof" };
+  }
+  const proof = parseTestPassProof(proofBody);
+  if (proof === undefined) {
+    return { ok: false, reason: "test-pass proof is malformed — a full verify cannot be confirmed" };
+  }
+  if (proof.mode !== "full") {
+    return {
+      ok: false,
+      reason: `test-pass proof mode is "${proof.mode ?? "absent"}", not "full" — the per-commit --changed gate is not a full verify; run a full \`roll test\` at round tail`,
+    };
+  }
+  if (headTree === "") {
+    return { ok: false, reason: "the delivered tree hash could not be computed — full verify cannot be confirmed (fail-closed)" };
+  }
+  if (proof.tree !== headTree) {
+    return {
+      ok: false,
+      reason: "full-verify proof tree does not match the delivered tree — code changed since the full run; re-run a full `roll test` at round tail",
+    };
+  }
+  const elapsed = now - proof.ts;
+  if (elapsed < 0) {
+    return { ok: false, reason: "full-verify proof timestamp is in the future — clock skew or replay; re-run a full `roll test` at round tail" };
+  }
+  if (elapsed > limitSeconds) {
+    return { ok: false, reason: `full-verify proof is stale (${elapsed}s > ${limitSeconds}s) — re-run a full \`roll test\` at round tail` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Is the proof body a SINGLE well-formed record? Used only by the full-verify
+ * path to reject multi-record ambiguity (see {@link evaluateFullVerify}). True
+ * iff the trimmed body has exactly one non-empty line AND at most one `"ts":`
+ * and one `"mode":` field. Does not validate the record's contents — that is
+ * {@link parseTestPassProof}'s job.
+ */
+function isSingleRecordProof(body: string): boolean {
+  const nonEmptyLines = body.split("\n").filter((l) => l.trim() !== "");
+  if (nonEmptyLines.length !== 1) return false;
+  if ((body.match(/"ts":/g) ?? []).length > 1) return false;
+  if ((body.match(/"tree":/g) ?? []).length > 1) return false;
+  if ((body.match(/"mode":/g) ?? []).length > 1) return false;
+  return true;
+}
+
+/**
+ * Boolean form of {@link evaluateFullVerify} (US-CYCLE-011 primitive): `true` IFF
+ * the proof parses AND `mode === "full"` AND `tree === headTree` AND it is within
+ * the freshness limit. Every other case (missing / malformed / changed-mode /
+ * tree-mismatch / stale) is `false` — fail-closed.
+ */
+export function fullVerifyProofValid(
+  proofBody: string | undefined,
+  headTree: string,
+  now: number,
+  limitSeconds?: number,
+): boolean {
+  return evaluateFullVerify(proofBody, headTree, now, limitSeconds).ok;
 }
 
 /**

@@ -483,6 +483,45 @@ This taxonomy cleanup is breaking by design. No alias, fallback, or dual-write p
 
 > 命名：只用 **Supervisor / Designer / Builder / Evaluator / Agent Scope / Role / Binding / Agent / Model**。核心角色是 `supervise` / `design` / `execute` / `evaluate`。内部命令 `roll supervisor` 与 `Supervisor*` 代码标识符保留，因为它们已经匹配 canonical control-plane role。
 
+#### Delta Team 与 Full Delta Team 交付协议 / Delta Team & Full Delta Team delivery protocol
+
+Roll 有两种有名字的交付拓扑，二者不同，且都不同于健康修复用的 **delivery team**
+（`AgentHealthIssue.routing: "delivery_team"` 的 FIX 路由目标——该 health-routing
+字面量绝不写作 `delta_team`，拓扑名 `delta-team` / `full-delta-team` 专属拓扑，二者不
+混用）。
+
+- **Delta Team**（普通、host-guided）= *当前宿主主会话* 作为**隐式 Supervisor**，加上由
+  该宿主 native 能力创建的 **host-native 子会话**担任 Designer → Builder → Evaluator
+  角色。宿主（Pi、Cursor…）自行请求并 attest 这些子会话；Roll 从不 spawn、resume 或
+  配置任何会话（包括主会话）。Roll 只通过 `roll delta` 管理协议：证据帧、schema 校验、
+  事件（`delta:*`）、投影与 fail-closed 闸。
+- **Full Delta Team** = *独立编排* 的多 agent / 多宿主拓扑。共用同一协议、artifact 布局、
+  事件与角色契约，但通过 Roll 通用 agent 适配器启动各自独立的角色会话。独立 agent/宿主
+  永不称作普通 Delta Team。
+
+诚实边界 / Honest boundaries（协议明说，绝不夸大）：
+
+- **终止绑定 = Option C（仅 handoff）。** 结构有效的 Evaluator 报告最多到
+  `delta:terminal(handoff_ready)`——不是 Done、不是 merge、不是 attest 裁定、不是
+  DeliveryRecord。之后由 owner **手动**走既有 delivery/PR/attest；Roll 不自动绑定，
+  也不做 delivery/Done 声明。唯一 Done 终止仍是 Story 路径（`roll attest` 接受证据 +
+  合入 `main` 的 PR 对账 + GitHub merge 证据）。
+- **宿主 attestation 仅结构校验（structural validation only）。** 只验证宿主提供的
+  `hostId` / `roleInstanceId` / `sessionId` / `modelId` 非空、在需要处唯一、且在
+  resolution/事件/manifest 间对应。绝不证明会话新起、声明角色/模型被遵守，或模型真的
+  执行过。
+- **本地 preset = 宿主本地配置。** `~/.roll/delta-team/presets.yaml` 是 machine-local，
+  绝不进项目配置、`.roll/agents.yaml`、`.roll/policy.yaml` 或 `@roll/core`。
+- **Host-guided 成本不可观测（`? (host_unobservable)`）。** 绝不估算、定价或写零；
+  host-guided 委派不写 `runs.jsonl` usage 行、不派生每角色/总成本。
+
+Loop 准入 / Loop admission：loop 无隐式宿主主会话，故 `loop-autonomous + delta-team`
+被确定性阻塞 `host_supervisor_required`，绝不静默转 solo 或 Full Delta；
+`loop-autonomous + full-delta-team` 是显式 opt-in；默认自主 solo 交付字节不变。Host-guided
+委派不创建 Cycle、`runs.jsonl` 行或 `cycle:terminal`，也不更新 `latest`。本节不引入
+daemon 或新状态存储；`events.ndjson` 里的 `delta:*` 事件是 Delegation 聚合的唯一生命周期
+真相。完整 host-guided 流程见 `roll-delta-team` 技能与 [ai-agents](../guide/en/ai-agents.md)。
+
 ### 上下文协作
 
 ```

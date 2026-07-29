@@ -19,7 +19,7 @@ import {
 import { resolveLang, STATUS_MARKER, t, v2Catalog, type Lang } from "@roll/spec";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { setLease, type LeaseSource } from "@roll/core";
+import { claimStoryLease, type LeaseSource } from "@roll/core";
 import {
   emitBacklogTarget,
   emitBacklogTargetError,
@@ -162,7 +162,7 @@ export function backlogClaimCommand(args: string[], deps: ClaimDeps = realClaimD
   }
   const target = resolveOneTarget(args, "mutation", deps);
   if (typeof target === "number") return target;
-  const leasePath = join(target.runtimeRoot, "locks", "story-leases.json");
+  const leasePath = join(target.runtimeRoot, "locks", "leases");
   if (!requireOwnedPaths(target, [target.backlogPath, leasePath])) return 1;
   if (!existsSync(target.backlogPath)) {
     errLine(`[roll] ${msg("backlog.roll_backlog_md_not_found_run")}`);
@@ -176,7 +176,11 @@ export function backlogClaimCommand(args: string[], deps: ClaimDeps = realClaimD
     return 0;
   }
   mkdirSync(dirname(leasePath), { recursive: true });
-  setLease(leasePath, pattern, { source, claimedAt: deps.nowMs() });
+  const result = claimStoryLease(leasePath, pattern, { source, claimedAt: deps.nowMs() });
+  if (result.status !== "claimed") {
+    errLine(`claim failed: story ${pattern} already owned by ${result.status === "exists" ? result.existingSource : "unknown"}`);
+    return 1;
+  }
   out(`claimed ${pattern} (${source} lease)`);
   return 0;
 }

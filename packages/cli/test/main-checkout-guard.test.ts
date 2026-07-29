@@ -5,10 +5,12 @@ import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyMainCheckoutWriteProtection,
+  captureMainHeadBaseline,
   checkMainDirty,
   detectMainCheckoutWriteProtectionResidue,
   quarantineMainCheckout,
   readMainDirtyBaseline,
+  readMainHeadBaseline,
   recoverMainCheckoutWriteProtectionResidue,
   releaseMainCheckoutWriteProtection,
   repairCoreWorktreeContamination,
@@ -241,7 +243,7 @@ describe("main checkout guard — US-LOOP-089", () => {
     expect(readFileSync(join(repo, ".pi", "workflows", "index.json"), "utf8")).toContain("2026-07-05T16:06:15.979Z");
   });
 
-  it("quarantines ahead commits into a rescue branch and resets main to origin/main", async () => {
+  it("FIX-1475: a mid-cycle ahead LEAK (no pre-spawn baseline) is bookmarked + reported, but main is NEVER reset", async () => {
     const repo = cleanRepo("roll-main-quarantine-ahead-");
     const runtimeDir = join(repo, ".roll", "loop");
     const originHead = sh(repo, ["rev-parse", "origin/main"]);
@@ -259,12 +261,42 @@ describe("main checkout guard — US-LOOP-089", () => {
       nowMs: () => 2_000,
     });
 
+    // Detection + audit trail are unchanged: quarantine event, bookmark ref, manifest.
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ reason: "ahead", files: ["<commit>:leaked main commit"] });
-    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(originHead);
     expect(sh(repo, ["rev-parse", results[0]!.ref])).toBe(leakedHead);
     const manifest = JSON.parse(readFileSync(results[0]!.manifestPath, "utf8"));
-    expect(manifest.restoreCommand).toContain(`git cherry-pick ${results[0]!.ref}`);
+    expect(manifest.restoreCommand).toContain("main was NOT moved");
+    // FIX-1475: the shared main ref did NOT move — HEAD stays on the ahead
+    // commit (byte-identical), NOT back on origin/main.
+    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(leakedHead);
+    expect(sh(repo, ["rev-parse", "HEAD"])).not.toBe(originHead);
+  });
+
+  it("FIX-1475: pre-existing ahead commits matching the pre-spawn baseline are left byte-identically alone (no event, no ref, no reset)", async () => {
+    const repo = cleanRepo("roll-main-quarantine-ahead-pre-");
+    const runtimeDir = join(repo, ".roll", "loop");
+    writeFileSync(join(repo, "tracked.txt"), "owner wip\n", "utf8");
+    git(repo, ["add", "tracked.txt"]);
+    git(repo, ["commit", "-q", "-m", "owner local WIP (unpushed)"]);
+    const aheadHead = sh(repo, ["rev-parse", "HEAD"]);
+    // The cycle's pre-spawn hook froze THIS head as the baseline.
+    captureMainHeadBaseline(repo, runtimeDir, "C-pre-ahead");
+
+    const results = await quarantineMainCheckout({
+      repoCwd: repo,
+      runtimeDir,
+      cycleId: "C-pre-ahead",
+      storyId: "FIX-1475",
+      phase: "pre-spawn",
+      nowMs: () => 2_500,
+    });
+
+    expect(results).toEqual([]);
+    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(aheadHead);
+    expect(sh(repo, ["rev-parse", "main"])).toBe(aheadHead);
+    expect(readFileSync(join(repo, "tracked.txt"), "utf8")).toBe("owner wip\n");
+    expect(sh(repo, ["branch", "--list", "rescue/*"])).toBe("");
   });
 
   it("FIX-1473: does not quarantine the configured integration branch baseline", async () => {
@@ -318,8 +350,9 @@ describe("main checkout guard — US-LOOP-089", () => {
       reason: "ahead",
       files: ["<commit>:leaked configured checkout commit"],
     });
-    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(baselineHead);
+    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(leakedHead);
     expect(sh(repo, ["rev-parse", results[0]!.ref])).toBe(leakedHead);
+    expect(results[0]?.restoreCommand).toContain("git reset --hard origin/dev");
   });
 
   it("checkMainDirty ignores .roll runtime and skills submodule dirt", async () => {
@@ -686,5 +719,41 @@ describe("E10 — persisted pre-spawn main-dirty baseline", () => {
     const nested = join(root, "does", "not", "exist");
     writeMainDirtyBaseline(nested, "C-mkdir", ["a.ts"]);
     expect(readMainDirtyBaseline(nested, "C-mkdir")).toEqual(["a.ts"]);
+  });
+});
+
+
+// ─── FIX-1475: persisted pre-spawn main-HEAD baseline ────────────────────────
+
+describe("FIX-1475 — persisted pre-spawn main-HEAD baseline", () => {
+  it("captureMainHeadBaseline persists the current HEAD sha and readMainHeadBaseline round-trips it", () => {
+    const repo = cleanRepo("roll-fix1475-head-baseline-");
+    const runtimeDir = join(repo, ".roll", "loop");
+    const head = sh(repo, ["rev-parse", "HEAD"]);
+
+    captureMainHeadBaseline(repo, runtimeDir, "C-head");
+
+    expect(readFileSync(join(runtimeDir, "C-head.main-head-baseline"), "utf8")).toBe(`${head}\n`);
+    expect(readMainHeadBaseline(runtimeDir, "C-head")).toBe(head);
+  });
+
+  it("readMainHeadBaseline returns '' when the baseline file is absent (legacy absolute-ahead fallback)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-fix1475-head-absent-"));
+    dirs.push(dir);
+    expect(readMainHeadBaseline(dir, "C-none")).toBe("");
+  });
+
+  it("readMainHeadBaseline returns '' on malformed content (never throws)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-fix1475-head-malformed-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "C-bad.main-head-baseline"), "not a sha\n", "utf8");
+    expect(readMainHeadBaseline(dir, "C-bad")).toBe("");
+  });
+
+  it("captureMainHeadBaseline is a clean no-op outside a git repo (best-effort)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-fix1475-head-nogit-"));
+    dirs.push(dir);
+    captureMainHeadBaseline(dir, dir, "C-nogit");
+    expect(readMainHeadBaseline(dir, "C-nogit")).toBe("");
   });
 });

@@ -76,6 +76,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { matchHeadCommitSha } from "@roll/core";
 import type { OpenPrReference, PrMergeableState } from "@roll/core";
 import type { ToolDeclaration, ToolInvocation, ToolResult } from "@roll/spec";
 import { invokeInfraTool } from "./tools/delegation.js";
@@ -186,6 +187,25 @@ export function isTransientGhError(stderr: string): boolean {
   }
   if (/bad gateway|service unavailable|gateway timeout|internal server error/.test(s)) return true;
   return false;
+}
+
+/**
+ * US-CYCLE-009 — true iff a `gh pr merge --auto` failure means the REPOSITORY
+ * does not have auto-merge enabled (a durable configuration fact, NOT a
+ * transient hiccup). The runner degrades gracefully on this: it does not crash;
+ * it leaves the PR open and lets the reconcile path self-merge it once CI is
+ * green. Matches the messages `gh` surfaces from the GraphQL
+ * `enablePullRequestAutoMerge` mutation when the repo/branch forbids auto-merge.
+ */
+export function isAutoMergeUnavailable(stderr: string): boolean {
+  const s = stderr.toLowerCase();
+  return (
+    /auto-?merge is not allowed/.test(s) ||
+    /auto-?merge is not enabled/.test(s) ||
+    /does not (?:allow|have) auto-?merge/.test(s) ||
+    /auto-?merge.*not.*(?:allowed|enabled|available)/.test(s) ||
+    /pull request( is)? not in the correct state to enable auto-?merge/.test(s)
+  );
 }
 
 /**
@@ -937,6 +957,11 @@ export interface RunPublishResult {
   degraded?: boolean;
   /** Machine-readable root-cause tag when {@link degraded} is true. */
   rootCauseKey?: string;
+  /** US-CYCLE-009: the auto-merge attach failed because the repository does not
+   *  have auto-merge enabled (a durable config fact, not a transient fault). The
+   *  publish still succeeds (status 0, PR open); the caller alerts and the
+   *  reconcile path self-merges the PR once CI is green. */
+  autoMergeUnavailable?: boolean;
 }
 
 /**
@@ -1068,10 +1093,17 @@ export async function runPublishPlan(
 
   if (merge !== undefined) {
     // FIX-353: retry `gh pr merge` on a transient EOF, then fall back to the
-    // REST `gh api PUT …/pulls/N/merge` — sha-pinned, branch-protection-honoured.
+    // REST `gh api PUT …/pulls/N/merge` — branch-protection-honoured.
+    // US-CYCLE-009: the REST fallback is head-sha-PINNED with the same
+    // `--match-head-commit` sha the auto-merge attach carries, so the fallback
+    // never merges a moved head (PR-API-head-lag trap).
     let r = await runGhResilient(merge.argv);
     if (r.code !== 0 && isTransientGhError(r.stderr)) {
-      const restArgv = ghPrMergeRestArgv(merge.argv, prNumberFromUrl(prUrl));
+      const restArgv = ghPrMergeRestArgv(
+        merge.argv,
+        prNumberFromUrl(prUrl),
+        matchHeadCommitSha(merge.argv),
+      );
       if (restArgv !== undefined) {
         const rest = await run("gh", restArgv);
         if (rest.code === 0) r = rest;
@@ -1084,6 +1116,12 @@ export async function runPublishPlan(
         return { prUrl, ok: false, status: 0, degraded: true, rootCauseKey: "env:gh_api" };
       }
       return { prUrl, ok: false, status: 1 };
+    }
+    // US-CYCLE-009: an auto-merge attach that failed because the repo has
+    // auto-merge disabled is NON-fatal (the PR is open; reconcile self-merges).
+    // Surface it so the caller can alert instead of silently degrading.
+    if (merge.kind === "gh-pr-merge-auto" && r.code !== 0 && isAutoMergeUnavailable(r.stderr)) {
+      return { prUrl, ok: prUrl !== "", status: 0, autoMergeUnavailable: true };
     }
   }
 

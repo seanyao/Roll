@@ -78,8 +78,10 @@ export interface GitPort {
   worktreeStatusSignature?(worktreeCwd: string): Promise<string>;
   /** FIX-252: `git rev-list --count origin/main..main` in the main checkout. */
   mainAhead(repoCwd: string): Promise<number>;
-  /** FIX-903: save the current main HEAD as a rescue ref (`rescue/leaked-<cycleId>`),
-   *  then reset main to origin/main. Returns the rescued SHA and exit code. */
+  /** FIX-903: save the current main HEAD to a quarantine bundle
+   *  (`rescue/leaked-<cycleId>.bundle`) for audit. FIX-1475: NEVER resets the
+   *  shared main ref — the commits stay in place and recovery is manual.
+   *  Returns the rescued SHA and exit code. */
   rescueLeaked(repoCwd: string, refName: string): Promise<{ code: number; rescuedSha: string }>;
   /** FIX-208: count `tcr:` commits ahead of the integration branch (v2口径:
    *  `git log --oneline <baseRef>..HEAD | grep -c ' tcr:'`) in the worktree.
@@ -124,6 +126,12 @@ export interface GitPort {
     worktreeCwd: string,
     integrationBranch?: string,
   ): Promise<{ code: number; sha: string; landedBranch: string; method: "created" | "fast_forward" | "merge"; stderr: string }>;
+  /** US-CYCLE-009: the real tip sha of `origin/<branch>` via `git ls-remote`
+   *  (the git plane — proof against the PR-API-head-lag trap). Used to
+   *  head-sha-pin the auto-merge attach. LENIENT: `undefined` on any failure /
+   *  unknown branch (the caller simply drops the pin). Optional so fakes that do
+   *  not implement it keep the pre-US-CYCLE-009 (unpinned) behavior. */
+  remoteBranchTip?(repoCwd: string, branch: string): Promise<string | undefined>;
 }
 
 /** GitHub facet — the publish-plan executor + slug resolution. */
@@ -133,7 +141,7 @@ export interface GithubPort {
   /** Execute a publish PLAN (core planPublishPr/DocPr) → publish status. */
   runPublishPlan(
     plan: ReadonlyArray<{ kind: string; tool: "git" | "gh"; argv: string[] }>,
-  ): Promise<{ status: 0 | 1 | 2; prUrl: string; ok: boolean; degraded?: boolean; rootCauseKey?: string }>;
+  ): Promise<{ status: 0 | 1 | 2; prUrl: string; ok: boolean; degraded?: boolean; rootCauseKey?: string; autoMergeUnavailable?: boolean }>;
   /** Poll a PR's merge state (sync merge-wait). Returns the gh state string. */
   prState(repoCwd: string, branch: string): Promise<string>;
   /** Poll a PR's full merge info (state, mergedAt, mergeCommit). Returns undefined on gh failure. */
@@ -416,6 +424,18 @@ export interface Ports {
    * de-duplication when the GitHub PR title/branch does not carry the story id.
    */
   pendingMergeDelivery?: (storyId: string) => { prNumber?: number } | undefined;
+  /**
+   * US-CYCLE-011 — SYNC readers for the round-tail / pre-PR full-verify fact that
+   * {@link evaluateEvidenceGate} enforces: the `.roll/last-test-pass` proof body
+   * and the delivered tree hash (`git write-tree`). Optional: absent ⇒ the gate
+   * falls back to the REAL fail-closed defaults (a real file read + a real
+   * `git write-tree` in the worktree), so production enforces without any wiring.
+   * A test double supplies these to drive the gate over a faked worktree.
+   */
+  fullVerify?: {
+    proofBody(worktreePath: string): string | undefined;
+    deliveredTree(worktreePath: string): string;
+  };
   clock: ProcessClock;
   /** Runtime paths the executor writes to. */
   paths: RunnerPaths;

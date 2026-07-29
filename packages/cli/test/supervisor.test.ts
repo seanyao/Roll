@@ -964,6 +964,84 @@ defaults:
     }
   });
 
+  it("US-DELTA-006: route --role designer|builder|evaluator --json maps to design/execute/evaluate", () => {
+    const rollHome = mkdtempSync(join(tmpdir(), "roll-route-delta-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "roll-route-delta-bin-"));
+    dirs.push(rollHome, bin);
+    for (const name of ["claude", "agy", "kimi", "pi", "reasonix", "codex"]) {
+      const path = join(bin, name);
+      writeFileSync(path, "#!/bin/sh\nexit 0\n");
+      chmodSync(path, 0o755);
+    }
+    writeFileSync(join(rollHome, "agents.yaml"), `schema: roll-agents/v1
+scope: machine
+agents:
+  claude:
+    capabilities: [supervise, design, execute, evaluate]
+  agy:
+    capabilities: [supervise, design, execute, evaluate]
+  kimi:
+    capabilities: [supervise, design, execute, evaluate]
+  pi:
+    capabilities: [supervise, execute, evaluate]
+  reasonix:
+    capabilities: [supervise, execute, evaluate]
+  codex:
+    capabilities: [supervise, execute, evaluate]
+roles:
+  supervise:
+    kind: fixed
+    agent: codex
+`);
+    const cwd = project(BACKLOG, {
+      agents: `schema: roll-agents/v1
+scope: project
+inherits: machine
+defaults:
+  story:
+    roles:
+      design:
+        kind: select
+        from: [claude, agy, kimi]
+        require: [design]
+        strategy: first-available
+      execute:
+        kind: select
+        from: [agy, kimi, reasonix, codex]
+        require: [execute]
+        strategy: first-available
+      evaluate:
+        kind: select
+        from: [agy, kimi, reasonix, codex]
+        require: [evaluate]
+        strategy: first-available
+`,
+    });
+    const savedRollHome = process.env["ROLL_HOME"];
+    const savedPath = process.env["PATH"];
+    process.env["ROLL_HOME"] = rollHome;
+    process.env["PATH"] = `${bin}:${savedPath ?? ""}`;
+    try {
+      const designer = JSON.parse(run(cwd, ["route", "--role", "designer", "--json"]).out) as { castRole: string; role: string; selected: string };
+      expect(designer.castRole).toBe("designer");
+      expect(designer.role).toBe("design");
+      expect(["claude", "agy", "kimi"]).toContain(designer.selected);
+
+      const builder = JSON.parse(run(cwd, ["route", "--role", "builder", "--json"]).out) as { castRole: string; role: string };
+      expect(builder.castRole).toBe("builder");
+      expect(builder.role).toBe("execute");
+
+      const evaluator = JSON.parse(run(cwd, ["route", "--role", "evaluator", "--json"]).out) as { castRole: string; role: string };
+      expect(evaluator.castRole).toBe("evaluator");
+      expect(evaluator.role).toBe("evaluate");
+    } finally {
+      if (savedRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = savedRollHome;
+      if (savedPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = savedPath;
+    }
+  });
+
   it("US-V4-022: health --json classifies a Reasonix skill-root pollution signal", () => {
     const cwd = project(BACKLOG, {
       events: [

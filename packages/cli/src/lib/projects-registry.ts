@@ -162,6 +162,7 @@ function remoteRepoName(cwd: string): string | null {
 export function resolveProjectName(cwd: string): string {
   const envName = (process.env["ROLL_BRAND_NAME"] ?? "").trim();
   if (envName !== "") return envName;
+  if (cwd.trim() === "") return "roll";
 
   const remoteName = remoteRepoName(cwd);
   if (remoteName !== null) return remoteName;

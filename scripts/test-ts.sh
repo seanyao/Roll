@@ -53,14 +53,11 @@ else
   pnpm -r test
 fi
 
-_TREE="$(git -C "$REPO_ROOT" write-tree 2>/dev/null || true)"
-if [ -n "$_TREE" ]; then
-  mkdir -p "$REPO_ROOT/.roll"
-  printf '{"ts":%s,"tree":"%s","mode":"vitest","scope":"%s"}\n' "$(date +%s)" "$_TREE" "$SCOPE" \
-    > "$REPO_ROOT/.roll/last-test-pass"
-fi
 # FIX-1264 — vitest-based obsolete snapshot guard: any .snap file without a
 # corresponding test file is a landmine that silently drifts. Fail loud.
+# US-CYCLE-011 (codex review): this MUST run BEFORE the proof is written — an
+# orphan-snapshot `exit 1` is a FAILED run, and a failed run must never leave a
+# fresh mode:"full" proof for the delivery gate to accept.
 _SNAP_DIR="$REPO_ROOT/packages/cli/test/__snapshots__"
 _TEST_DIR="$REPO_ROOT/packages/cli/test"
 _ORPHANS=""
@@ -78,4 +75,20 @@ if [ -n "$_ORPHANS" ]; then
   printf "   Run vitest --update to remove them, or restore the test file.\n"
   exit 1
 fi
-echo "✓ TS suites green (scope: $SCOPE) — test-pass proof written (mode: vitest)"
+
+# Proof-of-pass is written ONLY here, AFTER every failure check above has passed
+# (test run + orphan-snapshot guard). Any earlier nonzero exit (set -e on the
+# suites, or the orphan `exit 1`) leaves NO fresh proof — a failed run can never
+# satisfy the pre-commit freshness gate or the US-CYCLE-011 full-verify gate.
+_TREE="$(git -C "$REPO_ROOT" write-tree 2>/dev/null || true)"
+if [ -n "$_TREE" ]; then
+  mkdir -p "$REPO_ROOT/.roll"
+  # US-CYCLE-011: stamp the CANONICAL proof mode the delivery full-verify gate
+  # reads — SCOPE=full → mode:"full" (whole suite ran, eligible for the pre-PR
+  # full-verify), SCOPE=affected → mode:"changed" (the per-commit `vitest
+  # --changed` subset, NOT a full verify). `scope` is kept for back-compat.
+  if [ "$SCOPE" = "full" ]; then _MODE="full"; else _MODE="changed"; fi
+  printf '{"ts":%s,"tree":"%s","mode":"%s","scope":"%s"}\n' "$(date +%s)" "$_TREE" "$_MODE" "$SCOPE" \
+    > "$REPO_ROOT/.roll/last-test-pass"
+fi
+echo "✓ TS suites green (scope: $SCOPE) — test-pass proof written (mode: $_MODE)"

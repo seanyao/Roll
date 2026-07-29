@@ -175,8 +175,29 @@ function readHealthSignals(runtimeDir: string): AgentHealthSignal[] {
   return out;
 }
 
-function roleToScopeRole(role: CastRoleName): AgentScopeRole {
-  return role === "evaluator" || role === "peer_reviewer" ? "evaluate" : "execute";
+/**
+ * US-DELTA-006 — Cast role → Agent scope role. The Designer is a FIRST-CLASS
+ * `design` scope role, NOT a Builder alias: a Full Delta cycle resolves it
+ * independently and a missing `design` binding fails closed BEFORE the Builder
+ * runs (no quiet fallback to `execute`). Builder → `execute`; evaluator / peer
+ * reviewer → `evaluate`.
+ *
+ * Exported so the route diagnostic and tests assert the mapping directly.
+ */
+export function roleToScopeRole(role: CastRoleName): AgentScopeRole {
+  switch (role) {
+    case "designer":
+      return "design";
+    case "builder":
+      return "execute";
+    case "evaluator":
+    case "peer_reviewer":
+      return "evaluate";
+    default: {
+      const exhaustive: never = role;
+      throw new Error(`roleToScopeRole: unknown cast role ${String(exhaustive)}`);
+    }
+  }
 }
 
 function declaredCapabilities(layers: readonly { config: AgentScopeConfig; path: string }[]): Map<AgentName, readonly AgentScopeRole[]> {

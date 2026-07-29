@@ -79,12 +79,16 @@ Builder 执行期间，主 checkout 会被物理写保护。Builder 在自己的
 
 - dirty 文件写成 `rescue/leaked-*` ref，可按 manifest 里的
   `git stash apply <ref>` 还原；
-- ahead commits 写成 `rescue/leaked-*` 分支，可按 manifest 里的
-  `git cherry-pick <ref>` 还原；
+- cycle 运行期间新出现的 ahead commits 会被书签到 `rescue/leaked-*` 分支并上报——
+  但共享 `main` ref 永远不会被移动。恢复（`git reset --hard origin/main`）
+  是 owner 显式的人工决定，loop 绝不代劳。cycle 之前就已存在的本地 ahead
+  commits（owner WIP、并发 dispatch）会被逐字节原样保留：cycle worktree 从
+  `origin/main` 切出，它们不可能泄漏进 cycle；
 - manifest 写在 `.roll/loop/quarantine/`，记录 cycle、story、phase、文件列表、
   ref 和精确还原命令。
 
-按 manifest 认领隔离内容，然后把主 checkout 恢复干净，再恢复 loop。
+按 manifest 认领隔离的 dirty 内容。被书签的 ahead commits 仍留在 `main`
+（以及对应的 `rescue/leaked-*` ref）上——先检查，确实不要了再自行 reset。
 
 ## 调度配置
 
@@ -474,7 +478,7 @@ least-recent 状态决策。需要诊断快照时使用
 
 调度前，Supervisor 还会从持久事件流中归类 agent 工具链健康信号：auth block、
 network block、setup/skill-root 污染、worktree 权限失败。污染类信号会被作为 FIX
-路由给 delta team，而不会被误标为 auth 失败。可用 `roll supervisor health` 查看
+路由给 delivery team，而不会被误标为 auth 失败。可用 `roll supervisor health` 查看
 专用面板，或从 `roll supervisor next` / `roll supervisor why` 读取摘要。
 
 ### Agent 自降级（too_big 判定）
@@ -1094,10 +1098,14 @@ API key secret — 你配置的 agent 对应的那个。
 ## 主 checkout 保护
 
 Builder 进程运行期间，Roll 会在文件系统边界把共享主 checkout 设为只读，
-同时保持 cycle worktree 可写。如果上一轮 cycle 把产品文件留脏，或让本地
-`main` 领先 `origin/main`，Roll 会把污染物移入 `rescue/leaked-*` ref 和
-`.roll/loop/quarantine/*.json` 清单，随后把主 checkout 恢复到可信状态并继续
-本轮 cycle。
+同时保持 cycle worktree 可写。如果上一轮 cycle 把产品文件留脏，Roll 会把
+污染物 stash 到 `rescue/leaked-*` ref 和 `.roll/loop/quarantine/*.json` 清单，
+然后继续本轮 cycle。本地 `main` 领先 `origin/main` 的 commits 则区别对待：
+共享 `main` ref 永远不会被 reset。cycle 之前就已存在的 ahead commits
+（owner WIP、并发 dispatch）会被逐字节原样保留——cycle worktree 从
+`origin/main` 切出，它们不可能泄漏进 cycle。只有 cycle 运行期间移动的
+HEAD 才算泄漏：它会被书签到 `rescue/leaked-*` 分支、写进清单并产生告警；
+是否 reset main 是 owner 显式的人工决定。
 
 事件流会记录 `sandbox:write_protected` 和 `sandbox:quarantined`。
 `roll loop watch --events`、`roll loop cycle <id> --activity` 和 supervisor 输出都会

@@ -233,4 +233,27 @@ describe("US-DELIV-008 — read path and reconcile command AGREE on the same cyc
     expect(d.out.join("")).toContain("⏳ wait");
     expect(readEvents(p).filter((e) => e.type === "delivery:reconciled")).toHaveLength(0);
   });
+
+  // US-CYCLE-009 (codex #2): --dry-run mutates NOTHING even for a genuinely
+  // merged cycle — no backlog flip, no delivery:reconciled, no merge_confirmed.
+  it("merged cycle: --dry-run reports delivered but writes NO events and does NOT flip the backlog", async () => {
+    const p = cycleProject(true);
+    const backlogPath = join(p, ".roll", "backlog.md");
+    writeFileSync(
+      backlogPath,
+      `## Epic: Test\n\n| ID | Description | Status |\n|----|----|----|\n| ${STORY} | unify engine | 🔨 In Progress |\n`,
+    );
+    const eventsBefore = readEvents(p).length;
+
+    const d = commandDeps(p);
+    const code = await withoutGitEnv(() => loopReconcileCommand(["--dry-run"], d));
+    expect(code).toBe(0);
+    expect(d.out.join("")).toContain("✅ delivered"); // reports the verdict …
+    // … but mutates nothing: no new events, backlog untouched.
+    expect(readEvents(p).length).toBe(eventsBefore);
+    expect(readEvents(p).filter((e) => e.type === "delivery:reconciled")).toHaveLength(0);
+    expect(readEvents(p).filter((e) => e.type === "delivery:merge_confirmed")).toHaveLength(0);
+    expect(readFileSync(backlogPath, "utf8")).toContain("🔨 In Progress");
+    expect(readFileSync(backlogPath, "utf8")).not.toContain("✅ Done");
+  });
 });

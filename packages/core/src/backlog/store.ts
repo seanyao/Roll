@@ -144,7 +144,17 @@ export function appendBacklogRow(
   content: string,
   row: { id: string; title: string; epic: string; dependsOn?: string[]; chainDepth?: number },
 ): { content: string; appended: boolean } {
-  if (content.includes(`| [${row.id}]`)) return { content, appended: false };
+  // FIX-1475: de-dup by an EXACT id-cell match, not `content.includes("| [id]")`.
+  // The substring form falsely treated ANOTHER row whose description opens with a
+  // link to `[<id>](...)` as an already-existing card, silently dropping the
+  // append (create / self-downgrade).
+  const alreadyPresent = content.split("\n").some((l) => {
+    if (!l.startsWith("|")) return false;
+    const cell = (l.split("|")[1] ?? "").trim();
+    const id = cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
+    return id === row.id;
+  });
+  if (alreadyPresent) return { content, appended: false };
   const tags = [
     row.chainDepth !== undefined && row.chainDepth > 0 ? `chain_depth:${row.chainDepth}` : "",
     row.dependsOn !== undefined && row.dependsOn.length > 0 ? `depends-on:${row.dependsOn.join(",")}` : "",
@@ -188,7 +198,16 @@ export function extractAnnotation(cell: string): string | undefined {
   return undefined;
 }
 
-export function markStatus(content: string, pattern: string, newStatus: string): MarkResult {
+/**
+ * Rewrite the Status cell of every row whose id cell satisfies `matches`.
+ * Shared core of {@link markStatus} (bash-parity prefix matching) and
+ * {@link markStatusExact} (exact-id only).
+ */
+function markStatusWith(
+  content: string,
+  matches: (id: string) => boolean,
+  newStatus: string,
+): MarkResult {
   let count = 0;
   const lines = content.split("\n");
   const out = lines.map((raw) => {
@@ -198,11 +217,8 @@ export function markStatus(content: string, pattern: string, newStatus: string):
     if (!line.startsWith("|")) return raw;
     const parts = line.split("|");
     if (parts.length < 5) return raw;
-    // No family filter here — bash `_backlog_set_status` marks any row whose id
-    // cell matches, regardless of US/FIX/… prefix. The only intentional
-    // divergence from the oracle is ID-token anchoring (FIX-106).
     const id = stripLink((parts[1] ?? "").trim());
-    if (!idMatchesPattern(id, pattern)) return raw;
+    if (!matches(id)) return raw;
     const currentCell = (parts[parts.length - 2] ?? "").trim();
     // FIX-1219: preserve annotation text when rewriting Done status.
     // When the current cell already has a Done marker with trailing annotation
@@ -222,6 +238,25 @@ export function markStatus(content: string, pattern: string, newStatus: string):
     return hasCr ? `${rebuilt}\r` : rebuilt;
   });
   return { content: out.join("\n"), count };
+}
+
+export function markStatus(content: string, pattern: string, newStatus: string): MarkResult {
+  // No family filter here — bash `_backlog_set_status` marks any row whose id
+  // cell matches, regardless of US/FIX/… prefix. `idMatchesPattern` also marks
+  // `<id>-` descendants (bash parity). The only intentional divergence from the
+  // oracle is ID-token anchoring (FIX-106).
+  return markStatusWith(content, (id) => idMatchesPattern(id, pattern), newStatus);
+}
+
+/**
+ * FIX-1475: rewrite the Status cell of ONLY the row whose id EXACTLY equals
+ * `id` (case-insensitive). Unlike {@link markStatus}, this never touches
+ * `<id>-` descendant rows — a durable Done flip for `FIX-1475` must not also
+ * mark `FIX-1475-followup` Done.
+ */
+export function markStatusExact(content: string, id: string, newStatus: string): MarkResult {
+  const target = id.toUpperCase();
+  return markStatusWith(content, (rowId) => rowId.toUpperCase() === target, newStatus);
 }
 
 /** Store bound to a {@link FileStore} (Node-backed by default). */
@@ -262,6 +297,26 @@ export class BacklogStore {
     let result: MarkResult = { content: "", count: 0 };
     const hash = this.writeBacklog(path, expectedHash, (content) => {
       result = markStatus(content, pattern, newStatus);
+      return result.content;
+    });
+    return { ...result, hash };
+  }
+
+  /**
+   * FIX-1475: like {@link mark} but flips ONLY the row whose id EXACTLY equals
+   * `id` — never `<id>-` descendants. Use this when marking a single concrete
+   * story (e.g. a Done/In-Progress transition for one card), where prefix
+   * matching would wrongly flip sibling rows.
+   */
+  markExact(
+    path: string,
+    expectedHash: string,
+    id: string,
+    newStatus: string,
+  ): MarkResult & { hash: string } {
+    let result: MarkResult = { content: "", count: 0 };
+    const hash = this.writeBacklog(path, expectedHash, (content) => {
+      result = markStatusExact(content, id, newStatus);
       return result.content;
     });
     return { ...result, hash };

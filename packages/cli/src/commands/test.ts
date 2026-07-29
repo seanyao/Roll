@@ -368,7 +368,7 @@ function isolationDispatch(method: "exec" | "reset", args: string[]): number {
   return runForward(args[0] ?? "", args.slice(1)).status;
 }
 
-const HELP = `Usage: roll test [--where | --reset] [--] [<extra-args>...]
+const HELP = `Usage: roll test [--full | --where | --reset] [--] [<extra-args>...]
 
 Runs the project's test suite through the isolation adapter chosen in
 .roll/local.yaml:
@@ -394,6 +394,12 @@ Runner compatibility (FIX-1274):
   green test run bound to the exact committed tree.
 
 Flags:
+  --full         Run the WHOLE suite (round-tail / pre-PR verify), not the
+                 per-commit changed/affected subset, and stamp the proof
+                 \`mode:"full"\`. The delivery evidence gate requires a fresh
+                 full-mode proof matching the delivered tree before a PR opens
+                 (US-CYCLE-011). Run this once at round tail, after the last
+                 \`tcr:\` commit and before handing off to publish.
   --where        Print where tests will run, then exit (e.g. \`host\`,
                  \`unknown:<type>\`).
   --reset        Reset the isolation environment.
@@ -419,6 +425,25 @@ export function testCommand(args: string[]): number {
       argv = ["--help"];
       break;
     }
+  }
+
+  // US-CYCLE-011: `--full` (before any `--`) forces the ROUND-TAIL FULL suite so
+  // the minted proof is `mode:"full"` — the pre-PR full-verify the delivery
+  // evidence gate now requires. Extract + strip it so it never leaks into the
+  // `-- <args>` passthrough. Ignored once `--help` has been resolved above.
+  let fullRequested = false;
+  if (!(argv.length === 1 && argv[0] === "--help")) {
+    const cleaned: string[] = [];
+    let sawSep = false;
+    for (const a of argv) {
+      if (!sawSep && a === "--full") {
+        fullRequested = true;
+        continue;
+      }
+      if (a === "--") sawSep = true;
+      cleaned.push(a);
+    }
+    argv = cleaned;
   }
 
   const first = argv[0] ?? "";
@@ -461,6 +486,16 @@ export function testCommand(args: string[]): number {
   const guard = ensureNoneIsolation();
   if (guard !== null) return guard;
 
+  // US-CYCLE-011 (codex review): `--full` forces the WHOLE suite; combining it
+  // with a `-- <args>` passthrough is a footgun — the passthrough below would
+  // win and silently mint a NON-full proof (e.g. `roll test --full -- --affected`
+  // would run the affected subset yet the operator asked for full). Reject the
+  // combination loudly instead.
+  if (fullRequested && argv.length > 0) {
+    err("roll test --full runs the whole suite and cannot be combined with `-- <args>` passthrough");
+    return 1;
+  }
+
   // Explicit passthrough: `roll test -- <args>` forwards verbatim. The caller
   // owns the exact command and its proof; roll does not resolve or mint one.
   if (argv.length > 0) {
@@ -484,7 +519,19 @@ export function testCommand(args: string[]): number {
     process.stderr.write(`  next step: ${resolution.nextStep}\n`);
     return 1;
   }
-  const plan = resolution.plan;
+  // US-CYCLE-011: `--full` overrides the per-commit changed/affected selection
+  // with the WHOLE suite (`npm test`, no changed/affected flag) and stamps the
+  // proof `mode:"full"`. Proof OWNERSHIP is unchanged: roll's own wrapper
+  // (test-ts.sh, SCOPE=full) writes its own mode:"full" proof; a raw project lets
+  // roll mint it (writesProof carried through from the resolution).
+  const plan = fullRequested
+    ? {
+        mode: "full" as GateMode,
+        npmTestArgs: [] as string[],
+        writesProof: resolution.plan.writesProof,
+        reason: "forced full verify (--full) — round-tail proof mode=full",
+      }
+    : resolution.plan;
   // Surface the compatibility decision for the new (changed/full) paths; the
   // legacy/wrapper `--affected` path stays silent for byte-stable parity.
   if (plan.mode !== "affected") infoErr(`test gate: ${plan.mode} — ${plan.reason}`);

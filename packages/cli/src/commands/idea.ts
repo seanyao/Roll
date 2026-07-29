@@ -25,10 +25,11 @@
  *
  * Output follows the resolved locale (single-language).
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BacklogItem } from "@roll/core";
-import { BacklogStore, ConflictError, IDEA_SECTIONS, appendIdea, inferEpic, planIdea } from "@roll/core";
+import { BacklogStore, ConflictError, IDEA_SECTIONS, appendIdea, inferEpic, parseBacklog, planIdea } from "@roll/core";
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { generateIndex } from "../lib/archive.js";
 import { UNCATEGORIZED } from "../lib/archive.js";
@@ -68,7 +69,68 @@ function cardIdsAsBacklogItems(ids: readonly string[]): BacklogItem[] {
   return ids.map((id) => ({ id, desc: "", status: "" }));
 }
 
-export function ideaCommand(args: string[]): number {
+/** FIX-1481: injectable seams so id allocation can see the REMOTE authoritative
+ *  backlog (not just the possibly-stale local file) and be unit-tested. */
+export interface IdeaCommandDeps {
+  /** Ids present on the remote (`origin/main`) backlog. Best-effort: returns []
+   *  when the remote is unreachable so allocation degrades to local, never blocks.
+   *  Called with `fetch:true` for BOTH the allocation pool and the pre-write
+   *  collision re-check — the re-check must fetch fresh to see a concurrent
+   *  site's just-pushed id. */
+  remoteBacklogIds?: (projectPath: string, opts?: { fetch?: boolean }) => string[];
+}
+
+/**
+ * FIX-1481: read the ids on the REMOTE authoritative backlog so a new number is
+ * allocated past ids that other machines have already taken but this checkout
+ * has not synced yet (the multi-site collision that produced FIX-1272/1273/1473).
+ * Best-effort across both layouts — nested roll-meta (`.roll` is its own repo,
+ * `backlog.md` at its root) and in-repo (`.roll/backlog.md` tracked by the
+ * product repo).
+ *
+ * When `fetch` is true (the default) a FRESH `git fetch origin main` is REQUIRED
+ * for a layout to count as reachable: if the fetch fails we do NOT fall back to
+ * a stale local `origin/main` ref — that layout is skipped, and if no layout can
+ * refresh the result is `[]` (the caller degrades to local-only + a visible
+ * hint). This is what makes the pre-write re-check able to see a concurrent
+ * site's just-pushed id (AC2) and honours AC1's offline-degrade contract.
+ * `fetch:false` reads the already-fetched ref without re-fetching. Any
+ * git/parse failure → `[]` (degrade to local; never block capture).
+ */
+function realRemoteBacklogIds(projectPath: string, opts?: { fetch?: boolean }): string[] {
+  const doFetch = opts?.fetch !== false;
+  const layouts: Array<{ cwd: string; ref: string }> = [
+    { cwd: join(projectPath, ".roll"), ref: "origin/main:backlog.md" },
+    { cwd: projectPath, ref: "origin/main:.roll/backlog.md" },
+  ];
+  for (const { cwd, ref } of layouts) {
+    if (!existsSync(cwd)) continue;
+    if (doFetch) {
+      try {
+        execFileSync("git", ["fetch", "--quiet", "origin", "main"], { cwd, stdio: "ignore", timeout: 15_000 });
+      } catch {
+        // Could not refresh this layout's origin/main — treat as unreachable
+        // (never read a STALE ref and pass it off as authoritative). Try the
+        // next layout; if none refreshes, the caller degrades to local-only.
+        continue;
+      }
+    }
+    try {
+      const content = execFileSync("git", ["show", ref], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 15_000,
+      });
+      return parseBacklog(content).map((it) => it.id);
+    } catch {
+      /* wrong layout / no such ref — try the next */
+    }
+  }
+  return [];
+}
+
+export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number {
   const noColor =
     args.includes("--no-color") || !process.stdout.isTTY || (process.env["NO_COLOR"] ?? "") !== "";
   renderState.useColor = !noColor;
@@ -103,7 +165,17 @@ export function ideaCommand(args: string[]): number {
   const projectPath = process.cwd();
   const occupiedCardItems = cardIdsAsBacklogItems(readCardFolderIds(projectPath));
   const extraOccupiedIds: string[] = [];
-  let plan = planIdea([...snap.items, ...occupiedCardItems], text);
+  // FIX-1481: fold ids from the REMOTE authoritative backlog into the allocation
+  // pool so a new number lands past what other machines have already taken but
+  // this checkout has not synced. Unreachable remote → [] (degrade to local).
+  const remoteIds = (deps.remoteBacklogIds ?? realRemoteBacklogIds)(projectPath, { fetch: true });
+  const remoteItems = cardIdsAsBacklogItems(remoteIds);
+  if (remoteIds.length === 0) {
+    process.stderr.write(
+      `${c("dim", lang === "zh" ? "· 远端 backlog 不可达,取号仅依据本地(可能与其他现场撞号)" : "· remote backlog unreachable — allocating from local only (may collide with other sites)")}\n`,
+    );
+  }
+  let plan = planIdea([...snap.items, ...occupiedCardItems, ...remoteItems], text);
 
   if (plan.violations.length > 0) {
     process.stderr.write(
@@ -119,8 +191,25 @@ export function ideaCommand(args: string[]): number {
   let cardDir = join(projectPath, ".roll", "features", epic, plan.id);
   while (existsSync(join(cardDir, "spec.md"))) {
     extraOccupiedIds.push(plan.id);
-    plan = planIdea([...snap.items, ...occupiedCardItems, ...cardIdsAsBacklogItems(extraOccupiedIds)], text);
+    plan = planIdea(
+      [...snap.items, ...occupiedCardItems, ...remoteItems, ...cardIdsAsBacklogItems(extraOccupiedIds)],
+      text,
+    );
     cardDir = join(projectPath, ".roll", "features", epic, plan.id);
+  }
+
+  // FIX-1481 AC2: fail-loud if the chosen id was taken on the remote between the
+  // allocation read and now (a concurrent site minted it). This re-check FETCHES
+  // fresh (fetch:true) so it actually sees the other site's just-pushed id — a
+  // fetch-free read of the stale local origin/main would miss it. If the remote
+  // is unreachable the seam returns [] and we proceed (can't verify → don't
+  // block offline capture; the local-only degrade hint was already shown).
+  const freshRemoteIds = (deps.remoteBacklogIds ?? realRemoteBacklogIds)(projectPath, { fetch: true });
+  if (freshRemoteIds.includes(plan.id)) {
+    process.stderr.write(
+      `${RED}[roll]${NC} ${lang === "zh" ? `取号 ${plan.id} 已被其他现场占用(远端已存在)— 请重跑 roll idea` : `id ${plan.id} was just taken by another site (exists on remote) — re-run roll idea`}\n`,
+    );
+    return 1;
   }
 
   try {

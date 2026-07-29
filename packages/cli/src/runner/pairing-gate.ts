@@ -336,7 +336,13 @@ export type PairFanoutReason =
   | "high_risk_truth_or_release_gate"
   | "security_sensitive_card"
   | "repeated_prior_failures"
-  | "owner_requested_quorum";
+  | "owner_requested_quorum"
+  // US-CYCLE-008 — the card's LINT-VALIDATED design-contract declared
+  // `risk_tier: high` (auth / data-integrity / state-machine / shared-state
+  // harness). The evaluation fans out into a parallel adversarial panel. This is
+  // the ONLY tier-driven fan-out reason; it is derived from the spec, never from
+  // a supervisor/flag/env override (anti-Goodhart, see evaluation-tier.ts).
+  | "high_risk_tier_card";
 
 /** FIX-1054 — the bounded fan-out cap: even an explicit high-risk fan-out never
  *  spawns the entire installed roster. */
@@ -626,6 +632,15 @@ export interface RunScorePairingResult {
   /** The reviewer's fresh session/cast id recorded on the note (independence
    *  is verifiable, not asserted). Present on a "scored" result. */
   sessionId?: string;
+  /**
+   * US-CYCLE-008 — the ACTUAL panel composition: every peer a fresh evaluator
+   * session was spawned for during this score stage, in spawn order, de-duped.
+   * For a low-tier serial run this is normally one peer; for a high-tier fan-out
+   * it is the bounded parallel pool. The round-journal records this against the
+   * DECLARED tier so a readout can audit "declared vs actual". Always present
+   * (possibly empty on a none-available short-circuit).
+   */
+  panel: string[];
 }
 
 /** FIX-343 (step ④): the per-attempt score timeout and the bounded retry budget
@@ -716,7 +731,7 @@ export async function runScorePairing(
       // Fail-loud: no INDEPENDENT scorer exists to spawn a fresh session of, and
       // the builder is not an eligible fallback → BLOCK (no self-score, AC4).
       deps.event({ type: "pair:none-available", cycleId, stage: scoreStage, reason: "no independent scorer available to spawn a fresh review session", ts: deps.now() });
-      return { status: "none-available" };
+      return { status: "none-available", panel: [] };
     }
 
     const timeoutMs = deps.timeoutMs ?? SCORE_TIMEOUT_MS;
@@ -756,7 +771,12 @@ export async function runScorePairing(
     // (firstValid re-throws → outer catch → status "error"), per FIX-335.
     type ScoreWinner = { peer: string; scored: PairScore; sessionId: string };
     const fanout = deps.fanout;
+    // US-CYCLE-008 — the ACTUAL panel: every peer a fresh evaluator session is
+    // spawned for, in spawn order, de-duped. Recorded against the DECLARED tier
+    // so the round-journal can audit "declared vs actual" evaluation depth.
+    const panel: string[] = [];
     const spawnScore = async (peer: string, attempt: number): Promise<ScoreWinner | null> => {
+      if (!panel.includes(peer)) panel.push(peer);
       // FIX-344: the session-id prefix carries the score-stage label so a design
       // score's session is `${cycleId}:design:...` (distinguishable from a cycle's
       // `${cycleId}:score:...`); both remain a unique, verifiably-independent
@@ -856,7 +876,7 @@ export async function runScorePairing(
     }
     if (winner === null) {
       // All rounds (hetero, same-vendor, escalation) exhausted → honest timeout, BLOCK.
-      return { status: "timeout" };
+      return { status: "timeout", panel };
     }
     const { peer, scored, sessionId } = winner;
 
@@ -888,9 +908,9 @@ export async function runScorePairing(
     } catch {
       /* evidence/event are auxiliaries — the note is the product */
     }
-    return { status: "scored", peer, score: scored.score, notePath: note.path, sessionId };
+    return { status: "scored", peer, score: scored.score, notePath: note.path, sessionId, panel };
   } catch {
-    return { status: "error" }; // never throw — scoring must not fail the cycle
+    return { status: "error", panel: [] }; // never throw — scoring must not fail the cycle
   }
 }
 
