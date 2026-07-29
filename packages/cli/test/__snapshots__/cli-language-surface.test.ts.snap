@@ -35,26 +35,26 @@ exports[`US-LANG-003 CLI language surface > loop --help is locale-pinned and sin
   "en": "Usage: roll loop <subcommand>
 The autonomous delivery loop — grouped control / observe / alerts / maintain.
 
-control   on · off [--all] · now · pause · resume · reset · go · goal · recover · fallback
-observe   watch · status · runs · log · events · signals · eval
+control   go · goal · pause · resume · reset · recover · reconcile
+observe   watch · status · runs · log · events · signals · eval · cycles · cycle
 alerts    alert list · alert ack · alert resolve · alert log
-maintain  gc · fmt · mute · unmute · reconcile-pending
-internal  test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes
+maintain  gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
+internal  test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
-[38;2;88;166;255mstates    [0mACTIVE (lanes armed) · DORMANT (backlog drained → loop lane self-unloads, zero idle records) · PAUSED (you stopped it)
-[38;2;88;166;255mwake      [0ma DORMANT loop wakes on any roll command · the daily dream scan · a PR merge
+[38;2;88;166;255mstates    [0mACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)
+[38;2;88;166;255mdrive     [0mopen an agent session and run roll loop go — nothing advances on its own
 ",
   "zh": "用法：roll loop <子命令>
 自治交付循环——按作动/传感/告警/维护分组。
 
-作动      on · off [--all] · now · pause · resume · reset · go · goal · recover · fallback
-传感      watch · status · runs · log · events · signals · eval
+作动      go · goal · pause · resume · reset · recover · reconcile
+传感      watch · status · runs · log · events · signals · eval · cycles · cycle
 告警      alert list · alert ack · alert resolve · alert log
-维护      gc · fmt · mute · unmute · reconcile-pending
-内部      test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes
+维护      gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
+内部      test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
-[38;2;88;166;255m状态      [0mACTIVE 运行中(lane 就绪) · DORMANT 休眠(backlog 抽干→自卸 loop lane、不再记空转) · PAUSED 已暂停(你停的)
-[38;2;88;166;255m唤醒      [0m休眠的 loop 由以下唤醒：任意 roll 命令 · 每日 dream 扫描 · PR 合并
+[38;2;88;166;255m状态      [0mACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)
+[38;2;88;166;255m驱动      [0m开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进
 ",
 }
 `;

@@ -23,29 +23,33 @@ interface Band {
 }
 
 const BANDS: Band[] = [
-  { key: "control", color: "amber", en: "control", zh: "作动", verbs: "on · off [--all] · now · pause · resume · reset · go · goal · recover · fallback" },
-  { key: "observe", color: "green", en: "observe", zh: "传感", verbs: "watch · status · runs · log · events · signals · eval" },
+  // US-LOOP-113: `on`/`off`/`now`/`fallback` installed, removed, or poked a
+  // resident scheduler and are gone. `pause`/`resume` stay — PAUSE is a live gate
+  // the correction circuit breaker writes automatically, so `resume` is the only
+  // supported way out of a paused project.
+  { key: "control", color: "amber", en: "control", zh: "作动", verbs: "go · goal · pause · resume · reset · recover · reconcile" },
+  { key: "observe", color: "green", en: "observe", zh: "传感", verbs: "watch · status · runs · log · events · signals · eval · cycles · cycle" },
   { key: "alerts", color: "red", en: "alerts", zh: "告警", verbs: "alert list · alert ack · alert resolve · alert log" },
-  { key: "maintain", color: "muted", en: "maintain", zh: "维护", verbs: "gc · fmt · mute · unmute · reconcile-pending" },
+  { key: "maintain", color: "muted", en: "maintain", zh: "维护", verbs: "gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list" },
   // Agent-invoked entry points — live, but not user-facing daily verbs. Listed
   // so AC5's "no live subcommand dropped" holds without polluting the four
   // design bands.
-  { key: "internal", color: "faint", en: "internal", zh: "内部", verbs: "test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes" },
+  { key: "internal", color: "faint", en: "internal", zh: "内部", verbs: "test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split" },
 ];
 
-/** US-LOOP-079m (AC1/AC3): the run-state model documented right in `--help` —
- *  the three states, what DORMANT means (backlog drained → the loop lane
- *  self-unloads and stops writing idle records), and the three ways a dormant
- *  loop wakes. Plain language, no internal jargon; EN and 中 each their own
- *  block (AC4). */
+/** US-LOOP-113: the run-state model in `--help`. The old three states described a
+ *  daemon's lifecycle — ACTIVE meant "lanes armed", DORMANT meant "the lane
+ *  unloaded itself", and a dormant loop had to be "woken". With no resident lane
+ *  there are two honest states and nothing to wake: a session drives, or the owner
+ *  has paused autonomous progress. EN and 中 each get their own block. */
 const STATE_LINES: Record<Lang, string[]> = {
   en: [
-    `${c("blue", pad("states", 10))}ACTIVE (lanes armed) · DORMANT (backlog drained → loop lane self-unloads, zero idle records) · PAUSED (you stopped it)`,
-    `${c("blue", pad("wake", 10))}a DORMANT loop wakes on any roll command · the daily dream scan · a PR merge`,
+    `${c("blue", pad("states", 10))}ACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)`,
+    `${c("blue", pad("drive", 10))}open an agent session and run roll loop go — nothing advances on its own`,
   ],
   zh: [
-    `${c("blue", pad("状态", 10))}ACTIVE 运行中(lane 就绪) · DORMANT 休眠(backlog 抽干→自卸 loop lane、不再记空转) · PAUSED 已暂停(你停的)`,
-    `${c("blue", pad("唤醒", 10))}休眠的 loop 由以下唤醒：任意 roll 命令 · 每日 dream 扫描 · PR 合并`,
+    `${c("blue", pad("状态", 10))}ACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)`,
+    `${c("blue", pad("驱动", 10))}开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进`,
   ],
 };
 

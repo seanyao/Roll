@@ -425,6 +425,20 @@ export function lanesSection(lang: Lang, probe?: LaneProbe): string[] {
   lines.push("");
   lines.push(lang === "zh" ? "launchd lanes(全部 com.roll.* 任务)" : "launchd lanes (all com.roll.* jobs)");
   lines.push("");
+  // US-LOOP-113 (codex review r2): resident scheduling is retired, so any lane
+  // listed here is a LEFTOVER from an older install. `roll loop off` no longer
+  // exists to disarm it, so name the manual disarm explicitly — a machine that
+  // still has an armed timer contradicts "nothing runs on its own".
+  lines.push(
+    lang === "zh"
+      ? "  这些是旧版安装留下的残留 lane —— Roll 不再使用定时调度。逐个卸载："
+      : "  These are leftovers from an older install — Roll no longer uses timers. Disarm each:",
+  );
+  // `;` not `&&` (codex review r3): a lane listed as "not loaded" has nothing to
+  // boot out, so bootout exits non-zero and `&&` would leave the plist on disk —
+  // exactly the leftover this block is telling the user to remove.
+  lines.push("    launchctl bootout gui/$(id -u)/<label>; rm -f ~/Library/LaunchAgents/<label>.plist");
+  lines.push("");
   for (const name of plists) {
     const label = name.replace(/\.plist$/, "");
     const wd = readWorkingDirectory(join(dir, name));

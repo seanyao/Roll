@@ -200,17 +200,12 @@ export async function dreamRunOnceCommand(
     return 1;
   }
   append(`[${stamp()}] dream scan end rc=${exitCode}\n`);
-  // US-LOOP-079j: after a successful dream scan, re-arm a dormant loop.
-  if (exitCode === 0) {
-    try {
-      const rearm = await deps.dreamReArm(id.path, id.slug);
-      if (rearm.rearmed) {
-        append(`[${stamp()}] dream re-arm: woke loop (picked=${rearm.picked ?? "none"})\n`);
-      }
-    } catch (rearmErr) {
-      append(`[${stamp()}] dream re-arm error: ${String(rearmErr)}\n`);
-    }
-  }
+  // US-LOOP-113 (codex review r5): the post-scan re-arm is DISARMED. It existed to
+  // wake a DORMANT loop by creating and loading `com.roll.loop.<slug>`. With
+  // `roll loop off` removed, a dream scan that arms a timer nobody can disarm is the
+  // same one-way trap the wake-on-command hook was. The port stays on the deps
+  // interface until US-LOOP-114/115 delete the machinery outright.
+  void deps.dreamReArm;
   // REFACTOR-049 AC3: auto-gc after each dream scan — best-effort, never blocks.
   try {
     const save = process.cwd();

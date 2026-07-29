@@ -9,28 +9,37 @@ function doc(path: string): string {
 }
 
 describe("FIX-256 — goal mode docs and site wording", () => {
-  it("English and Chinese loop guides document goal mode versus scheduled mode", () => {
+  // US-LOOP-113: there is no scheduled mode to contrast goal mode WITH. What the
+  // guides must still document is the go lock (two sessions cannot race) and the
+  // pause/resume path.
+  it("English and Chinese loop guides document the go lock and pause/resume", () => {
     const en = doc("guide/en/loop.md");
-    expect(en).toContain("### Goal Mode vs Scheduled Mode");
+    expect(en).toContain("### The go lock");
     expect(en).toContain("go.lock");
-    expect(en).toMatch(/scheduled .*yield/i);
-    expect(en).toMatch(/scheduler .*off/i);
-    expect(en).toMatch(/paused.*resume/i);
+    expect(en).toMatch(/paused[\s\S]{0,200}resume/i);
+    expect(en).not.toMatch(/scheduled tick/i);
 
     const zh = doc("guide/zh/loop.md");
-    expect(zh).toContain("### Goal Mode 与定时模式");
+    expect(zh).toContain("### go 锁");
     expect(zh).toContain("go.lock");
-    expect(zh).toContain("定时");
-    expect(zh).toContain("off");
-    expect(zh).toContain("paused");
+    expect(zh).toMatch(/paused|已暂停/);
     expect(zh).toContain("resume");
+    expect(zh).not.toContain("定时 tick");
   });
 
-  it("READMEs summarize the off/pause distinction near roll loop go", () => {
-    expect(doc("README.md")).toMatch(/roll loop go[\s\S]{0,500}scheduler is off/i);
-    expect(doc("README.md")).toMatch(/roll loop go[\s\S]{0,700}paused[\s\S]{0,120}resume/i);
-    expect(doc("README_CN.md")).toMatch(/roll loop go[\s\S]{0,500}off/);
-    expect(doc("README_CN.md")).toMatch(/roll loop go[\s\S]{0,700}paused[\s\S]{0,120}resume/);
+  // US-LOOP-113: there is no "scheduler is off" state to distinguish from paused —
+  // resident scheduling is retired. What the READMEs must still explain is that the
+  // session drives, and that pause/resume gate autonomous progress.
+  it("READMEs explain session-driven delivery and the pause/resume gate", () => {
+    for (const f of ["README.md", "README_CN.md"]) {
+      const d = doc(f);
+      expect(d, f).toMatch(/roll loop go/);
+      expect(d, f).toMatch(/roll loop pause[\s\S]{0,400}roll loop resume/);
+      // And no longer advertises the removed scheduler verbs.
+      expect(d, f).not.toMatch(/roll loop on\b/);
+      expect(d, f).not.toMatch(/roll loop off\b/);
+      expect(d, f).not.toMatch(/roll loop fallback\b/);
+    }
   });
 
   it("site exposes goal mode and no longer advertises loop / dream / brief as active lanes", () => {

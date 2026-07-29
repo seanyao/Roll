@@ -45,7 +45,7 @@ as a regular user so the app installs into that user's `~/Applications`.
 cd your-project
 roll init           # set up Roll here (interactive confirmation)
 roll next           # continue with design, apply, repair, migrate, loop, or status
-roll loop on        # let AI work through the backlog (optional)
+roll loop go        # let AI work through the backlog in this session
 ```
 
 `roll init` first diagnoses the current directory. Complete Roll projects get
@@ -146,24 +146,20 @@ failure, zero TCR, missing PR/CI/evaluator evidence, parser failures, auth
 blocks, permission blocks, and `[roll:manual-merge]` PRs stop new scheduling and
 surface an owner action through `roll supervisor status/next/why`.
 
-### Operating modes
+### How work is driven
 
-Roll has two product modes over the same backlog, truth, route profile, execution
-profiles, evidence, Evaluator, and release gates:
+Roll has one way to drive delivery, over the same backlog, truth, route profile,
+execution profiles, evidence, Evaluator, and release gates:
 
-- **guided** — the owner drives through `roll supervisor status/next/why` and
-  starts work explicitly with commands such as `roll loop go --cards <id>`.
-  Guided mode never silently starts long-running Story execution. When the
-  scheduler is off, `roll loop go` runs a manual goal; when the loop is paused,
-  use `roll loop resume` before scheduled work can continue.
-- **autonomous** — `roll loop on` installs the scheduler; eligible Stories may
-  be picked within the existing pause, budget, route, evidence, Evaluator, and
-  release gates. `roll loop pause` / `roll loop off` return control to guided
-  operation; `roll loop off --all` is the machine-wide emergency stop for every
-  local `com.roll.*` LaunchAgent; `roll loop resume` / `roll loop on` switch
-  back explicitly. If macOS launchd bootstrap fails, `roll loop on` exits
-  unarmed and offers `roll loop fallback start --confirm` as an owner-confirmed,
-  non-persistent fallback; repair launchd first when possible.
+- **The session drives.** The owner reads `roll supervisor status/next/why` and
+  starts work in that session with `roll loop go` (optionally `--epic <name>` or
+  `--cards <id>`). The agent session running it is the Supervisor. Nothing
+  advances on its own — no timer, no resident process.
+- **Pause stops autonomous progress.** `roll loop pause` stops cards from being
+  picked; `roll loop resume` clears it. The correction circuit breaker also pauses
+  automatically after repeated failures, so `resume` is the supported way back.
+  An explicit one-shot (`roll loop go --cards <id>`) still runs while paused.
+
 - **Attest and evidence are story-scoped**. A Story is accepted through its own Acceptance Review Page (`latest/<id>-review.html`), AC map, and screenshots/test artifacts. `latest/<id>-report.html` remains a legacy alias for one release cycle.
 
 Agent bindings are declared in two files: `~/.roll/agents.yaml` for Machine Scope
@@ -209,7 +205,7 @@ roll init
 # or let Roll write .roll/brief.md from detected notes.
 roll next
 roll design --from-file .roll/brief.md
-roll loop on
+roll loop go
 ```
 
 Roll explains the next design step instead of inventing fake work. The Designer turns the requirement into Stories, the Supervisor chooses `standard`, `verified`, or `designed` execution, and the owner reviews story-scoped attest evidence.
@@ -221,7 +217,7 @@ cd existing-codebase
 roll init
 roll next
 roll init --apply        # after reviewing the generated onboard plan
-roll loop on
+roll loop go
 ```
 
 Roll diagnoses the repository without destructive migration, writes or updates Roll metadata only after review, and then lets the Supervisor reason over existing backlog, docs, context, open PRs, and scoped role bindings. Current state is visible through CLI-first observability: `roll status`, `roll loop watch`, `roll loop runs`, `roll loop cycle <id>`, `roll loop alert`, and story reports.
@@ -236,11 +232,11 @@ roll init
 # 1. Create a GitHub repository for the project and add it as `origin`
 # 2. Push the current branch so the loop has somewhere to land work
 git push -u origin main
-# 3. Start the autonomous loop
-roll loop on
+# 3. Drive the backlog from this session
+roll loop go
 ```
 
-The loop will fail fast with an alert if the repository is missing or
+`roll loop go` will fail fast with an alert if the repository is missing or
 unreachable, so it never burns agent tokens against a broken push target.  If
 you need to stop the loop, `roll loop pause` persists a pause marker; resume
 with `roll loop resume` when ready.

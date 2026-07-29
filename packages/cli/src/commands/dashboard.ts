@@ -1786,21 +1786,25 @@ function render(
   } else {
     const installState = detectInstallState();
     if (installState === "not-installed") {
+      // US-LOOP-113: there is nothing to "install" — a session drives delivery.
       ebL =
-        c("muted", "○ not installed", { bold: true }) +
+        c("muted", "◆ session-driven", { bold: true }) +
         c("muted", "   ") +
         c("dim", "run ") +
-        c("fg", "roll loop on", { bold: true }) +
-        c("dim", " to enable");
-      ebZh = c("dim", "  未安装 · 运行 ") + c("fg", "roll loop on") + c("dim", " 启用");
+        c("fg", "roll loop go", { bold: true }) +
+        c("dim", " in this session");
+      ebZh = c("dim", "  会话驱动 · 在本会话运行 ") + c("fg", "roll loop go");
     } else if (installState === "stale" || installState === "disabled") {
+      // US-LOOP-113 (codex review r5): a plist on disk is a LEFTOVER from an older
+      // install, not something to repair — Roll installs no timers. Point at the
+      // disarm path (`roll doctor` lists every lane with the command to remove it).
       ebL =
-        c("amber", "◌ STALE — plist present, not loaded", { bold: true }) +
+        c("amber", "◌ leftover plist from an older install", { bold: true }) +
         c("muted", "   ") +
         c("dim", "run ") +
-        c("fg", "roll loop on", { bold: true }) +
-        c("dim", " to repair");
-      ebZh = c("dim", "  Plist 存在但未加载 · 运行 ") + c("fg", "roll loop on") + c("dim", " 修复");
+        c("fg", "roll doctor", { bold: true }) +
+        c("dim", " to see how to remove it");
+      ebZh = c("dim", "  旧版安装留下的 plist · 运行 ") + c("fg", "roll doctor") + c("dim", " 查看卸载方法");
     } else {
       // FIX-1268b: status reflects the latest durable lock state. An unlock
       // event clears the wait copy, so stale lock events cannot lie forever.

@@ -135,8 +135,8 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                              <NOW> · 12 cycles / 72h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                              <NOW> · 12 cycles / 72h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -235,8 +235,8 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                              <NOW> · 12 cycles / 72h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -285,8 +285,8 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                             <NOW> · 12 cycles / 168h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -520,8 +520,8 @@ describe("frozen: roll loop status (live)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                               <NOW> · 2 cycles / 72h
 
-      ○ not installed   run roll loop on to enable                              last ✓ 10:48  US-CLI-006  
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session                       last ✓ 10:48  US-CLI-006  
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 

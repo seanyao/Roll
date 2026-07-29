@@ -114,7 +114,10 @@ describe("FIX-239 — unknown subcommands are errors (stderr + non-zero)", () =>
 });
 
 describe("FIX-240 — loop usage advertises only live subcommands", () => {
-  it("usage carries the live set, not retired monitor/attach", () => {
+  // US-LOOP-113 (codex review r3): the usage line used to inline a second verb
+  // list, which drifted AND advertised removed verbs (`on|off|now`) to a user who
+  // had just typed one. It now points at the grouped help — the single source.
+  it("usage points at the grouped help and advertises no removed verb", () => {
     let captured = "";
     const real = process.stderr.write.bind(process.stderr);
     // @ts-expect-error capture
@@ -124,10 +127,10 @@ describe("FIX-240 — loop usage advertises only live subcommands", () => {
     } finally {
       process.stderr.write = real;
     }
-    expect(captured).not.toContain("monitor");
-    expect(captured).not.toContain("attach");
-    for (const live of ["on", "off", "now", "status", "runs", "eval", "signals", "pause", "resume", "gc"]) {
-      expect(captured).toContain(live);
+    expect(captured).toContain("roll loop --help");
+    // No second verb list to drift, and nothing removed is named.
+    for (const gone of ["monitor", "attach", "on|off", "|now|", "fallback"]) {
+      expect(captured, `usage must not name ${gone}`).not.toContain(gone);
     }
   });
 });
