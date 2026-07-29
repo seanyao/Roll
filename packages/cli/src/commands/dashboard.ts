@@ -1319,22 +1319,16 @@ export function agentSummaryLine(records: RunRecord[], windowCycles = 50, minSam
 // ════════════════════════════════════════════════════════════════════════════
 // Install-state / schedule / tick lines (eyebrow)
 // ════════════════════════════════════════════════════════════════════════════
-function detectInstallState(): string {
-  const slug = projectSlug();
-  const label = `com.roll.loop.${slug}`;
-  const plist = join(launchAgentsDir(), `${label}.plist`);
-  if (!existsSync(plist)) return "not-installed";
-  try {
-    const uid = typeof process.getuid === "function" ? process.getuid() : 0;
-    const res = execFileSync("launchctl", ["print", `gui/${uid}/${label}`], {
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: 2000,
-    });
-    void res;
-    return "enabled";
-  } catch {
-    return "stale";
-  }
+/**
+ * Is a loop plist for this project still on disk?
+ *
+ * US-LOOP-118: this used to grade the lane — "enabled" when `launchctl print`
+ * succeeded, "stale" when it did not — and the banner then promised a next run for
+ * an "enabled" one. Nothing fires, so the grade is meaningless and the probe is
+ * pointless: a plist is leftover debris either way.
+ */
+function loopLaneLeftover(): boolean {
+  return existsSync(join(launchAgentsDir(), `com.roll.loop.${projectSlug()}.plist`));
 }
 
 function launchAgentsDir(): string {
@@ -1453,106 +1447,11 @@ function deliveryGateDiagnosticLine(diagnostic: DeliveryGateDiagnostic): string 
   return c("red", "⚠ main CI red") + c("dim", `  ${diagnostic.storyId}${ci}`);
 }
 
-type LoopPlistSchedule =
-  | { mode: "calendar"; minutes: number[] }
-  | { mode: "interval"; intervalSec: number };
-
-function readLoopPlistSchedule(): LoopPlistSchedule | null {
-  const slug = projectSlug();
-  const plist = join(launchAgentsDir(), `com.roll.loop.${slug}.plist`);
-  if (!existsSync(plist)) return null;
-  let text: string;
-  try {
-    text = readFileSync(plist, "utf8");
-  } catch {
-    return null;
-  }
-  if (text.includes("StartCalendarInterval")) {
-    const minutes = [...text.matchAll(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/g)]
-      .map((m) => Number.parseInt(m[1] ?? "", 10))
-      .filter((n) => Number.isInteger(n) && n >= 0 && n < 60)
-      .sort((a, b) => a - b);
-    return minutes.length > 0 ? { mode: "calendar", minutes: [...new Set(minutes)] } : null;
-  }
-  const interval = /<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/.exec(text);
-  if (interval) {
-    const intervalSec = Number.parseInt(interval[1] ?? "", 10);
-    if (Number.isInteger(intervalSec) && intervalSec > 0) return { mode: "interval", intervalSec };
-  }
-  return null;
-}
-
-function lastLoopFireEpochSec(): number | null {
-  const slug = projectSlug();
-  const rtDir = loopRuntimeDir(slug);
-  const cronLog = rtDir !== null ? join(rtDir, "cron.log") : join(sharedRoot(), "loop", `cron-${slug}.log`);
-  if (!existsSync(cronLog)) return null;
-  try {
-    const lines = readFileSync(cronLog, "utf8").trim().split("\n").reverse();
-    for (const line of lines) {
-      if (!line.includes("cycle start")) continue;
-      const m = /^\[([^\]]+)\]/.exec(line);
-      if (!m) continue;
-      const raw = m[1] ?? "";
-      const normalized = raw.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
-      const ms = Date.parse(normalized);
-      if (Number.isFinite(ms)) return Math.floor(ms / 1000);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function nextLoopScheduleHint(zh: boolean): string {
-  const now = renderNow();
-  const sched = readLoopPlistSchedule();
-  if (sched === null) return "?";
-  const nowSec = Math.floor(now.getTime() / 1000);
-  const lastFire = lastLoopFireEpochSec();
-
-  if (sched.mode === "interval") {
-    if (lastFire === null || lastFire > nowSec || nowSec - lastFire > sched.intervalSec * 2) return "?";
-    let next = lastFire;
-    while (next <= nowSec) next += sched.intervalSec;
-    const delta = Math.max(next - nowSec, 0);
-    const mins = Math.floor(delta / 60);
-    const secs = delta % 60;
-    if (zh) return `约 ${mins} 分 ${pad2(secs)} 秒`;
-    const nxtSh = toShanghai(new Date(next * 1000));
-    return `${pad2(nxtSh.getUTCHours())}:${pad2(nxtSh.getUTCMinutes())} · est · in ${mins}m ${pad2(secs)}s`;
-  }
-
-  if (lastFire !== null && nowSec - lastFire <= 6 * 3600) {
-    const lastMinute = toShanghai(new Date(lastFire * 1000)).getUTCMinutes();
-    if (!sched.minutes.includes(lastMinute)) return "?";
-  }
-
-  const sh = toShanghai(now);
-  let nextEpoch: number | null = null;
-  for (const minute of sched.minutes) {
-    const candidate =
-      Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate(), sh.getUTCHours(), minute, 0, 0) -
-      TZ_OFFSET_MS;
-    if (candidate > now.getTime()) {
-      nextEpoch = candidate;
-      break;
-    }
-  }
-  if (nextEpoch === null) {
-    const first = sched.minutes[0];
-    if (first === undefined) return "?";
-    nextEpoch =
-      Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate(), sh.getUTCHours() + 1, first, 0, 0) -
-      TZ_OFFSET_MS;
-  }
-  const deltaMs = nextEpoch - now.getTime();
-  const mins = Math.floor(deltaMs / 1000 / 60);
-  const secs = Math.floor((deltaMs / 1000) % 60);
-  if (zh) return `${mins} 分 ${pad2(secs)} 秒`;
-  const nxtSh = toShanghai(new Date(nextEpoch));
-  return `${pad2(nxtSh.getUTCHours())}:${pad2(nxtSh.getUTCMinutes())} · in ${mins}m ${pad2(secs)}s`;
-}
+// US-LOOP-118 (codex r1): the loop-plist schedule reader, the last-fire probe, and
+// nextLoopScheduleHint() are deleted. Together they parsed StartInterval /
+// StartCalendarInterval out of a plist and projected the next fire time so the
+// banner could print "next run 14:30 · in 12m". Nothing fires, so every one of
+// those numbers was a promise about a timer that no longer exists.
 
 // ════════════════════════════════════════════════════════════════════════════
 // Fixture data (test-only; ROLL_RENDER_FIXTURE=1)
@@ -1765,49 +1664,39 @@ function render(
   // US-LOOP-115: the DORMANT branch is gone — a session-driven loop cannot
   // idle-spin, so there is no dormant state to render.
   } else {
-    const installState = detectInstallState();
-    if (installState === "not-installed") {
-      // US-LOOP-113: there is nothing to "install" — a session drives delivery.
-      ebL =
-        c("muted", "◆ session-driven", { bold: true }) +
-        c("muted", "   ") +
-        c("dim", "run ") +
-        c("fg", "roll loop go", { bold: true }) +
-        c("dim", " in this session");
-      ebZh = c("dim", "  会话驱动 · 在本会话运行 ") + c("fg", "roll loop go");
-    } else if (installState === "stale" || installState === "disabled") {
-      // US-LOOP-113 (codex review r5): a plist on disk is a LEFTOVER from an older
+    // FIX-1268b: status reflects the latest durable lock state. An unlock event
+    // clears the wait copy, so stale lock events cannot lie forever.
+    let waitReasonEn = "";
+    let waitReasonZh = "";
+    if (args.projectSlug !== null) {
+      const proj = resolveProjectPath(args.projectSlug);
+      if (proj !== null) {
+        const eventsPath = join(proj, ".roll", "loop", "events.ndjson");
+        const en = screenLockWaitReason(eventsPath, "en");
+        const zh = screenLockWaitReason(eventsPath, "zh");
+        waitReasonEn = en === null ? "" : ` · ${en}`;
+        waitReasonZh = zh === null ? "" : ` · ${zh}`;
+      }
+    }
+    // US-LOOP-118 (codex r1): the third branch is gone. It was the "lane loaded"
+    // case and printed "enabled · next run 14:30 · in 12m" — a fire time computed
+    // from a plist period, for a lane that fires never. Whether a leftover plist is
+    // loaded or not changes nothing about how delivery advances, so there are two
+    // states left: a session drives, and (separately) there may be debris to remove.
+    ebL =
+      c("muted", "◆ session-driven", { bold: true }) +
+      c("muted", "   ") +
+      c("dim", "run ") +
+      c("fg", "roll loop go", { bold: true }) +
+      c("dim", " in this session") +
+      c("dim", waitReasonEn);
+    ebZh = c("dim", "  会话驱动 · 在本会话运行 ") + c("fg", "roll loop go") + c("dim", waitReasonZh);
+    if (loopLaneLeftover()) {
+      // US-LOOP-113 (codex r5): a plist on disk is a LEFTOVER from an older
       // install, not something to repair — Roll installs no timers. Point at the
       // disarm path (`roll doctor` lists every lane with the command to remove it).
-      ebL =
-        c("amber", "◌ leftover plist from an older install", { bold: true }) +
-        c("muted", "   ") +
-        c("dim", "run ") +
-        c("fg", "roll doctor", { bold: true }) +
-        c("dim", " to see how to remove it");
-      ebZh = c("dim", "  旧版安装留下的 plist · 运行 ") + c("fg", "roll doctor") + c("dim", " 查看卸载方法");
-    } else {
-      // FIX-1268b: status reflects the latest durable lock state. An unlock
-      // event clears the wait copy, so stale lock events cannot lie forever.
-      let waitReasonEn = "";
-      let waitReasonZh = "";
-      if (args.projectSlug !== null) {
-        const proj = resolveProjectPath(args.projectSlug);
-        if (proj !== null) {
-          const eventsPath = join(proj, ".roll", "loop", "events.ndjson");
-          const en = screenLockWaitReason(eventsPath, "en");
-          const zh = screenLockWaitReason(eventsPath, "zh");
-          waitReasonEn = en === null ? "" : ` · ${en}`;
-          waitReasonZh = zh === null ? "" : ` · ${zh}`;
-        }
-      }
-      ebL =
-        c("blue", "● IDLE", { bold: true }) +
-        c("muted", " · ") +
-        c("dim", "enabled · next run ") +
-        c("fg", nextLoopScheduleHint(false), { bold: true }) +
-        c("dim", waitReasonEn);
-      ebZh = c("dim", `  已启用 · 闲置 · 距下一轮 ${nextLoopScheduleHint(true)}${waitReasonZh}`);
+      ebL += c("amber", "   ◌ leftover plist — run ") + c("fg", "roll doctor", { bold: true });
+      ebZh += c("amber", " · 旧版安装留下的 plist,运行 ") + c("fg", "roll doctor");
     }
   }
 

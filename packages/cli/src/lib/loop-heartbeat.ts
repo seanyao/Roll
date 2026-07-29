@@ -41,11 +41,18 @@ export interface HeartbeatDeps {
 }
 
 /**
- * Retired resident lanes. They appear ONLY when a plist is still on disk, and then
- * as leftovers to remove — never as something that will fire (US-LOOP-118).
+ * Every resident lane Roll has ever installed. They appear ONLY when a plist is
+ * still on disk, and then as leftovers to remove — never as something that will
+ * fire (US-LOOP-118).
+ *
+ * `pr` is here because it must be (codex r1): the PR lane was retired earlier, by
+ * US-DELIV-006, so a machine upgraded across both retirements can still hold a
+ * `com.roll.pr.<slug>.plist`. Omitting it made that plist INVISIBLE — the one
+ * leftover nothing else would ever mention.
  */
-const RETIRED_LANES: Array<{ svc: "loop" | "dream"; name: string; mode: string }> = [
+const RETIRED_LANES: Array<{ svc: string; name: string; mode: string }> = [
   { svc: "loop", name: "backlog loop (leftover lane)", mode: "backlog" },
+  { svc: "pr", name: "PR loop (leftover lane)", mode: "pr" },
   { svc: "dream", name: "Dream loop (leftover lane)", mode: "dream" },
 ];
 

@@ -395,7 +395,10 @@ function liveData(): StatusData {
   const driver: "session" | "paused" = paused ? "paused" : "session";
   // codex review r1: a leftover DREAM lane is resident work too — it was installed
   // by the same retired `roll loop on`. Notice either lane, not just loop.
-  const leftoverLanes = ["loop", "dream"].filter((svc) => launchdLaneLeftover(svc, slug));
+  // Every lane Roll has ever installed, so no leftover plist is invisible. `pr`
+  // was retired earlier (US-DELIV-006) but an upgraded machine can still hold it
+  // — codex r1 caught its omission here.
+  const leftoverLanes = ["loop", "pr", "dream"].filter((svc) => launchdLaneLeftover(svc, slug));
   const note =
     leftoverLanes.length > 0
       ? `leftover launchd lane(s) from an older install: ${leftoverLanes.join(", ")} — run roll doctor to remove`

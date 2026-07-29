@@ -389,7 +389,19 @@ describe("frozen: roll loop status (fixture)", () => {
 });
 
 describe("frozen: roll loop status (live)", () => {
-  it("FIX-254: enabled interval schedule estimates next run from the latest real launchd fire", () => {
+  /**
+   * US-LOOP-118 — what FIX-254 was defending is now structurally impossible.
+   *
+   * FIX-254 stopped `roll loop status` from INVENTING a next-run time: with an
+   * interval plist it estimated from the latest real launchd fire, and on a
+   * calendar/fire mismatch it printed "?" rather than a made-up clock time. Both
+   * behaviours are gone because the thing they described is gone — no lane fires,
+   * so there is no next run to estimate correctly or incorrectly.
+   *
+   * These two cases replace them: whatever a leftover plist says, the banner must
+   * never print a next run, and must say a session drives instead.
+   */
+  it("US-LOOP-118: an interval plist yields NO next-run promise", () => {
     const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
     installLaunchctlShim(env);
     writeLoopPlist(env, ["<key>StartInterval</key>", "<integer>1800</integer>"].join("\n"));
@@ -397,16 +409,21 @@ describe("frozen: roll loop status (live)", () => {
       join(env["ROLL_PROJECT_RUNTIME_DIR"] as string, "cron.log"),
       "[2026-06-07T10:52:00+0800] cycle start (v3 run-once)\n",
     );
-    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-fix254-"));
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-interval-"));
     dirs.push(proj);
     mkdirSync(join(proj, ".roll"), { recursive: true });
 
     const ts = tsRun(env, ["--no-color"], proj);
-    expect(ts).toContain("● IDLE · enabled · next run 11:22 · est · in 22m 00s");
-    expect(ts).not.toContain("11:07");
+    expect(ts).not.toContain("next run");
+    expect(ts).not.toContain("enabled");
+    // A 30-minute StartInterval used to make this read "in 22m 00s".
+    expect(ts).not.toMatch(/in \d+m/);
+    expect(ts).toContain("session-driven");
+    // The plist is still on disk, so it is named as debris to remove.
+    expect(ts).toContain("leftover plist");
   });
 
-  it("FIX-254: calendar schedule and latest fire mismatch renders unknown instead of inventing a time", () => {
+  it("US-LOOP-118: a calendar plist yields NO next-run promise either", () => {
     const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
     installLaunchctlShim(env);
     writeLoopPlist(
@@ -423,13 +440,15 @@ describe("frozen: roll loop status (live)", () => {
       join(env["ROLL_PROJECT_RUNTIME_DIR"] as string, "cron.log"),
       "[2026-06-07T10:07:00+0800] cycle start (v3 run-once)\n",
     );
-    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-fix254-mismatch-"));
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-calendar-"));
     dirs.push(proj);
     mkdirSync(join(proj, ".roll"), { recursive: true });
 
     const ts = tsRun(env, ["--no-color"], proj);
-    expect(ts).toContain("● IDLE · enabled · next run ?");
-    expect(ts).not.toContain("11:22 · in 22m 00s");
+    // Not even the honest "?" survives: there is no next-run field at all.
+    expect(ts).not.toContain("next run");
+    expect(ts).toContain("session-driven");
+    expect(ts).toContain("leftover plist");
   });
 
   it("synthetic events + runs render", () => {

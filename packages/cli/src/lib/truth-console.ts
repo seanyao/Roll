@@ -689,7 +689,7 @@ function nowTab(input: TruthConsoleInput): string {
     `<a href="#loop" data-tab-link="loop" style="${MONO}font-size:11.5px;color:${C.blue};cursor:pointer;text-decoration:none;">${bi("open loop", "打开循环页")} →</a></div>` +
     (lanes.length > 0
       ? heartbeatHeader() + lanes.map((lane) => heartbeatRow(lane, s.generatedAt)).join("")
-      : `<div style="padding:14px 18px;font-size:12.5px;color:${C.faint};font-style:italic;">${bi("no scheduled lanes on this machine", "本机没有已调度的 lane")}</div>`) +
+      : `<div style="padding:14px 18px;font-size:12.5px;color:${C.faint};font-style:italic;">${bi("nothing is scheduled — delivery runs in an agent session", "没有任何定时任务——交付在 agent 会话里进行")}</div>`) +
     `</section>`;
 
   const verdictStrip =

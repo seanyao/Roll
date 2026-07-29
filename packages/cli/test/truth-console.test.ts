@@ -613,11 +613,31 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
     expect(loop?.nextAt).toBeUndefined();
   });
 
-  it("US-LOOP-118: a clean machine reports NO lanes rather than two off ones", () => {
+  it("US-LOOP-118: a clean machine reports NO lanes rather than several off ones", () => {
     const hb = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null });
-    // The old contract always listed both retired lanes so the console could say
-    // "0/2 lanes armed" — which read as two things missing and worth installing.
+    // The old contract always listed the retired lanes so the console could say
+    // "0/2 lanes armed" — which read as things missing and worth installing.
     expect(hb.lanes).toEqual([]);
+  });
+
+  it("US-LOOP-118: every lane Roll ever installed is scanned, pr included (codex r1)", () => {
+    // A machine upgraded across BOTH retirements (US-DELIV-006 for pr, this epic
+    // for loop/dream) can hold any of the three plists. A lane omitted from the
+    // scan is a leftover nothing would ever report.
+    const probed: string[] = [];
+    collectLoopHeartbeat({
+      laneLeftover: (svc) => {
+        probed.push(svc);
+        return false;
+      },
+      lastRunAt: () => null,
+    });
+    expect(probed).toEqual(["loop", "pr", "dream"]);
+    // And a lone pr plist is surfaced on its own.
+    const prOnly = collectLoopHeartbeat({ laneLeftover: (svc) => svc === "pr", lastRunAt: () => null });
+    expect(prOnly.lanes).toHaveLength(1);
+    expect(prOnly.lanes[0]?.mode).toBe("pr");
+    expect(prOnly.lanes[0]?.running).toBe(false);
   });
 
   it("US-DOSSIER-042: collects backlog, PR, dream launchd lanes and an active go session", () => {
@@ -654,15 +674,22 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
         ].join("\n"),
     });
 
-    // US-LOOP-118: the two retired lanes still appear because their plists are on
-    // disk, but as leftovers; the go session is the only lane that can be running.
+    // US-LOOP-118: all three retired lanes appear because their plists are on disk,
+    // but as leftovers; the go session is the only lane that can be running.
+    //
+    // codex r1: the earlier version of this assertion made `pr` present and then
+    // expected it MISSING — a vacuous check that hid a real gap, since the PR lane
+    // was retired by US-DELIV-006 and its plist can still exist on an upgraded box.
     expect(hb.lanes.map((l) => l.name)).toEqual([
       "backlog loop (leftover lane)",
+      "PR loop (leftover lane)",
       "Dream loop (leftover lane)",
       "go session",
     ]);
-    expect(hb.lanes.map((l) => l.source)).toEqual(["launchd", "launchd", "goal"]);
+    expect(hb.lanes.map((l) => l.source)).toEqual(["launchd", "launchd", "launchd", "goal"]);
     expect(hb.lanes.filter((l) => l.source === "launchd").every((l) => !l.running)).toBe(true);
+    // The PR lane's real last-run stamp survives — it is history, not a prediction.
+    expect(hb.lanes.find((l) => l.mode === "pr")?.lastAt).toBe("2026-06-12T23:35:00Z");
     expect(hb.lanes.find((l) => l.name === "go session")).toMatchObject({
       running: true,
       mode: "go",
