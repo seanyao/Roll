@@ -10,7 +10,8 @@
  * so the frozen value stays portable (macOS `/var/folders` vs Linux CI `/tmp`).
  */
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -69,7 +70,7 @@ describe("frozen: roll status render", () => {
       "  WARN    main reconciled vs backlog   exit 1
         North  no data
 
-        LOOP      2 loops · 1 running   next 08:55Z
+        LOOP      session-driven · go session open
         CYCLE     17 / 3d   12 failed · $0.59
         RELEASE   v3.611.2 staged   pass · f:0 w:44 ?:78 · 366 merged · 214 pending
         STORY     67% attest coverage      fail 0 · unknown 197
@@ -117,8 +118,6 @@ describe("frozen: roll status render", () => {
         + AGENTS.md
         + .roll/backlog.md
         + .roll/features/  23 feature docs
-        ● loop · launchd enabled
-        ○ dream · launchd not installed
         ◆ driver · session
 
       "
@@ -175,9 +174,12 @@ describe("frozen: roll status render", () => {
     const env = { HOME: home, ROLL_HOME: rollHome };
     // Live render embeds the random HOME/project paths → scrub to placeholders
     // so the frozen value stays portable (rollHome/claudeDir live under home; the
-    // THIS PROJECT header is `basename(cwd)`). The loop/dream lines read launchd:
-    // a fresh fabricated proj has no installed job on macOS and Linux has no
-    // launchd at all → both render "launchd not installed" deterministically.
+    // THIS PROJECT header is `basename(cwd)`).
+    //
+    // US-LOOP-118: the loop/dream launchd lines are gone, so there is nothing
+    // platform-dependent left to normalise here — a fabricated project has no
+    // leftover lane on any OS, and the driver line is derived from the PAUSE
+    // marker alone.
     const ts = tsStatus(env, proj)
       .split(proj)
       .join("<PROJ>")
@@ -229,8 +231,6 @@ describe("frozen: roll status render", () => {
         + AGENTS.md
         + .roll/backlog.md
         + .roll/features/  2 feature docs
-        ○ loop · launchd not installed
-        ○ dream · launchd not installed
         ◆ driver · session
 
       "
@@ -279,5 +279,33 @@ describe("frozen: roll status render", () => {
       .split(proj).join("<PROJ>")
       .split(basename(proj)).join("<PROJ>");
     expect(ts).not.toContain("$roll-design");
+  });
+});
+
+describe("US-LOOP-118 — leftover lane scan honours _LAUNCHD_DIR (codex r4)", () => {
+  it("names a leftover lane found in the configured LaunchAgents dir", () => {
+    // roll status hardcoded the home LaunchAgents path, making it the ONE surface
+    // that could not see a lane in a configured/sandboxed environment — its verdict
+    // silently disagreed with dashboard / doctor / index, and no test could reach it.
+    const home = mkdtempSync(join(tmpdir(), "roll-status-la-home-"));
+    const proj = mkdtempSync(join(tmpdir(), "roll-status-la-proj-"));
+    const la = mkdtempSync(join(tmpdir(), "roll-status-la-agents-"));
+    dirs.push(home, proj, la);
+    mkdirSync(join(proj, ".roll", "features"), { recursive: true });
+    // status.ts derives its own path-based slug (projectSlugPy) and does NOT read
+    // ROLL_MAIN_SLUG, so compute the same value here rather than assume an override.
+    const real = realpathSync(proj);
+    const slug = `${basename(real).replace(/[^A-Za-z0-9]+/g, "-")}-${createHash("md5").update(real).digest("hex").slice(0, 6)}`;
+    writeFileSync(join(la, `com.roll.dream.${slug}.plist`), "<plist/>\n");
+
+    const env = { HOME: home, ROLL_HOME: join(home, ".roll"), _LAUNCHD_DIR: la };
+    const out = tsStatus(env, proj);
+    expect(out).toContain("leftover launchd lane");
+    expect(out).toContain("dream");
+
+    // Same project, no plist in that dir → nothing claimed.
+    const empty = mkdtempSync(join(tmpdir(), "roll-status-la-empty-"));
+    dirs.push(empty);
+    expect(tsStatus({ ...env, _LAUNCHD_DIR: empty }, proj)).not.toContain("leftover launchd lane");
   });
 });

@@ -35,7 +35,7 @@ export type MergeEvidenceFn = (runCache: unknown, id: string) => boolean;
 export type CollectTruthBoardFn = (cwd: string, nowSec: number) => TruthBoardInput;
 
 /** Collect the loop heartbeat. */
-export type CollectLoopHeartbeatFn = (cwd: string) => TruthSnapshotLoop;
+export type CollectLoopHeartbeatFn = (cwd: string, nowSec: number) => TruthSnapshotLoop;
 
 /** Probe on-disk evidence flags for one story. */
 export type CollectEvidenceFlagsFn = (cwd: string, story: { id: string; epic: string }) => StoryEvidenceFlags;
@@ -63,7 +63,7 @@ export interface CollectorDeps {
 
 // ── Default best-effort collectors (node:fs only, no git/launchd) ────────────
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -216,7 +216,17 @@ function defaultCollectTruthBoard(cwd: string, nowSec: number): TruthBoardInput 
   };
 }
 
-function defaultCollectLoopHeartbeat(cwd: string): TruthSnapshotLoop {
+/**
+ * The default loop lane for a freshly collected snapshot.
+ *
+ * US-LOOP-118 (codex r8): this lane was labelled `source: "launchd"`, so a fresh
+ * snapshot presented it as a resident lane — readers then counted it, and a stale
+ * `lastAt` painted it red as a "zombie". Nothing here reads a plist: `running`
+ * comes from `live.log` existing and `lastAt` from runs.jsonl, both of which
+ * describe a SESSION. Labelling it `goal` puts it under the semantics it actually
+ * has, and leaves `launchd` to mean only "leftover plist on disk".
+ */
+function defaultCollectLoopHeartbeat(cwd: string, nowSec: number): TruthSnapshotLoop {
   const loopDir = join(cwd, ".roll", "loop");
   let lastAt: string | undefined;
   try {
@@ -234,14 +244,38 @@ function defaultCollectLoopHeartbeat(cwd: string): TruthSnapshotLoop {
       }
     }
   } catch { /* no runs */ }
-  const running = existsSync(join(loopDir, "live.log"));
+  // codex r9: `live.log` is never deleted, so its EXISTENCE only proves a cycle
+  // once ran — mere existence made a long-finished cycle read as "go session open".
+  // Use freshness, the same rule and window collectLoopLiveFeed already applies:
+  // a log untouched for longer than the window is not streaming.
+  const LIVE_FRESH_SEC = 300;
+  let running = false;
+  let liveAt: string | undefined;
+  try {
+    const st = statSync(join(loopDir, "live.log"));
+    running = nowSec - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
+    if (running) liveAt = new Date(st.mtimeMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+  } catch {
+    running = false; // no live.log at all
+  }
+  // codex r10: `running` and `lastAt` must describe the SAME activity. Taking
+  // `running` from a fresh live.log while `lastAt` still pointed at the PREVIOUS
+  // completed run meant a genuinely active stream was painted a zombie as soon as
+  // that earlier run aged past the staleness window. While streaming, the last
+  // activity IS the stream's own write time.
+  const activityAt = running ? liveAt : lastAt;
+  // codex r12: no signal at all ⇒ NO lane. The CLI collector already worked this
+  // way (US-LOOP-118: a clean project reports zero lanes rather than an idle one);
+  // emitting an unconditional "go session" here contradicted that same contract on
+  // the fallback path, so a project that had never run still showed a session lane.
+  if (!running && activityAt === undefined) return { lanes: [] };
   return {
     lanes: [{
-      name: "backlog loop",
-      source: "launchd" as const,
+      name: "go session",
+      source: "goal" as const,
       running,
-      mode: "backlog" as const,
-      ...(lastAt !== undefined ? { lastAt } : {}),
+      mode: "go" as const,
+      ...(activityAt !== undefined ? { lastAt: activityAt } : {}),
     }],
   };
 }
@@ -410,7 +444,7 @@ export function collectDossierState(
   const truth = collectTruthBoard(cwd, nowSec);
 
   // 4. Collect loop heartbeat
-  const loop = collectLoopHeartbeat(cwd);
+  const loop = collectLoopHeartbeat(cwd, nowSec);
 
   // 4.5. On Deck is backlog-primary: folders only provide deep links.
   const onDeck = collectOnDeck(cwd, epics);

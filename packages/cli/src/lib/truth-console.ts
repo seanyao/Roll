@@ -17,6 +17,7 @@
  * Casting/Charter render their project-specific surfaces below it.
  */
 import { bi, CONSISTENCY_DIMENSION_LABELS, type ConsistencyDimensionLabel, FONT_LINKS as CORE_FONT_LINKS } from "@roll/core";
+import { isLeftoverLane } from "@roll/spec";
 import type { TruthSnapshot, TruthSnapshotLoopLane, TruthSnapshotPanelSlot } from "@roll/spec";
 import type { CycleLedgerRow, CycleTapeSegment } from "./cycle-ledger.js";
 import type { AgentPanelRow } from "./agent-panel.js";
@@ -258,11 +259,6 @@ function sectionLabel(text: string): string {
   return `<span style="${MONO}font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:${C.faint};font-weight:600;">${text}</span>`;
 }
 
-function mins(n: number | undefined): string {
-  if (n === undefined) return "—";
-  return n >= 60 && n % 60 === 0 ? `${n / 60}h` : `${n}m`;
-}
-
 function shortTs(iso: string | undefined): string {
   if (iso === undefined || iso === "") return "—";
   return iso.replace(/^\d{4}-/, "").replace("T", " ").replace(/:\d{2}Z$/, "Z");
@@ -278,7 +274,11 @@ function heartbeatStale(lane: TruthSnapshotLoopLane, generatedAt: string | undef
 
 // FIX-373: ONE shared track template so the column header and every row align
 // pixel-for-pixel (Lane · 模式 · 周期 · 上次 · 下次).
-const HB_COLS = "grid-template-columns:1.6fr .8fr .7fr 1fr 1fr;";
+// US-LOOP-118: the EVERY and NEXT columns are gone. Both described resident
+// scheduling — a period parsed out of a plist, and a next fire predicted from it.
+// Nothing fires on a schedule, so those two cells could only ever print "—" or a
+// time that never arrives.
+const HB_COLS = "grid-template-columns:2fr 1fr 1.2fr;";
 
 /** FIX-373: aligned column headers above the heartbeat rows. */
 function heartbeatHeader(): string {
@@ -288,16 +288,21 @@ function heartbeatHeader(): string {
     `<div data-now-section="heartbeat-head" style="display:grid;${HB_COLS}align-items:center;gap:14px;padding:9px 18px;border-top:1px solid ${C.hair};background:#fafbfe;">` +
     `<span style="${MONO}font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:${C.faint};">Lane</span>` +
     h("mode", "模式") +
-    h("every", "周期") +
     h("last", "上次") +
-    h("next", "下次") +
     `</div>`
   );
 }
 
 function heartbeatRow(lane: TruthSnapshotLoopLane, generatedAt?: string): string {
   const on = lane.running;
-  const stale = heartbeatStale(lane, generatedAt);
+  // "Zombie" means: this lane CLAIMS to be running, but its last activity is old.
+  //
+  // codex r4 caught leftover lanes painted red; codex r9 pointed out that guarding
+  // on the leftover marker alone only treated that one symptom — ANY not-running
+  // lane with an old `lastAt` was painted red, and "not running with old activity"
+  // is simply a finished session. So gate on the claim itself: only a lane that
+  // says it is running can be a zombie.
+  const stale = on && heartbeatStale(lane, generatedAt);
   const dotColor = stale ? C.red : on ? C.green : "#cbd2dc";
   const dot = on
     ? `width:9px;height:9px;border-radius:50%;background:${dotColor};box-shadow:0 0 0 3px ${stale ? "rgba(210,59,59,.18)" : "rgba(23,138,82,.18)"};animation:beat 2.4s infinite;flex:none;`
@@ -315,9 +320,7 @@ function heartbeatRow(lane: TruthSnapshotLoopLane, generatedAt?: string): string
     `<div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;color:${C.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(lane.name)}</div>` +
     `<div style="${MONO}font-size:10.5px;color:${stale ? C.red : on ? C.green : C.faint};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${stateLine}</div></div></div>` +
     cell(esc(lane.mode ?? "—")) +
-    cell(mins(lane.everyMin)) +
     cell(shortTs(lane.lastAt), true) +
-    `<div class="hb-next" data-next="${esc(lane.nextAt ?? "")}" style="${MONO}font-size:12.5px;color:${C.body};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${shortTs(lane.nextAt)}</div>` +
     `</div>`
   );
 }
@@ -334,7 +337,6 @@ function loopStateBanner(input: TruthConsoleInput): string {
   const loop = input.snapshot.loop;
   const state = loop?.runState ?? "ACTIVE";
   const lanes = loop?.lanes ?? [];
-  const laneRunning = (mode: string): boolean => lanes.find((l) => l.mode === mode)?.running === true;
   const since = loop?.stateSince !== undefined && loop.stateSince !== "" ? esc(loop.stateSince) : "—";
   const reasonRaw = loop?.stateReason ?? "";
   const reason = reasonRaw !== "" ? ` · ${esc(reasonRaw)}` : "";
@@ -373,13 +375,41 @@ function loopStateBanner(input: TruthConsoleInput): string {
       [`⏸ 已暂停${since !== "—" ? ` · 自 ${since}` : ""}${reason}`, "恢复：roll loop resume"],
     );
   }
-  const armed = lanes.filter((l) => l.running).length;
+  // US-LOOP-118: "N/M lanes armed" counted installed timers. What an owner needs
+  // to know is whether a session is driving right now, and whether leftover lanes
+  // are still lying around.
+  const goOpen = lanes.some((l) => l.source === "goal" && l.running);
+  // Same marker-not-source rule as roll status: an old snapshot always listed the
+  // retired lanes, so counting by source invents leftovers that are not there.
+  const leftovers = lanes.filter(isLeftoverLane).length;
+  const leftEn = leftovers > 0 ? ` · ${leftovers} leftover lane(s) to disarm` : "";
+  const leftZh = leftovers > 0 ? ` · ${leftovers} 个残留 lane 待卸载` : "";
   return wrap(
     C.green,
     "#f1f9f4",
-    [`● <b>ACTIVE</b> · loop running · ${armed}/${lanes.length} lanes armed`],
-    [`● 活跃 · 循环运行中 · ${armed}/${lanes.length} lane 已就绪`],
+    [
+      `● <b>ACTIVE</b> · ${goOpen ? "go session open" : "no open go session"}${leftEn}`,
+      "Delivery advances only while an agent session drives it",
+    ],
+    [
+      `● 活跃 · ${goOpen ? "go 会话进行中" : "无进行中的 go 会话"}${leftZh}`,
+      "只有 agent 会话在驱动时,交付才会推进",
+    ],
   );
+}
+
+/**
+ * The pill above the repo loops table: what is actually driving, and what debris
+ * is left. Replaces "N/M running", which counted retired lanes (codex r4).
+ */
+export function leftoverAndSessionCount(lanes: readonly TruthSnapshotLoopLane[]): string {
+  const sessions = lanes.filter((l) => l.source === "goal" && l.running).length;
+  const leftovers = lanes.filter(isLeftoverLane).length;
+  const parts = [
+    sessions > 0 ? bi(`${sessions} session driving`, `${sessions} 个会话在驱动`) : bi("no session driving", "无会话驱动"),
+  ];
+  if (leftovers > 0) parts.push(bi(`${leftovers} leftover`, `${leftovers} 个残留`));
+  return parts.join(" · ");
 }
 
 function repoLoopsPanel(input: TruthConsoleInput): string {
@@ -387,9 +417,12 @@ function repoLoopsPanel(input: TruthConsoleInput): string {
   return (
     `<div style="display:flex;align-items:baseline;gap:12px;margin:24px 0 12px;flex-wrap:wrap;">` +
     `<span style="${MONO}font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${C.sub};font-weight:600;">${bi("Loops on this repo", "本仓 Loops")}</span>` +
-    `<span style="${MONO}font-size:11.5px;color:${C.faint};">${bi("backlog · PR · dream · go sessions", "backlog · PR · dream · go 会话")}</span>` +
+    // codex r4: the subtitle used to read "backlog · PR · dream · go sessions",
+    // advertising three retired lanes as live categories, and the pill counted
+    // "N/M running" over them. Only go sessions run; the rest can only be debris.
+    `<span style="${MONO}font-size:11.5px;color:${C.faint};">${bi("go sessions · leftover lanes", "go 会话 · 残留 lane")}</span>` +
     `<span style="flex:1;height:1px;background:#dfe4ec;min-width:16px;"></span>` +
-    `<span style="${MONO}font-size:11.5px;color:${C.dim};white-space:nowrap;">${lanes.filter((l) => l.running).length}/${lanes.length} ${bi("running", "运行中")}</span></div>` +
+    `<span style="${MONO}font-size:11.5px;color:${C.dim};white-space:nowrap;">${leftoverAndSessionCount(lanes)}</span></div>` +
     `<section style="border:1px solid ${C.line};border-radius:14px;background:${C.card};overflow:hidden;margin:0 0 8px;box-shadow:0 1px 2px rgba(17,26,69,.05);">` +
     (lanes.length > 0
       ? heartbeatHeader() + lanes.map((lane) => heartbeatRow(lane, input.snapshot.generatedAt)).join("")
@@ -668,19 +701,22 @@ function nowTab(input: TruthConsoleInput): string {
   const total = s.story.total || 1;
   const mergedPct = Math.round((spectrum.done / total) * 100);
 
-  const runningCount = lanes.filter((l) => l.running).length;
-  const hbPillColor = runningCount > 0 ? C.amber : C.slate;
-  const hbPillBg = runningCount > 0 ? "#fbf1df" : "#eef1f7";
+  // codex r5: the Now tab carried the SAME "N/M running" pill I replaced on the
+  // Loop tab, so a leftover-only lane still read "0/1 running" here. Both tabs use
+  // the one helper now — sessions driving, plus debris.
+  const sessionsDriving = lanes.filter((l) => l.source === "goal" && l.running).length;
+  const hbPillColor = sessionsDriving > 0 ? C.amber : C.slate;
+  const hbPillBg = sessionsDriving > 0 ? "#fbf1df" : "#eef1f7";
   const heartbeat =
     `<section style="border:1px solid ${C.line};border-radius:12px;background:${C.card};overflow:hidden;margin:20px 0 14px;box-shadow:0 1px 2px rgba(17,26,69,.05);">` +
     `<div style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid ${C.hair};">` +
     sectionLabel(bi("Loop heartbeat", "循环心跳")) +
-    `<span style="${MONO}font-size:11px;padding:2px 9px;border-radius:999px;color:${hbPillColor};background:${hbPillBg};font-weight:600;white-space:nowrap;">${runningCount}/${lanes.length} ${bi("running", "运行中")}</span>` +
+    `<span style="${MONO}font-size:11px;padding:2px 9px;border-radius:999px;color:${hbPillColor};background:${hbPillBg};font-weight:600;white-space:nowrap;">${leftoverAndSessionCount(lanes)}</span>` +
     `<span style="flex:1;"></span>` +
     `<a href="#loop" data-tab-link="loop" style="${MONO}font-size:11.5px;color:${C.blue};cursor:pointer;text-decoration:none;">${bi("open loop", "打开循环页")} →</a></div>` +
     (lanes.length > 0
       ? heartbeatHeader() + lanes.map((lane) => heartbeatRow(lane, s.generatedAt)).join("")
-      : `<div style="padding:14px 18px;font-size:12.5px;color:${C.faint};font-style:italic;">${bi("no scheduled lanes on this machine", "本机没有已调度的 lane")}</div>`) +
+      : `<div style="padding:14px 18px;font-size:12.5px;color:${C.faint};font-style:italic;">${bi("nothing is scheduled — delivery runs in an agent session", "没有任何定时任务——交付在 agent 会话里进行")}</div>`) +
     `</section>`;
 
   const verdictStrip =
@@ -1969,15 +2005,10 @@ export const CONSOLE_SCRIPT = `<script>
     var STALE_MS = 6 * 3600 * 1000;
     if (isFinite(gen) && Date.now() - gen > STALE_MS) b.style.display = "";
   }
-  function tickCountdown() {
-    var els = document.querySelectorAll(".hb-next");
-    for (var i = 0; i < els.length; i++) {
-      var next = Date.parse(els[i].getAttribute("data-next") || "");
-      if (!isFinite(next)) continue;
-      var ms = next - Date.now();
-      els[i].textContent = ms <= 0 ? "due" : "in " + Math.max(1, Math.round(ms / 60000)) + "m";
-    }
-  }
+  // US-LOOP-118: the hb-next countdown is gone with the NEXT column. It animated
+  // "in 12m" toward a fire time predicted from a launchd period; with no timer
+  // behind it, that countdown could only reach "due" and stay there. (No backticks
+  // in this comment: it lives inside the page's script template literal.)
   // US-DOSSIER-044: browser-side live feed is READ-ONLY. The generated page
   // already contains a server-folded snapshot from loop-fmt; this poller only
   // attempts to read ../loop/live.log and summarize newly visible lines. It never
@@ -2141,8 +2172,6 @@ export const CONSOLE_SCRIPT = `<script>
     }
     applyRange("recent");
     applyFreshness();
-    tickCountdown();
-    setInterval(tickCountdown, 30000);
     setupLiveFeeds();
     var bs = document.querySelectorAll("[data-set-lang]");
     for (var i = 0; i < bs.length; i++) {

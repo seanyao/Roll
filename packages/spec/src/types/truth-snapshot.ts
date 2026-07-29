@@ -77,6 +77,22 @@ export interface TruthSnapshotRelease {
   collectedAt?: string;
 }
 
+/**
+ * `status` marker the collector writes on a lane whose launchd plist is still on
+ * disk (US-LOOP-118).
+ *
+ * Readers must key the "leftover lane" warning on THIS, not on `source ===
+ * "launchd"`. Snapshots written before US-LOOP-118 listed every retired lane
+ * unconditionally — three of them, present or not — so counting by source turns a
+ * clean machine into a false "3 leftover lane(s)" warning.
+ */
+export const LEFTOVER_LANE_STATUS = "leftover — disarm with launchctl bootout; rm the plist";
+
+/** Does this lane represent a leftover launchd plist that is still on disk? */
+export function isLeftoverLane(lane: TruthSnapshotLoopLane): boolean {
+  return lane.source === "launchd" && lane.status === LEFTOVER_LANE_STATUS;
+}
+
 /** One scheduled lane on this machine (US-DOSSIER-011 loop heartbeat). */
 export interface TruthSnapshotLoopLane {
   name: string;
@@ -89,9 +105,21 @@ export interface TruthSnapshotLoopLane {
   status?: string;
   /** Human-readable goal scope when this lane represents a go session. */
   scope?: string;
-  /** Schedule period in minutes. */
+  /**
+   * Schedule period in minutes.
+   *
+   * US-LOOP-118: NEVER WRITTEN any more — it came from a launchd plist's
+   * `StartInterval`, and no plist drives anything. Kept as a READ contract so a
+   * dossier snapshot already on disk still parses; readers no longer display it.
+   */
   everyMin?: number;
   lastAt?: string;
+  /**
+   * Predicted next fire.
+   *
+   * US-LOOP-118: NEVER WRITTEN any more — it was `lastAt + everyMin`, a promise
+   * about a timer that no longer exists. Read contract only.
+   */
   nextAt?: string;
 }
 
