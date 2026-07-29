@@ -4,7 +4,6 @@ export * from "./github.js";
 export * from "./pr-provider.js";
 export * from "./process.js";
 export * from "./repo-visibility.js";
-export * from "./schedule.js";
 export * from "./tmux.js";
 export * from "./evidence.js";
 export * from "./screenshot.js";

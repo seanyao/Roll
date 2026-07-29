@@ -60,7 +60,6 @@ import {
   loopGcCommand,
   loopMuteCommand,
   loopResetCommand,
-  loopTestCommand,
   loopUnmuteCommand,
 } from "./loop-maint.js";
 import { loopReconcileCommand } from "./loop-reconcile.js";
@@ -522,7 +521,6 @@ export function registerAll(): void {
     if (args[0] === "gc") return loopGcCommand(args.slice(1));
     // `loop test` (≠ top-level `roll test`): manual smoke gate — generates the
     // v3 test runner and runs it once with ROLL_LOOP_FORCE=1 (US-PORT-022).
-    if (args[0] === "test") return loopTestCommand(args.slice(1));
     // `loop branches`: retired and no longer dispatched.
     if (args[0] === "branches") return loopUnknownSubcommand(args[0]);
     // Cycle-gate subcommands the loop AGENT invokes per the roll-loop skill

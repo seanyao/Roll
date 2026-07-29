@@ -21,8 +21,6 @@ import {
   type LoopGcDeps,
   loopMuteCommand,
   loopResetCommand,
-  loopTestCommand,
-  type LoopTestDeps,
   loopUnmuteCommand,
   muteFile,
   stateFile,
@@ -244,93 +242,7 @@ describe("loop gc — US-PORT-022", () => {
   });
 });
 
-describe("loop test — US-PORT-022", () => {
-  setEnv("ROLL_LANG", "en");
-  setEnv("NO_COLOR", "1");
+// US-LOOP-117: `roll loop test` is gone. It smoke-tested the GENERATED launchd
+// runner and hard-required it ("Run 'roll loop on' first") — a runner nothing can
+// generate any more. `roll loop go --max-cycles 1` is the honest equivalent.
 
-  /** A sandbox shared root; the installed runner exists unless `noRunner`. */
-  function testSandbox(opts: { exit?: number; noRunner?: boolean } = {}): {
-    shared: string;
-    slug: string;
-    deps: LoopTestDeps;
-    execed: string[];
-  } {
-    setEnv("ROLL_LANG", "en");
-    setEnv("NO_COLOR", "1");
-    const shared = tmp("roll-looptest-");
-    const loopDir = join(shared, "loop");
-    mkdirSync(loopDir, { recursive: true });
-    const slug = "tproj-aaa111";
-    if (!opts.noRunner) writeFileSync(join(loopDir, `run-${slug}.sh`), "#!/bin/bash\n");
-    let clock = 100;
-    const execed: string[] = [];
-    const deps: LoopTestDeps = {
-      slug: () => slug,
-      projectPath: () => shared,
-      sharedRoot: () => shared,
-      exec: (runner) => {
-        execed.push(runner);
-        clock += 3; // simulate 3s elapsed
-        return opts.exit ?? 0;
-      },
-      nowSec: () => clock,
-    };
-    return { shared, slug, deps, execed };
-  }
-
-  it("missing installed runner → err + exit 1, no exec", () => {
-    const { deps, execed } = testSandbox({ noRunner: true });
-    const r = capture(() => loopTestCommand([], deps));
-    expect(r.status).toBe(1);
-    expect(r.err).toContain("Runner not found");
-    expect(r.err).toContain("roll loop on");
-    expect(execed).toHaveLength(0);
-  });
-
-  it("default agent generates a claude smoke runner + reports pass", () => {
-    const { shared, slug, deps, execed } = testSandbox();
-    const r = capture(() => loopTestCommand([], deps));
-    expect(r.status).toBe(0);
-    expect(execed).toHaveLength(1);
-    const testRunner = join(shared, "loop", `run-${slug}-test.sh`);
-    expect(existsSync(testRunner)).toBe(true);
-    const body = readFileSync(testRunner, "utf8");
-    expect(body).toContain('claude -p "Reply with a single word: hello"');
-    expect(body).not.toContain("loop run-once"); // smoke runs the cmd, not a real cycle
-    expect(body).toContain("roll-loop-tproj-aaa111"); // tmux session preserved
-    expect(r.out).toContain("Smoke test passed (3s, agent: claude)");
-  });
-
-  it("--agent injects that agent's registered smoke command, no real claude", () => {
-    const { shared, slug, deps } = testSandbox();
-    const r = capture(() => loopTestCommand(["--agent", "pi"], deps));
-    expect(r.status).toBe(0);
-    const body = readFileSync(join(shared, "loop", `run-${slug}-test.sh`), "utf8");
-    expect(body).toContain('pi -p "Reply with a single word: hello"');
-    expect(body).not.toContain("claude -p");
-    expect(body).not.toContain("mock pi output");
-  });
-
-  it("--cmd overrides the agent default verbatim", () => {
-    const { shared, slug, deps } = testSandbox();
-    const r = capture(() => loopTestCommand(["--cmd", "echo CUSTOM_SMOKE"], deps));
-    expect(r.status).toBe(0);
-    const body = readFileSync(join(shared, "loop", `run-${slug}-test.sh`), "utf8");
-    expect(body).toContain("echo CUSTOM_SMOKE");
-  });
-
-  it("non-zero runner exit → smoke test failed, exit 1", () => {
-    const { deps } = testSandbox({ exit: 2 });
-    const r = capture(() => loopTestCommand([], deps));
-    expect(r.status).toBe(1);
-    expect(r.err).toContain("Smoke test failed (exit 2");
-  });
-
-  it("defaultSmokeCmd: pool agent vs fallback", () => {
-    expect(defaultSmokeCmd("claude")).toContain("claude -p");
-    // FIX-359: kimi smoke uses the real `kimi` binary (`kimi-code` never existed).
-    expect(defaultSmokeCmd("kimi")).toContain("kimi -p");
-    expect(defaultSmokeCmd("kimi")).not.toContain("kimi-code");
-    expect(defaultSmokeCmd("kimi")).not.toContain("mock kimi output");
-  });
-});
