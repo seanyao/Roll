@@ -615,7 +615,10 @@ export const DORMANCY_SUPPRESSED_REASONS: ReadonlySet<BacklogReason> = new Set([
   "screen_locked",
 ]);
 
-/** True when the given backlog reason should prevent the loop from entering DORMANT. */
+/** US-LOOP-115: DORMANT is retired, but this pure predicate still names the idle
+ *  reasons that are TEMPORARY (a PR will merge, a dep will land) versus terminal —
+ *  `roll loop go` uses it to decide whether an idle cycle means "stop" or "retry".
+ *  True when the reason is one the old dormancy path would have refused to act on. */
 export function shouldSuppressDormancy(reason: BacklogReason): boolean {
   return DORMANCY_SUPPRESSED_REASONS.has(reason);
 }

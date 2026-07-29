@@ -575,61 +575,24 @@ function pauseMarkerPath(projectPath: string, slug: string): string {
   return join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
 }
 
-// ─── US-LOOP-079g: DORMANT marker + loop run state resolver ───────────────
-
-export interface DormantMarkerBody {
-  /** ISO 8601 timestamp when the loop entered dormant state. */
-  since: string;
-  /** Human-readable reason (e.g. "idle for 6h with no Todo items"). */
-  reason: string;
-}
-
-/** The loop's run state resolved from on-disk marker files. */
-export type LoopRunState = "PAUSED" | "DORMANT" | "ACTIVE";
+// ─── loop run state ─────────────────────────────────────────────────────────
 
 /**
- * US-LOOP-079g AC1: the DORMANT marker path mirrors {@link pauseMarkerPath}.
- * `<rt>/.roll/loop/DORMANT-<slug>` (ROLL_PROJECT_RUNTIME_DIR-aware).
+ * The loop's run state resolved from on-disk markers.
+ *
+ * US-LOOP-115: DORMANT is gone. It meant "the backlog drained, so the launchd lane
+ * unloaded itself and stopped writing idle records" — a state that only makes sense
+ * for a timer that wakes on its own. A session-driven loop cannot idle-spin, so the
+ * only real state left is whether the owner (or a tripped correction breaker) has
+ * PAUSED autonomous progress.
+ *
+ * A leftover `DORMANT-<slug>` file on disk is an inert artifact: never read, never
+ * an error, never auto-deleted (`roll loop gc` may clean it).
  */
-export function dormantMarkerPath(projectPath: string, slug: string): string {
-  return join(projectPath, ".roll", "loop", `DORMANT-${slug}`);
-}
+export type LoopRunState = "PAUSED" | "ACTIVE";
 
-/**
- * Read and validate a DORMANT marker body. Returns null when missing,
- * malformed, or missing required fields.
- */
-export function readDormantMarker(markerPath: string): DormantMarkerBody | null {
-  try {
-    const raw = readFileSync(markerPath, "utf8").trim();
-    const body = JSON.parse(raw);
-    if (typeof body?.since === "string" && typeof body?.reason === "string") {
-      return { since: body.since, reason: body.reason };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Write a structured DORMANT marker to the given path (AC2: round-trip stable).
- */
-export function writeDormantMarker(markerPath: string, body: DormantMarkerBody): void {
-  mkdirSync(dirname(markerPath), { recursive: true });
-  writeFileSync(markerPath, JSON.stringify(body) + "\n", "utf8");
-}
-
-/**
- * US-LOOP-079g AC3/AC4: resolve the loop's run state from on-disk markers only.
- * Priority: PAUSE marker → PAUSED (even if DORMANT also exists);
- * only DORMANT marker → DORMANT; neither → ACTIVE.
- * Does NOT read lane-armed state or state.yaml files.
- */
 export function resolveLoopRunState(projectPath: string, slug: string): LoopRunState {
-  if (existsSync(pauseMarkerPath(projectPath, slug))) return "PAUSED";
-  if (existsSync(dormantMarkerPath(projectPath, slug))) return "DORMANT";
-  return "ACTIVE";
+  return existsSync(pauseMarkerPath(projectPath, slug)) ? "PAUSED" : "ACTIVE";
 }
 
 function syncGoalPaused(projectPath: string, reason: string): void {
@@ -748,102 +711,8 @@ export async function loopOnCommand(_args: string[], deps: LoopSchedDeps = realD
   const uid = deps.uid();
   mkdirSync(ld, { recursive: true });
 
-  // US-LOOP-079n: lightweight wake when DORMANT marker or orphan .waking
-  // is present. Skip the heavy 3-lane reinstall — only re-arm the loop
-  // lane so pr/dream schedules are undisturbed.
-  const dormant = dormantMarkerPath(id.path, id.slug);
-  const waking = join(id.path, ".roll", "loop", `.waking-${id.slug}`);
-  if (existsSync(dormant) || existsSync(waking)) {
-    const label = launchdLabel("loop", id.slug);
-    const loopPlist = launchdPlistPath("loop", id.slug, ld);
-
-    // Atomic claim: rename DORMANT → .waking (concurrent-safety with
-    // wake-on-roll hooks — at most one winner proceeds).
-    let claimed = false;
-    if (existsSync(dormant)) {
-      try {
-        renameSync(dormant, waking);
-        claimed = true;
-      } catch {
-        // rename failed — another trigger already claimed it
-      }
-    }
-
-    if (!claimed) {
-      // Orphan recovery: .waking exists, DORMANT does not (crash between
-      // rename and wake).
-      if (existsSync(waking)) {
-        const armed = await deps.scheduler.isArmed(label);
-        if (!armed) {
-          const mounted = await mountService(deps, label, loopPlist);
-          if (!mounted.ok) {
-            restoreDormantClaim(waking, dormant);
-            process.stderr.write(mountFailureMessage(uid, [{ label, plist: loopPlist, m: mounted }]));
-            return 1;
-          }
-          rmSync(waking, { force: true });
-          mkdirSync(join(id.path, ".roll", "loop"), { recursive: true });
-          new EventBus().appendEvent(join(id.path, ".roll", "loop", "events.ndjson"), {
-            type: "loop:woke",
-            loop: "ci",
-            ts: Math.floor(Date.now() / 1000),
-            trigger: "manual",
-            wakeEpoch: Math.floor(Date.now() / 1000),
-          });
-        } else {
-          rmSync(waking, { force: true });
-        }
-        process.stdout.write(
-          "Loop re-armed from dormant (lightweight wake, pr/dream untouched)\n" +
-          "Loop 已从休眠轻量唤醒（pr/dream 未扰动）\n" +
-          "mode: autonomous — scheduler can pick eligible Todo within pause/budget/route/evidence/Evaluator/release gates\n",
-        );
-        return 0;
-      }
-
-      // Another trigger claimed DORMANT and completed the wake already.
-      process.stdout.write(
-        "Loop already waking or awake\n" +
-        "Loop 正在唤醒或已活跃\n",
-      );
-      return 0;
-    }
-
-    // Claimed — check if lane is already armed (idempotent).
-    const armed = await deps.scheduler.isArmed(label);
-    if (armed) {
-      rmSync(waking, { force: true });
-      process.stdout.write(
-        "Loop already active (wake claim cleaned)\n" +
-        "Loop 已活跃（唤醒声明已清理）\n",
-      );
-      return 0;
-    }
-
-    // Perform the wake — re-arm the loop lane.
-    const mounted = await mountService(deps, label, loopPlist);
-    if (!mounted.ok) {
-      restoreDormantClaim(waking, dormant);
-      process.stderr.write(mountFailureMessage(uid, [{ label, plist: loopPlist, m: mounted }]));
-      return 1;
-    }
-    rmSync(waking, { force: true });
-    mkdirSync(join(id.path, ".roll", "loop"), { recursive: true });
-    new EventBus().appendEvent(join(id.path, ".roll", "loop", "events.ndjson"), {
-      type: "loop:woke",
-      loop: "ci",
-      ts: Math.floor(Date.now() / 1000),
-      trigger: "manual",
-      wakeEpoch: Math.floor(Date.now() / 1000),
-    });
-
-    process.stdout.write(
-      "Loop re-armed from dormant (lightweight wake, pr/dream untouched)\n" +
-      "Loop 已从休眠轻量唤醒（pr/dream 未扰动）\n" +
-      "mode: autonomous — scheduler can pick eligible Todo within pause/budget/route/evidence/Evaluator/release gates\n",
-    );
-    return 0;
-  }
+  // US-LOOP-115: the lightweight "wake from dormant" path is gone with DORMANT.
+  // It re-armed the loop lane when a marker or an orphan .waking file was present.
 
   // loop period from project local.yaml (live default: 30).
   let period = 30;

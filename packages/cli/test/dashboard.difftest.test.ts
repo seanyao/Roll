@@ -662,40 +662,30 @@ describe("frozen: roll loop status (live)", () => {
     `);
   });
 
-  it("dormant state renders from DORMANT marker (US-LOOP-079g)", () => {
+  // US-LOOP-115: DORMANT is retired. This case asserted the dormant RENDER; it now
+  // asserts the inverse — a leftover marker is inert and never renders a state.
+  it("a leftover DORMANT marker renders nothing (US-LOOP-115)", () => {
     const proj = mkdtempSync(join(tmpdir(), "roll-dash-dorm-"));
     dirs.push(proj);
     const env = sandboxEnv({ ROLL_RENDER_NOW: LIVE_NOW, ROLL_MAIN_PROJECT: proj });
     const rt = env["ROLL_PROJECT_RUNTIME_DIR"] as string;
     const slug = env["ROLL_MAIN_SLUG"] as string;
 
-    writeFileSync(
-      join(rt, "state.yaml"),
-      ['status: "idle"', ""].join("\n"),
-    );
+    writeFileSync(join(rt, "state.yaml"), ['status: "idle"', ""].join("\n"));
 
     const loopDir = join(proj, ".roll", "loop");
     mkdirSync(loopDir, { recursive: true });
     const dormantBody = JSON.stringify({ since: "2026-06-25T04:00:00Z", reason: "idle for 6h — no Todo items" });
     writeFileSync(join(loopDir, `DORMANT-${slug}`), dormantBody + "\n");
 
-    const base = new Date(LIVE_NOW);
-    const start1 = new Date(base.getTime() - 3 * 3600 * 1000);
-    const end1 = new Date(start1.getTime() + 300 * 1000);
-    const lab1 = label(start1);
-    const events = [
-      { ts: iso(start1), stage: "cycle_start", label: lab1, detail: "", outcome: "" },
-      { ts: iso(end1), stage: "cycle_end", label: lab1, detail: "", outcome: "done" },
-    ];
-    writeFileSync(join(rt, "events.ndjson"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
-
     mkdirSync(join(proj, ".roll"), { recursive: true });
     writeFileSync(join(proj, ".roll", "backlog.md"), "");
 
     const ts = tsRun(env, ["--no-color"], proj);
-    expect(ts).toContain("💤 DORMANT");
-    expect(ts).toContain("since 2026-06-25T04:00:00Z");
-    expect(ts).toContain("idle for 6h — no Todo items");
-    expect(ts).toContain("休眠(闲置)");
+    expect(ts).not.toContain("DORMANT");
+    expect(ts).not.toContain("休眠");
+    // The marker's contents never reach the screen.
+    expect(ts).not.toContain("2026-06-25T04:00:00Z");
+    expect(ts).not.toContain("idle for 6h");
   });
 });

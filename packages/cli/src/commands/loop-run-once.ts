@@ -15,7 +15,6 @@
 import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
 import { createScheduler, isOwnerHeld, launchdLabel, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
-import { dormantMarkerPath, resolveLoopRunState, writeDormantMarker } from "./loop-sched.js";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce } from "../runner/index.js";
@@ -571,82 +570,6 @@ export function resetConsecutiveIdle(projectPath: string, slug: string): void {
 }
 
 // ─── US-LOOP-079h2: enter-dormancy decision ──────────────────────────────────
-
-/** Consecutive-idle count that triggers DORMANT. Mirrors PAUSE_THRESHOLD. */
-const DORMANCY_THRESHOLD = 3;
-
-/**
- * Backlog reasons that DO enter DORMANT: no eligible work AND the idle is not
- * temporary. These all have todoCount === 0 (every "stay active" reason —
- * blocked-by-deps / awaiting-merge / merged-pending / skip-listed — has
- * todoCount > 0), so `assessBacklog` returns one of these via the histogram
- * regardless of the open-PR/merged/skip predicates. That is WHY run-once can
- * call `assessBacklog` with DEFAULT opts here: when any todo exists, default
- * opts make it look eligible → hasWork=true → we stay ACTIVE (the conservative
- * behaviour US-LOOP-079k wants); only a genuinely drained backlog dorms.
- */
-const DEEP_SLEEP_REASONS: ReadonlySet<BacklogReason> = new Set<BacklogReason>([
-  "all_done",
-  "backlog_empty",
-  "all_in_progress",
-]);
-
-export type DormancyOutcome = "active" | "dormant" | "dormant_failed";
-
-/**
- * The dormancy decision (US-LOOP-079h2). PURE over its injected deps so the AC
- * matrix is deterministic (no real launchctl / clock / fs). On `>= threshold`
- * consecutive idles with a deep-sleep reason it bootouts the loop lane, writes
- * the DORMANT marker + `loop:dormant` event, and upserts a `dormant_entered`
- * run row (which supersedes the cycle's `idle_no_work` row via readRuns
- * last-wins by (story_id, cycle_id)). A bootout failure degrades to a PAUSE
- * marker + observable `loop:dormant_failed` event and writes NO
- * `dormant_entered` row (never a "row says dormant but lane still armed" split).
- * The wake-epoch guard (AC7) is satisfied without a separate marker: US-LOOP-079i
- * resets the idle counter on rearm, so the first post-wake idle cycle sits below
- * the threshold and cannot re-dorm in the same epoch.
- */
-export async function maybeEnterDormancy(deps: {
-  slug: string;
-  count: number;
-  threshold?: number;
-  resolveState: () => "PAUSED" | "DORMANT" | "ACTIVE";
-  readBacklog: () => string;
-  assess?: (items: BacklogItem[]) => { hasWork: boolean; reason: BacklogReason };
-  scheduler: { dormant: (label: string) => Promise<boolean> };
-  loopLabel: string;
-  now: () => string;
-  emit: (event: Record<string, unknown>) => void;
-  writeDormant: (body: { since: string; reason: BacklogReason }) => void;
-  upsertDormantRun: () => void;
-  writePause: (reason: string) => void;
-}): Promise<DormancyOutcome> {
-  const threshold = deps.threshold ?? DORMANCY_THRESHOLD;
-  if (deps.count < threshold) return "active"; // anti-flap: need N consecutive idles
-  if (deps.resolveState() !== "ACTIVE") return "active"; // already PAUSED/DORMANT (precedence)
-  const assess = deps.assess ?? ((items: BacklogItem[]) => assessBacklog(items));
-  const { hasWork, reason } = assess(parseBacklog(deps.readBacklog()));
-  if (hasWork) return "active";
-  if (shouldSuppressDormancy(reason)) return "active"; // e.g. all_awaiting_merge — PR will merge
-  if (!DEEP_SLEEP_REASONS.has(reason)) return "active"; // e.g. all_blocked_by_deps — deps may complete
-  const since = deps.now();
-  let ok = false;
-  try {
-    ok = await deps.scheduler.dormant(deps.loopLabel);
-  } catch {
-    ok = false;
-  }
-  if (!ok) {
-    // §8 bootout failure → PAUSE fallback + observable alert; NO dormant_entered.
-    deps.writePause(`dormancy bootout failed (reason=${reason})`);
-    deps.emit({ type: "loop:dormant_failed", loop: deps.slug, reason, error: "bootout_failed", ts: Date.parse(since) });
-    return "dormant_failed";
-  }
-  deps.writeDormant({ since, reason });
-  deps.emit({ type: "loop:dormant", loop: deps.slug, reason, since, ts: Date.parse(since) });
-  deps.upsertDormantRun(); // supersedes idle_no_work (readRuns last-wins by key)
-  return "dormant";
-}
 
 export function shouldSuppressGoalChildFailureCounter(input: {
   isGoalChild: boolean;
@@ -1259,48 +1182,10 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
     // idle outcomes are not failures — a no-work cycle is expected behaviour.
     // The consecutive-failure counter is NOT ticked.
     const idleCount = incrementConsecutiveIdle(id.path, id.slug); // US-LOOP-079h1: idle → increment counter
-    // US-LOOP-079h2: after N consecutive idles with a drained backlog, self-unload
-    // the loop lane (DORMANT) so the loop stops waking / writing idle_no_work.
-    // Best-effort: dormancy must NEVER break the idle cycle.
-    try {
-      const bus = new EventBus();
-      const backlogFile = join(id.path, ".roll", "backlog.md");
-      const nowSec = Math.floor(Date.now() / 1000);
-      const outcome = await maybeEnterDormancy({
-        slug: id.slug,
-        count: idleCount,
-        resolveState: () => resolveLoopRunState(id.path, id.slug),
-        readBacklog: () => (existsSync(backlogFile) ? readFileSync(backlogFile, "utf8") : ""),
-        scheduler: createScheduler(process.platform, { uid: process.getuid?.() ?? 0 }),
-        loopLabel: launchdLabel("loop", id.slug),
-        now: () => new Date().toISOString(),
-        emit: (event) => bus.appendEvent(paths.eventsPath, event as never),
-        writeDormant: (body) => writeDormantMarker(dormantMarkerPath(id.path, id.slug), body),
-        upsertDormantRun: () =>
-          bus.upsertRun(
-            paths.runsPath,
-            { storyId: "", cycleId },
-            buildRunRow(
-              { kind: "append_run", status: "dormant", outcome: mapV2Status("dormant"), cycleId },
-              { cycleId, branch, loop: "ci" as never },
-              nowSec,
-            ),
-          ),
-        writePause: (reason) => {
-          const p = join(id.path, ".roll", "loop", `PAUSE-${id.slug}`);
-          mkdirSync(dirname(p), { recursive: true });
-          writeFileSync(p, `# loop paused — dormancy bootout failed\n\n${reason}\n`, "utf8");
-        },
-      });
-      if (outcome === "dormant") {
-        process.stdout.write(
-          "loop run-once: backlog drained — entering DORMANT (lane unloaded; no further idle records)\n" +
-            "loop run-once: backlog 抽干——进入休眠(已卸载 lane;此后不再产空转记录)\n",
-        );
-      }
-    } catch {
-      /* dormancy is best-effort — a failure here never breaks the idle cycle */
-    }
+    // US-LOOP-115: no dormancy. DORMANT existed because a launchd lane woke every
+    // 30 minutes and had to unload itself once the backlog drained, so it stopped
+    // writing idle records. A session-driven loop cannot idle-spin: `roll loop go`
+    // finishes when there is nothing pickable. There is no lane to unload.
     return 0;
   }
 
