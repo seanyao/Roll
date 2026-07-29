@@ -73,7 +73,17 @@ function expectedSteps(f: ReturnType<typeof fixture>, action: "created" | "reuse
     { kind: "directory", target: join(f.workspace, "design"), action },
     { kind: "directory", target: join(f.workspace, "backlog"), action },
     { kind: "file", target: join(f.workspace, "backlog", "index.md"), action },
-    ...["issues", "runtime", join("runtime", "locks"), join("runtime", "heartbeats"), join("runtime", "alerts")]
+    ...[
+      "features",
+      "evidence",
+      "issues",
+      "runtime",
+      join("runtime", "locks"),
+      join("runtime", "tool-dumps"),
+      join("runtime", "events"),
+      join("runtime", "heartbeats"),
+      join("runtime", "alerts"),
+    ]
       .map((name) => ({ kind: "directory" as const, target: join(f.workspace, name), action })),
     { kind: "cache", target: f.repoId, action },
     { kind: "registry", target: "ws-demo", action },

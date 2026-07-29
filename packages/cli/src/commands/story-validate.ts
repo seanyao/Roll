@@ -18,7 +18,9 @@
  * non-zero otherwise — so a skill / CI step can gate on objective evidence only.
  * Must-declare is a soft warning. A spec that cannot be found ⇒ exit 2 (caller error).
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseIssueStoryContract } from "@roll/core";
 import { c, renderState } from "../render.js";
 import { STORY_ID_RE } from "../lib/story-page.js";
 import { DuplicateStoryIdError, declaresAnySurface, screenshotExemption, storySpecPath } from "../runner/attest-gate.js";
@@ -34,8 +36,10 @@ export const STORY_VALIDATE_USAGE =
   "  Self-check a card's spec against the visual-evidence contract (FIX-339):\n" +
   "  warn when no deliverable surface is declared (deliverable_url /\n" +
   "  deliverable_cmd / screenshot_exempt) and require a visual-evidence AC.\n" +
+  "  Canonical Workspaces also validate the Runtime Story Contract consumed\n" +
+  "  by `workspace issue init`, including repository targets.\n" +
   "  Exit 0 = ok or warning-only, non-zero = not ok.\n" +
-  "  自检卡片是否满足可视证据契约:缺交付面只警告;缺可视证据 AC 才非 0。\n";
+  "  自检可视证据契约；canonical Workspace 还会校验 issue init 使用的 Runtime Story Contract。\n";
 
 export interface StoryValidateCommandDeps {
   readonly projectPath?: string;
@@ -102,6 +106,14 @@ export function storyValidateCommand(args: string[], deps: StoryValidateCommandD
 
   const fails: string[] = [];
   const warnings: string[] = [];
+  const runtimeContract = existsSync(join(cwd, "workspace.yaml"))
+    ? parseIssueStoryContract(specText, { storyId: id })
+    : undefined;
+  if (runtimeContract !== undefined && !runtimeContract.ok) {
+    for (const error of runtimeContract.errors) {
+      fails.push(`runtime-contract: ${error.path}: ${error.message}`);
+    }
+  }
   if (!mustDeclareOk) {
     warnings.push(
       "no deliverable surface declared — must declare `deliverable_url:` / `deliverable_cmd:` or a recorded `screenshot_exempt: <reason>`",
@@ -155,6 +167,9 @@ export function storyValidateCommand(args: string[], deps: StoryValidateCommandD
   }
   if (granularity !== null) {
     lines.push(`  granularity:     ${granularity.ok ? green("ok") : red("FAIL")}${granularity.ok ? "" : ` — ${granularity.violations.length} 违规 (卡太大/契约缺失)`}`);
+  }
+  if (runtimeContract !== undefined) {
+    lines.push(`  runtime-contract: ${runtimeContract.ok ? green("ok") : red("FAIL")}`);
   }
   for (const w of warnings) lines.push(`  • warning: ${w}`);
   for (const f of fails) lines.push(`  • ${f}`);

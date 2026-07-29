@@ -22,14 +22,14 @@ export type ResolveStorySpecResult =
   | { readonly ok: true; readonly path: string; readonly text: string }
   | { readonly ok: false; readonly code: ResolveStoryContractErrorCode; readonly matches?: readonly string[] };
 
-/** Bound recursion depth under a Workspace backlog tree — generous for any
+/** Bound recursion depth under a Workspace Story tree — generous for any
  *  real epic/sub-epic nesting while refusing to walk unbounded structures. */
-const MAX_BACKLOG_DEPTH = 8;
+const MAX_STORY_TREE_DEPTH = 8;
 
 /** Thrown internally to fail loud the instant a symlink is found anywhere in
  *  the backlog walk that would otherwise resolve outside the Workspace's own
  *  tree — caught by the one call site that converts it to a result code. */
-class BacklogSymlinkEscapeError extends Error {}
+class StoryTreeSymlinkEscapeError extends Error {}
 
 /** True when `path` exists and is ITSELF a symlink (checked with `lstatSync`,
  *  never following it) — the only question this function answers; it does
@@ -42,25 +42,21 @@ function isSymlink(path: string): boolean {
   }
 }
 
-/** Every `<story-id>/spec.md` found anywhere under `<workspaceRoot>/backlog`,
- *  at any depth — the Runtime Story Contract's ONLY valid home. A caller cwd's
- *  own `.roll/features` tree is never consulted here.
+/** Every `<story-id>/spec.md` found in the canonical Workspace `features`
+ *  authority or the legacy Workspace `backlog` tree. A caller cwd's own
+ *  `.roll/features` tree is never consulted here.
  *
  *  FAIL-LOUD ON SYMLINKS: `readdirSync(..., { withFileTypes: true })` reports
  *  a symlinked directory entry's OWN dirent type (a symlink, not a
  *  directory), so `entry.isDirectory()` alone would silently skip it —
  *  invisible rather than refused. Every directory entry named `storyId` and
  *  every `spec.md` leaf is explicitly `lstatSync`'d; a symlink at either
- *  position throws {@link BacklogSymlinkEscapeError} immediately rather than
+ *  position throws {@link StoryTreeSymlinkEscapeError} immediately rather than
  *  being quietly treated as absent. */
-function backlogStorySpecMatches(workspaceRoot: string, storyId: string): string[] {
-  const backlogRoot = join(workspaceRoot, "backlog");
-  if (isSymlink(backlogRoot)) {
-    throw new BacklogSymlinkEscapeError(`Workspace backlog root is a symlink: ${backlogRoot}`);
-  }
+function storySpecMatches(workspaceRoot: string, storyId: string): string[] {
   const matches: string[] = [];
-  const walk = (dir: string, depth: number): void => {
-    if (depth > MAX_BACKLOG_DEPTH) return;
+  const walk = (authority: "features" | "backlog", dir: string, depth: number): void => {
+    if (depth > MAX_STORY_TREE_DEPTH) return;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -70,25 +66,32 @@ function backlogStorySpecMatches(workspaceRoot: string, storyId: string): string
     for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.name === storyId) {
-        if (isSymlink(path)) throw new BacklogSymlinkEscapeError(`backlog story directory is a symlink: ${path}`);
+        if (isSymlink(path)) throw new StoryTreeSymlinkEscapeError(`${authority} story directory is a symlink: ${path}`);
         if (!entry.isDirectory()) continue;
         const spec = join(path, "spec.md");
-        if (isSymlink(spec)) throw new BacklogSymlinkEscapeError(`Story spec.md is a symlink: ${spec}`);
+        if (isSymlink(spec)) throw new StoryTreeSymlinkEscapeError(`Story spec.md is a symlink: ${spec}`);
         if (existsSync(spec)) matches.push(spec);
-        walk(path, depth + 1);
+        walk(authority, path, depth + 1);
         continue;
       }
       if (!entry.isDirectory() || isSymlink(path)) continue;
-      walk(path, depth + 1);
+      walk(authority, path, depth + 1);
     }
   };
-  walk(backlogRoot, 0);
+  for (const authority of ["features", "backlog"] as const) {
+    const root = join(workspaceRoot, authority);
+    if (isSymlink(root)) {
+      throw new StoryTreeSymlinkEscapeError(`Workspace ${authority} root is a symlink: ${root}`);
+    }
+    walk(authority, root, 0);
+  }
   return matches;
 }
 
-/** Resolve the Runtime Story Contract from inside the SELECTED Workspace's own
- *  backlog tree (`backlog/**\/<story-id>/spec.md`) — never the caller cwd's
- *  `.roll/features`. Fails loud when a story id resolves to more than one spec. */
+/** Resolve the Runtime Story Contract from the selected Workspace's canonical
+ * `features/**\/<story-id>/spec.md` authority, with `backlog/**` accepted only
+ * for legacy Workspaces. Never consult the caller cwd's `.roll/features`.
+ * Fails loud when a story id resolves to more than one spec across both roots. */
 export function resolveWorkspaceBacklogStorySpec(
   workspaceRoot: string,
   storyId: string,
@@ -97,9 +100,9 @@ export function resolveWorkspaceBacklogStorySpec(
   if (!validated.ok) return { ok: false, code: "invalid_story_id" };
   let matches: string[];
   try {
-    matches = backlogStorySpecMatches(workspaceRoot, storyId);
+    matches = storySpecMatches(workspaceRoot, storyId);
   } catch (error) {
-    if (error instanceof BacklogSymlinkEscapeError) return { ok: false, code: "symlink_escape" };
+    if (error instanceof StoryTreeSymlinkEscapeError) return { ok: false, code: "symlink_escape" };
     throw error;
   }
   if (matches.length === 0) return { ok: false, code: "story_not_found" };

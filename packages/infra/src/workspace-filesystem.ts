@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -103,6 +104,15 @@ export function workspaceLegacyCreateJournalPath(rollHome: string, workspaceId: 
 export function workspaceCreateLockPath(rollHome: string, workspaceId: string): string {
   void workspaceId;
   return join(resolve(rollHome), "locks", "workspace-create.lock");
+}
+
+function removeEmptyTransactionDirectory(path: string): void {
+  try {
+    rmdirSync(path);
+  } catch {
+    // A concurrent transaction may already be using it. Cosmetic cleanup must
+    // never turn a committed create into a failure.
+  }
 }
 
 function digest(text: string): string {
@@ -642,6 +652,7 @@ export async function applyWorkspaceCreation(
       registered = true;
       deps.afterStep?.(plan.steps.at(-1) as WorkspaceCreatePlanStep);
       rmSync(journalPath, { force: true });
+      removeEmptyTransactionDirectory(dirname(journalPath));
       return { outcome: plan.outcome, plan, authorization };
     } catch (error) {
       const preserved = registered ? created.map((node) => node.path).sort() : rollback(created);

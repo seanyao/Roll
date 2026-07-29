@@ -8,6 +8,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -141,7 +142,15 @@ function durableAtomicWrite(path: string, content: string, deps: WorkspaceEditTr
 function removeDurably(path: string): void {
   if (!existsSync(path)) return;
   rmSync(path, { force: true });
-  syncDirectory(dirname(path));
+  const parent = dirname(path);
+  syncDirectory(parent);
+  try {
+    rmdirSync(parent);
+    syncDirectory(dirname(parent));
+  } catch {
+    // Another edit may have created a journal. Empty-directory cleanup is
+    // cosmetic and must not invalidate a committed manifest replacement.
+  }
 }
 
 export function workspaceEditJournalPath(rollHome: string, workspaceId: string): string {

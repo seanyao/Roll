@@ -728,6 +728,14 @@ function migrationLockPath(rollHome: string, workspaceId: string): string {
   return join(resolve(rollHome), "locks", "workspace-migration", `${workspaceId}.lock`);
 }
 
+function removeEmptyMigrationLockDirectory(lockPath: string): void {
+  try {
+    rmdirSync(dirname(lockPath));
+  } catch {
+    // A concurrent migration may already own another lock in this directory.
+  }
+}
+
 /** Apply or resume one exact owner-approved historical migration plan. */
 async function applyHistoricalWorkspaceMigrationUnlocked(
   input: ApplyHistoricalWorkspaceMigrationInput,
@@ -859,6 +867,7 @@ async function applyHistoricalWorkspaceMigrationUnlocked(
     return completedResult(journal, "migrated");
   } finally {
     releaseLock(lockPath);
+    removeEmptyMigrationLockDirectory(lockPath);
   }
 }
 
@@ -926,6 +935,7 @@ function rollbackHistoricalWorkspaceMigrationUnlocked(
     return { outcome: "rolled_back", workspaceId: plan.workspaceId };
   } finally {
     releaseLock(lockPath);
+    removeEmptyMigrationLockDirectory(lockPath);
   }
 }
 

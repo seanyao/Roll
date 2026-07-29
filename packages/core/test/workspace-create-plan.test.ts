@@ -47,6 +47,12 @@ describe("US-WS-023 WorkspaceCreatePlan", () => {
       target: join(options.rollHome, "workspace-create", "ws-demo.pending.json"),
       action: "created",
     });
+    expect(plan.steps).toEqual(expect.arrayContaining([
+      { kind: "directory", target: join(options.homeDir, ".roll", "workspaces", "ws-demo", "features"), action: "created" },
+      { kind: "directory", target: join(options.homeDir, ".roll", "workspaces", "ws-demo", "evidence"), action: "created" },
+      { kind: "directory", target: join(options.homeDir, ".roll", "workspaces", "ws-demo", "runtime", "tool-dumps"), action: "created" },
+      { kind: "directory", target: join(options.homeDir, ".roll", "workspaces", "ws-demo", "runtime", "events"), action: "created" },
+    ]));
   });
 
   it("fails loud for the legacy init config with a deterministic conversion list", () => {

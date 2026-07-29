@@ -166,6 +166,7 @@ describe("US-WS-019a historical Workspace migration transaction", () => {
     });
     expect(readFileSync(join(f.source, ".roll", "RELOCATED.json"), "utf8")).toContain(saved.planId);
     expect(existsSync(historicalWorkspaceMigrationJournalPath(f.rollHome, saved.workspaceId))).toBe(false);
+    expect(existsSync(join(f.rollHome, "locks", "workspace-migration"))).toBe(false);
 
     const second = await applyHistoricalWorkspaceMigration({ sourceRoot: f.source, rollHome: f.rollHome, plan: saved });
     expect(second.outcome).toBe("reused");

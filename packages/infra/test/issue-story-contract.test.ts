@@ -50,6 +50,25 @@ describe("resolveWorkspaceBacklogStoryContract", () => {
     expect(result).toMatchObject({ ok: true, value: { storyId: "US-XX1" } });
   });
 
+  it("resolves the canonical Story spec minted under the Workspace features tree", () => {
+    const workspaceRoot = sandbox();
+    writeSpec(join(workspaceRoot, "features", "workspace-orchestration", "US-XX1"), "US-XX1");
+    const result = resolveWorkspaceBacklogStorySpec(workspaceRoot, "US-XX1");
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error("expected Workspace story spec");
+    expect(result.path).toBe(join(workspaceRoot, "features", "workspace-orchestration", "US-XX1", "spec.md"));
+  });
+
+  it("fails loud when the same Story exists in both legacy backlog and canonical features", () => {
+    const workspaceRoot = sandbox();
+    writeSpec(join(workspaceRoot, "backlog", "workspace-orchestration", "US-XX1"), "US-XX1");
+    writeSpec(join(workspaceRoot, "features", "workspace-orchestration", "US-XX1"), "US-XX1");
+    const result = resolveWorkspaceBacklogStoryContract(workspaceRoot, "US-XX1");
+    expect(result).toMatchObject({ ok: false, code: "duplicate_story" });
+    if (result.ok) throw new Error("expected duplicate_story");
+    expect(result.matches).toHaveLength(2);
+  });
+
   it("does NOT resolve a Story Contract from the caller's cwd .roll/features tree", () => {
     const workspaceRoot = sandbox();
     // Deliberately place the spec OUTSIDE the Workspace backlog tree, in a
@@ -109,6 +128,16 @@ repositories:
     writeSpec(join(outside, "workspace-orchestration", "US-XX1"), "US-XX1");
     // `backlog` itself (not just something inside it) is a symlink.
     symlinkSync(outside, join(workspaceRoot, "backlog"));
+
+    const result = resolveWorkspaceBacklogStoryContract(workspaceRoot, "US-XX1");
+    expect(result).toMatchObject({ ok: false, code: "symlink_escape" });
+  });
+
+  it("refuses a symlinked features ROOT escaping the Workspace", () => {
+    const workspaceRoot = sandbox();
+    const outside = sandbox();
+    writeSpec(join(outside, "workspace-orchestration", "US-XX1"), "US-XX1");
+    symlinkSync(outside, join(workspaceRoot, "features"));
 
     const result = resolveWorkspaceBacklogStoryContract(workspaceRoot, "US-XX1");
     expect(result).toMatchObject({ ok: false, code: "symlink_escape" });

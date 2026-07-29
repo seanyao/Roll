@@ -154,7 +154,10 @@ stdout/stderr 摘要；凭据从不落盘。
 ## 设计期声明可视证据
 
 `roll story validate` 在设计期就检查一张卡是否**生而诚实**——带可视证据 AC，
-且 web 面要声明可截的产品页。若卡有可视证据 AC，但没有声明任何交付面
+且 web 面要声明可截的产品页。对于 canonical Workspace 卡片，它还会使用与
+`roll workspace issue init` 相同的
+Runtime Story Contract 解析；repository target 缺失或无效会在 build handoff 前直接失败。
+若卡有可视证据 AC，但没有声明任何交付面
 （`deliverable_url`、`deliverable_cmd`、`physical_terminal` 或
 `screenshot_exempt`），validate 只打印 must-declare 软警告，仍以 0 退出。
 运行时 gate 也只把同一信号作为诊断携带，不会仅因此阻断或把交付标成 skipped。

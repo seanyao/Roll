@@ -201,7 +201,7 @@ export async function inspectRepositoryCache(
   try {
     const bare = await runGit(["rev-parse", "--is-bare-repository"], identity.cachePath);
     if (bare.code !== 0 || bare.stdout.trim() !== "true") return "repairable";
-    const origin = await runGit(["remote", "get-url", "origin"], identity.cachePath);
+    const origin = await runGit(["config", "--get", "remote.origin.url"], identity.cachePath);
     if (origin.code !== 0) return "repairable";
     const normalized = normalizeRepositoryRemote(origin.stdout.trim());
     if (!normalized.ok || normalized.value !== identity.remote) return "conflict";
@@ -390,7 +390,11 @@ async function inspectExistingCache(
     bare = await runGit(["rev-parse", "--is-bare-repository"], identity.cachePath);
     guard();
     if (bare.code !== 0 || bare.stdout.trim() !== "true") return "corrupt";
-    origin = await runGit(["remote", "get-url", "origin"], identity.cachePath);
+    // Read the stored identity, not Git's transport-expanded view. `remote
+    // get-url` applies url.*.insteadOf and can therefore turn a valid
+    // process-scoped HTTPS→SSH/file transport override into a false origin
+    // mismatch on recovery.
+    origin = await runGit(["config", "--get", "remote.origin.url"], identity.cachePath);
     guard();
     if (origin.code !== 0) return "corrupt";
     const normalizedOrigin = normalizeRepositoryRemote(origin.stdout.trim());

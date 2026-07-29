@@ -81,7 +81,7 @@ export function prepareWorkspaceSkillHandoff(input: {
   };
 }
 
-type RegisteredWorkspaceSkillPolicy = WorkspaceContextPolicy & {
+export type RegisteredWorkspaceSkillPolicy = WorkspaceContextPolicy & {
   readonly effectTarget: WorkspaceContextEffectTarget;
   readonly access: WorkspaceContextAccess;
   readonly repositorySelector: WorkspaceRepositorySelectorPolicy;
@@ -146,6 +146,27 @@ function registeredSkillPolicy(
   if (matches[0] === undefined) return { code: "missing_skill_policy" };
   const policy = matches[0];
   return policy as RegisteredWorkspaceSkillPolicy;
+}
+
+export type ResolveRegisteredWorkspaceSkillPolicyResult =
+  | { readonly ok: true; readonly policy: RegisteredWorkspaceSkillPolicy }
+  | { readonly ok: false; readonly code: string };
+
+/** Resolve the shipped policy before the command chooses Workspace/Issue scope. */
+export function resolveRegisteredWorkspaceSkillPolicy(
+  skillName: string,
+  operation: string,
+): ResolveRegisteredWorkspaceSkillPolicyResult {
+  let manifest: unknown;
+  try {
+    manifest = loadShippedWorkspaceSkillPolicyManifest();
+  } catch {
+    return { ok: false, code: "skill_policy_registry_unavailable" };
+  }
+  const resolved = registeredSkillPolicy(manifest, skillName, operation);
+  return "code" in resolved
+    ? { ok: false, code: resolved.code }
+    : { ok: true, policy: resolved };
 }
 
 function machineOnlyBlock(skillName: string, operation: string): string {

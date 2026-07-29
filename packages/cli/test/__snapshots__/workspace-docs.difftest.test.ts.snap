@@ -36,9 +36,10 @@ wake      a DORMANT loop wakes on any roll command · the daily dream scan · a 
 
 Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
-    "workspace": "Usage: roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
+    "workspace": "Usage: roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
   \`create <id> --config <file> [--authorization <file>] [--check] [--json]\`
   \`edit <id|path> --config <file> [--check] [--json]\`
+  \`handoff --skill <id> --operation <op> --requirement <text> [--workspace <id>] [--story <id>] [--repository <id|alias>] [--json]\`
   \`issue init <story-id> --workspace <id> [--check] [--json]\`
   \`requirement add --provider <provider> --ref <ref> --revision <revision> --body-file <file> --story <id> [options]\`
   \`doctor <id> [--json] [--repair <typed-action>] [--path <absolute-path>]\`
@@ -88,9 +89,10 @@ Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路�
 
 Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
-    "workspace": "用法：roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
+    "workspace": "用法：roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
   \`create <ID> --config <文件> [--authorization <文件>] [--check] [--json]\`
   \`edit <ID|路径> --config <文件> [--check] [--json]\`
+  \`handoff --skill <ID> --operation <操作> --requirement <文本> [--workspace <ID>] [--story <ID>] [--repository <ID|别名>] [--json]\`
   \`issue init <Story ID> --workspace <ID> [--check] [--json]\`
   \`requirement add --provider <来源> --ref <引用> --revision <修订> --body-file <文件> --story <ID> [选项]\`
   \`doctor <ID> [--json] [--repair <类型化动作>] [--path <绝对路径>]\`

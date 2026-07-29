@@ -161,6 +161,7 @@ describe("Workspace filesystem transaction", () => {
       entries: [{ workspaceId: "ws-demo", root: f.root }],
     });
     expect(existsSync(workspaceCreateJournalPath(f.rollHome, "ws-demo"))).toBe(false);
+    expect(existsSync(join(f.rollHome, "workspace-create"))).toBe(false);
 
     ensureCache.mockResolvedValue({ action: "reused" as const });
     const second = await applyWorkspaceCreation(f.config, {

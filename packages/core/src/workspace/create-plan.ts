@@ -393,9 +393,13 @@ function layout(root: string): readonly { readonly kind: "directory" | "file"; r
     { kind: "directory", target: join(root, "design") },
     { kind: "directory", target: join(root, "backlog") },
     { kind: "file", target: join(root, "backlog", "index.md") },
+    { kind: "directory", target: join(root, "features") },
+    { kind: "directory", target: join(root, "evidence") },
     { kind: "directory", target: join(root, "issues") },
     { kind: "directory", target: join(root, "runtime") },
     { kind: "directory", target: join(root, "runtime", "locks") },
+    { kind: "directory", target: join(root, "runtime", "tool-dumps") },
+    { kind: "directory", target: join(root, "runtime", "events") },
     { kind: "directory", target: join(root, "runtime", "heartbeats") },
     { kind: "directory", target: join(root, "runtime", "alerts") },
   ];

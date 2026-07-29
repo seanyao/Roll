@@ -184,6 +184,81 @@ function isolatedAuthorityFixture(): {
 }
 
 describe("US-WS-029 agent Workspace clarification host", () => {
+  it("bootstraps the registered roll-idea capture operation instead of hard-coding roll-design", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const output: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    process.stdout.write = ((chunk: string | Uint8Array) => (output.push(String(chunk)), true)) as typeof process.stdout.write;
+    try {
+      process.chdir(fixture.home);
+      const status = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-idea",
+        "--operation", "capture",
+        "--requirement", "capture an Axis Fields idea",
+        "--workspace", "roll",
+        "--json",
+      ]);
+      expect(status).toBe(0);
+      const resolved = JSON.parse(output.join("")) as {
+        route: string;
+        skill: string;
+        operation: string;
+        promptContext: string;
+        environmentContext: string;
+        context: { workspace: { workspaceId: string } };
+      };
+      expect(resolved).toMatchObject({
+        route: "context",
+        skill: "roll-idea",
+        operation: "capture",
+        context: { workspace: { workspaceId: "roll" } },
+      });
+      expect(resolved.promptContext).toBe(resolved.environmentContext);
+    } finally {
+      process.stdout.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
+  it("accepts the registered roll-build operation and reports the missing Issue identity precisely", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const errors: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    process.stderr.write = ((chunk: string | Uint8Array) => (errors.push(String(chunk)), true)) as typeof process.stderr.write;
+    try {
+      process.chdir(fixture.home);
+      const status = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-build",
+        "--operation", "build",
+        "--requirement", "build US-WS-001",
+        "--workspace", "roll",
+        "--json",
+      ]);
+      expect(status).toBe(1);
+      expect(JSON.parse(errors.join(""))).toMatchObject({
+        route: "error",
+        error: { code: "story_id_required" },
+      });
+    } finally {
+      process.stderr.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
   it("routes the real workspace handoff command through clarification, then emits paired context after selection", async () => {
     const fixture = isolatedAuthorityFixture();
     const originalCwd = process.cwd();

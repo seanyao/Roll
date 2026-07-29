@@ -307,8 +307,8 @@ describe("US-WS-023 create-only CLI", () => {
     const en = await run(["workspace", "--help"], home, "en");
     const zh = await run(["ws", "--help"], home, "zh");
 
-    expect(en.stdout.split("\n", 1)[0]).toBe("Usage: roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]");
-    expect(zh.stdout.split("\n", 1)[0]).toBe("用法：roll workspace <create|edit|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]");
+    expect(en.stdout.split("\n", 1)[0]).toBe("Usage: roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]");
+    expect(zh.stdout.split("\n", 1)[0]).toBe("用法：roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]");
     for (const output of [en.stdout, zh.stdout]) {
       expect(output).not.toMatch(/`init <(?:id|ID)> --config/u);
       expect(output).toContain("`issue init <");

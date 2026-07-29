@@ -185,6 +185,7 @@ describe("US-WS-026 Workspace edit transaction", () => {
     expect(readFileSync(f.issuePath)).toEqual(issueBefore);
     expect(readFileSync(f.requirementPath)).toEqual(requirementBefore);
     expect(existsSync(workspaceEditJournalPath(f.rollHome, "ws-demo"))).toBe(false);
+    expect(existsSync(join(f.rollHome, "workspace-edit"))).toBe(false);
     expect(lockOrder).toEqual(["authority", "reload", "rebuild", "reload"]);
     expect(phases).toEqual([
       "journal_prepared",

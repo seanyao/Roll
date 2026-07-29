@@ -30,6 +30,16 @@ function project(id: string, epic: string, specText: string): string {
   return p;
 }
 
+function workspaceProject(id: string, epic: string, specText: string): string {
+  const p = realpathSync(mkdtempSync(join(tmpdir(), "roll-storyvalidate-workspace-")));
+  dirs.push(p);
+  writeFileSync(join(p, "workspace.yaml"), "{}\n");
+  const dir = join(p, "features", epic, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "spec.md"), specText);
+  return p;
+}
+
 function run(p: string, args: string[]): { code: number; out: string; err: string } {
   const save = process.cwd();
   process.chdir(p);
@@ -111,6 +121,18 @@ describe("roll story validate — US-CYCLE-005 granularity gate", () => {
 });
 
 describe("roll story validate — FIX-339 AC7", () => {
+  it("rejects a canonical Workspace card that workspace issue init cannot parse", () => {
+    const p = workspaceProject(
+      "US-RUNTIME-1",
+      "workspace",
+      "---\nid: US-RUNTIME-1\nscreenshot_exempt: backend-only; substitute evidence = unit tests\ndeliverable_cmd: roll test\n---\n# US-RUNTIME-1\n",
+    );
+    const r = run(p, ["US-RUNTIME-1"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("runtime-contract: FAIL");
+    expect(r.out).toContain("must declare at least one repository target");
+  });
+
   it("a card with a declared deliverable_url + a web visual-evidence AC ⇒ ok (exit 0)", () => {
     const p = project(
       "FIX-V1",

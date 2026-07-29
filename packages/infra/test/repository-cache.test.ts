@@ -30,6 +30,7 @@ const sandboxes: string[] = [];
 
 afterEach(() => {
   for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 function sandbox(): string {
@@ -116,6 +117,32 @@ async function runCacheWorker(
 }
 
 describe("RepositoryCache identity and path safety", () => {
+  it("keeps raw origin identity stable while Git insteadOf rewrites only the fetch transport", async () => {
+    const rollHome = sandbox();
+    const upstream = localRemote(sandbox(), "transport-rewrite");
+    const canonicalRemote = "https://example.test/team/product.git";
+    const repository = binding(canonicalRemote);
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", `url.${upstream.remote}.insteadOf`);
+    vi.stubEnv("GIT_CONFIG_VALUE_0", canonicalRemote);
+
+    const created = await ensureRepositoryCache({
+      rollHome,
+      binding: repository,
+      integrationRefspec: "+refs/heads/main:refs/remotes/origin/main",
+    });
+    expect(created.action).toBe("created");
+    expect(runGit(created.cachePath, ["config", "--get", "remote.origin.url"])).toBe(canonicalRemote);
+
+    const reused = await ensureRepositoryCache({
+      rollHome,
+      binding: repository,
+      integrationRefspec: "+refs/heads/main:refs/remotes/origin/main",
+    });
+    expect(reused.action).toBe("reused");
+    expect(reused.baseSha).toBe(runGit(upstream.source, ["rev-parse", "HEAD"]));
+  });
+
   it("maps normalized remote identity to one deterministic collision-resistant cache path", () => {
     const rollHome = sandbox();
     const canonical = resolveRepositoryCacheIdentity({
