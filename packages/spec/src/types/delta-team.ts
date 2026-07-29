@@ -70,6 +70,8 @@ export type VisibleDeliveryMode = (typeof VISIBLE_DELIVERY_MODES)[number];
  * produced. Kept here for read-side recognition of historical projections.
  */
 export const RETIRED_VISIBLE_DELIVERY_MODES = ["autonomous-loop"] as const;
+/** A mode Roll no longer produces but must still render for historical records. */
+export type HistoricalVisibleDeliveryMode = (typeof RETIRED_VISIBLE_DELIVERY_MODES)[number];
 
 /** Read-side guard: has Roll ever rendered this visible mode? */
 export function isKnownHistoricalVisibleMode(value: unknown): boolean {

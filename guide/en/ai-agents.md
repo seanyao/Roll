@@ -222,12 +222,11 @@ overclaimed:**
 - **Host-guided cost is unobservable.** Status renders `? (host_unobservable)`;
   Roll never estimates, prices, or emits zero for host-guided sub-agent work.
 
-**Loop admission.** The loop has no implicit host main session, so a
-`loop-autonomous + delta-team` request is deterministically blocked
-`host_supervisor_required` — never silently converted to solo or Full Delta.
-`loop-autonomous + full-delta-team` is an explicit opt-in. Default autonomous
-solo delivery is unchanged. See the `roll-delta-team` skill for the full
-host-guided procedure.
+**Every delegation has a Supervisor.** A loop is a chain of cycles running inside
+a host session — it has a main session and full sub-agent capability, exactly like
+a delivery you drive by hand. There is a single trigger axis value and no
+admission prohibition: solo, Delta Team, and Full Delta Team are all available to
+a loop. See the `roll-delta-team` skill for the full procedure.
 
 ## See Also
 

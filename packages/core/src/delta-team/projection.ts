@@ -15,20 +15,35 @@ import type {
   DeliveryTopology,
   VisibleDeliveryMode,
   DeliveryShape,
+  HistoricalVisibleDeliveryMode,
   IdentityProvenance,
   RollEvent,
 } from "@roll/spec";
+import { RETIRED_DELEGATION_TRIGGERS } from "@roll/spec";
 
 // ── Visible-mode projection ───────────────────────────────────────────────────
 
 /**
- * Derive the user-visible delivery mode from the delivery shape.
+ * Derive the user-visible delivery mode from trigger + topology.
  *
- * US-LOOP-110: the trigger axis collapsed to a single value, so it no longer
- * discriminates — topology alone determines the visible mode. The parameter is
- * retained for call-site stability and historical-shape reads.
+ * US-LOOP-110: the LIVE trigger axis collapsed to a single value, so for any new
+ * delegation topology alone determines the mode. But a HISTORICAL record written
+ * under the retired `loop-autonomous` trigger was rendered as `autonomous-loop`
+ * at the time, and re-rendering it as `solo-skill` would silently rewrite what
+ * that delivery actually was (codex review r1). Such a record therefore projects
+ * to its historical mode, which the caller must treat as read-only history.
+ *
+ * The return type widens to include the retired mode for exactly this reason —
+ * `VISIBLE_DELIVERY_MODES` still lists only what a NEW delegation may produce.
  */
-export function visibleMode(_trigger: DelegationTrigger, topology: DeliveryTopology): VisibleDeliveryMode {
+export function visibleMode(
+  trigger: DelegationTrigger,
+  topology: DeliveryTopology,
+): VisibleDeliveryMode | HistoricalVisibleDeliveryMode {
+  // Read-side only: a historical trigger keeps its historical projection.
+  if ((RETIRED_DELEGATION_TRIGGERS as readonly string[]).includes(trigger as string)) {
+    return "autonomous-loop";
+  }
   switch (topology) {
     case "solo":
       return "solo-skill";
@@ -40,7 +55,9 @@ export function visibleMode(_trigger: DelegationTrigger, topology: DeliveryTopol
 }
 
 /** Derive visible mode from a full DeliveryShape. */
-export function visibleModeFromShape(shape: DeliveryShape): VisibleDeliveryMode {
+export function visibleModeFromShape(
+  shape: DeliveryShape,
+): VisibleDeliveryMode | HistoricalVisibleDeliveryMode {
   return visibleMode(shape.trigger, shape.topology);
 }
 
@@ -106,7 +123,7 @@ export function projectDelegationStatus(
     delegationId,
     storyId: "",
     status: "unknown" as DelegationStatus,
-    visibleMode: null as VisibleDeliveryMode | null,
+    visibleMode: null as VisibleDeliveryMode | HistoricalVisibleDeliveryMode | null,
     trigger: null as DelegationTrigger | null,
     topology: null as DeliveryTopology | null,
     qualityProfile: null as string | null,

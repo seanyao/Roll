@@ -17,6 +17,7 @@ import {
   type QualityProfile,
   type DeltaRole,
   type DeltaBlockReason,
+  isKnownHistoricalBlockReason,
 } from "@roll/spec";
 import {
   prepareDelegation,
@@ -707,21 +708,32 @@ function validateCommand(args: string[]): number {
   const blockedEvent = delegationEvents.find((e) => e.type === "delta:blocked");
   if (blockedEvent) {
     const blocked = blockedEvent as Record<string, unknown>;
-    const originalReason = typeof blocked.reason === "string" ? blocked.reason : "unknown";
-    const detail = `Delegation ${delegationId} is blocked (${originalReason}); cannot validate further stages`;
+    const rawReason = blocked.reason;
+    // codex review r1: never cast an arbitrary string into DeltaBlockReason — that
+    // would append an INVALID event to an append-only ledger. Only a reason Roll
+    // has ever legitimately written (live or retired) may be propagated; anything
+    // else falls back to a valid live reason and says so in the detail, so the
+    // ledger stays schema-clean and the malformed input stays visible.
+    const propagated = isKnownHistoricalBlockReason(rawReason)
+      ? (rawReason as DeltaBlockReason)
+      : "artifact_invalid";
+    const originalNote = isKnownHistoricalBlockReason(rawReason)
+      ? String(rawReason)
+      : `unrecognised prior reason ${JSON.stringify(rawReason)}`;
+    const detail = `Delegation ${delegationId} is blocked (${originalNote}); cannot validate further stages`;
     bus.appendEvent(eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
       role: stage,
-      reason: originalReason as DeltaBlockReason,
+      reason: propagated,
       detail,
       ts: now,
     });
     if (json) {
-      process.stderr.write(JSON.stringify({ ok: false, error: originalReason, detail: `Delegation is blocked`, role: stage }) + "\n");
+      process.stderr.write(JSON.stringify({ ok: false, error: propagated, detail: `Delegation is blocked`, role: stage }) + "\n");
     } else {
-      process.stderr.write(`Delegation ${delegationId} is blocked (${originalReason})` + "\n");
+      process.stderr.write(`Delegation ${delegationId} is blocked (${originalNote})` + "\n");
     }
     return 1;
   }

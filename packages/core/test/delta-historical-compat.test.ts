@@ -85,6 +85,9 @@ describe("historical delta events remain parseable", () => {
     // The retired trigger is READ back verbatim — never rewritten or dropped.
     expect(view.trigger).toBe("loop-autonomous");
     expect(view.storyId).toBe("US-OLD-3");
+    // codex r1: and its VISIBLE MODE is the one it was rendered as at the time.
+    // Projecting it as `solo-skill` would silently rewrite delivery history.
+    expect(view.visibleMode).toBe("autonomous-loop");
   });
 });
 

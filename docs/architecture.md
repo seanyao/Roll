@@ -413,9 +413,9 @@ Roll 有两种有名字的交付拓扑，二者不同，且都不同于健康修
 - **Host-guided 成本不可观测（`? (host_unobservable)`）。** 绝不估算、定价或写零；
   host-guided 委派不写 `runs.jsonl` usage 行、不派生每角色/总成本。
 
-Loop 准入 / Loop admission：loop 无隐式宿主主会话，故 `loop-autonomous + delta-team`
-被确定性阻塞 `host_supervisor_required`，绝不静默转 solo 或 Full Delta；
-`loop-autonomous + full-delta-team` 是显式 opt-in；默认自主 solo 交付字节不变。Host-guided
+委派总有 Supervisor / Every delegation has a Supervisor：loop 是宿主会话内的 cycle
+连续链，与任何交付一样拥有主会话与完整 sub-agent 能力。trigger 轴只有一个取值，
+不存在准入禁令——solo / Delta Team / Full Delta Team 三种拓扑对 loop 一律可用。Host-guided
 委派不创建 Cycle、`runs.jsonl` 行或 `cycle:terminal`，也不更新 `latest`。本节不引入
 daemon 或新状态存储；`events.ndjson` 里的 `delta:*` 事件是 Delegation 聚合的唯一生命周期
 真相。完整 host-guided 流程见 `roll-delta-team` 技能与 [ai-agents](../guide/en/ai-agents.md)。

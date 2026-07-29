@@ -198,10 +198,9 @@ Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要
 - **Host-guided 成本不可观测。** 状态渲染 `? (host_unobservable)`；Roll 绝不为
   host-guided 子会话工作估算、定价或写零。
 
-**Loop 准入。** loop 没有隐式的宿主主会话，因此 `loop-autonomous + delta-team` 请求会
-被确定性地阻塞为 `host_supervisor_required`——绝不静默转成 solo 或 Full Delta。
-`loop-autonomous + full-delta-team` 是显式 opt-in。默认的自主 solo 交付保持不变。完整的
-host-guided 流程见 `roll-delta-team` 技能。
+**委派总有 Supervisor。** loop 是宿主会话内的 cycle 连续链——它有主会话、有完整的
+sub-agent 能力，与你手动驱动的交付毫无二致。trigger 轴只有一个取值，也不存在准入禁令：
+solo、Delta Team、Full Delta Team 三种拓扑对 loop 一律可用。完整流程见 `roll-delta-team` 技能。
 
 ## 另见
 

@@ -13,15 +13,18 @@ import {
 import type { RollEvent, DeliveryShape } from "@roll/spec";
 
 describe("US-DELTA-001 AC2 — VisibleDeliveryMode projection", () => {
-  it("topology alone determines the mode — the trigger no longer discriminates (US-LOOP-110)", () => {
-    // The retired `loop-autonomous` trigger used to short-circuit to
-    // `autonomous-loop`. With the axis collapsed, even a historical trigger value
-    // projects purely from topology; no branch can resurrect the retired mode.
-    for (const t of ["host-guided", "loop-autonomous"] as unknown as readonly ["host-guided"]) {
-      expect(visibleMode(t, "solo")).toBe("solo-skill");
-      expect(visibleMode(t, "delta-team")).toBe("delta-team");
-      expect(visibleMode(t, "full-delta-team")).toBe("full-delta-team");
-    }
+  it("the live trigger no longer discriminates — topology alone decides (US-LOOP-110)", () => {
+    expect(visibleMode("host-guided", "solo")).toBe("solo-skill");
+    expect(visibleMode("host-guided", "delta-team")).toBe("delta-team");
+    expect(visibleMode("host-guided", "full-delta-team")).toBe("full-delta-team");
+  });
+
+  it("a HISTORICAL loop-autonomous record keeps its historical mode (codex r1)", () => {
+    // Re-rendering it as solo-skill would silently rewrite what that delivery
+    // actually was. Read-side compatibility means reading history, not restating it.
+    const retired = "loop-autonomous" as unknown as "host-guided";
+    expect(visibleMode(retired, "solo")).toBe("autonomous-loop");
+    expect(visibleMode(retired, "full-delta-team")).toBe("autonomous-loop");
   });
 
   it("host-guided + solo → solo-skill", () => {
@@ -414,6 +417,8 @@ describe("US-DELTA-001 AC9 — Status fixtures cover all modes", () => {
   });
 
   it("no fixture can produce the retired autonomous-loop mode (US-LOOP-110)", () => {
+    // Fixtures model NEW deliveries only; history is exercised in
+    // delta-historical-compat.test.ts.
     // The `autonomous-loop` scenario is gone from the fixture builder entirely —
     // asking for it is a type error, and no surviving scenario yields that mode.
     const scenarios = ["full-delta-team", "delta-team", "solo-skill", "unknown", "blocked"] as const;
