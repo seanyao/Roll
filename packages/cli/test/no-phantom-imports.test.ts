@@ -11,7 +11,8 @@
  * actually be exported there — including through barrels, which is where the
  * deleted modules of this epic actually lived (codex r2).
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -41,10 +42,16 @@ function code(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
-/** Named bindings in `import { a, type B, c as d } from "spec"` blocks. */
+/**
+ * Named bindings in `import { a, type B, c as d } from "spec"` blocks.
+ *
+ * codex r3: `import type { … }` was unscanned, so a phantom type-only import
+ * slipped through — and type-only imports are the MOST likely to rot, because
+ * nothing at runtime ever touches them.
+ */
 function namedImports(src: string): Array<{ names: string[]; spec: string }> {
   const out: Array<{ names: string[]; spec: string }> = [];
-  const re = /import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
+  const re = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
   for (const m of src.matchAll(re)) {
     const names = (m[1] ?? "")
       .split(",")
@@ -142,10 +149,45 @@ describe("US-LOOP-117 — no test imports a phantom export", () => {
     expect(phantom).toEqual([]);
   });
 
-  it("sees through a barrel — the blind spot codex r2 found", () => {
-    // A real barrel in this repo, reached the way tests reach it.
-    const barrel = resolveSpec(join(TEST_DIR, "x.test.ts"), "../src/lib/index.js");
-    if (barrel === undefined) return; // no such barrel: nothing to prove here
-    expect(exportsName(barrel, "definitelyNotExportedAnywhere")).toBe(false);
+  /**
+   * codex r3: the first version of this proof pointed at `src/lib/index.js`,
+   * which does not exist, and then `return`ed early — so it asserted nothing
+   * while reading as if it proved recursion. Build the barrel chain instead, so
+   * the traversal is exercised for real.
+   */
+  it("recurses through a barrel chain: finds a leaf export, rejects a phantom", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-barrel-"));
+    try {
+      writeFileSync(join(dir, "leaf.ts"), "export function realLeafSymbol(): void {}\n");
+      writeFileSync(join(dir, "mid.ts"), 'export * from "./leaf.js";\n');
+      writeFileSync(join(dir, "index.ts"), 'export * from "./mid.js";\n');
+      const barrel = join(dir, "index.ts");
+      // Two hops down to the leaf — this is what `export *` blanket-passing hid.
+      expect(exportsName(barrel, "realLeafSymbol")).toBe(true);
+      // And a name no leaf declares is still reported, rather than waved through.
+      expect(exportsName(barrel, "neverDeclaredAnywhere")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scans type-only imports too (codex r3)", () => {
+    // The spec here is deliberately NOT of the `./…/src/…` shape the sweep above
+    // collects, so this fixture cannot be mistaken for a real import of ours.
+    const found = namedImports('import type { Alpha, Beta as B } from "some-package";');
+    expect(found).toHaveLength(1);
+    expect(found[0]!.names).toEqual(["Alpha", "Beta"]);
+    expect(found[0]!.spec).toBe("some-package");
+  });
+
+  it("a cyclic barrel pair terminates instead of recursing forever", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-barrel-cycle-"));
+    try {
+      writeFileSync(join(dir, "a.ts"), 'export * from "./b.js";\n');
+      writeFileSync(join(dir, "b.ts"), 'export * from "./a.js";\n');
+      expect(exportsName(join(dir, "a.ts"), "nothingHere")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

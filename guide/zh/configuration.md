@@ -12,7 +12,7 @@ Roll 在启动时解析三个环境变量。在运行 `roll` 之前覆盖任意�
 | `ROLL_GLOBAL` | `$ROLL_HOME/conventions/global` | 全局约定文件（`AGENTS.md`、`CLAUDE.md` 等），同步到各 AI 工具目录。 |
 | `ROLL_LANG` | 未设置 | 当前进程的用户表面语言覆盖。支持 `en` 与 `zh`；未设置时使用已保存配置或系统语言探测。 |
 | `ROLL_HEARTBEAT_TIMEOUT` | `1800`（秒） | loop runner 认定 inner cycle 已成孤儿、需要 heal state 的心跳静默阈值。如果你的 cycle 合理静默时间超过 30 分钟，可调大此值。 |
-| `ROLL_LOOP_FORCE` | 未设置 | 设为任意非空值时，`roll loop` 会跳过活跃窗口和 pause 文件检查。`roll loop go` 在显式限定范围的运行里已自动设置；只有当你希望会话内的运行也忽略静默时段时，才需要手动 export。 |
+| `ROLL_LOOP_FORCE` | 未设置 | 设为任意非空值时，把这次运行标记为交互式：cycle 打印可读文本，而不是 JSON 流。没有任何命令会替你设置，想要这种输出就自己 export。它已经不再跳过任何检查：活跃窗口检查随常驻调度一起退役，PAUSE 只有 `roll loop go --cards <id>` 能绕过。 |
 | `ROLL_LOOP_NO_HEAL` | `0` | 设为 `1` 关闭构建完成后的 CI 自愈，恢复 fail-fast。调试或想给自主循环按周期省钱时使用。 |
 | `ROLL_LOOP_HEAL_MAX` | `2` | 故事提交落地后，CI 自愈的最大尝试次数。CI 抖动较多时可调大；想更快失败则调小。 |
 | `ROLL_PR_MERGE_TIMEOUT` | `600`（秒） | **已弃用（US-AUTO-044）。** 主 loop 不再等合并；符合条件的 PR 由 Delivery Reconciler 按机会推进。 |

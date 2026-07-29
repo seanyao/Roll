@@ -519,8 +519,7 @@ export function registerAll(): void {
     // `loop gc` (≠ top-level `roll gc`): garbage-collect orphan slugs + tmp
     // debris + expired backups (US-PORT-022 / US-LOOP-021). FIX-125 gated.
     if (args[0] === "gc") return loopGcCommand(args.slice(1));
-    // `loop test` (≠ top-level `roll test`): manual smoke gate — generates the
-    // v3 test runner and runs it once with ROLL_LOOP_FORCE=1 (US-PORT-022).
+    // `loop test`: retired with the runner-script generator (US-LOOP-117).
     // `loop branches`: retired and no longer dispatched.
     if (args[0] === "branches") return loopUnknownSubcommand(args[0]);
     // Cycle-gate subcommands the loop AGENT invokes per the roll-loop skill
