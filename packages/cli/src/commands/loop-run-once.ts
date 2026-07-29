@@ -14,7 +14,7 @@
  */
 import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
-import { createScheduler, isOwnerHeld, launchdLabel, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
+import { isOwnerHeld, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -1025,9 +1025,10 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   // consulted by the execution path.
   const routeDeps: RouteDeps = buildLoopRouteDeps(id.path);
 
-  // FIX-220: manual `roll loop now` (ROLL_LOOP_FORCE=1) runs in an interactive
-  // terminal — strip --verbose and --output-format stream-json so the user sees
-  // readable text instead of a JSON flood.
+  // FIX-220: a run marked ROLL_LOOP_FORCE=1 is one an owner is watching in a
+  // terminal — strip --verbose and --output-format stream-json so they see
+  // readable text instead of a JSON flood. (US-LOOP-117: this used to be set for
+  // you by `roll loop now`; that verb is gone, so the owner exports it.)
   const isInteractive = (process.env["ROLL_LOOP_FORCE"] ?? "").trim() !== "";
   let interactiveAgentSpawn: AgentSpawn | undefined;
   if (isInteractive) {

@@ -8,7 +8,7 @@ control   go · goal · pause · resume · reset · recover · reconcile
 observe   watch · status · runs · log · events · signals · eval · cycles · cycle
 alerts    alert list · alert ack · alert resolve · alert log
 maintain  gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
-internal  test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
+internal  run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
 states    ACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)
 drive     open an agent session and run roll loop go — nothing advances on its own
@@ -23,7 +23,7 @@ exports[`roll loop --help groups — US-DOSSIER-035 > AC6: EN/中 snapshots (sin
 传感      watch · status · runs · log · events · signals · eval · cycles · cycle
 告警      alert list · alert ack · alert resolve · alert log
 维护      gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
-内部      test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
+内部      run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
 状态      ACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)
 驱动      开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进

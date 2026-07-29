@@ -871,14 +871,12 @@ data lives at `<project>/.roll/loop/` instead of `~/.shared/roll/loop/`. Your
 ALERT is now `<project>/.roll/loop/ALERT-<slug>.md`, state is
 `state-<slug>.yaml`, run history is `runs.jsonl`.
 
-**Do I need to migrate manually?** No. The next cycle migrates legacy files
-automatically: `the legacy-path migration` copies state / ALERT / PAUSE / mute
-into the project and marks each old file `.migrated-<timestamp>`; `runs.jsonl`
-is split per project. During a 7-day window, reads fall back to the old home
-path if the new one is missing — so nothing breaks mid-upgrade.
-
-**How do I roll back?** The legacy files survive as `<name>.migrated-<timestamp>`
-for 7 days. Rename one back (drop the suffix) and delete the project-local copy.
+**Do I need to migrate manually?** Only if you are upgrading from before this
+move. The automatic migration and its 7-day dual-path fallback retired together
+with the resident scheduler, so a cycle no longer rewrites paths on the way in —
+Roll reads the project-local paths and nothing else. To bring an old project
+across, copy `state-<slug>.yaml`, `ALERT-<slug>.md`, `PAUSE-<slug>`, `mute-<slug>`
+and that project's `runs.jsonl` rows into `<project>/.roll/loop/` by hand.
 
 **Cleaning up debris:** `roll loop gc` retires orphan slugs (project deleted) and
 sweeps expired `.migrated-*` markers, `runs.jsonl.tmp.*`, and old backups. Use

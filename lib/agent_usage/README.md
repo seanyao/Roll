@@ -28,7 +28,9 @@ The key must match `ROLL_LOOP_AGENT` env var (e.g. `kimi`, `deepseek`).
 Run a real cycle with the agent and save the stdout to a fixture:
 
 ```bash
-roll loop test 2>&1 | tee tests/fixtures/<agent>_output_sample.txt
+# --no-tmux keeps the cycle in THIS process; without it `go` detaches a tmux
+# worker and returns immediately, so `tee` would capture only startup lines.
+roll loop go --max-cycles 1 --no-tmux 2>&1 | tee tests/fixtures/<agent>_output_sample.txt
 ```
 
 Or capture from a real cycle log.

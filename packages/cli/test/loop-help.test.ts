@@ -42,6 +42,21 @@ const LIVE_SUBCOMMANDS = DISPATCHED.filter((s) => !STUBS.has(s));
 // so `resume` is the only supported way out of a paused project.
 const RETIRED_SUBCOMMANDS = ["on", "off", "now", "fallback"];
 
+/**
+ * The verbs actually advertised in the banded help. Scoped to the band LINES, not
+ * the prose — English sentences legally contain words like "on".
+ *
+ * Multi-word entries ("alert list") contribute their first token, which is the
+ * dispatched verb; the sub-verb is dispatched inside it.
+ */
+function advertisedVerbs(out: string): string[] {
+  const bands = out
+    .split("\n")
+    .filter((l) => /^(control|observe|alerts|maintain|internal)\s/.test(l))
+    .map((l) => l.replace(/^\S+\s+/, "").split(" · ").map((v) => v.trim()));
+  return [...new Set(bands.flat().map((v) => v.split(/\s+/)[0]!).filter((v) => v !== ""))];
+}
+
 describe("roll loop --help groups — US-DOSSIER-035", () => {
   it("AC5: four labeled bands in the design order, replacing the flat pipe list", () => {
     const out = help("en");
@@ -72,14 +87,22 @@ describe("roll loop --help groups — US-DOSSIER-035", () => {
     }
   });
 
+  /**
+   * codex r2 on US-LOOP-117: the drift check above only ran ONE WAY — every live
+   * verb must be advertised. Nothing asserted the converse, so `roll loop test`
+   * stayed in the `internal` band for a full card after its implementation was
+   * deleted, advertising a verb that errors out. Both directions now hold.
+   */
+  it("US-LOOP-117: every advertised verb is actually dispatched — no phantom verb", () => {
+    const dispatched = new Set(DISPATCHED);
+    const phantom = advertisedVerbs(help("en")).filter((v) => !dispatched.has(v));
+    expect(phantom, `help advertises verbs that no longer dispatch: ${phantom.join(", ")}`).toEqual([]);
+  });
+
   it("US-LOOP-113: the retired scheduler verbs are not advertised", () => {
     // Scope the check to the VERB BANDS, not the prose — English sentences legally
     // contain words like "on", so scanning free text would false-positive.
-    const bands = help("en")
-      .split("\n")
-      .filter((l) => /^(control|observe|alerts|maintain|internal)\s/.test(l))
-      .map((l) => l.replace(/^\S+\s+/, "").split(" · ").map((v) => v.trim()));
-    const advertised = new Set(bands.flat());
+    const advertised = new Set(advertisedVerbs(help("en")));
     for (const sub of RETIRED_SUBCOMMANDS) {
       expect(advertised.has(sub), `retired verb "${sub}" must be gone from the bands`).toBe(false);
     }

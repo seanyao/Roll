@@ -791,13 +791,10 @@ gh issue create --title "Safari 上登录失败" --body "复现步骤: ..."
 `<project>/.roll/loop/ALERT-<slug>.md`，状态是 `state-<slug>.yaml`，运行
 历史是 `runs.jsonl`。
 
-**需要手动迁移吗？不需要。** 下一个 cycle 自动迁移：`旧路径迁移`
-把 state / ALERT / PAUSE / mute 复制进项目并把旧文件标记 `.migrated-<时间戳>`；
-`runs.jsonl` 按项目拆分。7 天窗口内，新路径缺失时读取会回退旧家目录路径，升级中
-途不会出问题。
-
-**怎么回滚？** 老文件以 `<name>.migrated-<时间戳>` 保留 7 天，改名回去（去后缀）
-并删掉项目本地副本即可。
+**需要手动迁移吗？** 只有从这次搬迁之前的版本升级才需要。自动迁移和它的 7 天双路回退
+已随常驻调度一起退役，cycle 不再在启动时改写路径 —— Roll 只读项目本地路径。要把老项目
+搬过来，手工把 `state-<slug>.yaml`、`ALERT-<slug>.md`、`PAUSE-<slug>`、`mute-<slug>`
+以及该项目在 `runs.jsonl` 里的行复制进 `<project>/.roll/loop/`。
 
 **清残骸：** `roll loop gc` 退役孤儿 slug（项目已删）、清扫过期 `.migrated-*`、
 `runs.jsonl.tmp.*` 与旧备份；`roll loop gc --dry-run` 预览。完整说明见

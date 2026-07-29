@@ -119,51 +119,32 @@ reserved for future use; aggregation is live today.
 
 ---
 
-## Automatic migration (7-day dual-path window)
+## Legacy home-directory files (migration retired)
 
-If you upgrade an existing project, **you do not need to do anything**. The
-outer runner migrates legacy files automatically on the next cycle.
+The one-time move of control state out of `~/.shared/roll/loop/` into each
+project's `.roll/loop/` is over, and the automatic migration that performed it
+retired with the resident scheduler — a cycle no longer rewrites paths on the way
+in, and there is no dual-path fallback. Roll reads the project-local paths in the
+table above, and nothing else.
 
-如果你升级一个既有项目，**无需任何手动操作**。outer runner 会在下一个 cycle 自动
-迁移老文件。
+把控制状态从 `~/.shared/roll/loop/` 搬进各项目 `.roll/loop/` 的一次性迁移已经结束，
+执行它的自动迁移也随常驻调度一起退役 —— cycle 不再在启动时改写路径，也没有双路回退。
+Roll 只读上表里的项目本地路径。
 
-**How it works:**
+If a project never made the move, copy its files by hand — `state-<slug>.yaml`,
+`ALERT-<slug>.md`, `PAUSE-<slug>`, `mute-<slug>`, and its rows from the
+machine-wide `runs.jsonl` — into `<project>/.roll/loop/`.
 
-**工作原理：**
+如果某个项目从未迁移过，手工把 `state-<slug>.yaml`、`ALERT-<slug>.md`、
+`PAUSE-<slug>`、`mute-<slug>`，以及机器级 `runs.jsonl` 里属于它的行，复制进
+`<project>/.roll/loop/`。
 
-1. Before reading any control state, the runner calls
-   `the legacy-path migration helper <slug>`. It copies `state-<slug>.yaml`,
-   `ALERT-<slug>.md`, `PAUSE-<slug>`, and `mute-<slug>` from
-   `~/.shared/roll/loop/` into `<project>/.roll/loop/`, then renames each legacy
-   file to `<name>.migrated-<timestamp>`.
-2. `runs.jsonl` is migrated by `the legacy-runs migration helper`: the machine-wide
-   file is split by each row's `project` slug into the matching project's
-   `.roll/loop/runs.jsonl`, then renamed `runs.jsonl.migrated-<timestamp>`. Rows
-   whose slug cannot be resolved are left behind so no history is lost.
-3. Migration is **idempotent** — the `.migrated-*` rename makes a re-run a
-   no-op, and an existing newer target is never overwritten.
+Leftover `.migrated-*` and `runs.jsonl.migrated-*` markers from the old migration
+are still reaped by `roll loop gc` once they age out (see below), so an upgraded
+machine cleans itself up.
 
-1. 读任何控制状态之前，runner 调用 `the legacy-path migration helper <slug>`，把
-   `state-<slug>.yaml`、`ALERT-<slug>.md`、`PAUSE-<slug>`、`mute-<slug>` 从
-   `~/.shared/roll/loop/` 复制进 `<project>/.roll/loop/`，再把每个老文件改名为
-   `<name>.migrated-<时间戳>`。
-2. `runs.jsonl` 由 `the legacy-runs migration helper` 迁移：机器级文件按每行的 `project`
-   slug 拆分进对应项目的 `.roll/loop/runs.jsonl`，再改名
-   `runs.jsonl.migrated-<时间戳>`。无法解析 slug 的行会留在原处，不丢历史。
-3. 迁移**幂等** —— `.migrated-*` 改名让重跑变成 no-op，已存在的更新目标永不被覆盖。
-
-**During the 7-day window**, reads of control-plane files use dual-path lookup
-(`the control-state path resolver`): the project-local path is preferred, falling back
-to the legacy home path. After the window, a separate FIX removes the fallback.
-
-**在 7 天窗口期内**，控制平面文件的读取走双路查找（`the control-state path resolver`）：
-优先项目本地路径，回退到家目录老路径。窗口结束后由单独的 FIX 移除回退。
-
-The `.migrated-*` and `runs.jsonl.migrated-*` artifacts are reaped by
-`roll loop gc` after they age out (see below), so home never accumulates debris.
-
-`.migrated-*` 和 `runs.jsonl.migrated-*` 残骸到期后由 `roll loop gc` 回收（见下），
-家目录不会堆积。
+老迁移留下的 `.migrated-*` 和 `runs.jsonl.migrated-*` 标记到期后仍由 `roll loop gc`
+回收（见下），升级过的机器会自己清干净。
 
 ---
 
@@ -227,29 +208,20 @@ inside the project, or open the file directly.
 现在在 `<project>/.roll/loop/ALERT-<slug>.md`。在项目里跑 `roll loop alert`，或直
 接打开文件。
 
-**How do I migrate manually?**
+**I still have `*.migrated-<timestamp>` files. What are they?**
 
-**怎么手动迁移？**
+**我这里还有 `*.migrated-<时间戳>` 文件，那是什么？**
 
-You normally never need to — the next cycle does it. To force it without waiting,
-run `roll loop now` (or `roll loop test`) once; the runner migrates before
-reading state.
+Leftovers from the one-time move to this layout. Nothing writes them any more —
+the automatic migration retired along with the resident scheduler, so a cycle no
+longer rewrites paths on the way in. `roll loop gc` still reaps markers older
+than 7 days, so you can also just leave them alone. If you have a project that
+never made the move, copy the files to their new paths by hand using the table
+above.
 
-正常你永远不需要 —— 下一个 cycle 会做。要不等就触发，跑一次 `roll loop now`（或
-`roll loop test`）；runner 在读状态前会先迁移。
-
-**How do I roll back?**
-
-**怎么回滚？**
-
-The legacy files are preserved as `<name>.migrated-<timestamp>` for 7 days. To
-revert a single file, rename it back (drop the `.migrated-<ts>` suffix) and
-remove the project-local copy. After 7 days `roll loop gc` reaps the markers, so
-roll back within the window.
-
-老文件以 `<name>.migrated-<时间戳>` 形式保留 7 天。要回退某个文件，把它改名回去
-（去掉 `.migrated-<时间戳>` 后缀）并删掉项目本地副本。7 天后 `roll loop gc` 会
-回收这些标记，所以请在窗口期内回滚。
+这是一次性迁移到当前布局时留下的。现在已经没有任何东西会再写它们 —— 自动迁移随常驻
+调度一起退役了，cycle 不再在启动时改写路径。`roll loop gc` 仍会回收 7 天以上的标记，
+所以放着不管也可以。如果某个项目从未迁移过，照上面的表把文件手工复制到新路径即可。
 
 See also: [roll loop](loop.md) · [Migration 2.0](migration-2.0.md) · [FAQ](faq.md)
 

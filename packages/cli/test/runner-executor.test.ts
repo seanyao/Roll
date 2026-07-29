@@ -9,7 +9,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { CycleCommand, CycleContext, CycleEvent, RollEvent, WarmSessionEntry } from "@roll/core";
+import type { CycleCommand, CycleContext, CycleEvent, WarmSessionEntry } from "@roll/core";
+// RollEvent lives in @roll/spec; @roll/core never re-exported it (US-LOOP-117).
+import type { RollEvent } from "@roll/spec";
 import { AGENTS } from "../../core/src/agent/specs.js";
 import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { classifyComplexity, cycleStep, initialCycleState, mapV2Status } from "@roll/core";
@@ -50,7 +52,6 @@ import {
   reasonixEnv,
   realAgentSpawn,
   rescueLeakedMain,
-  resetDirective,
   startSpawnTimeoutWatchdog,
   startBuilderLivenessProbe,
   readCycleTimeoutThresholds,

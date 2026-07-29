@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { cycleRow, fmtModel, renderState } from "../src/render.js";
 import { formatStream, renderSignal, streamThroughRenderer, tierVisible } from "../src/commands/loop-fmt.js";
-import { defaultSmokeCmd } from "../src/commands/loop-maint.js";
 
 const CLI_BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "roll.js");
 
@@ -182,10 +181,7 @@ describe("FIX-313 — downstream agent presentation uses AgentSpec", () => {
     expect(out).not.toContain("$1.25");
   });
 
-  it("loop smoke commands come from the registry, not non-claude mocks", () => {
-    expect(defaultSmokeCmd("kimi")).toContain("kimi");
-    expect(defaultSmokeCmd("kimi")).not.toContain("mock kimi");
-  });
+    // US-LOOP-117: defaultSmokeCmd is gone with `roll loop test`.
 });
 
 describe("tierVisible", () => {

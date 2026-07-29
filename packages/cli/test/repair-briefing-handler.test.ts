@@ -10,7 +10,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateDeltaManifest, type DeltaArtifactManifest } from "@roll/core";
+import { validateDeltaManifest } from "@roll/core";
+import type { DeltaArtifactManifest } from "@roll/spec";
 import { describe, expect, it } from "vitest";
 import { buildRepairRoundBriefing } from "../src/runner/repair-briefing-handler.js";
 import type { CycleContext } from "@roll/core";

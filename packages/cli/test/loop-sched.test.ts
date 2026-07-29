@@ -21,11 +21,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
-  buildLoopRunnerScript,
-  buildLoopTestRunnerScript,
-  buildDreamRunnerScript,
-  deriveMinute,
-  parseLoopPeriodMinutes,
   loopPauseCommand,
   loopResumeCommand,
   resolveLoopRunState,
@@ -33,7 +28,6 @@ import {
   type LoopRunState,
 } from "../src/commands/loop-sched.js";
 import { recordRootCauseFailure } from "../src/runner/failure-attribution.js";
-import { type LaunchctlResult } from "@roll/infra";
 import { parseGoalYaml } from "@roll/spec";
 
 const dirs: string[] = [];
@@ -47,71 +41,22 @@ function tmp(tag: string): string {
   return d;
 }
 
-/** Deps fake: records scheduler ops, pins identity/paths to a sandbox. */
-function fakeDeps(proj: string, shared: string, launchdDir: string): {
+/**
+ * Deps fake. US-LOOP-117: LoopSchedDeps carries ONE seam now (identity) — the
+ * Scheduler seam, launchd dir, shared root and uid went with the plist layer. The
+ * flaky-mount fake is gone too: there is no mount to retry.
+ */
+function fakeDeps(proj: string, _shared: string, _launchdDir: string): {
   deps: LoopSchedDeps;
   calls: string[];
 } {
   const calls: string[] = [];
   return {
     calls,
-    deps: {
-      identity: () => Promise.resolve({ path: proj, slug: "proj-abc123" }),
-      uid: () => 501,
-      sharedRoot: () => shared,
-      launchdDir: () => launchdDir,
-      scheduler: {
-        wake: (label, plist) => {
-          calls.push(`wake ${label} ${plist}`);
-          return Promise.resolve(true);
-        },
-        dormant: (label) => {
-          calls.push(`dormant ${label}`);
-          return Promise.resolve(true);
-        },
-        isArmed: (label) => {
-          calls.push(`isArmed ${label}`);
-          return Promise.resolve(true);
-        },
-      },
-    },
+    deps: { identity: () => Promise.resolve({ path: proj, slug: "proj-abc123" }) },
   };
 }
 
-/**
- * FIX-212 fake: wake fails for the first `failBefore[label]` attempts, and
- * `isArmed` reports armed only once that label has been woken past its
- * failing attempts. Mirrors the bootout+bootstrap race (FIX-027/098) where the
- * job silently does not mount.
- */
-function fakeFlakyDeps(
-  proj: string,
-  shared: string,
-  launchdDir: string,
-  failBefore: Record<string, number>,
-): { deps: LoopSchedDeps; attempts: Record<string, number> } {
-  const attempts: Record<string, number> = {};
-  return {
-    attempts,
-    deps: {
-      identity: () => Promise.resolve({ path: proj, slug: "proj-abc123" }),
-      uid: () => 501,
-      sharedRoot: () => shared,
-      launchdDir: () => launchdDir,
-      scheduler: {
-        wake: (_label) => {
-          const label = _label;
-          attempts[label] = (attempts[label] ?? 0) + 1;
-          const fails = (failBefore[label] ?? 0) >= attempts[label];
-          return Promise.resolve(!fails);
-        },
-        dormant: () => Promise.resolve(true),
-        isArmed: (_label) =>
-          Promise.resolve((attempts[_label] ?? 0) > (failBefore[_label] ?? 0)),
-      },
-    },
-  };
-}
 
 function captureStdout(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
   const chunks: string[] = [];
