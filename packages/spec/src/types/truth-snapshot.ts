@@ -99,14 +99,17 @@ export interface TruthSnapshotLoop {
   lanes: TruthSnapshotLoopLane[];
   collectedAt?: string;
   /**
-   * US-LOOP-079l: resolved loop run-state for the 3-state dossier header.
-   * Mirrors `resolveLoopRunState` (PAUSED > DORMANT > ACTIVE). Additive —
-   * older snapshots omit it and the renderer falls back to ACTIVE.
+   * Resolved loop run-state for the dossier header.
+   *
+   * US-LOOP-115: live values are ACTIVE | PAUSED — DORMANT is retired. This is a
+   * READ contract over snapshots already written to disk, so the retired value stays
+   * in the union: an old dossier must keep rendering rather than fail to parse.
+   * Never write DORMANT.
    */
-  runState?: "ACTIVE" | "DORMANT" | "PAUSED";
-  /** When DORMANT/PAUSED: the marker's `since` timestamp (ISO 8601). */
+  runState?: "ACTIVE" | "PAUSED" | "DORMANT";
+  /** When PAUSED (or a historical DORMANT): the marker's `since` timestamp (ISO 8601). */
   stateSince?: string;
-  /** When DORMANT/PAUSED: the marker's human-readable reason. */
+  /** When PAUSED (or a historical DORMANT): the marker's human-readable reason. */
   stateReason?: string;
 }
 

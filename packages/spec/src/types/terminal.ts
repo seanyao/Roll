@@ -38,7 +38,9 @@ export const TERMINAL_OUTCOMES = [
   "orphan_timeout",
   "idle_no_work",
   "gave_up",
-  // US-LOOP-079d — dormant_entered: loop 连续 N idle 后自卸;终态,此后无 idle 行.
+  // US-LOOP-115: dormant_entered is no longer PRODUCED (the dormancy path is gone),
+  // but historical runs.jsonl rows carry it, so the terminal vocabulary keeps it for
+  // read-side compatibility. Never emit it.
   "dormant_entered",
   // FIX-351 — a cycle that reached the end with its gates PASSED (attest
   // produced + peer ok/consulted, real TCR commits, exit 0 → a `built` capture)

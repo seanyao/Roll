@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEventLine, parseGoalYaml, type GoalScope, type GoalStatus, type TruthSnapshotLoop, type TruthSnapshotLoopLane } from "@roll/spec";
-import { resolveLoopRunState, dormantMarkerPath, readDormantMarker } from "../commands/loop-sched.js";
+import { resolveLoopRunState } from "../commands/loop-sched.js";
 
 export interface HeartbeatDeps {
   /** plist text for a lane, or null when not installed. */
@@ -22,11 +22,11 @@ export interface HeartbeatDeps {
   /** .roll/loop/events.ndjson text for goal session reconstruction. */
   eventsText?: () => string | null;
   /**
-   * US-LOOP-079l: resolved loop run-state (+ marker since/reason for DORMANT).
+   * US-LOOP-115: resolved loop run-state (ACTIVE / PAUSED).
    * Injected so the snapshot carries it and the dossier render stays pure.
    * Absent → snapshot omits runState and the renderer falls back to ACTIVE.
    */
-  runState?: () => { state: "ACTIVE" | "DORMANT" | "PAUSED"; since?: string; reason?: string };
+  runState?: () => { state: "ACTIVE" | "PAUSED"; since?: string; reason?: string };
 }
 
 const LAUNCHD_LANES: Array<{ svc: "loop" | "dream"; name: string; mode: string }> = [
@@ -84,16 +84,8 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
         return null;
       }
     },
-    // US-LOOP-079l: resolve the 3-state run-state from on-disk markers; read the
-    // DORMANT marker's since/reason so the dossier header is self-describing.
-    runState: () => {
-      const state = resolveLoopRunState(projectPath, slug);
-      if (state === "DORMANT") {
-        const body = readDormantMarker(dormantMarkerPath(projectPath, slug));
-        return body !== null ? { state, since: body.since, reason: body.reason } : { state };
-      }
-      return { state };
-    },
+    // US-LOOP-115: two states (ACTIVE / PAUSED) resolved from the PAUSE marker.
+    runState: () => ({ state: resolveLoopRunState(projectPath, slug) }),
   };
 }
 

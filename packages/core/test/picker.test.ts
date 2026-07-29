@@ -13,7 +13,6 @@ import {
   parseTargetSubmodule,
   pickStory,
   prTitleReferences,
-  shouldSuppressDormancy,
   type BacklogItem,
 } from "../src/index.js";
 
@@ -575,40 +574,10 @@ describe("buildHasOpenPr — predicate from open PR titles", () => {
 
 // ─── US-LOOP-079k AC1: dormancy suppression ────────────────────────────────
 
-describe("shouldSuppressDormancy", () => {
-  it("returns true for all_awaiting_merge (temporary PR-blocked idle)", () => {
-    expect(shouldSuppressDormancy("all_awaiting_merge")).toBe(true);
-  });
-
-  it("returns false for permanent / structural idle reasons", () => {
-    for (const reason of [
-      "all_blocked_by_deps",
-      "all_merged_pending",
-      "all_skip_listed",
-      "all_in_progress",
-      "all_done",
-      "backlog_empty",
-      "has_work",
-    ] as const) {
-      expect(shouldSuppressDormancy(reason), reason).toBe(false);
-    }
-  });
-
-  it("all_awaiting_merge is the only suppressed reason (tripwire against unintended set growth)", () => {
-    // AC1: DORMANCY_SUPPRESSED_REASONS is a closed set — all_awaiting_merge is
-    // the only temporary idle reason that should keep the loop ACTIVE.
-    // Adding a reason to this set changes dormancy policy and needs a story.
-    expect(shouldSuppressDormancy("all_awaiting_merge")).toBe(true);
-    // Every OTHER known reason should NOT suppress dormancy.
-    expect(shouldSuppressDormancy("all_blocked_by_deps")).toBe(false);
-    expect(shouldSuppressDormancy("all_merged_pending")).toBe(false);
-    expect(shouldSuppressDormancy("all_skip_listed")).toBe(false);
-    expect(shouldSuppressDormancy("all_in_progress")).toBe(false);
-    expect(shouldSuppressDormancy("all_done")).toBe(false);
-    expect(shouldSuppressDormancy("backlog_empty")).toBe(false);
-    expect(shouldSuppressDormancy("has_work")).toBe(false);
-  });
-});
+// US-LOOP-115: shouldSuppressDormancy and DORMANCY_SUPPRESSED_REASONS are deleted.
+// They existed only to decide whether the dormancy path should fire; with dormancy
+// gone they had no consumer, so keeping them would have been dead code carrying a
+// comment about a caller that no longer exists (codex review r1).
 
 // ─── US-DELIV-005: one-card-one-lease picker gate ──────────────────────────
 
@@ -630,38 +599,6 @@ describe("US-DELIV-005 — delivery lease gate", () => {
   });
 });
 
-describe("US-DELIV-005 — all_leased dormancy policy", () => {
-  it("all_leased is temporary: the loop stays ACTIVE until the lease clears", () => {
-    // US-DELIV-005 extends the US-LOOP-079k policy: a fully-leased backlog is
-    // a temporary idle (leases clear on merge / cycle end) — entering DORMANT
-    // here would strand the loop exactly like all_awaiting_merge.
-    expect(shouldSuppressDormancy("all_leased")).toBe(true);
-  });
-
-  it("suppressed set includes screen_locked (FIX-1268)", () => {
-    expect(shouldSuppressDormancy("screen_locked")).toBe(true);
-  });
-
-  it("suppressed set is exactly { all_awaiting_merge, all_pending_publish, all_leased, screen_locked } (tripwire)", () => {
-    // Adding a reason to DORMANCY_SUPPRESSED_REASONS changes dormancy policy
-    // and needs a story. FIX-1268 added screen_locked.
-    for (const reason of [
-      "all_blocked_by_deps",
-      "all_merged_pending",
-      "all_skip_listed",
-      "all_in_progress",
-      "all_done",
-      "backlog_empty",
-      "has_work",
-    ] as const) {
-      expect(shouldSuppressDormancy(reason), reason).toBe(false);
-    }
-    expect(shouldSuppressDormancy("all_awaiting_merge")).toBe(true);
-    expect(shouldSuppressDormancy("all_pending_publish")).toBe(true);
-    expect(shouldSuppressDormancy("all_leased")).toBe(true);
-    expect(shouldSuppressDormancy("screen_locked")).toBe(true);
-  });
-});
 
 describe("FIX-1268 — screen-lock physical-surface gate", () => {
   it("skips physical-surface cards while screen is locked", () => {

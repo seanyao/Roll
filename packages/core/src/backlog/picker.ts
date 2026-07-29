@@ -590,32 +590,4 @@ export function assessBacklog(
 
 // ─── US-LOOP-079k: dormancy suppression ──────────────────────────────────────
 
-/**
- * Backlog reasons that should NOT trigger DORMANT — the idle is temporary
- * and the loop should stay ACTIVE to pick work when the blocker clears.
- *
- *   - all_awaiting_merge: work exists but is blocked by open PRs (temporary —
- *     PRs will merge and work becomes pickable). Entering DORMANT here would
- *     strand the loop until a manual wake, while the PR could merge seconds
- *     later and leave the loop sleeping through deliverable work.
- *   - all_leased (US-DELIV-005): work exists but every card is held by an
- *     active delivery lease — equally temporary (leases clear on merge or
- *     cycle end).
- *
- * US-LOOP-079k AC1: consumed by the dormancy decision (US-LOOP-079h2) to
- * skip the DORMANT marker + dormant_entered terminal when the idle reason
- * is temporary. The consecutive-idle counter is still incremented (the loop
- * WAS idle), but the counter alone doesn't trigger the bootout — it only
- * feeds into the next dormancy check with a fresh reason.
- */
-export const DORMANCY_SUPPRESSED_REASONS: ReadonlySet<BacklogReason> = new Set([
-  "all_awaiting_merge",
-  "all_pending_publish",
-  "all_leased",
-  "screen_locked",
-]);
 
-/** True when the given backlog reason should prevent the loop from entering DORMANT. */
-export function shouldSuppressDormancy(reason: BacklogReason): boolean {
-  return DORMANCY_SUPPRESSED_REASONS.has(reason);
-}

@@ -36,7 +36,9 @@ export type RollEvent =
   // FIX-1268: the screen is locked and at least one physical-surface card was held.
   // Emitted once per idle cycle that is blocked solely (or primarily) by this gate.
   | { type: "loop:screen_locked"; cycleId: string; storyId?: string; locked: boolean; reason: string; ts: number }
-  // US-LOOP-079e: dormant/wake/failed state transitions
+  // US-LOOP-115: loop:dormant / loop:woke / loop:dormant_failed are no longer
+  // EMITTED — the dormancy and wake paths are deleted. The event union is a read
+  // contract over an append-only ledger, so the shapes stay parseable forever.
   | { type: "loop:dormant"; loop: LoopType; ts: number; reason: string; since: number }
   | { type: "loop:woke"; loop: LoopType; ts: number; trigger: "roll-cmd" | "dream" | "pr" | "manual"; picked?: string; wakeEpoch: number }
   | { type: "loop:dormant_failed"; loop: LoopType; ts: number; reason: string; error: string }

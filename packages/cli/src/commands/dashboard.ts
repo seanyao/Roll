@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
-import { resolveLoopRunState, readDormantMarker, dormantMarkerPath, readFallbackHealthForProject } from "./loop-sched.js";
+import { resolveLoopRunState, readFallbackHealthForProject } from "./loop-sched.js";
 import {
   COLS,
   c,
@@ -1762,27 +1762,8 @@ function render(
       c("muted", " · ") +
       c("dim", state["paused_reason"] ?? "");
     ebZh = c("dim", "  已暂停 · run: roll loop resume");
-  } else if (markerState === "DORMANT") {
-    // US-LOOP-079g: DORMANT state — loop suspended via idle detection,
-    // will auto-wake on a `roll loop resume` or new Todo item.
-    const proj = args.projectSlug !== null ? resolveProjectPath(args.projectSlug) : null;
-    let dormantSince = "—";
-    let dormantReason = "";
-    if (proj !== null && args.projectSlug !== null) {
-      const body = readDormantMarker(dormantMarkerPath(proj, args.projectSlug));
-      if (body !== null) {
-        dormantSince = body.since;
-        dormantReason = body.reason;
-      }
-    }
-    ebL =
-      c("fg", "💤 DORMANT", { bold: true }) +
-      c("muted", "   ") +
-      c("dim", "since ") +
-      c("fg", dormantSince) +
-      c("muted", " · ") +
-      c("dim", dormantReason);
-    ebZh = c("dim", "  休眠(闲置) · run: roll loop resume");
+  // US-LOOP-115: the DORMANT branch is gone — a session-driven loop cannot
+  // idle-spin, so there is no dormant state to render.
   } else {
     const installState = detectInstallState();
     if (installState === "not-installed") {
