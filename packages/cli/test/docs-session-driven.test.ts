@@ -36,6 +36,11 @@ function docFiles(): string[] {
   walk(join(ROOT, "guide"));
   walk(join(ROOT, "docs"));
   walk(join(ROOT, "site"));
+  // codex r8: the skills submodule is a doc surface too — an owner reads SKILL.md
+  // as instructions. It carried the same session-ends-stops overclaim and this gate
+  // never looked at it. Absent (a slim checkout without submodules) is not a failure;
+  // `walk` already tolerates a missing tree.
+  walk(join(ROOT, "skills"));
   const readme = join(ROOT, "README.md");
   try {
     if (statSync(readme).isFile()) out.push(readme);
@@ -131,7 +136,11 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     for (const f of docFiles()) {
       const text = readFileSync(f, "utf8");
       for (const [i, line] of text.split("\n").entries()) {
-        if (RETIRED_COMMAND.test(line)) offenders.push(`${relative(ROOT, f)}:${i + 1}`);
+        if (!RETIRED_COMMAND.test(line)) continue;
+        // A changelog EXAMPLE quoting a past entry is history, not instruction —
+        // the skills changelog contract shows one verbatim (codex r8).
+        if (/^- \*\*(Fixed|Added|Changed|Removed)\*\*/.test(line.trim())) continue;
+        offenders.push(`${relative(ROOT, f)}:${i + 1}`);
       }
     }
     expect(offenders, `retired commands still documented at: ${offenders.join(", ")}`).toEqual([]);
@@ -234,6 +243,23 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     expect(en).toMatch(/launchctl bootout[^\n]*;\s*rm -f/);
     const zh = readFileSync(join(ROOT, "guide/zh/loop.md"), "utf8");
     expect(zh).toContain("launchctl bootout");
+  });
+
+  /**
+   * The CHANGELOG is deliberately NOT swept as a whole: released sections are
+   * history, and a v3 entry that says a scan ran nightly is a true statement about
+   * v3. Only the Unreleased section describes the product as it is now, so that is
+   * the part held to the same rules as the guides (codex r8).
+   */
+  it("the Unreleased CHANGELOG section itself makes no retired claim", () => {
+    const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+    const unreleased = log.slice(log.indexOf("## Unreleased"), log.indexOf("## v4."));
+    for (const claim of UNATTENDED_CLAIM) {
+      // A changelog MUST name what it is removing, so the retired command names are
+      // expected here — only the behavioural overclaims are forbidden.
+      if (/roll loop|autonomous 模式|guided 模式/.test(claim.source)) continue;
+      expect(unreleased, `Unreleased section carries: ${claim.source}`).not.toMatch(claim);
+    }
   });
 
   it("the CHANGELOG records this as a breaking change with the replacement", () => {

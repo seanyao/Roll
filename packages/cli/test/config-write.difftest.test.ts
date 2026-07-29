@@ -103,11 +103,11 @@ const CASES: Case[] = [
 function frozen(c: Case): { status: number; stdout: string; stderr: string; fileContent: string | null } {
   switch (c.name) {
     case "flat global write":
-      return { status: 0, stdout: "[roll] ✓ set loop_dream_hour = 5 in <HOME>/.roll/config.yaml\n", stderr: "", fileContent: "loop_dream_hour: 5\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop_dream_hour = 5 in <HOME>/.roll/config.yaml\nnote: this key is inactive — nothing reads it\n说明:这个 key 已失效 —— 没有任何东西读它\n", stderr: "", fileContent: "loop_dream_hour: 5\n" };
     case "nested project write (default scope)":
-      return { status: 0, stdout: "[roll] ✓ set loop_schedule.period_minutes = 30 in .roll/local.yaml\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop_schedule.period_minutes = 30 in .roll/local.yaml\nnote: this key is inactive — nothing reads it\n说明:这个 key 已失效 —— 没有任何东西读它\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
     case "nested project write (explicit --project)":
-      return { status: 0, stdout: "[roll] ✓ set loop_active_start = 9 in .roll/local.yaml\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop_active_start = 9 in .roll/local.yaml\nnote: this key is inactive — nothing reads it\n说明:这个 key 已失效 —— 没有任何东西读它\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n" };
     case "loop-window facade":
       return { status: 0, stdout: "[roll] ✓ set loop-window = 9-18 in .roll/local.yaml\nnote: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`\n说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n  loop_active_end: 18\n" };
     case "loop-schedule facade with offset":

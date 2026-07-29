@@ -172,6 +172,20 @@ function dreamTime(value: string, scope: Scope): number {
   return 0;
 }
 
+/**
+ * Keys that are still stored and printed but that nothing reads: the retired
+ * quiet window, the retired period/offset, and the retired dream fire time. Both
+ * the facades and a raw `roll config <key> <value>` write must disclose this.
+ */
+const INACTIVE_KEYS = new Set([
+  "loop_active_start",
+  "loop_active_end",
+  "loop_schedule.period_minutes",
+  "loop_schedule.offset_minute",
+  "loop_dream_hour",
+  "loop_dream_minute",
+]);
+
 // ─── lang facade (REFACTOR-049) ───────────────────────────────────────────
 
 /** `config lang [zh|en|--reset]` — the lang command merged into config. */
@@ -275,5 +289,12 @@ export function configCommand(args: string[]): number {
   const file = configKeyFile(sc);
   configSet(key, value, file);
   ok(`✓ set ${key} = ${value} in ${file}`);
+  // codex r8: the FACADES disclose that these keys are dead, but a raw write
+  // (`roll config loop_schedule.period_minutes 30`) printed a bare success. Same
+  // key, same non-effect — say so on both paths.
+  if (INACTIVE_KEYS.has(key)) {
+    process.stdout.write("note: this key is inactive — nothing reads it\n");
+    process.stdout.write("说明:这个 key 已失效 —— 没有任何东西读它\n");
+  }
   return 0;
 }

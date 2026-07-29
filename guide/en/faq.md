@@ -133,9 +133,10 @@ agent session to let it pick a story itself, then widen the run from there
 - **Per project:** `.roll/`, plus symlinks under `.claude/skills/` (or
   equivalent for other agents).
 
-Everything Roll does happens inside a command you start, in the foreground,
-for as long as you keep it running. Nothing is installed that keeps running
-after you walk away.
+Everything Roll does happens inside a command you start. A `roll loop go` run puts
+its worker in a detached tmux window, so it keeps going after you close your
+terminal and ends on its own scope — use `--no-tmux` to keep it in the foreground.
+What Roll never does is install something that starts work you did not ask for.
 
 To remove everything:
 
