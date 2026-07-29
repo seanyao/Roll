@@ -28,9 +28,6 @@
  */
 import {
   type Scheduler,
-  type ProcessFallbackIntent,
-  type ProcessFallbackStartResult,
-  ProcessFallbackScheduler,
   createScheduler,
   configResolve,
   launchdLabel,
@@ -38,16 +35,7 @@ import {
   plistContent,
   projectIdentity,
 } from "@roll/infra";
-import type { FallbackHealth } from "@roll/spec";
-import {
-  EventBus,
-  computeFallbackCommandDigest,
-  evaluateFallbackLiveness,
-  fallbackHeartbeatPath,
-  fallbackLeasePath,
-  readFallbackLease,
-  type FallbackRunnerConfig,
-} from "@roll/core";
+import { EventBus } from "@roll/core";
 import { GOAL_SCHEMA_VERSION, parseGoalYaml, renderGoalYaml, resolveLang, t, transitionGoal, v3Catalog } from "@roll/spec";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -813,7 +801,6 @@ export async function loopOnCommand(_args: string[], deps: LoopSchedDeps = realD
 export async function loopOffCommand(
   args: string[],
   deps: LoopSchedDeps = realDeps(),
-  fbBackend: FallbackBackend = defaultFallbackBackend(),
 ): Promise<number> {
   if (args.includes("--all")) return loopOffAllCommand(deps);
 
@@ -849,32 +836,16 @@ export async function loopOffCommand(
     process.stdout.write(`  stopped ${parts.join(" and ")}\n`);
   }
 
-  // US-LOOP-108 AC4: `off` owns the fallback backend too. Stop an active/leased
-  // process fallback, then VERIFY no scheduler tick remains possible — launchd
-  // is booted out above and the fallback lease is gone or being torn down.
-  const config = resolveFallbackConfig(id.path, id.slug);
-  const fbHealth = await fbBackend.health(config);
-  let fallbackStillLive = false;
-  if (fbHealth.lease !== null) {
-    const stopped = await fbBackend.stop(config);
-    const after = await fbBackend.health(config);
-    fallbackStillLive = after.alive;
-    process.stdout.write(
-      stopped
-        ? `  stopped process fallback (pid ${fbHealth.lease.pid}); lease removed on exit\n`
-        : `  cleared stale process-fallback lease (pid ${fbHealth.lease.pid})\n`,
-    );
-  }
-
+  // US-LOOP-116: there is no fallback backend to stop — the second resident
+  // scheduler is gone, so a booted-out launchd lane is the whole story.
   const launchdArmed = await deps.scheduler.isArmed(launchdLabel("loop", id.slug));
-  const noTick = !launchdArmed && !fallbackStillLive;
   process.stdout.write(
-    `Loop disabled (loop/dream/pr booted out)\n` +
-    `Loop 已停用(loop/dream/pr 均已卸载)\n` +
-    (noTick
-      ? `verified: no further scheduler tick is possible (launchd unarmed, fallback stopped)\n`
-      : `warning: a scheduler backend may still be shutting down — re-run \`roll loop status\` to confirm\n`) +
-    `mode: guided — scheduler disabled; owner drives \`roll supervisor next\` or explicit \`roll loop go\`\n`,
+    `Loop disabled (loop/dream booted out)\n` +
+    `Loop 已停用(loop/dream 均已卸载)\n` +
+    (launchdArmed
+      ? `warning: the launchd lane still reports armed — re-run \`roll loop status\` to confirm\n`
+      : `verified: no further scheduler tick is possible\n`) +
+    `delivery runs in the agent session that drives \`roll loop go\`\n`,
   );
   return 0;
 }
@@ -925,301 +896,13 @@ export function listAllRollLaneLabels(): string[] {
   return listRollLaneLabelsByFilter(() => true);
 }
 
-// ─── Owner-confirmed process fallback surface (US-LOOP-108) ──────────────────
-//
-// The launchd backend is the only autonomous scheduler; when its bootstrap
-// fails on macOS `roll loop on` ends UNARMED (see mountFailureMessage). This
-// surface lets the owner EXPLICITLY opt into the US-LOOP-107 process fallback —
-// Roll never selects it automatically. Every command below reaches the real
-// lease/liveness state (readFallbackLease + evaluateFallbackLiveness); nothing
-// here is a cosmetic message.
+// ─── US-LOOP-116: the process fallback is gone ──────────────────────────────
+// US-LOOP-107 added a `detached` self-running process as a fallback for when
+// launchd bootstrap failed. It was a SECOND resident scheduler: deleting the plist
+// layer alone would have left it running under a different name. With no resident
+// scheduling at all there is no backend to choose, so SchedulerBackendName,
+// the lease/heartbeat/liveness probes and `roll loop fallback` are all deleted.
 
-export type SchedulerBackendName = "launchd" | "process-fallback" | "none";
-
-/** The subset of ProcessFallbackScheduler the CLI surface uses (test seam). */
-export interface FallbackBackend {
-  start(config: FallbackRunnerConfig, intent: ProcessFallbackIntent): Promise<ProcessFallbackStartResult>;
-  stop(config: FallbackRunnerConfig): Promise<boolean>;
-  health(config: FallbackRunnerConfig): Promise<FallbackHealth>;
-}
-
-export interface LoopFallbackDeps {
-  identity: () => Promise<{ path: string; slug: string }>;
-  /** Resolve the frozen fallback runner config (period + roll binary). */
-  resolveConfig: (projectPath: string, slug: string) => FallbackRunnerConfig;
-  backend: FallbackBackend;
-  /** launchd arm probe — so status reports which backend actually holds. */
-  launchdArmed: (slug: string) => Promise<boolean>;
-}
-
-/**
- * Freeze the fallback runner identity. periodMinutes + rollBin feed the command
- * digest, so this MUST be deterministic across start/stop/status invocations or
- * a live lease would read back as stale (digest drift).
- */
-export function resolveFallbackConfig(projectPath: string, slug: string): FallbackRunnerConfig {
-  let period = 30;
-  const localYaml = join(projectPath, ".roll", "local.yaml");
-  if (existsSync(localYaml)) {
-    try {
-      period = parseLoopPeriodMinutes(readFileSync(localYaml, "utf8"));
-    } catch {
-      /* default */
-    }
-  }
-  const rollBin = (process.env["ROLL_RUNNER_ROLL_BIN"] ?? "").trim() || "roll";
-  return { projectPath, slug, periodMinutes: period, rollBin };
-}
-
-function defaultFallbackBackend(): FallbackBackend {
-  const scheduler = new ProcessFallbackScheduler();
-  return {
-    start: (c, i) => scheduler.start(c, i),
-    stop: (c) => scheduler.stop(c),
-    health: (c) => scheduler.health(c),
-  };
-}
-
-function realFallbackDeps(): LoopFallbackDeps {
-  const uid = process.getuid?.() ?? 501;
-  const launchd = createScheduler(process.platform, { uid });
-  return {
-    identity: () => projectIdentity(),
-    resolveConfig: resolveFallbackConfig,
-    backend: defaultFallbackBackend(),
-    launchdArmed: (slug) => launchd.isArmed(launchdLabel("loop", slug)),
-  };
-}
-
-/** Synchronous fallback-liveness read for the sync status/doctor renderers. */
-export function readFallbackHealthSync(projectPath: string, slug: string): FallbackHealth {
-  const config = resolveFallbackConfig(projectPath, slug);
-  return evaluateFallbackLiveness({
-    lease: readFallbackLease(fallbackLeasePath(projectPath, slug)),
-    heartbeatPath: fallbackHeartbeatPath(projectPath, slug),
-    expectedDigest: computeFallbackCommandDigest(config),
-  });
-}
-
-/**
- * Locate + evaluate a project's fallback lease WITHOUT the caller knowing its
- * slug — the lease directory name (`fallback-lease-<slug>`) carries it. Used by
- * `roll doctor`, which is synchronous and has no async project identity.
- */
-export function readFallbackHealthForProject(
-  projectPath: string,
-): { slug: string; health: FallbackHealth } | null {
-  const rt = join(projectPath, ".roll", "loop");
-  let entries: string[];
-  try {
-    entries = readdirSync(rt);
-  } catch {
-    return null;
-  }
-  const leaseDir = entries.find((n) => n.startsWith("fallback-lease-"));
-  if (leaseDir === undefined) return null;
-  const slug = leaseDir.slice("fallback-lease-".length);
-  return { slug, health: readFallbackHealthSync(projectPath, slug) };
-}
-
-export interface SchedulerBackendView {
-  backend: SchedulerBackendName;
-  launchdArmed: boolean;
-  fallback: FallbackHealth;
-}
-
-/**
- * Decide the effective scheduler backend. launchd wins when armed; otherwise a
- * LIVE fallback holds; otherwise `none`. A stale/dead fallback is never the
- * active backend (AC3) — `fallback.alive` gates the process-fallback branch.
- */
-export function decideBackend(launchdArmed: boolean, fallback: FallbackHealth): SchedulerBackendName {
-  if (launchdArmed) return "launchd";
-  if (fallback.alive) return "process-fallback";
-  return "none";
-}
-
-export async function resolveSchedulerBackend(deps: LoopFallbackDeps): Promise<SchedulerBackendView> {
-  const id = await deps.identity();
-  const config = deps.resolveConfig(id.path, id.slug);
-  const [launchdArmed, fallback] = await Promise.all([
-    deps.launchdArmed(id.slug),
-    deps.backend.health(config),
-  ]);
-  return { backend: decideBackend(launchdArmed, fallback), launchdArmed, fallback };
-}
-
-function fbLang(): "en" | "zh" {
-  return resolveLang({
-    rollLang: process.env["ROLL_LANG"],
-    lcAll: process.env["LC_ALL"],
-    lang: process.env["LANG"],
-  }) === "zh"
-    ? "zh"
-    : "en";
-}
-
-const pick = (lang: "en" | "zh", en: string, zh: string): string => (lang === "zh" ? zh : en);
-
-const FALLBACK_LIMITATION = {
-  en: "limitation: not a launchd replacement — does not survive reboot/login",
-  zh: "限制:不是 launchd 的等价替代 — 重启/登出后不保留",
-} as const;
-
-/**
- * Render the effective backend, health, PID/heartbeat and limitations for
- * `roll loop status` / `roll loop fallback status`. A stale lease is reported
- * as stale + NOT active, never as a running backend.
- */
-export function renderBackendStatusLines(view: SchedulerBackendView, lang: "en" | "zh"): string[] {
-  const lines: string[] = [];
-  lines.push(pick(lang, `scheduler backend: ${view.backend}`, `排程后端:${view.backend}`));
-  lines.push(
-    view.launchdArmed
-      ? pick(lang, "  launchd: armed — autonomous scheduling active", "  launchd:已激活 — 自主排程运行中")
-      : pick(lang, "  launchd: unarmed", "  launchd:未激活"),
-  );
-
-  const fb = view.fallback;
-  const lease = fb.lease;
-  if (fb.alive && lease !== null) {
-    lines.push(
-      pick(lang, "  process-fallback: armed (owner-confirmed)", "  process-fallback:已激活(owner 已确认)"),
-      `    pid: ${lease.pid}  heartbeat: ${lease.heartbeatAt}`,
-      pick(lang, `    owner-confirmed: ${lease.ownerConfirmedAt}`, `    owner 确认于:${lease.ownerConfirmedAt}`),
-      `    ${pick(lang, FALLBACK_LIMITATION.en, FALLBACK_LIMITATION.zh)}`,
-    );
-  } else if (lease !== null) {
-    lines.push(
-      pick(
-        lang,
-        `  process-fallback: stale — NOT active (${fb.reason})`,
-        `  process-fallback:已失效 — 未运行(${fb.reason})`,
-      ),
-      pick(lang, `    last known pid: ${lease.pid}`, `    最后已知 pid:${lease.pid}`),
-      pick(lang, "    recover: roll loop fallback start --confirm", "    恢复:roll loop fallback start --confirm"),
-    );
-  } else {
-    lines.push(pick(lang, "  process-fallback: none", "  process-fallback:无"));
-  }
-
-  if (view.backend === "none") {
-    lines.push(
-      pick(lang, "  scheduler: unarmed — no autonomous work will run", "  排程:未激活 — 不会运行任何自主任务"),
-      pick(lang, "  repair launchd, or: roll loop fallback start --confirm", "  修复 launchd,或执行:roll loop fallback start --confirm"),
-    );
-  }
-  return lines;
-}
-
-/** `roll loop status` — read-only effective scheduler backend + health. */
-export async function loopStatusCommand(
-  _args: string[],
-  deps: LoopFallbackDeps = realFallbackDeps(),
-): Promise<number> {
-  const view = await resolveSchedulerBackend(deps);
-  process.stdout.write(renderBackendStatusLines(view, fbLang()).join("\n") + "\n");
-  return 0;
-}
-
-/** `roll loop fallback <start|stop|status>` — owner-confirmed process fallback. */
-export async function loopFallbackCommand(
-  args: string[],
-  deps: LoopFallbackDeps = realFallbackDeps(),
-): Promise<number> {
-  const sub = args[0];
-  const lang = fbLang();
-  if (sub === "status" || sub === undefined) {
-    return loopStatusCommand([], deps);
-  }
-  if (sub === "start") {
-    const confirmed = args.includes("--confirm");
-    const id = await deps.identity();
-    const config = deps.resolveConfig(id.path, id.slug);
-    if (!confirmed) {
-      // AC2: start without --confirm refuses WITHOUT spawning anything.
-      process.stderr.write(
-        [
-          pick(lang, "loop fallback start: refused — owner confirmation required", "loop fallback start:已拒绝 — 需要 owner 明示确认"),
-          pick(
-            lang,
-            "  the process fallback runs unattended cycles; confirm with:",
-            "  进程 fallback 会无人值守地运行周期;请确认:",
-          ),
-          "    roll loop fallback start --confirm",
-          pick(lang, `  ${FALLBACK_LIMITATION.en}`, `  ${FALLBACK_LIMITATION.zh}`),
-          "",
-        ].join("\n"),
-      );
-      return 1;
-    }
-    const result = await deps.backend.start(config, { ownerConfirmed: true });
-    if (!result.started) {
-      process.stderr.write(
-        [
-          pick(lang, `loop fallback start: not started — ${result.reason}`, `loop fallback start:未启动 — ${result.reason}`),
-          ...(result.pid !== undefined
-            ? [pick(lang, `  holder pid: ${result.pid}`, `  持有者 pid:${result.pid}`)]
-            : []),
-          "",
-        ].join("\n"),
-      );
-      return 1;
-    }
-    const health = await deps.backend.health(config);
-    process.stdout.write(
-      [
-        pick(lang, "Process fallback armed (owner-confirmed)", "进程 fallback 已激活(owner 已确认)"),
-        `  pid: ${result.pid}`,
-        ...(health.lease !== null ? [`  heartbeat: ${health.lease.heartbeatAt}`] : []),
-        pick(lang, `  ${FALLBACK_LIMITATION.en}`, `  ${FALLBACK_LIMITATION.zh}`),
-        pick(lang, "  stop with: roll loop fallback stop", "  停止:roll loop fallback stop"),
-        "",
-      ].join("\n"),
-    );
-    return 0;
-  }
-  if (sub === "stop") {
-    const id = await deps.identity();
-    const config = deps.resolveConfig(id.path, id.slug);
-    const before = await deps.backend.health(config);
-    if (before.lease === null) {
-      process.stdout.write(
-        pick(lang, "Process fallback: nothing to stop (no lease)\n", "进程 fallback:无需停止(无 lease)\n"),
-      );
-      return 0;
-    }
-    const stopped = await deps.backend.stop(config);
-    if (!stopped) {
-      process.stderr.write(
-        pick(
-          lang,
-          "loop fallback stop: no live runner to stop (lease was already stale)\n",
-          "loop fallback stop:没有存活的运行器可停(lease 已失效)\n",
-        ),
-      );
-      return before.alive ? 1 : 0;
-    }
-    process.stdout.write(
-      [
-        pick(lang, "Process fallback stop signaled — runner is shutting down", "已发出进程 fallback 停止信号 — 运行器正在退出"),
-        pick(lang, "  the lease is removed on exit; no further tick will run", "  lease 会在退出时移除;不会再有新的周期"),
-        "",
-      ].join("\n"),
-    );
-    return 0;
-  }
-  process.stderr.write(
-    pick(
-      lang,
-      `loop fallback: unknown subcommand '${sub}' (use start --confirm | stop | status)\n`,
-      `loop fallback:未知子命令 '${sub}'(可用 start --confirm | stop | status)\n`,
-    ),
-  );
-  return 1;
-}
-
-/** `roll loop pause` — write the PAUSE marker the runner honors. */
 export async function loopPauseCommand(_args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
   const id = await deps.identity();
   const marker = pauseMarkerPath(id.path, id.slug);

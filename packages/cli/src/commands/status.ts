@@ -24,7 +24,6 @@ import { attestCoverage, isSnapshotStale, loadTruthSnapshot, renderNowMs, snapsh
 import type { TruthSnapshotCycle } from "@roll/spec";
 import { detectDesignHandoff, renderDesignNudge } from "../lib/onboard-nudge.js";
 import { loadNorthStarReport, renderNorthStatusSummary } from "./north.js";
-import { decideBackend, readFallbackHealthSync, type SchedulerBackendName } from "./loop-sched.js";
 
 /** FIX-361: format a cycle snapshot's cost with correct currency symbols,
  *  separating by currency so ¥ and $ are never blindly summed. */
@@ -99,10 +98,13 @@ interface StatusData {
   project_features_count: number;
   loop_state: string;
   dream_state: string;
-  /** US-LOOP-108: effective scheduler backend (launchd|process-fallback|none). */
-  scheduler_backend: SchedulerBackendName;
-  /** US-LOOP-108: one-line backend health note (PID/heartbeat, stale, or ""). */
-  scheduler_note: string;
+  /**
+   * US-LOOP-116: how delivery is driven. There is no scheduler backend to choose
+   * between any more — a session drives, or the owner has paused it.
+   */
+  driver: "session" | "paused";
+  /** One-line note (e.g. a leftover launchd lane worth disarming), or "". */
+  driver_note: string;
 }
 
 function globalConventions(): Conventions {
@@ -246,8 +248,8 @@ function fixtureData(): StatusData {
     project_features_count: 23,
     loop_state: "enabled",
     dream_state: "not-installed",
-    scheduler_backend: "launchd",
-    scheduler_note: "",
+    driver: "session",
+    driver_note: "",
   };
 }
 
@@ -365,21 +367,18 @@ function renderThisProject(out: string[], d: StatusData): void {
     out.push("  " + dot + " " + word);
   }
 
-  // US-LOOP-108: effective scheduler backend — launchd | process-fallback | none.
+  // US-LOOP-116: who drives — a session, or nobody because it is paused.
   {
     let dot: string, word: string;
-    if (d.scheduler_backend === "launchd") {
-      dot = c("green", "●");
-      word = c("green", "backend · launchd");
-    } else if (d.scheduler_backend === "process-fallback") {
-      dot = c("amber", "⚠");
-      word = c("amber", "backend · process-fallback");
+    if (d.driver === "session") {
+      dot = c("green", "◆");
+      word = c("green", "driver · session");
     } else {
-      dot = c("red", "○");
-      word = c("red", "backend · none");
+      dot = c("amber", "⏸");
+      word = c("amber", "driver · paused");
     }
     let line = "  " + dot + " " + word;
-    if (d.scheduler_note !== "") line += c("dim", `  ${d.scheduler_note}`);
+    if (d.driver_note !== "") line += c("dim", `  ${d.driver_note}`);
     out.push(line);
   }
   out.push("");
@@ -403,18 +402,17 @@ function liveData(): StatusData {
     featCount = readdirSync(featDir).filter((n) => n.endsWith(".md")).length;
   }
   const loopState = launchdState("loop", slug);
-  // US-LOOP-108: derive the effective backend. A stale/dead fallback lease is
-  // never reported as an active backend (evaluateFallbackLiveness gates alive).
-  const fbHealth = readFallbackHealthSync(root, slug);
-  const backend = decideBackend(loopState === "enabled", fbHealth);
-  let note = "";
-  if (backend === "process-fallback" && fbHealth.lease !== null) {
-    note = `owner-confirmed · pid ${fbHealth.lease.pid} · not persistent across reboot/login`;
-  } else if (fbHealth.status === "stale" && fbHealth.lease !== null) {
-    note = `stale fallback lease (${fbHealth.reason}) — not active`;
-  } else if (backend === "none") {
-    note = "unarmed — no autonomous work will run";
-  }
+  // US-LOOP-116: no backend to derive. Delivery is session-driven; the only real
+  // state is whether autonomous progress is paused. A launchd lane still on disk is
+  // a leftover from an older install and is worth naming, not obeying.
+  const paused = existsSync(join(root, ".roll", "loop", `PAUSE-${slug}`));
+  const driver: "session" | "paused" = paused ? "paused" : "session";
+  const note =
+    loopState !== "not-installed"
+      ? "leftover launchd lane from an older install — run roll doctor to remove it"
+      : paused
+        ? "autonomous progress paused — roll loop resume, or roll loop go --cards <id>"
+        : "";
   return {
     conventions: globalConventions(),
     ai_clients: aiClients,
@@ -425,8 +423,8 @@ function liveData(): StatusData {
     project_features_count: featCount,
     loop_state: loopState,
     dream_state: launchdState("dream", slug),
-    scheduler_backend: backend,
-    scheduler_note: note,
+    driver,
+    driver_note: note,
   };
 }
 
