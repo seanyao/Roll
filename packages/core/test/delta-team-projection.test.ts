@@ -22,9 +22,12 @@ describe("US-DELTA-001 AC2 — VisibleDeliveryMode projection", () => {
   it("a HISTORICAL loop-autonomous record keeps its historical mode (codex r1)", () => {
     // Re-rendering it as solo-skill would silently rewrite what that delivery
     // actually was. Read-side compatibility means reading history, not restating it.
-    const retired = "loop-autonomous" as unknown as "host-guided";
-    expect(visibleMode(retired, "solo")).toBe("autonomous-loop");
-    expect(visibleMode(retired, "full-delta-team")).toBe("autonomous-loop");
+    // codex r3: no cast needed — the read-side input accepts a historical trigger.
+    expect(visibleMode("loop-autonomous", "solo")).toBe("autonomous-loop");
+    expect(visibleMode("loop-autonomous", "full-delta-team")).toBe("autonomous-loop");
+    expect(
+      visibleModeFromShape({ trigger: "loop-autonomous", topology: "solo", qualityProfile: "standard" }),
+    ).toBe("autonomous-loop");
   });
 
   it("host-guided + solo → solo-skill", () => {

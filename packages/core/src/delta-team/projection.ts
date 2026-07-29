@@ -15,6 +15,7 @@ import type {
   DeliveryTopology,
   VisibleDeliveryMode,
   DeliveryShape,
+  HistoricalDeliveryShape,
   HistoricalDelegationTrigger,
   HistoricalVisibleDeliveryMode,
   IdentityProvenance,
@@ -38,7 +39,7 @@ import { RETIRED_DELEGATION_TRIGGERS } from "@roll/spec";
  * `VISIBLE_DELIVERY_MODES` still lists only what a NEW delegation may produce.
  */
 export function visibleMode(
-  trigger: DelegationTrigger,
+  trigger: DelegationTrigger | HistoricalDelegationTrigger,
   topology: DeliveryTopology,
 ): VisibleDeliveryMode | HistoricalVisibleDeliveryMode {
   // Read-side only: a historical trigger keeps its historical projection.
@@ -55,9 +56,14 @@ export function visibleMode(
   }
 }
 
-/** Derive visible mode from a full DeliveryShape. */
+/**
+ * Derive visible mode from a full DeliveryShape, live or historical.
+ *
+ * codex review r3: the INPUT is widened too. A historical shape must be readable
+ * without a cast — narrowing the parameter would push the lie back onto callers.
+ */
 export function visibleModeFromShape(
-  shape: DeliveryShape,
+  shape: DeliveryShape | HistoricalDeliveryShape,
 ): VisibleDeliveryMode | HistoricalVisibleDeliveryMode {
   return visibleMode(shape.trigger, shape.topology);
 }

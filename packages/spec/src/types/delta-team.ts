@@ -93,6 +93,17 @@ export interface DeliveryShape {
   readonly qualityProfile: QualityProfile;
 }
 
+/**
+ * A shape as it may appear in a HISTORICAL record: identical to
+ * {@link DeliveryShape} except the trigger may be a retired literal. Read-side
+ * consumers accept this so a historical artifact needs no cast (codex review r3).
+ */
+export interface HistoricalDeliveryShape {
+  readonly trigger: DelegationTrigger | HistoricalDelegationTrigger;
+  readonly topology: DeliveryTopology;
+  readonly qualityProfile: QualityProfile;
+}
+
 /** Type guard: is every field within its valid literal set? */
 export function isValidDeliveryShape(s: unknown): s is DeliveryShape {
   if (typeof s !== "object" || s === null) return false;
