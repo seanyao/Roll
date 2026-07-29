@@ -295,10 +295,14 @@ function heartbeatHeader(): string {
 
 function heartbeatRow(lane: TruthSnapshotLoopLane, generatedAt?: string): string {
   const on = lane.running;
-  // codex r4: a leftover lane must never render as a red "zombie". Staleness means
-  // "this should be beating and is not" — but a leftover plist is DEBRIS and is
-  // expected to be silent, and its `lastAt` is old precisely because it stopped.
-  const stale = !isLeftoverLane(lane) && heartbeatStale(lane, generatedAt);
+  // "Zombie" means: this lane CLAIMS to be running, but its last activity is old.
+  //
+  // codex r4 caught leftover lanes painted red; codex r9 pointed out that guarding
+  // on the leftover marker alone only treated that one symptom — ANY not-running
+  // lane with an old `lastAt` was painted red, and "not running with old activity"
+  // is simply a finished session. So gate on the claim itself: only a lane that
+  // says it is running can be a zombie.
+  const stale = on && heartbeatStale(lane, generatedAt);
   const dotColor = stale ? C.red : on ? C.green : "#cbd2dc";
   const dot = on
     ? `width:9px;height:9px;border-radius:50%;background:${dotColor};box-shadow:0 0 0 3px ${stale ? "rgba(210,59,59,.18)" : "rgba(23,138,82,.18)"};animation:beat 2.4s infinite;flex:none;`

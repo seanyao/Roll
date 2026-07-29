@@ -1305,6 +1305,33 @@ describe("command chips + freshness — US-DOSSIER-018", () => {
     expect(html).toContain("applyFreshness");
   });
 
+  it("US-LOOP-118: only a lane CLAIMING to run can be a zombie (codex r9)", () => {
+    // r4 guarded the leftover marker; r9 pointed out that only treated one symptom.
+    // Any not-running lane with an old lastAt was painted red — but "not running,
+    // last activity a while ago" is just a finished session.
+    const finishedSession = render({
+      ...SNAP,
+      generatedAt: "2026-06-13T00:00:00Z",
+      loop: {
+        lanes: [
+          { name: "go session", source: "goal", running: false, mode: "go", status: "complete", lastAt: "2026-06-12T03:00:00Z" },
+        ],
+      },
+    });
+    expect(finishedSession).not.toContain("zombie");
+    // A lane that DOES claim to be running with stale activity is still a zombie.
+    const claimsRunning = render({
+      ...SNAP,
+      generatedAt: "2026-06-13T00:00:00Z",
+      loop: {
+        lanes: [
+          { name: "go session", source: "goal", running: true, mode: "go", status: "active", lastAt: "2026-06-12T03:00:00Z" },
+        ],
+      },
+    });
+    expect(claimsRunning).toContain("zombie");
+  });
+
   it("US-LOOP-118: a leftover lane is debris, not a red zombie (codex r4)", () => {
     // `stale` means "this should be beating and is not". A leftover plist is
     // EXPECTED to be silent, and its lastAt is old precisely because it stopped —

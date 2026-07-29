@@ -7,7 +7,7 @@
  * overall crash.
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, afterEach, beforeEach } from "vitest";
@@ -299,6 +299,26 @@ describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane
     // No fresh snapshot may claim a launchd lane — that label now means only
     // "a leftover plist is on disk", which this collector never checks.
     expect(lanes.some((l) => l.source === "launchd")).toBe(false);
+  });
+
+  it("US-LOOP-118: a STALE live.log is not a running session (codex r9)", () => {
+    // live.log is never deleted, so its existence only proves a cycle once ran.
+    // Mere existence made a long-finished cycle read as "go session open".
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-stale-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    const live = join(loopDir, "live.log");
+    writeFileSync(live, "old activity\n");
+    // ROLL_RENDER_NOW is frozen at 2026-06-20T12:00:00Z; age this log a day.
+    const oldSec = Date.parse("2026-06-19T12:00:00Z") / 1000;
+    utimesSync(live, oldSec, oldSec);
+    expect(collectDossierState(cwd).loop?.lanes?.[0]?.running).toBe(false);
+
+    // A log touched inside the freshness window IS a running session.
+    const freshSec = Date.parse("2026-06-20T11:59:00Z") / 1000;
+    utimesSync(live, freshSec, freshSec);
+    expect(collectDossierState(cwd).loop?.lanes?.[0]?.running).toBe(true);
   });
 
   it("without live.log the session lane is not running, and still not a launchd lane", () => {

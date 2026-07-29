@@ -35,7 +35,7 @@ export type MergeEvidenceFn = (runCache: unknown, id: string) => boolean;
 export type CollectTruthBoardFn = (cwd: string, nowSec: number) => TruthBoardInput;
 
 /** Collect the loop heartbeat. */
-export type CollectLoopHeartbeatFn = (cwd: string) => TruthSnapshotLoop;
+export type CollectLoopHeartbeatFn = (cwd: string, nowSec: number) => TruthSnapshotLoop;
 
 /** Probe on-disk evidence flags for one story. */
 export type CollectEvidenceFlagsFn = (cwd: string, story: { id: string; epic: string }) => StoryEvidenceFlags;
@@ -63,7 +63,7 @@ export interface CollectorDeps {
 
 // ── Default best-effort collectors (node:fs only, no git/launchd) ────────────
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -226,7 +226,7 @@ function defaultCollectTruthBoard(cwd: string, nowSec: number): TruthBoardInput 
  * describe a SESSION. Labelling it `goal` puts it under the semantics it actually
  * has, and leaves `launchd` to mean only "leftover plist on disk".
  */
-function defaultCollectLoopHeartbeat(cwd: string): TruthSnapshotLoop {
+function defaultCollectLoopHeartbeat(cwd: string, nowSec: number): TruthSnapshotLoop {
   const loopDir = join(cwd, ".roll", "loop");
   let lastAt: string | undefined;
   try {
@@ -244,7 +244,18 @@ function defaultCollectLoopHeartbeat(cwd: string): TruthSnapshotLoop {
       }
     }
   } catch { /* no runs */ }
-  const running = existsSync(join(loopDir, "live.log"));
+  // codex r9: `live.log` is never deleted, so its EXISTENCE only proves a cycle
+  // once ran — mere existence made a long-finished cycle read as "go session open".
+  // Use freshness, the same rule and window collectLoopLiveFeed already applies:
+  // a log untouched for longer than the window is not streaming.
+  const LIVE_FRESH_SEC = 300;
+  let running = false;
+  try {
+    const st = statSync(join(loopDir, "live.log"));
+    running = nowSec - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
+  } catch {
+    running = false; // no live.log at all
+  }
   return {
     lanes: [{
       name: "go session",
@@ -420,7 +431,7 @@ export function collectDossierState(
   const truth = collectTruthBoard(cwd, nowSec);
 
   // 4. Collect loop heartbeat
-  const loop = collectLoopHeartbeat(cwd);
+  const loop = collectLoopHeartbeat(cwd, nowSec);
 
   // 4.5. On Deck is backlog-primary: folders only provide deep links.
   const onDeck = collectOnDeck(cwd, epics);
