@@ -85,7 +85,10 @@ async function initializeIssue(
   const contract: IssueStoryContract = {
     storyId,
     repositories: [{ alias: "primary", access: "write", requiredDelivery: true }],
-    integrationCommand: ["pnpm", "test:integration"],
+    integrationAcceptance: {
+      command: ["pnpm", "test:integration"],
+      cwd: "primary",
+    },
   };
   const issueRoot = join(workspaceRoot, "issues", storyId);
   await applyIssueInit({

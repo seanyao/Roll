@@ -43,6 +43,7 @@ function context(workspaceId: string): WorkspaceExecutionContextV1 {
             access: "write",
             requiredDelivery: true,
             noChangePolicy: "changes_required",
+            workBranch: `story/${storyId}/product`,
             worktreePath: join(issueRoot, "product"),
             baseSha: "a".repeat(40),
             headSha: "b".repeat(40),

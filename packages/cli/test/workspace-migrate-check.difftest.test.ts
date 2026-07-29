@@ -195,6 +195,8 @@ describe("US-WS-019b migration check CLI contract", () => {
   });
 
   it("rejects anything except the explicit check-only grammar without collecting", async () => {
+    const previousLang = process.env["ROLL_LANG"];
+    process.env["ROLL_LANG"] = "en";
     let collected = 0;
     let stderr = "";
     const realErr = process.stderr.write.bind(process.stderr);
@@ -216,6 +218,8 @@ describe("US-WS-019b migration check CLI contract", () => {
       });
     } finally {
       process.stderr.write = realErr;
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
     }
 
     expect(status).toBe(1);

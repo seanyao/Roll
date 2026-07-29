@@ -40,7 +40,7 @@ import { appendWriteProtectionEvent, quarantineMainCheckoutForCycle, startMainCh
 import { spawnWatched } from "./spawn-watchdog.js";
 import { resolveIntegrationBranch } from "@roll/infra";
 import { eventTs, guardRuntimeDir } from "./runner-time.js";
-import { prepareWorkspaceBuilderSkillBody } from "./spawn-agent-handler.js";
+import { prepareWorkspaceBuilderSkillBody } from "./workspace-builder-context.js";
 import { repositoryAgentWritableRoots, submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
 import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktree.js";
 import type { ExecuteResult, Ports } from "./ports.js";

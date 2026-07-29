@@ -2,6 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, mkd
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { deriveWorkspaceExecutionAuthorities } from "@roll/core";
+import {
+  REPOSITORY_BINDING_V1,
+  WORKSPACE_EXECUTION_CONTEXT_V1,
+  repositoryIdFromRemote,
+  type WorkspaceExecutionContextV1,
+} from "@roll/spec";
 import { storyNewCommand } from "../src/commands/story-new.js";
 import { ideaCommand } from "../src/commands/idea.js";
 import { designCommand } from "../src/commands/design.js";
@@ -44,7 +51,30 @@ function fixture() {
     runtimeRoot: join(workspaceRoot, "runtime"),
     configPath: join(workspaceRoot, "runtime", "backlog-sync.yaml"),
   };
-  return { cwd, workspaceRoot, target };
+  const remote = "https://example.test/workspace-alpha/product.git";
+  const parsedRepoId = repositoryIdFromRemote(remote);
+  if (!parsedRepoId.ok) throw new Error("planning fixture remote must be valid");
+  const workspaceExecution: WorkspaceExecutionContextV1 = {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: {
+      workspaceId: "alpha",
+      root: workspaceRoot,
+      canonicalRoot: workspaceRoot,
+      lifecycle: "active",
+    },
+    resolution: { source: "explicit", evidence: [] },
+    bindings: [{
+      schema: REPOSITORY_BINDING_V1,
+      repoId: parsedRepoId.value,
+      alias: "product",
+      remote,
+      integrationBranch: "idea-074-workspace",
+      provider: "generic",
+      workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+    }],
+    authorities: deriveWorkspaceExecutionAuthorities(workspaceRoot),
+  };
+  return { cwd, workspaceRoot, target, workspaceExecution };
 }
 
 function capture(run: () => number): { code: number; out: string; err: string } {
@@ -136,7 +166,10 @@ describe("US-WS-034 planning authority", () => {
       "| ID | Description | Status |\n|----|----|----|\n| US-DESIGN-1 | design me | 📋 Todo |\n",
       "utf8",
     );
-    const result = capture(() => designCommand([], { cwd: f.workspaceRoot }) as number);
+    const result = capture(() => designCommand([], {
+      cwd: f.workspaceRoot,
+      workspaceExecution: f.workspaceExecution,
+    }) as number);
     expect(result.code).toBe(0);
     expect(result.out).toContain("roll design");
     expect(existsSync(join(f.workspaceRoot, ".roll"))).toBe(false);

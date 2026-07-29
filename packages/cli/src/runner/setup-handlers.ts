@@ -15,7 +15,6 @@ import {
   projectDeliveryLeases,
   readLeases,
   reconcileBranchName,
-  releaseStoryLease,
   runRowHasPublishedPr,
   type BacklogItem,
   type CycleCommand,
@@ -53,6 +52,7 @@ import {
   persistWorkspaceCycleContext,
   persistWorkspaceCycleRepositorySelector,
 } from "./scoped-route.js";
+import { workspaceSetupFailed } from "./workspace-setup-failure.js";
 
 type SetupCommand = Extract<CycleCommand, { kind:
   | "preflight"
@@ -62,30 +62,6 @@ type SetupCommand = Extract<CycleCommand, { kind:
   | "resolve_route"
 }>;
 
-/** Resolve Workspace and legacy runners onto the canonical per-story lease directory. */
-function storyLeasePath(ports: Ports): string {
-  return resolveStoryLeasePath(ports.paths);
-}
-
-function workspaceSetupFailed(input: {
-  readonly ports: Ports;
-  readonly storyId: string;
-  readonly preCycleStatus?: string;
-  readonly leasePath: string;
-  readonly alert?: string;
-}): ExecuteResult {
-  if (input.alert !== undefined) input.ports.events.appendAlert(input.ports.paths.alertsPath, input.alert);
-  input.ports.backlog.markStatus?.(input.ports.repoCwd, input.storyId, input.preCycleStatus ?? STATUS_MARKER.todo);
-  try {
-    releaseStoryLease(input.leasePath, input.storyId, { source: "cycle", pid: process.pid });
-  } catch {
-    /* terminal cleanup retries the lease release */
-  }
-  return {
-    event: { type: "repository_setup_failed", storyId: input.storyId },
-    ctxPatch: input.preCycleStatus === undefined || input.preCycleStatus === "" ? {} : { preCycleStatus: input.preCycleStatus },
-  };
-}
 export async function executeSetupCommand(
   cmd: SetupCommand,
   ports: Ports,
@@ -131,7 +107,7 @@ export async function executeSetupCommand(
         const claims = rows.filter((r) => (r.status ?? "").includes("🔨"));
         if (claims.length > 0) {
           const slug = await ports.github.repoSlug(ports.repoCwd).catch(() => undefined);
-          const leases = readLeases(storyLeasePath(ports));
+          const leases = readLeases(resolveStoryLeasePath(ports.paths));
           const nowMs = Date.now();
           for (const claim of claims) {
             const cycle = latestDeliveringCycle(runRows, claim.id);
@@ -317,7 +293,7 @@ export async function executeSetupCommand(
       // runs. A crashed cycle leaves a stale cycle-lease that accumulates in the
       // file. Clean it before the claim predicate reads the shared ledger so a
       // dead owner cannot keep the Story blocked.
-      const leasePath = storyLeasePath(ports);
+      const leasePath = resolveStoryLeasePath(ports.paths);
       const deadLeases = cleanDeadLeases(leasePath);
       if (deadLeases.length > 0) {
         ports.events.appendAlert(

@@ -48,7 +48,10 @@ function workspace(root: string, repositories: Readonly<Record<string, { path: s
             alias: repoId,
             access: repository.access,
             requiredDelivery: repository.access === "write",
-            ...(repository.access === "write" ? { noChangePolicy: "changes_required" as const } : {}),
+            ...(repository.access === "write" ? {
+              noChangePolicy: "changes_required" as const,
+              workBranch: `story/US-WS-035/${repoId}`,
+            } : {}),
             worktreePath: repository.path,
             baseSha: "a".repeat(40),
             headSha: "b".repeat(40),

@@ -97,7 +97,10 @@ function fixture(): {
       alias: binding.alias,
       access: index === 0 ? "write" : "read",
       requiredDelivery: index === 0,
-      ...(index === 0 ? { noChangePolicy: "changes_required" as const } : {}),
+      ...(index === 0 ? {
+        noChangePolicy: "changes_required" as const,
+        workBranch: `roll/roll/${storyId}/${binding.alias}`,
+      } : {}),
       worktreePath: `${issueRoot}/${binding.alias}`,
       baseSha: `${index + 1}`.repeat(40),
       headSha: `${index + 3}`.repeat(40),
