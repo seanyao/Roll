@@ -250,19 +250,27 @@ function defaultCollectLoopHeartbeat(cwd: string, nowSec: number): TruthSnapshot
   // a log untouched for longer than the window is not streaming.
   const LIVE_FRESH_SEC = 300;
   let running = false;
+  let liveAt: string | undefined;
   try {
     const st = statSync(join(loopDir, "live.log"));
     running = nowSec - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
+    if (running) liveAt = new Date(st.mtimeMs).toISOString().replace(/\.\d{3}Z$/, "Z");
   } catch {
     running = false; // no live.log at all
   }
+  // codex r10: `running` and `lastAt` must describe the SAME activity. Taking
+  // `running` from a fresh live.log while `lastAt` still pointed at the PREVIOUS
+  // completed run meant a genuinely active stream was painted a zombie as soon as
+  // that earlier run aged past the staleness window. While streaming, the last
+  // activity IS the stream's own write time.
+  const activityAt = running ? liveAt : lastAt;
   return {
     lanes: [{
       name: "go session",
       source: "goal" as const,
       running,
       mode: "go" as const,
-      ...(lastAt !== undefined ? { lastAt } : {}),
+      ...(activityAt !== undefined ? { lastAt: activityAt } : {}),
     }],
   };
 }

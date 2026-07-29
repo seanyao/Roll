@@ -295,7 +295,11 @@ describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane
     expect(lanes).toHaveLength(1);
     expect(lanes[0]?.source).toBe("goal");
     expect(lanes[0]?.running).toBe(true);
-    expect(lanes[0]?.lastAt).toBe("2026-06-20T11:00:00Z");
+    // codex r10: while streaming, lastAt is the STREAM's write time, not the
+    // previous run's ts from runs.jsonl — the two fields must agree. This file was
+    // just written, so it is "now"; the pairing itself is asserted precisely in the
+    // dedicated case below.
+    expect(lanes[0]?.lastAt).toBeDefined();
     // No fresh snapshot may claim a launchd lane — that label now means only
     // "a leftover plist is on disk", which this collector never checks.
     expect(lanes.some((l) => l.source === "launchd")).toBe(false);
@@ -319,6 +323,36 @@ describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane
     const freshSec = Date.parse("2026-06-20T11:59:00Z") / 1000;
     utimesSync(live, freshSec, freshSec);
     expect(collectDossierState(cwd).loop?.lanes?.[0]?.running).toBe(true);
+  });
+
+  it("US-LOOP-118: a live stream's lastAt is its OWN write, not the previous run (codex r10)", () => {
+    // `running` and `lastAt` have to describe the same activity. Taking `running`
+    // from a fresh live.log while `lastAt` still pointed at the previous COMPLETED
+    // run meant a genuinely active stream got painted a zombie as soon as that
+    // earlier run aged past the staleness window.
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-pair-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    // A run that finished a day ago…
+    writeFileSync(join(loopDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-19T12:00:00Z" })}\n`);
+    // …and a stream writing right now (frozen now = 2026-06-20T12:00:00Z).
+    const live = join(loopDir, "live.log");
+    writeFileSync(live, "streaming\n");
+    const freshSec = Date.parse("2026-06-20T11:59:30Z") / 1000;
+    utimesSync(live, freshSec, freshSec);
+
+    const lane = collectDossierState(cwd).loop?.lanes?.[0];
+    expect(lane?.running).toBe(true);
+    // NOT the day-old run — the stream's own write time.
+    expect(lane?.lastAt).toBe("2026-06-20T11:59:30Z");
+
+    // Once the stream goes cold, lastAt falls back to the completed run.
+    const coldSec = Date.parse("2026-06-20T10:00:00Z") / 1000;
+    utimesSync(live, coldSec, coldSec);
+    const cold = collectDossierState(cwd).loop?.lanes?.[0];
+    expect(cold?.running).toBe(false);
+    expect(cold?.lastAt).toBe("2026-06-19T12:00:00Z");
   });
 
   it("without live.log the session lane is not running, and still not a launchd lane", () => {
