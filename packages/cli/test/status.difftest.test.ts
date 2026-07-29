@@ -69,7 +69,7 @@ describe("frozen: roll status render", () => {
       "  WARN    main reconciled vs backlog   exit 1
         North  no data
 
-        LOOP      2 loops · 1 running   next 08:55Z
+        LOOP      session-driven · go session open
         CYCLE     17 / 3d   12 failed · $0.59
         RELEASE   v3.611.2 staged   pass · f:0 w:44 ?:78 · 366 merged · 214 pending
         STORY     67% attest coverage      fail 0 · unknown 197
@@ -117,8 +117,6 @@ describe("frozen: roll status render", () => {
         + AGENTS.md
         + .roll/backlog.md
         + .roll/features/  23 feature docs
-        ● loop · launchd enabled
-        ○ dream · launchd not installed
         ◆ driver · session
 
       "
@@ -229,8 +227,6 @@ describe("frozen: roll status render", () => {
         + AGENTS.md
         + .roll/backlog.md
         + .roll/features/  2 feature docs
-        ○ loop · launchd not installed
-        ○ dream · launchd not installed
         ◆ driver · session
 
       "

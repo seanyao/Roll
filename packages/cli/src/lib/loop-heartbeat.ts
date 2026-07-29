@@ -1,20 +1,31 @@
 /**
  * US-DOSSIER-011 — loop heartbeat collection for the Truth Console overview.
  *
- * Best-effort, injected-fs: for each roll lane on this machine (loop / pr / dream),
- * report whether it is scheduled (launchd plist present), its period, the last
- * cycle stamp from runs.jsonl, and the derived next fire. A collection miss
- * yields an honest empty/partial lane — never a throw (the console must render
- * with whatever is knowable).
+ * Best-effort, injected-fs. A collection miss yields an honest empty/partial
+ * lane — never a throw (the console must render with whatever is knowable).
+ *
+ * US-LOOP-118: this used to report each launchd lane as `running` when its plist
+ * existed, read a period out of that plist, and add it to the last run stamp to
+ * PREDICT `nextAt`. All three claims died with resident scheduling: a plist drives
+ * nothing, so its `StartInterval` describes nobody's schedule and no fire is
+ * coming. Lanes are now derived from what actually happened — the go session, and
+ * recent runs — while a plist still on disk is reported as leftover debris with
+ * `running: false` and no predicted next fire.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseEventLine, parseGoalYaml, type GoalScope, type GoalStatus, type TruthSnapshotLoop, type TruthSnapshotLoopLane } from "@roll/spec";
+import { LEFTOVER_LANE_STATUS, parseEventLine, parseGoalYaml, type GoalScope, type GoalStatus, type TruthSnapshotLoop, type TruthSnapshotLoopLane } from "@roll/spec";
 import { resolveLoopRunState } from "../commands/loop-sched.js";
 
 export interface HeartbeatDeps {
-  /** plist text for a lane, or null when not installed. */
-  plistText: (svc: string) => string | null;
+  /**
+   * Is a `com.roll.<svc>.<slug>` plist still on disk for this lane?
+   *
+   * US-LOOP-118: was `plistText`, because the period had to be parsed out of the
+   * XML. Nothing reads the period any more, so the only question is existence —
+   * and a `true` here means leftover debris, not a running lane.
+   */
+  laneLeftover: (svc: string) => boolean;
   /** latest run stamp for a lane (ISO) or null. */
   lastRunAt: (svc: string) => string | null;
   /** current .roll/loop/goal.yaml text, or null when no go goal exists. */
@@ -29,9 +40,13 @@ export interface HeartbeatDeps {
   runState?: () => { state: "ACTIVE" | "PAUSED"; since?: string; reason?: string };
 }
 
-const LAUNCHD_LANES: Array<{ svc: "loop" | "dream"; name: string; mode: string }> = [
-  { svc: "loop", name: "backlog loop", mode: "backlog" },
-  { svc: "dream", name: "Dream loop", mode: "dream" },
+/**
+ * Retired resident lanes. They appear ONLY when a plist is still on disk, and then
+ * as leftovers to remove — never as something that will fire (US-LOOP-118).
+ */
+const RETIRED_LANES: Array<{ svc: "loop" | "dream"; name: string; mode: string }> = [
+  { svc: "loop", name: "backlog loop (leftover lane)", mode: "backlog" },
+  { svc: "dream", name: "Dream loop (leftover lane)", mode: "dream" },
 ];
 
 export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAgentsDir: string): HeartbeatDeps {
@@ -61,12 +76,11 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
     return null;
   };
   return {
-    plistText: (svc) => {
-      const p = join(launchAgentsDir, `com.roll.${svc}.${slug}.plist`);
+    laneLeftover: (svc) => {
       try {
-        return existsSync(p) ? readFileSync(p, "utf8") : null;
+        return existsSync(join(launchAgentsDir, `com.roll.${svc}.${slug}.plist`));
       } catch {
-        return null;
+        return false;
       }
     },
     lastRunAt,
@@ -87,19 +101,6 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
     // US-LOOP-115: two states (ACTIVE / PAUSED) resolved from the PAUSE marker.
     runState: () => ({ state: resolveLoopRunState(projectPath, slug) }),
   };
-}
-
-function periodMinutes(plist: string): number | undefined {
-  const m = /<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/.exec(plist);
-  if (m?.[1] !== undefined) return Math.round(Number(m[1]) / 60);
-  if (plist.includes("<key>StartCalendarInterval</key>")) return 24 * 60; // daily calendar lane
-  return undefined;
-}
-
-function addMinutes(iso: string, min: number): string | undefined {
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return undefined;
-  return new Date(ms + min * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function isoFromSec(sec: number): string {
@@ -156,28 +157,31 @@ function goalLane(deps: HeartbeatDeps): TruthSnapshotLoopLane | undefined {
   };
 }
 
-/** Collect the heartbeat lanes; lanes that are off still appear (state off). */
+/**
+ * Collect the heartbeat lanes.
+ *
+ * US-LOOP-118: a lane appears only when there is something real to say about it —
+ * a leftover plist, or a go session. The old contract listed both retired lanes
+ * unconditionally so the console could print "0/2 lanes armed", which invited the
+ * reading that two lanes were missing and ought to be installed.
+ */
 export function collectLoopHeartbeat(deps: HeartbeatDeps): TruthSnapshotLoop {
   const lanes: TruthSnapshotLoopLane[] = [];
-  for (const { svc, name, mode } of LAUNCHD_LANES) {
-    const plist = deps.plistText(svc);
-    const running = plist !== null;
-    const everyMin = plist !== null ? periodMinutes(plist) : undefined;
+  // US-LOOP-118: a retired lane is listed only if its plist is still on disk, and
+  // then as debris. `running: false` unconditionally — a plist drives nothing — and
+  // never a `nextAt`, because no fire is coming. `lastAt` stays: it is a real
+  // timestamp of work that really happened.
+  for (const { svc, name, mode } of RETIRED_LANES) {
+    if (!deps.laneLeftover(svc)) continue;
     const last = deps.lastRunAt(svc);
     const lane: TruthSnapshotLoopLane = {
       name,
       source: "launchd",
-      running,
+      running: false,
       mode,
-      ...(everyMin !== undefined ? { everyMin } : {}),
+      status: LEFTOVER_LANE_STATUS,
     };
-    if (last !== null) {
-      lane.lastAt = last;
-      if (everyMin !== undefined) {
-        const next = addMinutes(last, everyMin);
-        if (next !== undefined) lane.nextAt = next;
-      }
-    }
+    if (last !== null) lane.lastAt = last;
     lanes.push(lane);
   }
   const go = goalLane(deps);

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
+import { LEFTOVER_LANE_STATUS, serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
 import { renderTruthConsole, renderMachineStubPage, rollScope, type ProjectRegistryEntry } from "../src/lib/truth-console.js";
 import { collectLoopLiveFeed } from "../src/commands/index-gen.js";
 import { renderAgentsMachinePage } from "../src/lib/page-agents.js";
@@ -459,7 +459,11 @@ describe("renderTruthConsole — US-DOSSIER-011", () => {
     expect(html).toContain('data-now-section="heartbeat-head"');
     expect(html).toContain(">Lane<");
     // the header and rows share ONE grid track template so they align.
-    expect(html).toContain("grid-template-columns:1.6fr .8fr .7fr 1fr 1fr;");
+    // US-LOOP-118: three columns now — EVERY and NEXT described a launchd period
+    // and a fire predicted from it, neither of which exists.
+    expect(html).toContain("grid-template-columns:2fr 1fr 1.2fr;");
+    expect(html).not.toContain(">every<");
+    expect(html).not.toContain(">next<");
   });
 
   it("US-DOSSIER-044: Now embeds a read-only loop watch live stream with polling continuity", () => {
@@ -590,36 +594,35 @@ describe("collectLoopLiveFeed — US-DOSSIER-044", () => {
 });
 
 describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
-  it("reads plist presence, period, last run; derives next; off lanes stay visible", () => {
+  it("US-LOOP-118: a leftover plist is reported as debris — never running, never a next fire", () => {
     const hb = collectLoopHeartbeat({
-      plistText: (svc) =>
-        svc === "loop" ? "<key>StartInterval</key>\n<integer>3600</integer>" : null,
+      laneLeftover: (svc) => svc === "loop",
       lastRunAt: () => "2026-06-12T23:30:00Z",
     });
-    expect(hb.lanes).toHaveLength(2);
+    // Only the lane whose plist still exists appears at all.
+    expect(hb.lanes).toHaveLength(1);
     const loop = hb.lanes[0];
-    expect(loop?.running).toBe(true);
-    expect(loop?.everyMin).toBe(60);
+    expect(loop?.name).toContain("leftover");
+    // A plist drives nothing, so it is NOT running however loaded it looks.
+    expect(loop?.running).toBe(false);
+    expect(loop?.status).toContain("bootout");
+    // lastAt is real history and stays; everyMin/nextAt were derived from the
+    // plist's period and are never written again.
     expect(loop?.lastAt).toBe("2026-06-12T23:30:00Z");
-    expect(loop?.nextAt).toBe("2026-06-13T00:30:00Z");
-    expect(hb.lanes[1]?.running).toBe(false);
+    expect(loop?.everyMin).toBeUndefined();
+    expect(loop?.nextAt).toBeUndefined();
   });
 
-  it("never throws on a machine with nothing scheduled", () => {
-    const hb = collectLoopHeartbeat({ plistText: () => null, lastRunAt: () => null });
-    expect(hb.lanes.every((l) => !l.running)).toBe(true);
+  it("US-LOOP-118: a clean machine reports NO lanes rather than two off ones", () => {
+    const hb = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null });
+    // The old contract always listed both retired lanes so the console could say
+    // "0/2 lanes armed" — which read as two things missing and worth installing.
+    expect(hb.lanes).toEqual([]);
   });
 
   it("US-DOSSIER-042: collects backlog, PR, dream launchd lanes and an active go session", () => {
     const hb = collectLoopHeartbeat({
-      plistText: (svc) =>
-        svc === "loop"
-          ? "<key>StartInterval</key>\n<integer>1800</integer>"
-          : svc === "pr"
-            ? "<key>StartInterval</key>\n<integer>300</integer>"
-            : svc === "dream"
-              ? "<key>StartInterval</key>\n<integer>86400</integer>"
-              : null,
+      laneLeftover: (svc) => svc === "loop" || svc === "pr" || svc === "dream",
       lastRunAt: (svc) =>
         svc === "loop"
           ? "2026-06-12T23:30:00Z"
@@ -651,8 +654,15 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
         ].join("\n"),
     });
 
-    expect(hb.lanes.map((l) => l.name)).toEqual(["backlog loop", "Dream loop", "go session"]);
+    // US-LOOP-118: the two retired lanes still appear because their plists are on
+    // disk, but as leftovers; the go session is the only lane that can be running.
+    expect(hb.lanes.map((l) => l.name)).toEqual([
+      "backlog loop (leftover lane)",
+      "Dream loop (leftover lane)",
+      "go session",
+    ]);
     expect(hb.lanes.map((l) => l.source)).toEqual(["launchd", "launchd", "goal"]);
+    expect(hb.lanes.filter((l) => l.source === "launchd").every((l) => !l.running)).toBe(true);
     expect(hb.lanes.find((l) => l.name === "go session")).toMatchObject({
       running: true,
       mode: "go",
@@ -664,7 +674,7 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
 
   it("US-LOOP-079l: carries the resolved runState (+ DORMANT since/reason) onto the snapshot", () => {
     const hb = collectLoopHeartbeat({
-      plistText: () => null,
+      laneLeftover: () => false,
       lastRunAt: () => null,
       runState: () => ({ state: "DORMANT", since: "2026-06-25T03:00:00Z", reason: "idle 6h, no Todo" }),
     });
@@ -674,11 +684,11 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
   });
 
   it("US-LOOP-079l: ACTIVE state carries no since/reason; absent dep stays additive (undefined)", () => {
-    const active = collectLoopHeartbeat({ plistText: () => null, lastRunAt: () => null, runState: () => ({ state: "ACTIVE" }) });
+    const active = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null, runState: () => ({ state: "ACTIVE" }) });
     expect(active.runState).toBe("ACTIVE");
     expect(active.stateSince).toBeUndefined();
     expect(active.stateReason).toBeUndefined();
-    const legacy = collectLoopHeartbeat({ plistText: () => null, lastRunAt: () => null });
+    const legacy = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null });
     expect(legacy.runState).toBeUndefined();
   });
 });
@@ -705,9 +715,17 @@ describe("loop tab active loops — US-DOSSIER-042", () => {
     expect(html).toContain("go session");
     expect(html).toContain("cards: US-A-1, FIX-9");
     expect(html).toContain("mode");
-    expect(html).toContain("周期");
     expect(html).toContain("上次");
-    expect(html).toContain("下次");
+    // US-LOOP-118: the every/next columns are gone from the HEARTBEAT HEADER —
+    // both described a launchd period and a fire predicted from it. Scope the
+    // check to that header: 周期/下次 legitimately appear elsewhere on the page.
+    // An old snapshot still carrying everyMin/nextAt (as this fixture does) must
+    // keep RENDERING; those values are simply no longer shown.
+    const head = /data-now-section="heartbeat-head"[\s\S]*?<\/div>\s*<div/.exec(html)?.[0] ?? "";
+    expect(head).not.toBe("");
+    expect(head).toContain("上次");
+    expect(head).not.toContain("周期");
+    expect(head).not.toContain("下次");
   });
 });
 
@@ -1235,10 +1253,11 @@ describe("command chips + freshness — US-DOSSIER-018", () => {
     expect(html).toContain("applyFreshness");
   });
 
-  it("AC4: heartbeat next is a client-side countdown anchor", () => {
-    expect(html).toContain('class="hb-next"');
-    expect(html).toContain('data-next="2026-06-13T00:30:00Z"');
-    expect(html).toContain("tickCountdown");
+  it("US-LOOP-118: there is no next-fire countdown to anchor", () => {
+    // Was AC4: a `.hb-next` cell animated "in 12m" toward a launchd fire time.
+    // With no timer, that countdown could only reach "due" and stay there.
+    expect(html).not.toContain('class="hb-next"');
+    expect(html).not.toContain("tickCountdown");
   });
 });
 
@@ -1731,11 +1750,31 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
     expect(html).toContain("已暂停");
   });
 
-  it("ACTIVE: all lanes armed → active banner with the armed count", () => {
-    const html = render(withLoop({ runState: "ACTIVE", lanes: LANES_ALL_ON }));
-    expect(html).toContain('data-loop-state="ACTIVE"');
-    expect(html).toContain("loop running · 3/3 lanes armed");
-    expect(html).toContain("活跃"); // ZH
+  it("US-LOOP-118: ACTIVE says whether a session is driving, not how many lanes are armed", () => {
+    // The old banner read "loop running · 3/3 lanes armed" — a count of installed
+    // timers, which is no longer a thing that can be armed.
+    const open = render(withLoop({
+      runState: "ACTIVE",
+      lanes: [{ name: "go session", source: "goal", running: true, mode: "go", status: "active" }],
+    }));
+    expect(open).toContain('data-loop-state="ACTIVE"');
+    expect(open).toContain("go session open");
+    expect(open).not.toContain("lanes armed");
+    expect(open).toContain("活跃"); // ZH
+
+    // No session driving: say so, and never imply something needs installing.
+    const idle = render(withLoop({ runState: "ACTIVE", lanes: [] }));
+    expect(idle).toContain("no open go session");
+    expect(idle).toContain("Delivery advances only while an agent session drives it");
+
+    // A leftover plist is named as debris to disarm.
+    const leftover = render(withLoop({
+      runState: "ACTIVE",
+      // The marker is what makes it a leftover; source alone is not enough,
+      // because old snapshots list retired lanes unconditionally.
+      lanes: [{ name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS }],
+    }));
+    expect(leftover).toContain("1 leftover lane(s) to disarm");
   });
 
   it("fallback: a snapshot without runState (older snapshots) renders ACTIVE, never crashes", () => {

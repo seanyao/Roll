@@ -17,6 +17,7 @@
  * Casting/Charter render their project-specific surfaces below it.
  */
 import { bi, CONSISTENCY_DIMENSION_LABELS, type ConsistencyDimensionLabel, FONT_LINKS as CORE_FONT_LINKS } from "@roll/core";
+import { isLeftoverLane } from "@roll/spec";
 import type { TruthSnapshot, TruthSnapshotLoopLane, TruthSnapshotPanelSlot } from "@roll/spec";
 import type { CycleLedgerRow, CycleTapeSegment } from "./cycle-ledger.js";
 import type { AgentPanelRow } from "./agent-panel.js";
@@ -258,11 +259,6 @@ function sectionLabel(text: string): string {
   return `<span style="${MONO}font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:${C.faint};font-weight:600;">${text}</span>`;
 }
 
-function mins(n: number | undefined): string {
-  if (n === undefined) return "—";
-  return n >= 60 && n % 60 === 0 ? `${n / 60}h` : `${n}m`;
-}
-
 function shortTs(iso: string | undefined): string {
   if (iso === undefined || iso === "") return "—";
   return iso.replace(/^\d{4}-/, "").replace("T", " ").replace(/:\d{2}Z$/, "Z");
@@ -278,7 +274,11 @@ function heartbeatStale(lane: TruthSnapshotLoopLane, generatedAt: string | undef
 
 // FIX-373: ONE shared track template so the column header and every row align
 // pixel-for-pixel (Lane · 模式 · 周期 · 上次 · 下次).
-const HB_COLS = "grid-template-columns:1.6fr .8fr .7fr 1fr 1fr;";
+// US-LOOP-118: the EVERY and NEXT columns are gone. Both described resident
+// scheduling — a period parsed out of a plist, and a next fire predicted from it.
+// Nothing fires on a schedule, so those two cells could only ever print "—" or a
+// time that never arrives.
+const HB_COLS = "grid-template-columns:2fr 1fr 1.2fr;";
 
 /** FIX-373: aligned column headers above the heartbeat rows. */
 function heartbeatHeader(): string {
@@ -288,9 +288,7 @@ function heartbeatHeader(): string {
     `<div data-now-section="heartbeat-head" style="display:grid;${HB_COLS}align-items:center;gap:14px;padding:9px 18px;border-top:1px solid ${C.hair};background:#fafbfe;">` +
     `<span style="${MONO}font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:${C.faint};">Lane</span>` +
     h("mode", "模式") +
-    h("every", "周期") +
     h("last", "上次") +
-    h("next", "下次") +
     `</div>`
   );
 }
@@ -315,9 +313,7 @@ function heartbeatRow(lane: TruthSnapshotLoopLane, generatedAt?: string): string
     `<div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;color:${C.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(lane.name)}</div>` +
     `<div style="${MONO}font-size:10.5px;color:${stale ? C.red : on ? C.green : C.faint};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${stateLine}</div></div></div>` +
     cell(esc(lane.mode ?? "—")) +
-    cell(mins(lane.everyMin)) +
     cell(shortTs(lane.lastAt), true) +
-    `<div class="hb-next" data-next="${esc(lane.nextAt ?? "")}" style="${MONO}font-size:12.5px;color:${C.body};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${shortTs(lane.nextAt)}</div>` +
     `</div>`
   );
 }
@@ -334,7 +330,6 @@ function loopStateBanner(input: TruthConsoleInput): string {
   const loop = input.snapshot.loop;
   const state = loop?.runState ?? "ACTIVE";
   const lanes = loop?.lanes ?? [];
-  const laneRunning = (mode: string): boolean => lanes.find((l) => l.mode === mode)?.running === true;
   const since = loop?.stateSince !== undefined && loop.stateSince !== "" ? esc(loop.stateSince) : "—";
   const reasonRaw = loop?.stateReason ?? "";
   const reason = reasonRaw !== "" ? ` · ${esc(reasonRaw)}` : "";
@@ -373,12 +368,26 @@ function loopStateBanner(input: TruthConsoleInput): string {
       [`⏸ 已暂停${since !== "—" ? ` · 自 ${since}` : ""}${reason}`, "恢复：roll loop resume"],
     );
   }
-  const armed = lanes.filter((l) => l.running).length;
+  // US-LOOP-118: "N/M lanes armed" counted installed timers. What an owner needs
+  // to know is whether a session is driving right now, and whether leftover lanes
+  // are still lying around.
+  const goOpen = lanes.some((l) => l.source === "goal" && l.running);
+  // Same marker-not-source rule as roll status: an old snapshot always listed the
+  // retired lanes, so counting by source invents leftovers that are not there.
+  const leftovers = lanes.filter(isLeftoverLane).length;
+  const leftEn = leftovers > 0 ? ` · ${leftovers} leftover lane(s) to disarm` : "";
+  const leftZh = leftovers > 0 ? ` · ${leftovers} 个残留 lane 待卸载` : "";
   return wrap(
     C.green,
     "#f1f9f4",
-    [`● <b>ACTIVE</b> · loop running · ${armed}/${lanes.length} lanes armed`],
-    [`● 活跃 · 循环运行中 · ${armed}/${lanes.length} lane 已就绪`],
+    [
+      `● <b>ACTIVE</b> · ${goOpen ? "go session open" : "no open go session"}${leftEn}`,
+      "Delivery advances only while an agent session drives it",
+    ],
+    [
+      `● 活跃 · ${goOpen ? "go 会话进行中" : "无进行中的 go 会话"}${leftZh}`,
+      "只有 agent 会话在驱动时,交付才会推进",
+    ],
   );
 }
 
@@ -1969,15 +1978,10 @@ export const CONSOLE_SCRIPT = `<script>
     var STALE_MS = 6 * 3600 * 1000;
     if (isFinite(gen) && Date.now() - gen > STALE_MS) b.style.display = "";
   }
-  function tickCountdown() {
-    var els = document.querySelectorAll(".hb-next");
-    for (var i = 0; i < els.length; i++) {
-      var next = Date.parse(els[i].getAttribute("data-next") || "");
-      if (!isFinite(next)) continue;
-      var ms = next - Date.now();
-      els[i].textContent = ms <= 0 ? "due" : "in " + Math.max(1, Math.round(ms / 60000)) + "m";
-    }
-  }
+  // US-LOOP-118: the hb-next countdown is gone with the NEXT column. It animated
+  // "in 12m" toward a fire time predicted from a launchd period; with no timer
+  // behind it, that countdown could only reach "due" and stay there. (No backticks
+  // in this comment: it lives inside the page's script template literal.)
   // US-DOSSIER-044: browser-side live feed is READ-ONLY. The generated page
   // already contains a server-folded snapshot from loop-fmt; this poller only
   // attempts to read ../loop/live.log and summarize newly visible lines. It never
@@ -2141,8 +2145,6 @@ export const CONSOLE_SCRIPT = `<script>
     }
     applyRange("recent");
     applyFreshness();
-    tickCountdown();
-    setInterval(tickCountdown, 30000);
     setupLiveFeeds();
     var bs = document.querySelectorAll("[data-set-lang]");
     for (var i = 0; i < bs.length; i++) {

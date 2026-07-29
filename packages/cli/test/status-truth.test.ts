@@ -6,6 +6,7 @@
  * are read from the SAME snapshot the web reads (no recompute). EN/中 snapshots.
  */
 import { describe, expect, it } from "vitest";
+import { LEFTOVER_LANE_STATUS } from "@roll/spec";
 import type { TruthSnapshot } from "@roll/spec";
 import { renderTruthSummary, statusTruthJson } from "../src/commands/status.js";
 import { attestCoverage, snapshotVerdict } from "../src/lib/truth-read.js";
@@ -20,9 +21,11 @@ function snap(overrides: Partial<TruthSnapshot> = {}): TruthSnapshot {
     cycle: { cycles3d: 17, failed3d: 12, costUsd3d: 0.59 },
     release: { latestTag: "v3.611.2", verdict: "pass" },
     loop: {
+      // US-LOOP-118: everyMin/nextAt are deliberately still here — this is an
+      // OLD snapshot shape and it must keep parsing. They are simply not shown.
       lanes: [
-        { name: "loop", running: true, mode: "cron", everyMin: 30, nextAt: "2026-06-13T08:55:00Z" },
-        { name: "dream", running: false, mode: "nightly", everyMin: 1440 },
+        { name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS, everyMin: 30, nextAt: "2026-06-13T08:55:00Z" },
+        { name: "go session", source: "goal", running: true, mode: "go", status: "active", scope: "all" },
       ],
     },
     stories: [
@@ -58,7 +61,11 @@ describe("roll status truth summary — US-DOSSIER-035", () => {
     expect(iCycle).toBeLessThan(iRelease);
     expect(iRelease).toBeLessThan(iStory);
     // each line summarizes its snapshot fields
-    expect(out).toMatch(/LOOP\s+2 loops · 1 running/);
+    // US-LOOP-118: the LOOP line no longer counts lanes or predicts a next fire —
+    // it says whether a session is driving, and warns about leftover lanes.
+    expect(out).toMatch(/LOOP\s+session-driven · go session open/);
+    expect(out).toContain("1 leftover lane(s)");
+    expect(out).not.toContain("loops ·");
     expect(out).toMatch(/CYCLE\s+17 \/ 3d   12 failed · \$0\.59/);
     expect(out).toMatch(/RELEASE\s+v3\.611\.2 staged   pass · f:0 w:44 \?:78/);
   });
@@ -84,6 +91,65 @@ describe("roll status truth summary — US-DOSSIER-035", () => {
     expect(out).toContain("no truth snapshot");
     expect(out).toContain("roll index");
     expect(out).not.toContain("undefined");
+  });
+
+  /**
+   * US-LOOP-118 AC5 — a historical snapshot must not break the reader.
+   *
+   * Snapshots written before this epic carry things that are never written again:
+   * `runState: "DORMANT"`, lanes with `running: true` for a launchd plist, and
+   * `everyMin`/`nextAt`. `roll status` has to keep rendering all of it.
+   */
+  it("US-LOOP-118: an OLD snapshot's launchd lanes are not miscounted as leftovers", () => {
+    // Caught by running `roll status` for real: the machine had NO com.roll.*
+    // plists, yet the line said "3 leftover lane(s)". A pre-US-LOOP-118 snapshot
+    // lists every retired lane whether or not a plist exists, so counting by
+    // `source === "launchd"` invents debris. The count keys on the marker the new
+    // collector writes instead.
+    const oldShape = snap({
+      loop: {
+        lanes: [
+          { name: "backlog loop", source: "launchd", running: false, mode: "backlog" },
+          { name: "PR loop", source: "launchd", running: false, mode: "pr" },
+          { name: "Dream loop", source: "launchd", running: false, mode: "dream" },
+        ],
+      },
+    });
+    expect(sum(oldShape, "en")).not.toContain("leftover lane");
+
+    // A lane the NEW collector wrote carries the marker and IS counted.
+    const fresh = snap({
+      loop: {
+        lanes: [
+          { name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+        ],
+      },
+    });
+    expect(sum(fresh, "en")).toContain("1 leftover lane(s)");
+  });
+
+  it("US-LOOP-118: a historical DORMANT snapshot still renders a LOOP line", () => {
+    const historical = snap({
+      loop: {
+        runState: "DORMANT",
+        stateSince: "2026-06-25T03:00:00Z",
+        stateReason: "idle 6h, no Todo",
+        lanes: [
+          { name: "loop", source: "launchd", running: true, mode: "cron", everyMin: 30, nextAt: "2026-06-13T08:55:00Z" },
+          { name: "dream", source: "launchd", running: false, mode: "nightly", everyMin: 1440 },
+        ],
+      },
+    });
+    const en = sum(historical, "en");
+    // It renders, and does not crash or leak `undefined` into the line.
+    expect(en).toMatch(/LOOP\s+\S/);
+    expect(en).not.toContain("undefined");
+    // DORMANT is not PAUSED, so the reader must not claim the owner paused it.
+    expect(en).not.toContain("roll loop resume");
+    // And those old lanes carry no leftover marker, so they are NOT counted as
+    // debris — the snapshot listed them unconditionally, not because a plist
+    // existed. (See the miscount regression above.)
+    expect(en).not.toContain("leftover lane");
   });
 
   it("AC6: EN/中 snapshots (single-language per locale, color scrubbed)", () => {
