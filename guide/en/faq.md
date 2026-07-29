@@ -26,9 +26,9 @@ in your journey with Roll:
 > see `$roll-build US-001`, that's a skill you invoke from your agent's
 > prompt.
 >
-> **Nothing in Roll advances on its own.** Delivery moves forward only while
-> you have an agent session open running `roll loop go`. Close the session and
-> the loop stops.
+> **Nothing in Roll starts on its own.** Delivery moves forward because you ran
+> `roll loop go`. That run outlives your window (it is a detached tmux worker) and
+> ends on its own scope; between runs nothing happens.
 
 ### A1. Will Roll modify my code or break my main branch?
 

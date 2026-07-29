@@ -10,7 +10,7 @@
 
 **能力边界(如实说):** **不开会话,就什么都不会发生。** Roll 不再安装任何定时器,也不在
 后台留任何常驻进程。以前"晚上让它自己干"这件事,现在需要你开着一个会话让它连续跑 ——
-会话结束,推进就停。
+你启动的运行会活过窗口(detached tmux),按自己的范围结束;但两次运行之间不会有任何推进。
 
 **消失的命令(六个):** `roll loop on`、`roll loop off`、`roll loop now`、
 `roll loop fallback`、`roll loop test`,以及 `roll loop off --all`。跑它们会提示该用什么。

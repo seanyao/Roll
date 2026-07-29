@@ -22,8 +22,8 @@
 > 看到 `roll loop go` —— 是 shell 命令。看到 `$roll-build US-001` —— 是
 > 你在 agent prompt 里调用的 skill。
 >
-> **Roll 里没有任何东西会自己往前跑。** 只有你开着一个 agent 会话、里面跑着
-> `roll loop go`，交付才会推进；会话一关，loop 就停。
+> **Roll 里没有任何东西会自己开始跑。** 交付推进是因为你跑了 `roll loop go`;
+> 这次运行会活过你的窗口(detached tmux),按自己的范围结束;两次运行之间不会有推进。
 
 ### A1. Roll 会不会改我代码、搞坏我的 main 分支？
 

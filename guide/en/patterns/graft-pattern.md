@@ -75,7 +75,7 @@ Roll 不会在后台自己动：新故事只在你打开 agent 会话跑 `roll l
 4. Skill 读代码、理解项目、走三组九问、产出 `.roll/onboard-plan.yaml`
 5. `roll init --apply` 先打印计划操作检查点并等待确认，再按 plan 落盘 `.roll/` 结构
 6. 团队 review 生成的 backlog，调整后开始用 `$roll-build` 推新故事
-7. 想让 Roll 连着啃 backlog：打开 agent 会话跑 `roll loop go`（先试一轮用 `roll loop go --max-cycles 1`）。会话结束就停，后台不会有任何东西继续跑
+7. 想让 Roll 连着啃 backlog：打开 agent 会话跑 `roll loop go`（先试一轮用 `roll loop go --max-cycles 1`）。它会活过你的窗口(detached tmux),直到范围做完或到达上限;但没有任何东西会替你启动它
 
 ## 渐进式深入（L1 → L5）
 

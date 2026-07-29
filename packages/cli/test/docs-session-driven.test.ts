@@ -106,6 +106,21 @@ const UNATTENDED_CLAIM = [
   /when it ends, progress stops/i,
   /(关掉|关闭|结束)(会话|窗口|终端)[^。]{0,20}(就停|停止|会停)/,
   /会话(一)?(关|结束)[,，]?\s*(推进|交付|工作)就停/,
+  // codex r7: session-FIRST orderings, which the closing-first shapes above miss.
+  /(session|window|terminal) (ends?|closes?)[^.]{0,60}(stops?|halts?|no (further )?progress)/i,
+  /(会话|窗口|终端)(一旦|一)?(结束|关闭|关掉)[^。]{0,30}(就停|停下|不再|没有(进展|推进))/,
+  /no agent session means no progress/i,
+  /没有 ?agent ?会话就没有(进展|推进)/,
+  // codex r7 round two: four more phrasings the shapes above still missed —
+  // "会话一关", "close the workshop", "advances only while ... session open",
+  // and the bare "会话结束,推进就停". Each is the same overclaim in new clothes,
+  // which is why this list matches shapes and keeps growing rather than being
+  // replaced.
+  /会话(一)?关[,，]?\s*(loop|推进|交付|工作)?\s*就停/,
+  /close the workshop and the work waits/i,
+  /关门[,，]?\s*活儿就在那儿等着/,
+  /(advances|moves forward) only while[^.]{0,60}session (open|running)/i,
+  /会话结束[,，]\s*推进就停/,
   /budget (runs out|in force)/i,
   /预算(用尽|生效)/,
 ];
@@ -131,14 +146,51 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
    */
   const ENUM_CITATION = /environment|ci \| nightly \| release|ROLL_SMOKE_ENV|(Release|发版) ?\/ ?nightly/;
 
+  /**
+   * codex r7: scanning ONE LINE AT A TIME let every wrapped claim through — prose
+   * wraps at ~80 columns, so "closing the session\nstops work" never matched. Scan a
+   * flattened copy (newlines collapsed to spaces) and map the hit back to a line by
+   * counting newlines before the match offset.
+   */
+  function flatten(text: string): { flat: string; lineOf: (offset: number) => number } {
+    // Build the flattened text and a PER-CHARACTER line map together, so an offset
+    // in `flat` maps back exactly. Deriving the map separately (my first attempt)
+    // skewed every report by a few lines.
+    let flat = "";
+    const lineAt: number[] = [];
+    let line = 1;
+    let i = 0;
+    while (i < text.length) {
+      const ch = text[i]!;
+      if (ch === "\n") {
+        // Collapse "<spaces>\n<spaces>" into a single space.
+        line++;
+        i++;
+        while (i < text.length && /[ \t]/.test(text[i]!)) i++;
+        if (flat.length > 0 && !flat.endsWith(" ")) {
+          flat += " ";
+          lineAt.push(line);
+        }
+        continue;
+      }
+      flat += ch;
+      lineAt.push(line);
+      i++;
+    }
+    return { flat, lineOf: (offset) => lineAt[Math.min(offset, lineAt.length - 1)] ?? 1 };
+  }
+
   it("no doc promises progress without a session driving", () => {
     const offenders: string[] = [];
     for (const f of docFiles()) {
       const text = readFileSync(f, "utf8");
-      for (const [i, line] of text.split("\n").entries()) {
-        if (ENUM_CITATION.test(line)) continue;
-        for (const claim of UNATTENDED_CLAIM) {
-          if (claim.test(line)) offenders.push(`${relative(ROOT, f)}:${i + 1} — ${claim.source}`);
+      const { flat, lineOf } = flatten(text);
+      for (const claim of UNATTENDED_CLAIM) {
+        for (const m of flat.matchAll(new RegExp(claim.source, `${claim.flags.replace("g", "")}g`))) {
+          const at = m.index ?? 0;
+          // Enum citations are exempt — check the surrounding window, not one line.
+          if (ENUM_CITATION.test(flat.slice(Math.max(0, at - 120), at + 120))) continue;
+          offenders.push(`${relative(ROOT, f)}:${lineOf(at)} — ${claim.source}`);
         }
       }
     }

@@ -76,8 +76,10 @@ roll loop go
 ```
 
 That agent session is the Supervisor: it picks the next `📋 Todo` card, runs the
-build/fix cycle, and can delegate to a Delta Team. When the session ends, work
-stops. Nothing in Roll advances on its own — if you do not open an agent session
+build/fix cycle, and can delegate to a Delta Team. The run outlives your window
+(it is a detached tmux worker) and ends on its own scope — cards finishing,
+`--max-cycles` / `--for`, the dead-loop breaker, or `roll loop pause`. Nothing in
+Roll starts on its own — if you do not open an agent session
 and run `roll loop go`, nothing happens.
 
 To try exactly one cycle first:

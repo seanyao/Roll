@@ -123,7 +123,7 @@ Done. Run `roll next` to continue with the next action.
 
 ### 5. Run your first cycle
 
-Delivery advances only while you are driving it. Open an agent session in the project and run:
+Delivery advances because you start it. Open an agent session in the project and run:
 
 ```bash
 roll loop go --max-cycles 1

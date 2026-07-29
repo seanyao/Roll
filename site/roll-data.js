@@ -117,7 +117,7 @@ window.RollData = (function () {
       ],
       analogy: {
         label: "The analogy",
-        body: "Like a well-run workshop. You open it and set the job; the tools, jigs and checks are already in place, so the work moves without you doing each step. Close the workshop and the work waits. You stay in control of the decisions that matter.",
+        body: "Like a well-run workshop. You open it and set the job; the tools, jigs and checks are already in place, so the work moves without you doing each step. Whatever you set going finishes its batch; nothing new starts until you ask. You stay in control of the decisions that matter.",
       },
     },
     FEATURES_HEADING: {
@@ -326,7 +326,7 @@ window.RollData = (function () {
       ],
       analogy: {
         label: "类比",
-        body: "像一间打理好的工坊。你开门、定下今天做什么,工具、夹具和检查都已就位,活儿自己往前走,不用你一步步盯。关门,活儿就在那儿等着。决定权始终在你手里。",
+        body: "像一间打理好的工坊。你开门、定下今天做什么,工具、夹具和检查都已就位,活儿自己往前走,不用你一步步盯。你交下去的那批活会做完;不开口,就不会有新的开始。决定权始终在你手里。",
       },
     },
     FEATURES_HEADING: {
