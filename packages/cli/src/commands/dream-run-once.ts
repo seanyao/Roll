@@ -12,15 +12,11 @@
  * just spawns the agent with CWD = the project and streams its output to the
  * project-local machine log (.roll/dream/cron.log, mirroring loop's FIX-139).
  */
-import { projectIdentity, createScheduler } from "@roll/infra";
-import { BacklogStore, EventBus, buildDoneIndex, isEligible } from "@roll/core";
-import { existsSync, appendFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { projectIdentity } from "@roll/infra";
+import { existsSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { type AgentSpawn, realAgentSpawn } from "../runner/agent-spawn.js";
 import { readSkillBody } from "../runner/skill-body.js";
-import { rearmLoop, type WakeDeps } from "../lib/wake-hook.js";
-import { dormantMarkerPath } from "./loop-sched.js";
 import { gcCommand } from "./gc.js";
 
 interface DreamStructureScanArtifact {
@@ -54,8 +50,6 @@ export interface DreamRunOnceDeps {
   spawn: AgentSpawn;
   now: () => Date;
   structureScan: (projectPath: string, generatedAt: string) => Promise<{ json: DreamStructureScanArtifact; log: string }>;
-  /** US-LOOP-079j: re-arm a dormant loop after dream finds eligible REFACTOR work. */
-  dreamReArm: (projectPath: string, slug: string) => Promise<{ rearmed: boolean; picked?: string }>;
 }
 
 function realDeps(): DreamRunOnceDeps {
@@ -76,56 +70,6 @@ function realDeps(): DreamRunOnceDeps {
       const graph = buildStaticProjectGraph({ root: projectPath });
       const result = { ...scanDreamStructure(graph), generatedAt };
       return { json: result, log: renderDreamStructureLog(result) };
-    },
-    dreamReArm: async (projectPath, slug) => {
-      // US-LOOP-079j AC1/AC3: check DORMANT marker + structure-scan findings
-      // + eligible REFACTOR-DREAM backlog rows, then rearm via 079i rearmLoop.
-      const dormant = dormantMarkerPath(projectPath, slug);
-      if (!existsSync(dormant)) return { rearmed: false };
-
-      const scanPath = join(projectPath, ".roll", "dream", "structure-scan.json");
-      if (!existsSync(scanPath)) return { rearmed: false };
-
-      let hasFindings = false;
-      try {
-        const raw = readFileSync(scanPath, "utf8");
-        const parsed = JSON.parse(raw) as { findings?: unknown[] };
-        hasFindings = (parsed.findings?.length ?? 0) > 0;
-      } catch {
-        return { rearmed: false };
-      }
-      if (!hasFindings) return { rearmed: false };
-
-      const store = new BacklogStore();
-      const snap = store.readBacklog(join(projectPath, ".roll", "backlog.md"));
-      const isDone = buildDoneIndex(snap.items);
-
-      for (const item of snap.items) {
-        if (!item.id.startsWith("REFACTOR-DREAM-")) continue;
-        if (isEligible(item, isDone)) {
-          const scheduler = createScheduler(process.platform, { uid: process.getuid?.() ?? 501 });
-          const loopDir = join(projectPath, ".roll", "loop");
-          const launchdDir = join(homedir(), "Library", "LaunchAgents");
-          const label = `com.roll.loop.${slug}`;
-          const wakeDeps: WakeDeps = {
-            projectPath,
-            slug,
-            scheduler,
-            backlogPath: join(projectPath, ".roll", "backlog.md"),
-            eventsPath: join(loopDir, "events.ndjson"),
-            eventBus: new EventBus(),
-            readBacklog: (p) => new BacklogStore().readBacklog(p),
-            probe: (p) => existsSync(p),
-            rename: (from, to) => renameSync(from, to),
-            unlink: (p) => unlinkSync(p),
-            nowSec: () => Math.floor(Date.now() / 1000),
-            loopPlistPath: join(launchdDir, `${label}.plist`),
-          };
-          await rearmLoop("dream", wakeDeps, item.id);
-          return { rearmed: true, picked: item.id };
-        }
-      }
-      return { rearmed: false };
     },
   };
 }
@@ -200,12 +144,6 @@ export async function dreamRunOnceCommand(
     return 1;
   }
   append(`[${stamp()}] dream scan end rc=${exitCode}\n`);
-  // US-LOOP-113 (codex review r5): the post-scan re-arm is DISARMED. It existed to
-  // wake a DORMANT loop by creating and loading `com.roll.loop.<slug>`. With
-  // `roll loop off` removed, a dream scan that arms a timer nobody can disarm is the
-  // same one-way trap the wake-on-command hook was. The port stays on the deps
-  // interface until US-LOOP-114/115 delete the machinery outright.
-  void deps.dreamReArm;
   // REFACTOR-049 AC3: auto-gc after each dream scan — best-effort, never blocks.
   try {
     const save = process.cwd();
