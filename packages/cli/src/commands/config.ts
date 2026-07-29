@@ -26,6 +26,18 @@
  */
 import { CONFIG_KEYS, configKeyFile, configResolve, configSet, configValidate } from "@roll/infra";
 import { INACTIVE_KEYS } from "./config-get.js";
+/**
+ * The "this key does nothing" note, in ONE language.
+ *
+ * codex r12: my first version printed EN and ZH back to back, which breaks the
+ * project's single-language rule for user-facing output (the language-surface test
+ * asserts `expectNoAdjacentBilingualPairs`). Bilingual means both wordings exist,
+ * not that both are shown.
+ */
+function inactiveNote(en: string, zh: string): void {
+  process.stdout.write(`${resolveCurrent() === "zh" ? zh : en}\n`);
+}
+
 import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";
 import { CONFIG_FACADE_KEYS, configGetCommand } from "./config-get.js";
 
@@ -90,8 +102,10 @@ function loopWindow(value: string, scope: Scope): number {
   configSet("loop_active_start", String(start), file);
   configSet("loop_active_end", String(end), file);
   ok(`✓ set loop-window = ${start}-${end} in ${file}`);
-  process.stdout.write("note: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`\n");
-  process.stdout.write("说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定\n");
+  inactiveNote(
+    "note: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`",
+    "说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定",
+  );
   return 0;
 }
 
@@ -130,8 +144,10 @@ function loopSchedule(value: string, scope: Scope): number {
   } else {
     ok(`✓ set loop-schedule = ${period} in ${file}`);
   }
-  process.stdout.write("note: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles\n");
-  process.stdout.write("说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`\n");
+  inactiveNote(
+    "note: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles",
+    "说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`",
+  );
   return 0;
 }
 
@@ -168,8 +184,10 @@ function dreamTime(value: string, scope: Scope): number {
   configSet(hourKey, String(hh), file);
   configSet(minKey, String(mm), file);
   ok(`✓ set ${svc}-time = ${pad2(hh)}:${pad2(mm)} in ${file}`);
-  process.stdout.write(`note: nothing reads this — run \`roll ${svc} run-once\` when you want a scan\n`);
-  process.stdout.write(`说明:这个值没人读 —— 想扫就跑 \`roll ${svc} run-once\`\n`);
+  inactiveNote(
+    `note: nothing reads this — run \`roll ${svc} run-once\` when you want a scan`,
+    `说明:这个值没人读 —— 想扫就跑 \`roll ${svc} run-once\``,
+  );
   return 0;
 }
 
@@ -280,8 +298,7 @@ export function configCommand(args: string[]): number {
   // (`roll config loop_schedule.period_minutes 30`) printed a bare success. Same
   // key, same non-effect — say so on both paths.
   if (INACTIVE_KEYS.has(key)) {
-    process.stdout.write("note: this key is inactive — nothing reads it\n");
-    process.stdout.write("说明:这个 key 已失效 —— 没有任何东西读它\n");
+    inactiveNote("note: this key is inactive — nothing reads it", "说明:这个 key 已失效 —— 没有任何东西读它");
   }
   return 0;
 }

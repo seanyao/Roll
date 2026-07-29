@@ -1223,8 +1223,9 @@ Roll no longer installs or owns any launchd job. An older machine may still carr
 them for you; see the EN guide for the same commands.
 
 Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
-plist。它们已经不可能启动 cycle(指向的 runner 脚本已不存在),但属于该清掉的垃圾;
-在清掉之前,`roll status` / `roll loop status` 会一直提示它们。Roll 有意**不**替你删:
+plist。仍然加载着的那种还会触发并调用 `roll loop run-once` —— 那条路径会如实说明,
+但这属于你没要求过的无人驱动的活,该清掉。清掉之前,`roll status` / `roll loop status`
+会一直提示残留 lane。Roll 有意**不**替你删:
 它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务不是 Roll 该做的决定。
 
 先看有什么:

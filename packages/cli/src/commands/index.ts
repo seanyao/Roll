@@ -247,7 +247,7 @@ export function registerAll(): void {
   // `dream`: full surface TS (US-PORT-020). `run-once` is the v3-native scan
   // heart; every other arg mirrors v2's generic unknown-command surface without
   // shelling to bin/roll.
-  registerPorted("dream", dreamCommand, { hidden: true, help: "Usage: roll dream run-once\n  Nightly self-scan (patterns, docs freshness, test quality) — run one pass now.\n夜间自检跑一遍。" });
+  registerPorted("dream", dreamCommand, { hidden: true, help: "Usage: roll dream run-once\n  Self-scan (patterns, docs freshness, test quality) — run one pass now.\n自检跑一遍(模式、文档新鲜度、测试质量)。" });
   // `agent`: full surface TS (view/list/use/set/unknown). The write face owns
   // .roll/agents.yaml plus legacy .roll/local.yaml sync; no bash fallback.
   registerPorted("agent", (args) => {

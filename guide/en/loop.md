@@ -1432,16 +1432,18 @@ global mute switch — stay in `~/.shared/roll/`. See
 ## Leftover launchd lanes
 
 Roll installs no launchd job and owns none. A machine that ran an older version may
-still carry `com.roll.*` plists. They cannot start a cycle — the runner scripts they
-pointed at are gone — but they are debris worth clearing, and `roll status` /
-`roll loop status` will keep naming them until you do.
+still carry `com.roll.*` plists. A loaded one can still fire and invoke
+`roll loop run-once` — that path stays honest about it, but it is unattended work you
+did not ask for, so clear it. `roll status` / `roll loop status` keep naming leftover
+lanes until you do.
 
 Roll deliberately does NOT remove them for you: they live in your `~/Library/
 LaunchAgents/`, and silently unloading jobs on your machine is not Roll's call.
 
 Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
-plist。它们已经不可能启动 cycle（它们指向的 runner 脚本已不存在），但属于该清掉的垃圾;
-在清掉之前，`roll status` / `roll loop status` 会一直提示它们。
+plist。仍然加载着的那种还会触发并调用 `roll loop run-once`——那条路径会如实说明，
+但这属于你没要求过的无人驱动的活，该清掉。清掉之前，`roll status` / `roll loop status`
+会一直提示残留 lane。
 
 Roll 有意**不**替你删:它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务
 不是 Roll 该做的决定。
