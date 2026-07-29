@@ -4,14 +4,14 @@ exports[`roll loop --help groups — US-DOSSIER-035 > AC6: EN/中 snapshots (sin
 "Usage: roll loop <subcommand>
 The autonomous delivery loop — grouped control / observe / alerts / maintain.
 
-control   on · off [--all] · now · pause · resume · reset · go · goal · recover · fallback
+control   go · goal · reset · recover · reconcile
 observe   watch · status · runs · log · events · signals · eval
 alerts    alert list · alert ack · alert resolve · alert log
 maintain  gc · fmt · mute · unmute · reconcile-pending
 internal  test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes
 
-states    ACTIVE (lanes armed) · DORMANT (backlog drained → loop lane self-unloads, zero idle records) · PAUSED (you stopped it)
-wake      a DORMANT loop wakes on any roll command · the daily dream scan · a PR merge
+states    ACTIVE (a session may drive cards) · PAUSED (you stopped autonomous progress)
+drive     open an agent session and run roll loop go — nothing advances on its own
 "
 `;
 
@@ -19,13 +19,13 @@ exports[`roll loop --help groups — US-DOSSIER-035 > AC6: EN/中 snapshots (sin
 "用法：roll loop <子命令>
 自治交付循环——按作动/传感/告警/维护分组。
 
-作动      on · off [--all] · now · pause · resume · reset · go · goal · recover · fallback
+作动      go · goal · reset · recover · reconcile
 传感      watch · status · runs · log · events · signals · eval
 告警      alert list · alert ack · alert resolve · alert log
 维护      gc · fmt · mute · unmute · reconcile-pending
 内部      test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes
 
-状态      ACTIVE 运行中(lane 就绪) · DORMANT 休眠(backlog 抽干→自卸 loop lane、不再记空转) · PAUSED 已暂停(你停的)
-唤醒      休眠的 loop 由以下唤醒：任意 roll 命令 · 每日 dream 扫描 · PR 合并
+状态      ACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你停掉了自主推进)
+驱动      开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进
 "
 `;
