@@ -121,7 +121,7 @@ function frozen(c: Case): { status: number; stdout: string; stderr: string; file
     case "loop-schedule read default":
       return { status: 0, stdout: "loop-schedule: 60min / offset :0 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "dream-time read default":
-      return { status: 0, stdout: "dream-time: 03:00 (from default)\n", stderr: "", fileContent: null };
+      return { status: 0, stdout: "dream-time: 03:00 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "above max":
       return { status: 2, stdout: "", stderr: "[roll] config: 'loop_dream_hour' must be <= 23 (got 99)\n[roll] config：'loop_dream_hour' 必须 <= 23（收到 99）\n", fileContent: null };
     case "non-integer":

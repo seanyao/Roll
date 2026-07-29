@@ -143,7 +143,7 @@ function dreamTime(value: string, scope: Scope): number {
     const [vh, sh] = configResolve(hourKey) ?? ["", "default"];
     let [vm] = configResolve(minKey) ?? ["", "default"];
     if (vm === "-" || vm === "") vm = "0";
-    process.stdout.write(`${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))} (${fromSource(sh)})\n`);
+    process.stdout.write(`${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))} (${fromSource(sh)}) — inactive, nothing reads this\n`);
     return 0;
   }
   if (!/^[0-9]{1,2}:[0-9]{1,2}$/.test(value)) {

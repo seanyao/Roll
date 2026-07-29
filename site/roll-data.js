@@ -132,8 +132,8 @@ window.RollData = (function () {
       ]},
       { id: "autonomous", title: "Session-Driven Execution", blurb: "One session, many cards.", features: [
         { name: "roll loop go",        mono: true, desc: "In this session, the Supervisor picks Stories from Backlog and runs isolated Delta Units.", badges: ["core"] },
-        { name: "roll loop go",        mono: true, desc: "Manual goal mode for a scoped backlog run; scheduled ticks yield while the goal lock is held.", badges: ["new", "highlight"] },
-        { name: "roll loop status",    mono: true, desc: "Scheduler snapshot for loop / pr / dream service status, queues, alerts and recent runs.", badges: ["core"] },
+        { name: "roll loop go",        mono: true, desc: "Drive a scoped backlog run from this session: --epic, --cards, --max-cycles, --for.", badges: ["new", "highlight"] },
+        { name: "roll loop status",    mono: true, desc: "Run state (ACTIVE / PAUSED), queues, alerts, recent runs and cost.", badges: ["core"] },
         { name: "tmux attach -t roll-loop-<slug>", mono: true, desc: "Attach to the live tmux session and watch AI work in real time.", badges: ["highlight"] },
         { name: "roll loop pause / resume", mono: true, desc: "Hand-code yourself; let the system resume when you're done.", badges: [] },
       ]},
@@ -341,8 +341,8 @@ window.RollData = (function () {
       ]},
       { id: "autonomous", title: "会话驱动执行", blurb: "一个会话，连着啃多张卡。", features: [
         { name: "roll loop go",        mono: true, desc: "在本会话里，Supervisor 从 Backlog 领取 Story 并运行隔离的 Delta Unit。", badges: ["core"] },
-        { name: "roll loop go",        mono: true, desc: "手动 goal mode，用于限定范围的 backlog 连跑；持有 goal lock 时定时 tick 会让路。", badges: ["new", "highlight"] },
-        { name: "roll loop status",    mono: true, desc: "调度快照:loop / pr / dream 服务状态、队列、告警、最近执行。", badges: ["core"] },
+        { name: "roll loop go",        mono: true, desc: "在本会话里推进限定范围的 backlog：--epic、--cards、--max-cycles、--for。", badges: ["new", "highlight"] },
+        { name: "roll loop status",    mono: true, desc: "运行态(ACTIVE / PAUSED)、队列、告警、最近执行与成本。", badges: ["core"] },
         { name: "tmux attach -t roll-loop-<slug>", mono: true, desc: "接入实时 tmux 会话,观看 AI 现场工作。", badges: ["highlight"] },
         { name: "roll loop pause / resume", mono: true, desc: "需要手动改时暂停,改完再让系统接力。", badges: [] },
       ]},
