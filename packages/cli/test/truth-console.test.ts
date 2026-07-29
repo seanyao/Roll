@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { LEFTOVER_LANE_STATUS, serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
-import { renderTruthConsole, renderMachineStubPage, rollScope, type ProjectRegistryEntry } from "../src/lib/truth-console.js";
+import { leftoverAndSessionCount, renderTruthConsole, renderMachineStubPage, rollScope, type ProjectRegistryEntry } from "../src/lib/truth-console.js";
 import { collectLoopLiveFeed } from "../src/commands/index-gen.js";
 import { renderAgentsMachinePage } from "../src/lib/page-agents.js";
 import { renderSkillsPage } from "../src/lib/page-skills.js";
@@ -1278,6 +1278,64 @@ describe("command chips + freshness — US-DOSSIER-018", () => {
     expect(html).toContain('data-generated="2026-06-13T00:00:00Z"');
     expect(html).toContain("数据已过期");
     expect(html).toContain("applyFreshness");
+  });
+
+  it("US-LOOP-118: a leftover lane is debris, not a red zombie (codex r4)", () => {
+    // `stale` means "this should be beating and is not". A leftover plist is
+    // EXPECTED to be silent, and its lastAt is old precisely because it stopped —
+    // so painting it red as a zombie contradicts the debris semantics.
+    const withLeftover = render({
+      ...SNAP,
+      generatedAt: "2026-06-13T00:00:00Z",
+      loop: {
+        lanes: [
+          {
+            name: "backlog loop (leftover lane)",
+            source: "launchd",
+            running: false,
+            mode: "backlog",
+            status: LEFTOVER_LANE_STATUS,
+            // Hours stale — the old rule flagged anything past 60s.
+            lastAt: "2026-06-12T03:00:00Z",
+          },
+        ],
+      },
+    });
+    expect(withLeftover).not.toContain("zombie");
+    expect(withLeftover).not.toContain("僵尸");
+  });
+
+  it("US-LOOP-118: the repo loops pill counts sessions and debris, not 'running' lanes (codex r4)", () => {
+    const html = render({
+      ...SNAP,
+      loop: {
+        lanes: [
+          { name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+          { name: "go session", source: "goal", running: true, mode: "go", status: "active" },
+        ],
+      },
+    });
+    // The subtitle no longer advertises retired lanes as live categories.
+    expect(html).not.toContain("backlog · PR · dream · go sessions");
+    expect(html).toContain("go sessions · leftover lanes");
+    expect(html).toContain("1 session driving");
+    expect(html).toContain("1 leftover");
+    // A clean repo says so rather than counting lanes. Assert the pill's own text
+    // positively — a page-wide negative on "0/0" false-positives on other pills.
+    const clean = render({ ...SNAP, loop: { lanes: [] } });
+    expect(clean).toContain("no session driving");
+    // Assert the pill helper directly. It returns bilingual markup (bi()), so
+    // check both languages are present rather than matching a plain string.
+    const emptyPill = leftoverAndSessionCount([]);
+    expect(emptyPill).toContain("no session driving");
+    expect(emptyPill).toContain("无会话驱动");
+    expect(emptyPill).not.toContain("leftover");
+    const bothPill = leftoverAndSessionCount([
+      { name: "go session", source: "goal", running: true, mode: "go" },
+      { name: "l", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+    ]);
+    expect(bothPill).toContain("1 session driving");
+    expect(bothPill).toContain("1 leftover");
   });
 
   it("US-LOOP-118: there is no next-fire countdown to anchor", () => {

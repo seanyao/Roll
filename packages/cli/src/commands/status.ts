@@ -220,7 +220,12 @@ function skillsInstalled(): number {
  * `launchctl list` call, no three-way verdict.
  */
 function launchdLaneLeftover(service: string, slug: string): boolean {
-  return existsSync(join(homedir(), "Library", "LaunchAgents", `com.roll.${service}.${slug}.plist`));
+  // codex r4: honour `_LAUNCHD_DIR` the way dashboard / doctor / index do.
+  // Hardcoding the home path made this the ONE surface that could not see a lane
+  // in a configured or sandboxed environment — so its verdict silently disagreed
+  // with the others, and tests could never cover it.
+  const dir = process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
+  return existsSync(join(dir, `com.roll.${service}.${slug}.plist`));
 }
 
 // ── Fixture data (test-only; opt in via ROLL_RENDER_FIXTURE=1) ──────────────

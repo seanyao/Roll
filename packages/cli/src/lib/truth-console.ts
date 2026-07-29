@@ -295,7 +295,10 @@ function heartbeatHeader(): string {
 
 function heartbeatRow(lane: TruthSnapshotLoopLane, generatedAt?: string): string {
   const on = lane.running;
-  const stale = heartbeatStale(lane, generatedAt);
+  // codex r4: a leftover lane must never render as a red "zombie". Staleness means
+  // "this should be beating and is not" — but a leftover plist is DEBRIS and is
+  // expected to be silent, and its `lastAt` is old precisely because it stopped.
+  const stale = !isLeftoverLane(lane) && heartbeatStale(lane, generatedAt);
   const dotColor = stale ? C.red : on ? C.green : "#cbd2dc";
   const dot = on
     ? `width:9px;height:9px;border-radius:50%;background:${dotColor};box-shadow:0 0 0 3px ${stale ? "rgba(210,59,59,.18)" : "rgba(23,138,82,.18)"};animation:beat 2.4s infinite;flex:none;`
@@ -391,14 +394,31 @@ function loopStateBanner(input: TruthConsoleInput): string {
   );
 }
 
+/**
+ * The pill above the repo loops table: what is actually driving, and what debris
+ * is left. Replaces "N/M running", which counted retired lanes (codex r4).
+ */
+export function leftoverAndSessionCount(lanes: readonly TruthSnapshotLoopLane[]): string {
+  const sessions = lanes.filter((l) => l.source === "goal" && l.running).length;
+  const leftovers = lanes.filter(isLeftoverLane).length;
+  const parts = [
+    sessions > 0 ? bi(`${sessions} session driving`, `${sessions} 个会话在驱动`) : bi("no session driving", "无会话驱动"),
+  ];
+  if (leftovers > 0) parts.push(bi(`${leftovers} leftover`, `${leftovers} 个残留`));
+  return parts.join(" · ");
+}
+
 function repoLoopsPanel(input: TruthConsoleInput): string {
   const lanes = input.snapshot.loop?.lanes ?? [];
   return (
     `<div style="display:flex;align-items:baseline;gap:12px;margin:24px 0 12px;flex-wrap:wrap;">` +
     `<span style="${MONO}font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${C.sub};font-weight:600;">${bi("Loops on this repo", "本仓 Loops")}</span>` +
-    `<span style="${MONO}font-size:11.5px;color:${C.faint};">${bi("backlog · PR · dream · go sessions", "backlog · PR · dream · go 会话")}</span>` +
+    // codex r4: the subtitle used to read "backlog · PR · dream · go sessions",
+    // advertising three retired lanes as live categories, and the pill counted
+    // "N/M running" over them. Only go sessions run; the rest can only be debris.
+    `<span style="${MONO}font-size:11.5px;color:${C.faint};">${bi("go sessions · leftover lanes", "go 会话 · 残留 lane")}</span>` +
     `<span style="flex:1;height:1px;background:#dfe4ec;min-width:16px;"></span>` +
-    `<span style="${MONO}font-size:11.5px;color:${C.dim};white-space:nowrap;">${lanes.filter((l) => l.running).length}/${lanes.length} ${bi("running", "运行中")}</span></div>` +
+    `<span style="${MONO}font-size:11.5px;color:${C.dim};white-space:nowrap;">${leftoverAndSessionCount(lanes)}</span></div>` +
     `<section style="border:1px solid ${C.line};border-radius:14px;background:${C.card};overflow:hidden;margin:0 0 8px;box-shadow:0 1px 2px rgba(17,26,69,.05);">` +
     (lanes.length > 0
       ? heartbeatHeader() + lanes.map((lane) => heartbeatRow(lane, input.snapshot.generatedAt)).join("")
