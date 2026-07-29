@@ -1008,7 +1008,7 @@ PR 等合并）每 30–60s 还会 emit 一次 `phase_tick` 心跳，tmux 不再
 | 5 | `publish_push` | push 分支 + 建 PR（doc-only 直接合） | 5 – 30 秒 |
 | 6 | `cleanup` | 环境清理 + 落 PR 终态 + 拆 worktree | < 1 秒 |
 
-> **US-AUTO-044**:主 loop 开完 PR 即退，**不再等合并**。事件型 Delivery Reconciler 在 cycle 边界、读路径或显式 `roll loop reconcile` 时推进；没有独立合并 daemon。有 open PR 的 story 由资格闸跳过，不会重复开，也不会假 Done。
+> 一个 cycle 在 PR 开出来时结束，**不等合并**。事件型 Delivery Reconciler 在 cycle 边界、读路径或显式 `roll loop reconcile` 时推进交付；没有合并 daemon。有 open PR 的 story 由资格闸跳过，不会重复开，也不会假 Done。
 
 Idle / failed / aborted cycle 只 emit 实际进入过的阶段。
 cycle 收尾时 inner runner 在 stdout 打一份按耗时降序的面板：

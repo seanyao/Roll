@@ -1137,7 +1137,7 @@ so the tmux viewer never looks frozen.
 | 5 | `publish_push` | push branch + open PR (or doc-only merge) | 5 – 30 s |
 | 6 | `cleanup` | env cleanup + emit PR final state + worktree teardown | < 1 s |
 
-> **US-AUTO-044**: the main loop exits after opening the PR and **no longer waits for merge**. The event-backed Delivery Reconciler advances it at cycle boundaries, read paths, or via `roll loop reconcile`; there is no dedicated merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
+> A cycle ends when the PR is open — it does **not** wait for merge. The event-backed Delivery Reconciler advances delivery at cycle boundaries, on read paths, or via `roll loop reconcile`; there is no merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
 
 Idle / failed / aborted cycles only emit the phases they actually entered.
 At cycle exit, the inner runner prints a phase breakdown panel sorted by

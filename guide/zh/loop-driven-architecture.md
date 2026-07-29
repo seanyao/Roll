@@ -50,7 +50,7 @@ Roll 采用不同的协调方式。没有中心规划器，没有共享执行图
  story
 ```
 
-每个 Loop：
+每个 Loop 在会话驱动期间：
 1. **轮询**特定 artifact（BACKLOG、open PR、alert 文件）
 2. **行动**（写代码、heal CI、合 PR）
 3. **写回**共享 artifact（提交、PR 评论、BACKLOG 更新）
@@ -122,7 +122,7 @@ Loop 之间从不直接调用对方，完全通过 artifact 协调。交付对�
 - CI 变慢
 - PR 积压
 
-DAG 被设计为执行一次后终止。Loop 被设计为永远运行，在条件合适时做有价值的工作。持续交付需要 Loop。
+DAG 被设计为执行一次后终止。Loop 被设计为只要有人驱动就一轮接一轮地跑，在条件合适时领下一件有价值的工作。持续交付需要 Loop —— 由会话驱动，而不是由定时器。
 
 **韧性**：Loop 相互隔离。一轮 cycle 失败不会拖垮其他项目；后续任意 Roll 调用都能从事件账本与 main 继续对账。
 
@@ -147,7 +147,7 @@ DAG 被设计为执行一次后终止。Loop 被设计为永远运行，在条�
 | **bug loop** | 1 小时 | 扫描日志和错误模式，开 FIX story |
 | **dep loop** | 1 天 | 检查过期依赖和 CVE，开升级 story |
 | **doc loop** | 1 天 | 检测代码/文档偏差，开文档 PR |
-| **dream loop** | 每晚 | 反思近期工作，优化 BACKLOG 优先级 |
+| **dream loop** | 按需（`roll dream run-once`） | 反思近期工作，优化 BACKLOG 优先级 |
 
 每个 Loop 只读写自己的 domain。它们之间的协调完全是涌现的——没有任何一个 Loop 知道其他 Loop 的存在。
 

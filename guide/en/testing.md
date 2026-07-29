@@ -101,7 +101,7 @@ and a safe next step instead of silently passing.
 ## Test Quality Rubric
 
 `guide/en/testing/quality-rubric.md` (referenced from `$roll-.dream` Scan 7)
-catalogs eight recurring antipatterns the dream nightly scan flags as
+catalogs eight recurring antipatterns the dream scan flags as
 `REFACTOR-XXX [test-quality:❶|❷|...|❽]`:
 
 | # | Antipattern | Fix |

@@ -17,17 +17,12 @@
  *   live in @roll/infra (configValidate / configSet / configKeyFile).
  *
  * ─── DELIBERATE DIVERGENCE: schedule reload ─────────────────────────────────
- * v2's cmd_config calls `_config_reload_schedule` after every successful write,
- * which re-runs `_install_launchd_plists >/dev/null 2>&1` — SILENT on success,
- * warning only when the loop is paused/muted or the install fails. The TS port
- * does NOT implicitly (re)mount launchd from a config write: mounting is owned
- * by `roll loop on` (US-LOOP-009), which FIX-212 made verify-or-fail-loud — a
- * silent best-effort remount from an unrelated config edit would undermine that
- * guarantee. The facades already print "run `roll loop on` to apply", and the
- * plain-key write path's observable output is unchanged (the v2 reload emits
- * nothing on the success path). Net: byte-identical CLI output; the only
- * behavioural change is that applying a new schedule is now an explicit
- * `roll loop on` rather than an implicit side effect.
+ * US-LOOP-120: `loop-window` and `loop-schedule` write keys that NOTHING READS.
+ * A quiet window and a period only meant something to a resident scheduler, and
+ * Roll installs none — how often cards advance is decided by when the owner opens
+ * a session and runs `roll loop go`. Both facades therefore say so on write rather
+ * than printing an apply hint for a command that no longer exists. Removing the
+ * facades outright is FIX-1485; until then they must not imply they took effect.
  */
 import { CONFIG_KEYS, configKeyFile, configResolve, configSet, configValidate } from "@roll/infra";
 import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";
@@ -94,7 +89,8 @@ function loopWindow(value: string, scope: Scope): number {
   configSet("loop_active_start", String(start), file);
   configSet("loop_active_end", String(end), file);
   ok(`✓ set loop-window = ${start}-${end} in ${file}`);
-  process.stdout.write("run `roll loop on` to apply\n");
+  process.stdout.write("note: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`\n");
+  process.stdout.write("说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定\n");
   return 0;
 }
 
@@ -131,7 +127,8 @@ function loopSchedule(value: string, scope: Scope): number {
   } else {
     ok(`✓ set loop-schedule = ${period} in ${file}`);
   }
-  process.stdout.write("run `roll loop on` to apply\n");
+  process.stdout.write("note: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles\n");
+  process.stdout.write("说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`\n");
   return 0;
 }
 
@@ -168,7 +165,8 @@ function dreamTime(value: string, scope: Scope): number {
   configSet(hourKey, String(hh), file);
   configSet(minKey, String(mm), file);
   ok(`✓ set ${svc}-time = ${pad2(hh)}:${pad2(mm)} in ${file}`);
-  process.stdout.write("run `roll loop on` to apply\n");
+  process.stdout.write(`note: nothing reads this — run \`roll ${svc} run-once\` when you want a scan\n`);
+  process.stdout.write(`说明:这个值没人读 —— 想扫就跑 \`roll ${svc} run-once\`\n`);
   return 0;
 }
 

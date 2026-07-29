@@ -50,7 +50,7 @@ main loop  reconciler     dream      brief
   stories  from main       code
 ```
 
-Each scheduled loop:
+Each loop, while a session drives it:
 1. **Polls** a specific artifact (BACKLOG, open PRs, alert file)
 2. **Acts** on what it finds (write code, heal CI, merge)
 3. **Writes back** to shared artifacts (commits, PR comments, BACKLOG updates)
@@ -122,7 +122,7 @@ Software delivery is not a one-shot task. It is an ongoing process:
 - CI gets slower
 - PRs accumulate
 
-A DAG is designed to execute once and terminate. A loop is designed to run forever, doing useful work whenever conditions are right. For continuous delivery, you want loops.
+A DAG is designed to execute once and terminate. A loop is designed to keep going for as long as it is driven, taking the next piece of useful work whenever conditions are right. For continuous delivery, you want loops — driven by a session, not by a timer.
 
 **Resilience**: Loops are isolated. A failed cycle does not stop other projects, and any later Roll invocation can resume reconciliation from the event ledger and main.
 
@@ -147,7 +147,7 @@ As the system matures, loops become more specialized:
 | **bug loop** | 1 hour | Scans logs and error patterns, opens FIX stories |
 | **dep loop** | 1 day | Checks outdated deps and CVEs, opens upgrade stories |
 | **doc loop** | 1 day | Detects code/doc drift, opens docs PRs |
-| **dream loop** | nightly | Reflects on recent work, refines BACKLOG priorities |
+| **dream loop** | on demand (`roll dream run-once`) | Reflects on recent work, refines BACKLOG priorities |
 
 Each loop reads and writes only its own domain. The coordination between them is entirely emergent — no loop knows the others exist.
 

@@ -99,11 +99,11 @@ defaults:
 - CI 门禁 — loop 等待 CI 绿；CI 红则停止循环并写入告警 `[core]`
 - TCR 纪律 — 测试不过不提交；空 diff 提交自动回滚 `[core]`
 
-### 夜间巡检
+### Dream 代码健康巡检
 
-- 代码健康扫描 — 检测死代码、架构漂移、过度工程候选项 `[highlight]`
+- 代码健康扫描 — `roll dream run-once` 检测死代码、架构漂移、过度工程候选项 `[highlight]`
 - 文档覆盖率 — 标记缺失指南、过时文档、未记录的 ENV 变量
-- REFACTOR 队列 — 将 REFACTOR-NNN 条目写入 BACKLOG，次日早晨由 loop 领取
+- REFACTOR 队列 — 将 REFACTOR-NNN 条目写入 BACKLOG，由 loop 领取
 
 ### 故事生命周期
 
@@ -180,7 +180,7 @@ Roll 支持三种接入模式，按项目起点选择 —— 决策树见
 | 第一次跑通项目 | [getting-started.md](getting-started.md) |
 | 调度、子命令、tmux 可见性 | [loop.md](loop.md) |
 | 受治理的工具注册表与策略 | [tools.md](tools.md) |
-| 夜间代码健康巡检与 REFACTOR 生成 | [dream.md](dream.md) |
+| 代码健康巡检与 REFACTOR 生成 | [dream.md](dream.md) |
 | 跨 Agent 评审协议 | [peer.md](peer.md) |
 | 完整技能目录 | [skills.md](skills.md) |
 | 接入模式（seed / graft / replant） | [patterns/](patterns/README.md) |

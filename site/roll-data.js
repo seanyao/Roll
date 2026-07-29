@@ -117,7 +117,7 @@ window.RollData = (function () {
       ],
       analogy: {
         label: "The analogy",
-        body: "Like a smart building. You set the temperature; the system handles heating, cooling, and overnight maintenance on its own schedule. You stay in control of the decisions that matter.",
+        body: "Like a well-run workshop. You open it and set the job; the tools, jigs and checks are already in place, so the work moves without you doing each step. Close the workshop and the work waits. You stay in control of the decisions that matter.",
       },
     },
     FEATURES_HEADING: {
@@ -144,10 +144,10 @@ window.RollData = (function () {
         { name: "CI Gate",           desc: "Loop waits for green CI; red CI halts the loop and writes an ALERT entry.", badges: ["core"] },
         { name: "TCR Discipline",    desc: "No commit without passing tests; zero-diff commits revert automatically.", badges: ["core"] },
       ]},
-      { id: "dream", title: "Nightly Dream", blurb: "Maintenance, on its own.", features: [
+      { id: "dream", title: "Dream Scan", blurb: "Maintenance, when you ask.", features: [
         { name: "Code Health Scan", desc: "Detects dead code, architectural drift, and over-engineering candidates.", badges: ["highlight"] },
         { name: "Doc Coverage",     desc: "Flags missing guides, stale docs and undocumented ENV vars across the project.", badges: [] },
-        { name: "REFACTOR Queue",   desc: "Writes REFACTOR-NNN entries to Backlog so loop picks them up next morning.", badges: [] },
+        { name: "REFACTOR Queue",   desc: "Writes REFACTOR-NNN entries to Backlog so the loop picks them up on a later run.", badges: [] },
       ]},
       { id: "lifecycle", title: "Story Lifecycle", blurb: "Idea to merged PR, in one flow.", features: [
         { name: "Backlog capture", desc: "One-liners become IDEA or FIX entries without starting a full planning session.", badges: ["core"] },
@@ -211,7 +211,7 @@ window.RollData = (function () {
         { time: "10:00", title: "Security peer review", body: "Risky build triggers peer. claude → kimi negotiate the plan over up to three rounds. AGREE.", tag: "peer" },
         { time: "10:30", title: "Verified",             body: "Acceptance Check confirms ACs are met. Screenshots and test output collected as proof of life.", tag: "verify" },
         { time: "10:45", title: "Live",                 body: "Human approves the PR. Merge to main. The Story report records the evidence and delivery state.", tag: "ship" },
-        { time: "03:00", title: "Nightly scan queues improvements", body: "Dream finds a small refactor opportunity in the new code. Files REFACTOR-013 for tomorrow.", tag: "dream" },
+        { time: "16:20", title: "Dream scan queues improvements", body: "You run a dream scan; it finds a small refactor opportunity in the new code and files REFACTOR-013 for a later run.", tag: "dream" },
       ],
     },
     NUMBERS: {
@@ -219,7 +219,7 @@ window.RollData = (function () {
       stats: [
         { value: "20+",  label: "Standardized skills" },
         { value: "4",    label: "Quality safety nets" },
-        { value: "24/7", label: "Automated monitoring" },
+        { value: "1 session", label: "Many cards per sitting" },
         { value: "Hrs",  label: "Idea → production" },
       ],
     },
@@ -231,7 +231,7 @@ window.RollData = (function () {
         { name: "Overview",         path: "guide/en/overview.md",          desc: "Quick start, Supervisor execution model, onboarding samples, feature list." },
         { name: "Methodology",      path: "guide/en/methodology.md",       desc: "Markdown-as-code, INVEST stories, two-tier .roll/backlog.md index." },
         { name: "Loop",             path: "guide/en/loop.md",              desc: "Scheduling, subcommands, tmux visibility, PR inbox." },
-        { name: "Dream",            path: "guide/en/dream.md",             desc: "Nightly code health scan and REFACTOR generation." },
+        { name: "Dream",            path: "guide/en/dream.md",             desc: "On-demand code health scan and REFACTOR generation." },
         { name: "Peer",             path: "guide/en/peer.md",              desc: "Cross-agent review protocol — AGREE / REFINE / OBJECT / ESCALATE." },
         { name: "Skills",           path: "guide/en/skills.md",            desc: "Skill catalog and the decision tree for picking the right one." },
         { name: "Tools & Policy",   path: "guide/en/tools.md",             desc: "Built-in tools (bash / browser / git / github / network / fs / mcp), their per-cycle policy guardrails, and roll doctor tools status." },
@@ -326,7 +326,7 @@ window.RollData = (function () {
       ],
       analogy: {
         label: "类比",
-        body: "像一栋智能楼宇。你设定温度,系统按自己的节奏调度供暖、制冷、夜间维护。决定权始终在你手里。",
+        body: "像一间打理好的工坊。你开门、定下今天做什么,工具、夹具和检查都已就位,活儿自己往前走,不用你一步步盯。关门,活儿就在那儿等着。决定权始终在你手里。",
       },
     },
     FEATURES_HEADING: {
@@ -353,7 +353,7 @@ window.RollData = (function () {
         { name: "CI 门禁",        desc: "Loop 等 CI 绿;红则停循环并写入 ALERT。", badges: ["core"] },
         { name: "TCR 纪律",       desc: "测试不过不准提交;空 diff 提交自动回滚。", badges: ["core"] },
       ]},
-      { id: "dream", title: "夜间 Dream", blurb: "维护自己跑。", features: [
+      { id: "dream", title: "Dream 巡检", blurb: "想扫就扫。", features: [
         { name: "代码健康扫描", desc: "识别死代码、架构漂移、过度工程候选项。", badges: ["highlight"] },
         { name: "文档覆盖率",   desc: "标记缺失指南、过时文档、未记录的 ENV 变量。", badges: [] },
         { name: "REFACTOR 队列", desc: "把 REFACTOR-NNN 写进 Backlog,次日 loop 自己拣。", badges: [] },
@@ -420,7 +420,7 @@ window.RollData = (function () {
         { time: "10:00", title: "安全 Peer 评审",     body: "高风险构建触发 peer。claude → kimi 至多三轮协商方案。AGREE。", tag: "peer" },
         { time: "10:30", title: "验证通过",          body: "验收检查确认 AC 全部满足。截图、测试输出作为「活体证据」入档。", tag: "verify" },
         { time: "10:45", title: "上线",              body: "人审批 PR。合入 main。Story 报告记录证据与交付状态。", tag: "ship" },
-        { time: "03:00", title: "夜检排上改进项",      body: "Dream 在新代码里发现一处小重构机会,写入 REFACTOR-013,明天再做。", tag: "dream" },
+        { time: "16:20", title: "Dream 巡检排上改进项", body: "你跑一次 dream 巡检,它在新代码里发现一处小重构机会,写入 REFACTOR-013,留给后面的运行。", tag: "dream" },
       ],
     },
     NUMBERS: {
@@ -428,7 +428,7 @@ window.RollData = (function () {
       stats: [
         { value: "20+",  label: "标准化技能" },
         { value: "4",    label: "质量安全网" },
-        { value: "24/7", label: "自动化监控" },
+        { value: "一个会话", label: "一次啃掉多张卡" },
         { value: "小时",  label: "想法 → 生产" },
       ],
     },
@@ -440,7 +440,7 @@ window.RollData = (function () {
         { name: "概述",        path: "guide/zh/overview.md",          desc: "快速开始、Supervisor 执行模型、接入样例、功能列表。" },
         { name: "方法论",       path: "guide/zh/methodology.md",       desc: "Markdown 即代码、INVEST 故事、.roll/backlog.md 两层索引。" },
         { name: "Loop",       path: "guide/zh/loop.md",              desc: "调度、子命令、tmux 可见性、PR 收件箱。" },
-        { name: "Dream",      path: "guide/zh/dream.md",             desc: "夜间代码健康巡检与 REFACTOR 生成。" },
+        { name: "Dream",      path: "guide/zh/dream.md",             desc: "按需代码健康巡检与 REFACTOR 生成。" },
         { name: "Peer",       path: "guide/zh/peer.md",              desc: "跨 Agent 评审协议 — AGREE / REFINE / OBJECT / ESCALATE。" },
         { name: "技能",        path: "guide/zh/skills.md",            desc: "技能目录与选用决策树。" },
         { name: "工具与策略",   path: "guide/zh/tools.md",             desc: "内置工具(bash / browser / git / github / network / fs / mcp)、各自的每周期策略护栏，以及 roll doctor tools status。" },

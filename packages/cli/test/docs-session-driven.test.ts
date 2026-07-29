@@ -64,6 +64,36 @@ const UNATTENDED_CLAIM = [
   /runs? (automatically )?at 3am/i,
   /凌晨 ?3 ?点(触发|运行)/,
   /while you sleep/i,
+  // codex r1: the first version was too narrow and let a whole slide deck plus
+  // guide/en/ai-agents.md through. These are the other shapes the same promise
+  // takes — a cadence, a clock, or a mode Roll no longer has.
+  /\bnightly\b/i,
+  /每晚|夜间(扫描|巡检|运行)/,
+  /24\/7|24×7|24x7/,
+  /(on|has) its own schedule/i,
+  /next morning/i,
+  /第二天早上|次日早上/,
+  /hour by hour/i,
+  /\bovernight\b/i,
+  /通宵|整夜/,
+  /runs? forever/i,
+  /永远运行|一直跑下去/,
+  // The guided/autonomous binary is gone; a doc that still offers it as a MODE
+  // describes a choice the owner cannot make.
+  /\bautonomous mode\b/i,
+  /\bguided mode\b/i,
+  /autonomous 模式|guided 模式/,
+  // The same promise in marketing register — "you can walk away". Found in four
+  // slide decks after the cadence sweep, so it is worth pinning by name.
+  /babysitting/i,
+  /无须看守|无人看守/,
+  /runs? unattended|run it unattended/i,
+  // NOT a bare /无人值守/: two legitimate uses exist — a lease in the managed
+  // browser channel, and the adversarial engine's "must never hang when nobody is
+  // watching THIS TURN". Both are about a turn with no human reading it, not about
+  // a scheduler. Match only the marketing shape: "runs/works unattended".
+  /无人值守(地)?(跑|运行|执行|交付)/,
+  /executes? autonomously/i,
 ];
 
 describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
@@ -78,11 +108,21 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     expect(offenders, `retired commands still documented at: ${offenders.join(", ")}`).toEqual([]);
   });
 
+  /**
+   * `nightly` is also a LIVE enum value — the outward-smoke `environment` field is
+   * typed `"ci" | "nightly" | "release"` (evaluation-contract.ts) and names which
+   * external environment a smoke declaration targets. Documenting that literal is
+   * correct; renaming it would desync the docs from the parser. So exempt lines
+   * that are clearly citing the enum rather than promising a cadence.
+   */
+  const ENUM_CITATION = /environment|ci \| nightly \| release|ROLL_SMOKE_ENV|(Release|发版) ?\/ ?nightly/;
+
   it("no doc promises progress without a session driving", () => {
     const offenders: string[] = [];
     for (const f of docFiles()) {
       const text = readFileSync(f, "utf8");
       for (const [i, line] of text.split("\n").entries()) {
+        if (ENUM_CITATION.test(line)) continue;
         for (const claim of UNATTENDED_CLAIM) {
           if (claim.test(line)) offenders.push(`${relative(ROOT, f)}:${i + 1} — ${claim.source}`);
         }

@@ -30,8 +30,8 @@ roll agent list                 # 查看本机已安装 agent
 
 Roll 的 Agent 领域有三个核心角色：
 
-- `supervise` — 项目级协调。guided mode 下可以是你当前对话的 agent；autonomous
-  mode 下由 Roll 解析角色并驱动 loop。
+- `supervise` — 项目级协调。就是你当前对话的那个 agent 会话：它驱动 loop，
+  并可以把其它角色派出去。
 - `execute` — 通过选中的 skill 工作流构建或修复 Story。
 - `evaluate` — 用 fresh session 评审、打分或检查交付。
 
@@ -104,13 +104,14 @@ roll supervisor route --role evaluator --story US-123 --json
 trace 会列出每个候选、eligibility、score reasons、warnings、skipped runtime facts、
 最终选中 agent、策略和来源 binding。
 
-## Guided Mode 与 Autonomous Mode
+## 一个会话，多个角色
 
-Guided mode 下，你可以继续留在当前 agent 窗口里工作。这个会话就是 supervisor
-front door：它可以查看 `roll agent`、执行 migration，并通过 CLI 让 Roll 继续。
+你继续留在已有的那个 agent 窗口里工作。这个会话就是 supervisor front door：
+它可以查看 `roll agent`、执行 migration，并通过 CLI 驱动 loop。
 
-Autonomous mode 下，你不需要手动打开多个 agent 窗口。loop 会解析 `supervise`、
-`story.execute`、`story.evaluate`，再按绑定为各角色 spawn fresh agent session。
+你不需要为每个角色开一个窗口。cycle 需要 `story.execute` 或 `story.evaluate` 时，
+loop 解析绑定并为该角色 spawn 一个 fresh agent session —— 而你所在的会话始终是
+那个做协调的。
 
 ## 支持的 Agent
 

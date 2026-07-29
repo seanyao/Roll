@@ -103,11 +103,11 @@ Runtime availability is explicit. Unavailable agents are recorded as unavailable
 - CI Gate — loop waits for green CI; red CI halts the loop and writes an alert `[core]`
 - TCR Discipline — no commit without passing tests; zero-diff commits revert automatically `[core]`
 
-### Nightly Dream
+### Dream Code Health Scan
 
-- Code Health Scan — detects dead code, architectural drift, over-engineering candidates `[highlight]`
+- Code Health Scan — `roll dream run-once` detects dead code, architectural drift, over-engineering candidates `[highlight]`
 - Doc Coverage — flags missing guides, stale docs, undocumented ENV vars
-- REFACTOR Queue — writes REFACTOR-NNN entries to BACKLOG for loop to pick up next morning
+- REFACTOR Queue — writes REFACTOR-NNN entries to BACKLOG for loop to pick up
 
 ### Story Lifecycle
 
@@ -186,7 +186,7 @@ point — see [patterns/](patterns/README.md) for the decision tree:
 | First working project | [getting-started.md](getting-started.md) |
 | Scheduling, subcommands, tmux visibility | [loop.md](loop.md) |
 | Governed tool registry and policy | [tools.md](tools.md) |
-| Nightly code health and REFACTOR generation | [dream.md](dream.md) |
+| Code health scan and REFACTOR generation | [dream.md](dream.md) |
 | Cross-agent review protocol | [peer.md](peer.md) |
 | Complete skill catalog | [skills.md](skills.md) |
 | Adoption patterns (seed / graft / replant) | [patterns/](patterns/README.md) |

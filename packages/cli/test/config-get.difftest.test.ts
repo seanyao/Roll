@@ -83,7 +83,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "Usage: roll config <key>                 print current value + source
-             roll config --list                list all loop schedule keys
+             roll config --list                list all loop/dream config keys
              roll config <key> <value> [--global|--project]   set a value
                                                                         统一调度配置
       Read / list / set the loop and dream schedule keys without hand-editing
@@ -104,6 +104,8 @@ describe("frozen: roll config (read) render", () => {
         roll config loop-window 9-18              loop_active_start + loop_active_end
         roll config loop-schedule 30/7            period_minutes + offset_minute
         roll config dream-time 03:20              loop_dream_hour + loop_dream_minute
+        (these three write values nothing reads — delivery is driven by "roll loop go"
+         in a session you open, and a scan by "roll dream run-once")
 
       Language (REFACTOR-049: roll lang → roll config lang):
         roll config lang                          show current language + source

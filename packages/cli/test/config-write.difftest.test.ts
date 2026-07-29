@@ -109,13 +109,13 @@ function frozen(c: Case): { status: number; stdout: string; stderr: string; file
     case "nested project write (explicit --project)":
       return { status: 0, stdout: "[roll] ✓ set loop_active_start = 9 in .roll/local.yaml\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n" };
     case "loop-window facade":
-      return { status: 0, stdout: "[roll] ✓ set loop-window = 9-18 in .roll/local.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n  loop_active_end: 18\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop-window = 9-18 in .roll/local.yaml\nnote: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`\n说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n  loop_active_end: 18\n" };
     case "loop-schedule facade with offset":
-      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 45/7 in .roll/local.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 45\n  offset_minute: 7\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 45/7 in .roll/local.yaml\nnote: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles\n说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 45\n  offset_minute: 7\n" };
     case "loop-schedule facade no offset":
-      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 30 in .roll/local.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 30 in .roll/local.yaml\nnote: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles\n说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
     case "dream-time facade":
-      return { status: 0, stdout: "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_dream_hour: 3\nloop_dream_minute: 20\n" };
+      return { status: 0, stdout: "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml\nnote: nothing reads this — run `roll dream run-once` when you want a scan\n说明:这个值没人读 —— 想扫就跑 `roll dream run-once`\n", stderr: "", fileContent: "loop_dream_hour: 3\nloop_dream_minute: 20\n" };
     case "loop-window read default":
       return { status: 0, stdout: "loop-window: 0-24 (from default)\n", stderr: "", fileContent: null };
     case "loop-schedule read default":
