@@ -28,7 +28,7 @@ import {
   type LoopRunState,
 } from "../src/commands/loop-state.js";
 import { recordRootCauseFailure } from "../src/runner/failure-attribution.js";
-import { GOAL_GUIDED_ENV } from "../src/lib/goal-progress.js";
+import { GOAL_GUIDED_ENV, isGuidedRunOnce } from "../src/lib/goal-progress.js";
 import { parseGoalYaml } from "@roll/spec";
 
 const dirs: string[] = [];
@@ -362,12 +362,30 @@ describe("US-LOOP-119 — PAUSE semantics", () => {
     expect(resolveLoopRunState(project, "slug-a")).toBe("ACTIVE");
   });
 
-  it("FIX-1472 stays reachable: the gate reads the guided env, not the run state", () => {
-    // The guided bypass cannot be expressed as a run-state value — PAUSED is PAUSED.
-    // What makes `--cards` work is the explicit guided flag the go driver sets, so
-    // the resolver must NOT be the thing consulted for that decision. Assert the
-    // seam exists and is env-based, so a future "resolver decides" refactor fails here.
-    expect(GOAL_GUIDED_ENV).toBe("ROLL_LOOP_GO_GUIDED");
+  it("FIX-1472 stays reachable: the bypass is decided by env + scope, NOT by run state", () => {
+    // codex r1: asserting `GOAL_GUIDED_ENV === "ROLL_LOOP_GO_GUIDED"` proved nothing
+    // — a constant's value survives any refactor of the decision. Exercise the real
+    // predicate instead, in a project that is genuinely PAUSED on disk.
+    const project = tmp("l119-guided");
+    const rt = join(project, ".roll", "loop");
+    mkdirSync(rt, { recursive: true });
+    writeFileSync(join(rt, "PAUSE-slug-a"), "paused by owner\n");
+    expect(resolveLoopRunState(project, "slug-a")).toBe("PAUSED");
+
+    const cards = new Set(["US-A-1"]);
+    // Guided flag + a non-empty scope: allowed through even while PAUSED.
+    expect(isGuidedRunOnce(cards, { [GOAL_GUIDED_ENV]: "1" })).toBe(true);
+    // Fail closed on either half alone — a stray env flag with no scope, or a
+    // scope with no flag, must NOT bypass the pause.
+    expect(isGuidedRunOnce(undefined, { [GOAL_GUIDED_ENV]: "1" })).toBe(false);
+    expect(isGuidedRunOnce(new Set<string>(), { [GOAL_GUIDED_ENV]: "1" })).toBe(false);
+    expect(isGuidedRunOnce(cards, {})).toBe(false);
+    // And the decision is INDEPENDENT of the run state: the same inputs give the
+    // same answer in an ACTIVE project, which is what makes PAUSED still PAUSED.
+    const active = tmp("l119-guided-active");
+    mkdirSync(join(active, ".roll", "loop"), { recursive: true });
+    expect(resolveLoopRunState(active, "slug-a")).toBe("ACTIVE");
+    expect(isGuidedRunOnce(cards, { [GOAL_GUIDED_ENV]: "1" })).toBe(true);
   });
 });
 
