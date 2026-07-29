@@ -354,19 +354,12 @@ function statSafeIsFile(f: string): boolean {
   }
 }
 
-// ─── loop test ──────────────────────────────────────────────────────────────
-
-/** Injectable surface so tests drive paths + a fake runner exec + clock. */
-
-/** The default smoke command for an agent (mirrors `_loop_test`). */
-export function defaultSmokeCmd(agent: string): string {
-  return `${agentSmokeCommand(agent)}; sleep 10`;
-}
-
-// US-LOOP-117: `roll loop test` is gone. It smoke-tested the generated launchd
-// runner and hard-required it ("Run 'roll loop on' first to generate it") — a
-// runner nothing can generate any more. `roll loop go --max-cycles 1` is the
-// honest way to try the flow end to end.
+// US-LOOP-117: `roll loop test` is gone, and so is `defaultSmokeCmd`. The command
+// smoke-tested the GENERATED launchd runner and hard-required it ("Run 'roll loop
+// on' first to generate it") — a runner nothing can generate any more. Its smoke
+// command builder had no other caller, so keeping it would have left an export that
+// only tests reach: worse than untested, because the tests would keep passing.
+// `roll loop go --max-cycles 1` is the honest way to try the flow end to end.
 
 
 export { err as _err, info as _info, ok as _ok, palette as _palette };
