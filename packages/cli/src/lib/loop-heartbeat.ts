@@ -12,7 +12,7 @@
  * recent runs — while a plist still on disk is reported as leftover debris with
  * `running: false` and no predicted next fire.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LEFTOVER_LANE_STATUS, parseEventLine, parseGoalYaml, type GoalScope, type GoalStatus, type TruthSnapshotLoop, type TruthSnapshotLoopLane } from "@roll/spec";
 import { resolveLoopRunState } from "../commands/loop-sched.js";
@@ -33,6 +33,15 @@ export interface HeartbeatDeps {
   /** .roll/loop/events.ndjson text for goal session reconstruction. */
   eventsText?: () => string | null;
   /**
+   * Is a cycle streaming right now, and when did it last write?
+   *
+   * codex r11: a goal lane only exists for `roll loop go`; a bare `roll loop
+   * run-once` writes no goal event, so a running cycle was invisible here. `running`
+   * and `at` come from the SAME observation (live.log's mtime) so a live stream can
+   * never be read as stale.
+   */
+  liveStream?: () => { running: boolean; at?: string };
+  /**
    * US-LOOP-115: resolved loop run-state (ACTIVE / PAUSED).
    * Injected so the snapshot carries it and the dossier render stays pure.
    * Absent → snapshot omits runState and the renderer falls back to ACTIVE.
@@ -50,6 +59,9 @@ export interface HeartbeatDeps {
  * `com.roll.pr.<slug>.plist`. Omitting it made that plist INVISIBLE — the one
  * leftover nothing else would ever mention.
  */
+/** Freshness window for "a cycle is streaming" (mirrors collectLoopLiveFeed). */
+const LIVE_FRESH_SEC = 300;
+
 const RETIRED_LANES: Array<{ svc: string; name: string; mode: string }> = [
   { svc: "loop", name: "backlog loop (leftover lane)", mode: "backlog" },
   { svc: "pr", name: "PR loop (leftover lane)", mode: "pr" },
@@ -109,6 +121,18 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
         return null;
       }
     },
+    liveStream: () => {
+      // Same rule and window collectLoopLiveFeed applies: live.log is never
+      // deleted, so only a RECENT write means a cycle is streaming.
+      try {
+        const st = statSync(join(projectPath, ".roll", "loop", "live.log"));
+        const at = new Date(st.mtimeMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+        const fresh = Math.floor(Date.now() / 1000) - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
+        return fresh ? { running: true, at } : { running: false };
+      } catch {
+        return { running: false };
+      }
+    },
     // US-LOOP-115: two states (ACTIVE / PAUSED) resolved from the PAUSE marker.
     runState: () => ({ state: resolveLoopRunState(projectPath, slug) }),
   };
@@ -145,7 +169,10 @@ function activeGoalSession(eventsText: string | null): { open: boolean; lastAt?:
 function goalLane(deps: HeartbeatDeps): TruthSnapshotLoopLane | undefined {
   const text = deps.goalText?.() ?? null;
   const session = activeGoalSession(deps.eventsText?.() ?? null);
-  if (text === null && !session.open) return undefined;
+  const live = deps.liveStream?.() ?? { running: false };
+  // codex r11: a streaming cycle counts even with no goal at all (`run-once`
+  // writes none), so the lane exists whenever ANY of the three signals is present.
+  if (text === null && !session.open && !live.running) return undefined;
   let status: GoalStatus | "unknown" = "unknown";
   let scope = "unknown";
   if (text !== null) {
@@ -157,14 +184,18 @@ function goalLane(deps: HeartbeatDeps): TruthSnapshotLoopLane | undefined {
       status = "unknown";
     }
   }
+  // A live stream is proof of running on its own; when it is streaming, the last
+  // activity is its OWN write time, so `running` and `lastAt` agree (codex r10).
+  const running = live.running || (session.open && status === "active");
+  const lastAt = live.running ? live.at : session.lastAt;
   return {
     name: "go session",
     source: "goal",
-    running: session.open && status === "active",
+    running,
     mode: "go",
     status,
     scope,
-    ...(session.lastAt !== undefined ? { lastAt: session.lastAt } : {}),
+    ...(lastAt !== undefined ? { lastAt } : {}),
   };
 }
 

@@ -644,6 +644,55 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
     expect(prOnly.lanes[0]?.running).toBe(false);
   });
 
+  it("US-LOOP-118: a streaming cycle with NO goal is still a running lane (codex r11)", () => {
+    // Only `roll loop go` writes goal events; a bare `roll loop run-once` writes
+    // none, so the production collector reported no active session at all while a
+    // cycle was streaming. The live stream is proof of running on its own.
+    const hb = collectLoopHeartbeat({
+      laneLeftover: () => false,
+      lastRunAt: () => "2026-06-19T12:00:00Z", // a run that finished yesterday
+      goalText: () => null,
+      eventsText: () => null,
+      liveStream: () => ({ running: true, at: "2026-06-20T11:59:30Z" }),
+    });
+    const go = hb.lanes.find((l) => l.source === "goal");
+    expect(go).toBeDefined();
+    expect(go?.running).toBe(true);
+    // lastAt is the STREAM's write, not yesterday's run — the r10 pairing rule.
+    expect(go?.lastAt).toBe("2026-06-20T11:59:30Z");
+  });
+
+  it("US-LOOP-118: no goal and no stream means no session lane at all", () => {
+    const hb = collectLoopHeartbeat({
+      laneLeftover: () => false,
+      lastRunAt: () => null,
+      goalText: () => null,
+      eventsText: () => null,
+      liveStream: () => ({ running: false }),
+    });
+    expect(hb.lanes.some((l) => l.source === "goal")).toBe(false);
+  });
+
+  it("US-LOOP-118: defaultHeartbeatDeps reads a real live.log for the stream signal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-hb-live-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      const live = join(rt, "live.log");
+      writeFileSync(live, "streaming\n");
+      const fresh = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-live", join(dir, "la")));
+      expect(fresh.lanes.find((l) => l.source === "goal")?.running).toBe(true);
+
+      // Age it past the window: no longer streaming.
+      const old = Math.floor(Date.now() / 1000) - 3600;
+      utimesSync(live, old, old);
+      const cold = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-live", join(dir, "la")));
+      expect(cold.lanes.find((l) => l.source === "goal")?.running ?? false).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("US-LOOP-118: pr reads runs.jsonl as JSONL, not as a dream text log (codex r6)", () => {
     // The file choice keyed on `svc === "dream"` while the PARSE keyed on
     // `svc === "loop"`, so pr read runs.jsonl through the dream bracket-timestamp
