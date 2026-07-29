@@ -5,6 +5,7 @@
  * conclude, status. Uses real filesystem with temp dirs, no external engines.
  */
 import { describe, expect, it, afterEach, beforeAll } from "vitest";
+import { DELTA_BLOCK_REASONS } from "@roll/spec";
 import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -881,7 +882,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
         qualityProfile: input.qualityProfile,
         frameDir: input.frameDir,
       };
-      return { ok: false, reason: "host_supervisor_required", detail: "test injected block", role: input.stage };
+      return { ok: false, reason: "artifact_invalid", detail: "test injected block", role: input.stage };
     });
 
     try {
@@ -909,7 +910,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
       const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
       const lastEvent = JSON.parse(events[events.length - 1]!);
       expect(lastEvent.type).toBe("delta:blocked");
-      expect(lastEvent.reason).toBe("host_supervisor_required");
+      expect(lastEvent.reason).toBe("artifact_invalid");
     } finally {
       injectValidator(null);
     }
@@ -3710,14 +3711,17 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
       ], dir);
       expect(r2.code).toBe(1);
       const err = JSON.parse(r2.stderr);
-      expect(err.error).toBe("host_supervisor_required");
+      // US-LOOP-110: the ORIGINAL block reason is propagated. This used to report
+      // `host_supervisor_required`, which was never what happened — the delegation
+      // was blocked by `artifact_invalid` and this check only refuses to advance.
+      expect(err.error).toBe("artifact_invalid");
 
       // Exactly one new delta:blocked event appended
       const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
       expect(eventsAfter.length).toBe(eventsBefore.length + 1);
       const blockEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
       expect(blockEvent.type).toBe("delta:blocked");
-      expect(blockEvent.reason).toBe("host_supervisor_required");
+      expect(blockEvent.reason).toBe("artifact_invalid");
       expect(blockEvent.role).toBe("evaluator");
     } finally {
       injectValidator(null);
@@ -4223,3 +4227,104 @@ function readdirRecursive(root: string): string[] {
   walk(root);
   return result.sort();
 }
+
+// US-LOOP-110 (codex r4) — the validator seam is typed `reason?: string`, so it can
+// hand back an absent, retired, or foreign literal. A NEW ledger record must still
+// carry a LIVE reason: the event gets a valid one, the detail keeps what the
+// validator actually said.
+describe("US-LOOP-110 — a validator's non-live reason never lands in the ledger", () => {
+  for (const [label, injected] of [
+    ["retired literal", "host_supervisor_required"],
+    ["foreign literal", "totally_made_up"],
+    ["absent reason", undefined],
+  ] as const) {
+    it(`${label} → event carries a live reason, detail keeps the original`, () => {
+      const dir = setupMinimalProject("US-DELTA-LIVE-RSN", "delta-team");
+      const resPath = writeResolutionTemplate(dir, "US-DELTA-LIVE-RSN", "local-preset");
+      const r1 = tsRunCwd([
+        "prepare", "US-DELTA-LIVE-RSN",
+        "--trigger", "host-guided", "--topology", "delta-team",
+        "--profile", "standard", "--preset", "local-preset",
+        "--resolution", resPath, "--json",
+      ], dir);
+      expect(r1.code).toBe(0);
+      const delegationId = JSON.parse(r1.stdout).delegationId;
+
+      injectValidator((input) => ({
+        ok: false,
+        ...(injected === undefined ? {} : { reason: injected }),
+        detail: "validator said no",
+        role: input.stage,
+      }));
+      try {
+        const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+        expect(r2.code).toBe(1);
+        const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+        const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter((l) => l.trim());
+        const last = JSON.parse(events[events.length - 1]!);
+        expect(last.type).toBe("delta:blocked");
+        // The appended reason is always a LIVE enum member.
+        expect(DELTA_BLOCK_REASONS as readonly string[]).toContain(last.reason);
+        expect(last.reason).toBe("artifact_invalid");
+        // …and the validator's own word is preserved rather than dropped.
+        expect(last.detail).toContain("validator said no");
+        if (injected !== undefined) expect(last.detail).toContain(injected);
+      } finally {
+        injectValidator(null);
+      }
+    });
+  }
+});
+
+// US-LOOP-110 (codex r5) — a resolution template is PERSISTED verbatim, so its
+// trigger is a write boundary: a new record must never claim a retired literal,
+// and it must not contradict the --trigger flag.
+describe("US-LOOP-110 — prepare refuses a resolution template with a non-live trigger", () => {
+  it("rejects a template declaring the retired loop-autonomous", () => {
+    const dir = setupMinimalProject("US-DELTA-TPL-RETIRED", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-TPL-RETIRED", "local-preset");
+    const tpl = JSON.parse(readFileSync(resPath, "utf8"));
+    tpl.trigger = "loop-autonomous";
+    writeFileSync(resPath, JSON.stringify(tpl));
+    const r = tsRunCwd([
+      "prepare", "US-DELTA-TPL-RETIRED",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.stderr).detail).toContain("loop-autonomous");
+    // Nothing persisted, so no contradictory record exists.
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8") : "";
+    expect(events).not.toContain("loop-autonomous");
+  });
+
+  it("rejects a template whose trigger disagrees with --trigger", () => {
+    const dir = setupMinimalProject("US-DELTA-TPL-MISMATCH", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-TPL-MISMATCH", "local-preset");
+    const tpl = JSON.parse(readFileSync(resPath, "utf8"));
+    tpl.trigger = "made-up-trigger";
+    writeFileSync(resPath, JSON.stringify(tpl));
+    const r = tsRunCwd([
+      "prepare", "US-DELTA-TPL-MISMATCH",
+      "--trigger", "host-guided", "--topology", "solo",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.stderr).detail).toContain("made-up-trigger");
+  });
+
+  it("accepts a template whose trigger is the live value", () => {
+    const dir = setupMinimalProject("US-DELTA-TPL-OK", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-TPL-OK", "local-preset");
+    const r = tsRunCwd([
+      "prepare", "US-DELTA-TPL-OK",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(r.code).toBe(0);
+  });
+});

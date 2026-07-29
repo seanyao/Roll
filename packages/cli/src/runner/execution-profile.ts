@@ -619,7 +619,7 @@ export async function runEvaluatorStage(
     storyId,
     cycleId: ctx.cycleId ?? "",
     role: "evaluator",
-    trigger: "loop-autonomous",
+    trigger: "host-guided",
     topology: "full-delta-team",
     qualityProfile: ctx.selectedProfile,
     executionIdentity: {

@@ -15,16 +15,37 @@ import type {
   DeliveryTopology,
   VisibleDeliveryMode,
   DeliveryShape,
+  HistoricalDeliveryShape,
+  HistoricalDelegationTrigger,
+  HistoricalVisibleDeliveryMode,
   IdentityProvenance,
   RollEvent,
 } from "@roll/spec";
+import { RETIRED_DELEGATION_TRIGGERS } from "@roll/spec";
 
 // ── Visible-mode projection ───────────────────────────────────────────────────
 
-/** Derive the user-visible delivery mode from trigger + topology. */
-export function visibleMode(trigger: DelegationTrigger, topology: DeliveryTopology): VisibleDeliveryMode {
-  if (trigger === "loop-autonomous") return "autonomous-loop";
-  // host-guided
+/**
+ * Derive the user-visible delivery mode from trigger + topology.
+ *
+ * US-LOOP-110: the LIVE trigger axis collapsed to a single value, so for any new
+ * delegation topology alone determines the mode. But a HISTORICAL record written
+ * under the retired `loop-autonomous` trigger was rendered as `autonomous-loop`
+ * at the time, and re-rendering it as `solo-skill` would silently rewrite what
+ * that delivery actually was (codex review r1). Such a record therefore projects
+ * to its historical mode, which the caller must treat as read-only history.
+ *
+ * The return type widens to include the retired mode for exactly this reason —
+ * `VISIBLE_DELIVERY_MODES` still lists only what a NEW delegation may produce.
+ */
+export function visibleMode(
+  trigger: DelegationTrigger | HistoricalDelegationTrigger,
+  topology: DeliveryTopology,
+): VisibleDeliveryMode | HistoricalVisibleDeliveryMode {
+  // Read-side only: a historical trigger keeps its historical projection.
+  if ((RETIRED_DELEGATION_TRIGGERS as readonly string[]).includes(trigger as string)) {
+    return "autonomous-loop";
+  }
   switch (topology) {
     case "solo":
       return "solo-skill";
@@ -35,8 +56,15 @@ export function visibleMode(trigger: DelegationTrigger, topology: DeliveryTopolo
   }
 }
 
-/** Derive visible mode from a full DeliveryShape. */
-export function visibleModeFromShape(shape: DeliveryShape): VisibleDeliveryMode {
+/**
+ * Derive visible mode from a full DeliveryShape, live or historical.
+ *
+ * codex review r3: the INPUT is widened too. A historical shape must be readable
+ * without a cast — narrowing the parameter would push the lie back onto callers.
+ */
+export function visibleModeFromShape(
+  shape: DeliveryShape | HistoricalDeliveryShape,
+): VisibleDeliveryMode | HistoricalVisibleDeliveryMode {
   return visibleMode(shape.trigger, shape.topology);
 }
 
@@ -77,8 +105,15 @@ export interface DelegationStatusView {
   readonly delegationId: string;
   readonly storyId: string;
   readonly status: DelegationStatus;
-  readonly visibleMode: VisibleDeliveryMode | null;
-  readonly trigger: DelegationTrigger | null;
+  /**
+   * codex review r2: a status view is a READ of the event ledger, so these two
+   * fields must be typed as widely as the ledger can hold — a delegation prepared
+   * under the retired trigger reads back its historical trigger and the historical
+   * mode it was rendered as. Typing them live-only forced a cast and left
+   * historical consumers unable to read the returned values safely.
+   */
+  readonly visibleMode: VisibleDeliveryMode | HistoricalVisibleDeliveryMode | null;
+  readonly trigger: DelegationTrigger | HistoricalDelegationTrigger | null;
   readonly topology: DeliveryTopology | null;
   readonly qualityProfile: string | null;
   readonly blockReason?: string;
@@ -102,8 +137,8 @@ export function projectDelegationStatus(
     delegationId,
     storyId: "",
     status: "unknown" as DelegationStatus,
-    visibleMode: null as VisibleDeliveryMode | null,
-    trigger: null as DelegationTrigger | null,
+    visibleMode: null as VisibleDeliveryMode | HistoricalVisibleDeliveryMode | null,
+    trigger: null as DelegationTrigger | HistoricalDelegationTrigger | null,
     topology: null as DeliveryTopology | null,
     qualityProfile: null as string | null,
     blockReason: undefined as string | undefined,
@@ -203,10 +238,10 @@ export function projectDelegationStatus(
 
 /**
  * Build a lightweight fixture view suitable for snapshot testing.
- * Returns the four visible modes plus unknown/blocked, with stable fake IDs.
+ * Returns every visible mode plus unknown/blocked, with stable fake IDs.
  */
 export function buildStatusFixture(
-  scenario: "autonomous-loop" | "full-delta-team" | "delta-team" | "solo-skill" | "unknown" | "blocked",
+  scenario: "full-delta-team" | "delta-team" | "solo-skill" | "unknown" | "blocked",
 ): DelegationStatusView {
   switch (scenario) {
     case "unknown":
@@ -220,20 +255,6 @@ export function buildStatusFixture(
         qualityProfile: null,
         roles: [],
         totalCost: HOST_UNOBSERVABLE_COST,
-      };
-    case "autonomous-loop":
-      return {
-        delegationId: "deleg-loop-001",
-        storyId: "US-LOOP-1",
-        status: "in_progress",
-        visibleMode: "autonomous-loop",
-        trigger: "loop-autonomous",
-        topology: "solo",
-        qualityProfile: "standard",
-        roles: [
-          { role: "builder", status: "artifact_published", hostId: "adapter", modelId: "model-adapter-1", identityProvenance: "adapter-observed", cost: "? (usage_authority_unavailable)" },
-        ],
-        totalCost: "? (usage_authority_unavailable)",
       };
     case "full-delta-team":
       return {

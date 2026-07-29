@@ -16,12 +16,10 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help is localiz
       对应）；绝不证明会话新起或模型执行过。
     - preset 放在 ~/.roll/delta-team/presets.yaml（仅宿主本地配置）。
     - host-guided 成本渲染 ? (host_unobservable)——绝不估算或写零。
-    - loop-autonomous + delta-team 阻塞 host_supervisor_required（不静默转换）；
-      loop-autonomous + full-delta-team 是显式 opt-in。
 
   宿主导引的委派生命周期命令（仅协议层；不启任何 agent）。
 
-  roll delta prepare <story-id> --trigger host-guided|loop-autonomous --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]
     原子化申领委派帧与 host-delegation 租约。
 
   roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
@@ -56,12 +54,10 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help prints EN 
       or that a model executed.
     - Presets live in ~/.roll/delta-team/presets.yaml (host-local config only).
     - Host-guided cost renders ? (host_unobservable) — never estimated or zeroed.
-    - loop-autonomous + delta-team blocks host_supervisor_required (no silent
-      conversion); loop-autonomous + full-delta-team is explicit opt-in.
 
   Host-guided delegation lifecycle commands (protocol-only; no agent spawning).
 
-  roll delta prepare <story-id> --trigger host-guided|loop-autonomous --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]
     Atomically claim a delegation frame and host-delegation lease.
 
   roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]

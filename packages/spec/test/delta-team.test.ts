@@ -12,12 +12,29 @@ import {
   VISIBLE_DELIVERY_MODES,
   type DeliveryShape,
   type DeltaBlockReason,
+  RETIRED_DELEGATION_TRIGGERS,
+  RETIRED_VISIBLE_DELIVERY_MODES,
+  RETIRED_DELTA_BLOCK_REASONS,
+  isKnownHistoricalTrigger,
+  isKnownHistoricalVisibleMode,
+  isKnownHistoricalBlockReason,
 } from "../src/index.js";
 import { parseEventLine } from "../src/types/events.js";
 
 describe("US-DELTA-001 AC1 — DelegationTrigger, DeliveryTopology, and QualityProfile are distinct typed values", () => {
-  it("all trigger literals are valid", () => {
-    expect(DELEGATION_TRIGGERS).toEqual(["host-guided", "loop-autonomous"]);
+  it("the trigger axis is a single live value (US-LOOP-110)", () => {
+    expect(DELEGATION_TRIGGERS).toEqual(["host-guided"]);
+  });
+
+  it("recognises the retired trigger on the READ side without admitting it", () => {
+    expect(RETIRED_DELEGATION_TRIGGERS).toEqual(["loop-autonomous"]);
+    // Historical artifacts stay readable…
+    expect(isKnownHistoricalTrigger("loop-autonomous")).toBe(true);
+    expect(isKnownHistoricalTrigger("host-guided")).toBe(true);
+    // …but the retired literal is NOT a live value.
+    expect((DELEGATION_TRIGGERS as readonly string[]).includes("loop-autonomous")).toBe(false);
+    expect(isKnownHistoricalTrigger("made-up")).toBe(false);
+    expect(isKnownHistoricalTrigger(42)).toBe(false);
   });
 
   it("all topology literals are valid", () => {
@@ -30,11 +47,17 @@ describe("US-DELTA-001 AC1 — DelegationTrigger, DeliveryTopology, and QualityP
 
   it("all visible delivery modes are defined", () => {
     expect(VISIBLE_DELIVERY_MODES).toEqual([
-      "autonomous-loop",
       "full-delta-team",
       "delta-team",
       "solo-skill",
     ]);
+  });
+
+  it("recognises the retired visible mode on the READ side only (US-LOOP-110)", () => {
+    expect(RETIRED_VISIBLE_DELIVERY_MODES).toEqual(["autonomous-loop"]);
+    expect(isKnownHistoricalVisibleMode("autonomous-loop")).toBe(true);
+    expect(isKnownHistoricalVisibleMode("solo-skill")).toBe(true);
+    expect((VISIBLE_DELIVERY_MODES as readonly string[]).includes("autonomous-loop")).toBe(false);
   });
 
   it("all delta roles are defined", () => {
@@ -42,9 +65,18 @@ describe("US-DELTA-001 AC1 — DelegationTrigger, DeliveryTopology, and QualityP
   });
 
   it("all block reasons are defined", () => {
-    expect(DELTA_BLOCK_REASONS).toContain("host_supervisor_required");
     expect(DELTA_BLOCK_REASONS).toContain("identity_collision");
     expect(DELTA_BLOCK_REASONS).toContain("host_attestation_invalid");
+  });
+
+  it("host_supervisor_required is unreachable but still parseable (US-LOOP-110)", () => {
+    // The premise it guarded (a loop has no host session) was wrong; the trigger
+    // it blocked is gone, so the reason can no longer be emitted.
+    expect((DELTA_BLOCK_REASONS as readonly string[]).includes("host_supervisor_required")).toBe(false);
+    expect(RETIRED_DELTA_BLOCK_REASONS).toEqual(["host_supervisor_required"]);
+    expect(isKnownHistoricalBlockReason("host_supervisor_required")).toBe(true);
+    expect(isKnownHistoricalBlockReason("identity_collision")).toBe(true);
+    expect(isKnownHistoricalBlockReason("invented_reason")).toBe(false);
   });
 });
 
@@ -58,14 +90,18 @@ describe("US-DELTA-001 AC3 — DeliveryShape type guards validate orthogonal com
     expect(isValidDeliveryShape(shape)).toBe(true);
   });
 
-  it("accepts loop-autonomous solo shape", () => {
+  it("REJECTS the retired loop-autonomous shape as a live shape (US-LOOP-110)", () => {
+    // The shape guard admits LIVE shapes only. A historical manifest carrying the
+    // retired trigger is still recognisable via isKnownHistoricalTrigger — but it
+    // must never pass as a shape a new delegation may be prepared with.
     expect(
       isValidDeliveryShape({
         trigger: "loop-autonomous",
         topology: "solo",
         qualityProfile: "standard",
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(isKnownHistoricalTrigger("loop-autonomous")).toBe(true);
   });
 
   it("accepts host-guided full-delta-team shape", () => {

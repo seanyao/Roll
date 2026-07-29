@@ -7,6 +7,8 @@ import type { AgentId, AgentToolchainClassification, ArtifactRef, ExecutionProfi
 import type { CycleCost, CyclePhase } from "./cycle.js";
 import type {
   DelegationTrigger,
+  HistoricalDelegationTrigger,
+  HistoricalDeltaBlockReason,
   DeliveryTopology,
   QualityProfile,
   DeltaRole,
@@ -639,7 +641,14 @@ export type RollEvent =
       runId: string;
       storyId: string;
       cycleId?: string;
-      trigger: DelegationTrigger;
+      /**
+       * US-LOOP-110 (codex r3/r4): the EVENT UNION is a read contract over an
+       * append-only ledger, so it must hold every value Roll has ever written —
+       * including the retired trigger. Emitters are constrained separately: `roll
+       * delta prepare` validates against the LIVE `DELEGATION_TRIGGERS`, so no new
+       * event can carry a retired literal.
+       */
+      trigger: DelegationTrigger | HistoricalDelegationTrigger;
       topology: DeliveryTopology;
       qualityProfile: QualityProfile;
       presetId: string;
@@ -701,7 +710,12 @@ export type RollEvent =
       delegationId: string;
       storyId: string;
       role?: DeltaRole;
-      reason: DeltaBlockReason;
+      /**
+       * Read contract: historical events carry the retired reason. Emitters must
+       * still write a LIVE reason only — `delta validate` enforces that and puts
+       * any prior/foreign value in `detail` verbatim.
+       */
+      reason: DeltaBlockReason | HistoricalDeltaBlockReason;
       detail: string;
       ts: number;
     };

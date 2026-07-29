@@ -12,10 +12,13 @@ import {
   DELIVERY_TOPOLOGIES,
   QUALITY_PROFILES,
   DELTA_ROLES,
+  DELTA_BLOCK_REASONS,
   type DelegationTrigger,
   type DeliveryTopology,
   type QualityProfile,
   type DeltaRole,
+  type DeltaBlockReason,
+  isKnownHistoricalBlockReason,
 } from "@roll/spec";
 import {
   prepareDelegation,
@@ -244,6 +247,37 @@ function prepareCommand(args: string[]): number {
   // resolution template (credible provenance claims). The host is the attestation authority
   // for these fields; they must never be fabricated or re-used from other sources.
   const templateRecord = resolutionTemplate as Record<string, unknown>;
+
+  // US-LOOP-110 (codex review r5): the template's own `trigger` is persisted into
+  // the resolution on disk. Unchecked, a `--trigger host-guided` prepare could
+  // write a NEW resolution claiming the retired `loop-autonomous`, contradicting
+  // its own delta:prepared event. A new record must never carry a retired literal,
+  // so refuse rather than silently rewrite the host's template.
+  const templateTrigger = templateRecord.trigger;
+  if (templateTrigger !== undefined) {
+    const liveTrigger =
+      typeof templateTrigger === "string" && (DELEGATION_TRIGGERS as readonly string[]).includes(templateTrigger);
+    if (!liveTrigger) {
+      const msg = `Resolution template declares trigger ${JSON.stringify(templateTrigger)}, which is not a live trigger (${DELEGATION_TRIGGERS.join("|")})`;
+      if (json) {
+        process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: msg }) + "\n");
+      } else {
+        process.stderr.write(`${msg}\n`);
+      }
+      return 1;
+    }
+    const flagTrigger = flags["trigger"];
+    if (typeof flagTrigger === "string" && flagTrigger !== templateTrigger) {
+      const msg = `Resolution template trigger ${JSON.stringify(templateTrigger)} disagrees with --trigger ${JSON.stringify(flagTrigger)}`;
+      if (json) {
+        process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: msg }) + "\n");
+      } else {
+        process.stderr.write(`${msg}\n`);
+      }
+      return 1;
+    }
+  }
+
   const hostPresetSha256 = templateRecord.presetSha256 as string | undefined;
   const hostInventorySha256 = templateRecord.inventorySha256 as string | undefined;
   const hostInventoryObservedAt = templateRecord.inventoryObservedAt as string | undefined;
@@ -698,23 +732,45 @@ function validateCommand(args: string[]): number {
     return 1;
   }
 
-  // Admission check 2: delegation must not be blocked
+  // Admission check 2: delegation must not be blocked.
+  // US-LOOP-110: this used to re-emit `host_supervisor_required`, which was never
+  // what happened here — the delegation was blocked for its OWN reason and this
+  // check only refuses to advance past it. The original reason is now PROPAGATED
+  // (never replaced by an unrelated one, never invented when unparseable).
   const blockedEvent = delegationEvents.find((e) => e.type === "delta:blocked");
   if (blockedEvent) {
     const blocked = blockedEvent as Record<string, unknown>;
+    const rawReason = blocked.reason;
+    // A NEW event may only carry a LIVE reason — the ledger is append-only, so
+    // writing a retired or arbitrary literal would make this fresh record
+    // schema-invalid (codex review r1 + r2). Two distinct things therefore:
+    //   - `propagated` is what the new event carries: the prior reason when it is
+    //     still live, otherwise the honest live fallback;
+    //   - `originalNote` is what the DETAIL says the prior reason actually was,
+    //     verbatim, including a retired or malformed value.
+    // Nothing is invented and nothing is hidden.
+    const isLiveReason =
+      typeof rawReason === "string" && (DELTA_BLOCK_REASONS as readonly string[]).includes(rawReason);
+    const propagated: DeltaBlockReason = isLiveReason ? (rawReason as DeltaBlockReason) : "artifact_invalid";
+    const originalNote = isLiveReason
+      ? rawReason
+      : isKnownHistoricalBlockReason(rawReason)
+        ? `retired prior reason ${String(rawReason)}`
+        : `unrecognised prior reason ${JSON.stringify(rawReason)}`;
+    const detail = `Delegation ${delegationId} is blocked (${originalNote}); cannot validate further stages`;
     bus.appendEvent(eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
       role: stage,
-      reason: "host_supervisor_required",
-      detail: `Delegation ${delegationId} is blocked (${blocked.reason as string ?? "unknown"}); cannot validate further stages`,
+      reason: propagated,
+      detail,
       ts: now,
     });
     if (json) {
-      process.stderr.write(JSON.stringify({ ok: false, error: "host_supervisor_required", detail: `Delegation is blocked`, role: stage }) + "\n");
+      process.stderr.write(JSON.stringify({ ok: false, error: propagated, detail: `Delegation is blocked`, role: stage }) + "\n");
     } else {
-      process.stderr.write(`Delegation ${delegationId} is blocked` + "\n");
+      process.stderr.write(`Delegation ${delegationId} is blocked (${originalNote})` + "\n");
     }
     return 1;
   }
@@ -793,14 +849,28 @@ function validateCommand(args: string[]): number {
   const result = validator(validationInput);
 
   if (!result.ok) {
-    // Block: append delta:blocked event, return non-zero
+    // Block: append delta:blocked event, return non-zero.
+    // codex review r4: the validator seam is typed `reason?: string`, so it can
+    // hand back an absent, retired, or foreign literal. A new ledger record may
+    // carry a LIVE reason only — otherwise this fresh event is permanently
+    // schema-invalid. Same split as the already-blocked path: the event gets a
+    // live reason, the detail keeps the validator's own words verbatim.
+    const validatorReason = result.reason;
+    const liveReason: import("@roll/spec").DeltaBlockReason =
+      typeof validatorReason === "string" && (DELTA_BLOCK_REASONS as readonly string[]).includes(validatorReason)
+        ? (validatorReason as import("@roll/spec").DeltaBlockReason)
+        : "artifact_invalid";
+    const blockDetail =
+      liveReason === validatorReason || validatorReason === undefined
+        ? (result.detail ?? "")
+        : `${result.detail ?? ""}${result.detail !== undefined && result.detail !== "" ? " " : ""}(validator reported ${JSON.stringify(validatorReason)})`;
     bus.appendEvent(eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
       role: stage,
-      reason: result.reason as import("@roll/spec").DeltaBlockReason,
-      detail: result.detail ?? "",
+      reason: liveReason,
+      detail: blockDetail,
       ts: now,
     });
 

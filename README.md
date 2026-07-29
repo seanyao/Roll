@@ -127,10 +127,11 @@ Honest boundaries the protocol states and never overclaims:
 - **Host-guided cost is `? (host_unobservable)`** — never estimated, priced, or
   zeroed.
 
-Loop admission: `loop-autonomous + delta-team` is blocked
-`host_supervisor_required` (never silently converted);
-`loop-autonomous + full-delta-team` is explicit opt-in; default autonomous solo
-delivery is unchanged. See the `roll-delta-team` skill and
+Every delegation has a Supervisor: a loop is a chain of cycles running inside a
+host session, so it has a main session and full sub-agent capability like any
+other delivery. There is one trigger axis value and no admission prohibition —
+any topology (solo / Delta Team / Full Delta Team) is available to a loop. See
+the `roll-delta-team` skill and
 [guide/en/ai-agents.md](guide/en/ai-agents.md) for the full procedure.
 
 ### Supervisor backlog-clearing standard
