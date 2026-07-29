@@ -263,7 +263,7 @@ describe("supervisorCommand", () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain("Supervisor — project facts");
     expect(r.out).toContain("backlog: 2 todo");
-    expect(r.out).toContain("mode: guided");
+    expect(r.out).toContain("mode: session-driven");
     expect(r.out).toContain("owner action:");
   });
 
@@ -302,7 +302,7 @@ describe("supervisorCommand", () => {
     const cwd = project(BACKLOG, { events: [JSON.stringify({ type: "pr:merge", prNumber: 1, storyId: "US-1", ts: 1 })] });
     const r = run(cwd, ["next"]);
     expect(r.out).toContain("US-2"); // US-2 depends-on US-1 (delivered) → ready
-    expect(r.out).toContain("mode: guided");
+    expect(r.out).toContain("mode: session-driven");
     expect(r.out).toContain("roll loop go --cards US-2");
     expect(r.out).toContain("scheduler:");
   });
@@ -633,7 +633,8 @@ describe("supervisorCommand", () => {
     const cwd = project(BACKLOG);
     const r = run(cwd, ["--json"]);
     const parsed = JSON.parse(r.out);
-    expect(parsed.mode.mode).toBe("guided");
+    // US-LOOP-112: the guided/autonomous binary is gone — one mode remains.
+    expect(parsed.mode.mode).toBe("session-driven");
     expect(parsed.facts.counts.done).toBe(1);
     expect(Array.isArray(parsed.decisions)).toBe(true);
   });
@@ -643,9 +644,12 @@ describe("supervisorCommand", () => {
     const r = run(cwd, ["why"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain("Supervisor — why stuck");
-    expect(r.out).toContain("mode: guided");
+    expect(r.out).toContain("mode: session-driven");
     expect(r.out).toContain("owner action:");
-    expect(r.out).toContain("will not start long-running Story execution");
+    // US-LOOP-112: the scheduler line no longer describes a scheduler that "will
+    // not start" work — cards advance only while a session drives them.
+    expect(r.out).toContain("scheduler:");
+    expect(r.out).toContain("only while a session drives them");
   });
 
   it("live renders full-team role panes and handoff flow", () => {

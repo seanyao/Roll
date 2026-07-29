@@ -1446,12 +1446,11 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
     const n = recommendNext(input);
     const mode = resolveOperatingMode(projectPath);
     const ctx = supervisorContext(projectPath, input, readSupervisorEvents(projectPath));
-    const action =
-      state.next.kind === "run_card" && mode.mode === "guided"
-        ? suggestedGuidedRun(n.storyId)
-        : state.next.kind === "run_card"
-          ? mode.ownerAction
-          : state.next.ownerAction;
+    // US-LOOP-112: this used to branch on `mode.mode === "guided"` to decide
+    // between suggesting an explicit run command and deferring to the scheduler's
+    // own next action. There is no scheduler and no second mode — a card that is
+    // ready to run is always run by this session, so always name the command.
+    const action = state.next.kind === "run_card" ? suggestedGuidedRun(n.storyId) : state.next.ownerAction;
     const browserLines = renderBrowserTruthSupervisorLine(collectBrowserTruth({ projectPath }));
     process.stdout.write(
       `\n  Supervisor — next: ${n.storyId ?? "(nothing ready)"}\n  scope: ${state.scope.label}\n  remaining: ${remainingLine(input)}\n  cast: ${ctx.cast}\n  cast detail: ${ctx.castDetail}\n  gate: ${ctx.gate}\n  manual merge: ${ctx.manualMerge}\n  semantic ranking: ${ctx.pickRanking?.line ?? "none"}\n  .roll meta: ${ctx.rollMeta.state} — ${ctx.rollMeta.detail}\n  agent health: ${state.agentHealth.summary}\n${browserLines.join("\n")}\n\n  ${n.reason}\n  ${formatOperatingMode(mode)}\n  owner action: ${action}\n  scheduler: ${state.next.schedulerAction}\n\n`,

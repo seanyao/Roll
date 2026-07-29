@@ -1,18 +1,40 @@
-import { launchdLabel } from "@roll/infra";
+/**
+ * US-LOOP-112 — how Roll describes the way this project is being driven.
+ *
+ * This module used to answer a BINARY question: `guided` or `autonomous`. Its one
+ * and only judge was whether a launchd plist existed and was loaded:
+ *
+ *   launchdLabel("loop", slug) → ~/Library/LaunchAgents/<label>.plist exists?
+ *                              → launchctl print says enabled?
+ *                              → autonomous, else guided
+ *
+ * So "autonomous" never meant "Roll is driving itself" — it meant "a timer is
+ * installed". With the daemon lanes retired there is no second judge to swap in,
+ * because there is no second mode: every delivery runs inside a host agent
+ * session, and that session is the Supervisor.
+ *
+ * What survives is the part that was always real: whether the owner has PAUSED
+ * autonomous progress. So the view keeps its output slots (`reason`,
+ * `ownerAction`, `schedulerAction` — consumed by `roll supervisor next/why/advise`)
+ * and drops the mode binary along with the install-state axis.
+ */
 import { projectSlug as deriveProjectSlug } from "@roll/spec";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type RollOperatingMode = "guided" | "autonomous";
+/**
+ * The single way Roll is driven. Kept as a one-value union (rather than deleted)
+ * so the `mode` slot in `roll supervisor --json` stays present and self-describing
+ * for downstream readers.
+ */
+export type RollOperatingMode = "session-driven";
 
-type InstallState = "enabled" | "stale" | "not_installed";
-type RunState = "active" | "paused" | "dormant";
+/** Whether the owner has paused autonomous progress in this project. */
+type RunState = "active" | "paused";
 
 export interface OperatingModeView {
   readonly mode: RollOperatingMode;
-  readonly installState: InstallState;
   readonly runState: RunState;
   readonly slug: string;
   readonly reason: string;
@@ -21,9 +43,8 @@ export interface OperatingModeView {
 }
 
 export interface OperatingModeDeps {
-  readonly launchdDir?: () => string;
-  readonly launchdEnabled?: (label: string) => boolean;
-  readonly uid?: () => number;
+  /** Path-existence probe, injectable so tests never touch a real home dir. */
+  readonly probe?: (path: string) => boolean;
 }
 
 function gitOutput(projectPath: string, argv: readonly string[]): string | undefined {
@@ -58,85 +79,53 @@ function remoteUrl(projectPath: string): string | undefined {
   return first === undefined ? undefined : gitOutput(projectPath, ["remote", "get-url", first]);
 }
 
-export function projectOperatingSlug(projectPath: string): string {
+export function projectOperatingSlug(projectPath: string = process.cwd()): string {
+  // ROLL_MAIN_SLUG wins outright (US-LOOP-006) — unrelated to the mode collapse,
+  // so it stays exactly as it was.
   const override = process.env["ROLL_MAIN_SLUG"];
   if (override !== undefined && override !== "") return override;
   const path = canonicalProjectPath(projectPath);
   return deriveProjectSlug({ path, remoteUrl: remoteUrl(path) });
 }
 
-function defaultLaunchdDir(): string {
-  return process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
+function runState(projectPath: string, slug: string, probe: (p: string) => boolean): RunState {
+  // PAUSE is the one real state left: it stops autonomous progress. A guided
+  // one-shot (`roll loop go --cards <id>`) still runs while paused (FIX-1472).
+  return probe(join(projectPath, ".roll", "loop", `PAUSE-${slug}`)) ? "paused" : "active";
 }
 
-function installedState(slug: string, deps: OperatingModeDeps): InstallState {
-  const label = launchdLabel("loop", slug);
-  const plist = join((deps.launchdDir ?? defaultLaunchdDir)(), `${label}.plist`);
-  if (!existsSync(plist)) return "not_installed";
-  const enabled = deps.launchdEnabled ?? ((l: string): boolean => {
-    try {
-      const uid = (deps.uid ?? (() => process.getuid?.() ?? 501))();
-      execFileSync("launchctl", ["print", `gui/${uid}/${l}`], {
-        stdio: ["ignore", "ignore", "ignore"],
-        timeout: 2000,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  return enabled(label) ? "enabled" : "stale";
-}
-
-function runState(projectPath: string, slug: string): RunState {
-  const rt = join(projectPath, ".roll", "loop");
-  if (existsSync(join(rt, `PAUSE-${slug}`))) return "paused";
-  if (existsSync(join(rt, `DORMANT-${slug}`))) return "dormant";
-  return "active";
-}
-
-function nextAction(mode: RollOperatingMode, install: InstallState, run: RunState): string {
-  if (mode === "autonomous") {
-    if (run === "dormant") return "add Todo work or run `roll loop resume` to wake; observe with `roll supervisor live`";
-    return "observe with `roll supervisor live`; pause with `roll loop pause` before manual intervention";
+function nextAction(run: RunState): string {
+  if (run === "paused") {
+    return "autonomous progress is paused — resume it, or drive one card now with `roll loop go --cards <id>`";
   }
-  if (run === "paused") return "run `roll loop resume` to return to autonomous mode, or use `roll supervisor next` for manual guidance";
-  if (install === "stale") return "run `roll loop on` to repair autonomous scheduling, or use `roll loop go --cards <id>` for an explicit guided run";
-  return "run `roll supervisor next`, then explicitly start work with `roll loop go --cards <id>` or switch with `roll loop on`";
+  return "run `roll supervisor next`, then start work with `roll loop go` in this session";
 }
 
-export function resolveOperatingMode(projectPath: string = process.cwd(), deps: OperatingModeDeps = {}): OperatingModeView {
+export function resolveOperatingMode(
+  projectPath: string = process.cwd(),
+  deps: OperatingModeDeps = {},
+): OperatingModeView {
+  const probe = deps.probe ?? existsSync;
   const slug = projectOperatingSlug(projectPath);
-  const installState = installedState(slug, deps);
-  const state = runState(projectPath, slug);
-  const mode: RollOperatingMode = installState === "enabled" && state !== "paused" ? "autonomous" : "guided";
-  const reason =
-    mode === "autonomous"
-      ? state === "dormant"
-        ? "scheduler is installed and dormant; it can wake without changing agent config"
-        : "scheduler is installed and eligible cycles may start within gates"
-      : state === "paused"
-        ? "pause marker is present; owner must resume before scheduled work starts"
-        : installState === "stale"
-          ? "scheduler plist exists but is not loaded"
-          : "scheduler is not installed";
-  const schedulerAction =
-    mode === "autonomous"
-      ? "may pick eligible Todo stories, but still honors pause, budget, route, evidence, Evaluator, and release gates"
-      : "will not start long-running Story execution until the owner explicitly runs or resumes it";
+  const state = runState(projectPath, slug, probe);
   return {
-    mode,
-    installState,
+    mode: "session-driven",
     runState: state,
     slug,
-    reason,
-    ownerAction: nextAction(mode, installState, state),
-    schedulerAction,
+    reason:
+      state === "paused"
+        ? "pause marker is present; autonomous progress stays stopped until it is cleared"
+        : "delivery runs in this agent session — the session is the Supervisor",
+    ownerAction: nextAction(state),
+    schedulerAction:
+      state === "paused"
+        ? "no card will be picked autonomously while the pause marker is present"
+        : "cards advance only while a session drives them, and still honor budget, route, evidence, Evaluator, and release gates",
   };
 }
 
 export function formatOperatingMode(view: OperatingModeView): string {
-  return `mode: ${view.mode} (${view.runState}/${view.installState}) — ${view.reason}`;
+  return `mode: ${view.mode} (${view.runState}) — ${view.reason}`;
 }
 
 export function suggestedGuidedRun(storyId: string | null): string {
