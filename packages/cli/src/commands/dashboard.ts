@@ -1335,75 +1335,11 @@ function launchAgentsDir(): string {
   return process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
 }
 
-interface DailySchedule {
-  mode: "calendar" | "interval";
-  hour?: number;
-  minute?: number;
-}
-
-function readDailyPlistSchedule(svc: string): DailySchedule | null {
-  const slug = projectSlug();
-  const ladir = process.env["_LAUNCHD_DIR"] || join(homedir(), "Library", "LaunchAgents");
-  const plist = join(ladir, `com.roll.${svc}.${slug}.plist`);
-  if (!existsSync(plist)) return null;
-  let text: string;
-  try {
-    text = readFileSync(plist, "utf8");
-  } catch {
-    return null;
-  }
-  if (text.includes("StartCalendarInterval")) {
-    const h = /<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/.exec(text);
-    const m = /<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/.exec(text);
-    if (h) {
-      return {
-        mode: "calendar",
-        hour: parseInt(h[1] ?? "0", 10),
-        minute: m ? parseInt(m[1] ?? "0", 10) : 0,
-      };
-    }
-  }
-  if (text.includes("StartInterval")) return { mode: "interval" };
-  return null;
-}
-
-/** now is the display-local Date (UTC+8 wall clock represented as a Date). */
-function computeNextFire(hour: number, minute: number, base: Date): number {
-  // base is a real (UTC) Date; we anchor candidate to today's HH:MM in UTC+8.
-  const sh = toShanghai(base);
-  // candidate in UTC+8 wall clock
-  let candidateShanghai = Date.UTC(
-    sh.getUTCFullYear(),
-    sh.getUTCMonth(),
-    sh.getUTCDate(),
-    hour,
-    minute,
-    0,
-    0,
-  );
-  // convert candidate (UTC+8 wall) back to real epoch by subtracting offset
-  let candidateEpoch = candidateShanghai - TZ_OFFSET_MS;
-  if (candidateEpoch <= base.getTime()) candidateEpoch += 86400 * 1000;
-  return candidateEpoch / 1000;
-}
-
-function dailyScheduleLine(svc: string, now: Date): string | null {
-  const sched = readDailyPlistSchedule(svc);
-  if (sched === null) return null;
-  if (sched.mode === "calendar") {
-    const hh = sched.hour ?? 0;
-    const mm = sched.minute ?? 0;
-    const nxt = computeNextFire(hh, mm, now);
-    let line = `${svc}: ${pad2(hh)}:${pad2(mm)}`;
-    const delta = Math.trunc(nxt - now.getTime() / 1000);
-    const safe = Math.max(delta, 0);
-    const h = Math.floor(Math.floor(safe / 60) / 60);
-    const m = Math.floor(safe / 60) % 60;
-    line += ` (next fire in ${h}h ${m}m)`;
-    return line;
-  }
-  return `${svc}: daily (legacy interval)`;
-}
+// US-LOOP-118 (codex r2): the daily-plist schedule reader, computeNextFire(), and
+// dailyScheduleLine() are deleted. They printed "dream: 03:00 (next fire in 5h
+// 12m)" under the banner — the same prediction as the loop lane, one row down.
+// A leftover dream plist now surfaces the same way every other retired lane does:
+// as debris, via the leftover-lane note and roll doctor.
 
 function tickAgeLine(loopType: string, now: Date): string | null {
   const slug = projectSlug();
@@ -1735,10 +1671,6 @@ function render(
   // US-LOOP-116: no process-fallback backend to surface — the second resident
   // scheduler is deleted, so there is no lease, PID or heartbeat to report.
 
-  for (const svc of ["dream"]) {
-    const sl = dailyScheduleLine(svc, now);
-    if (sl) out.push("  " + c("dim", sl));
-  }
   // Delivery gate diagnostics — read runs for recent main-CI-red cycles.
   if (args.projectSlug !== null) {
     const dt = deliveryGateDiagnosticsFromRows(args.runs, { nowSec: Math.floor(args.now.getTime() / 1000) });

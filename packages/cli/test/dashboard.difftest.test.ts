@@ -423,6 +423,46 @@ describe("frozen: roll loop status (live)", () => {
     expect(ts).toContain("leftover plist");
   });
 
+  /**
+   * US-LOOP-118 (codex r2) — one tripwire for the whole class.
+   *
+   * Two separate prediction sites shipped in this file's history: the loop banner
+   * ("next run 14:30 · in 12m") and a dream line one row below it ("dream: 03:00
+   * (next fire in 5h 12m)"). I removed the first and codex found the second. So
+   * assert the PROPERTY rather than each site: with plists for every retired lane
+   * present, roll loop status must not name a future time at all.
+   */
+  it("US-LOOP-118: no lane's plist can produce a future-time promise anywhere", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    writeLoopPlist(env, ["<key>StartInterval</key>", "<integer>1800</integer>"].join("\n"));
+    // A dream plist with a calendar entry — the shape that produced "next fire in".
+    const la = env["_LAUNCHD_DIR"] as string;
+    writeFileSync(
+      join(la, `com.roll.dream.${env["ROLL_MAIN_SLUG"] as string}.plist`),
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<plist version=\"1.0\"><dict>",
+        "<key>StartCalendarInterval</key>",
+        "<dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>",
+        "</dict></plist>",
+        "",
+      ].join("\n"),
+    );
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-nofire-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    expect(ts).not.toContain("next fire");
+    expect(ts).not.toContain("next run");
+    // No "in 5h 12m" / "in 22m 00s" style countdown from any lane.
+    expect(ts).not.toMatch(/in \d+h \d+m/);
+    expect(ts).not.toMatch(/in \d+m \d+s/);
+    // And the dream plist is not silently ignored: it is debris to remove.
+    expect(ts).toContain("session-driven");
+  });
+
   it("US-LOOP-118: a calendar plist yields NO next-run promise either", () => {
     const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
     installLaunchctlShim(env);
