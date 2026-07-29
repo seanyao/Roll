@@ -113,43 +113,23 @@ use.
 
 ---
 
-## 自动迁移（7 天双路窗口）
+## 家目录遗留文件（自动迁移已退役）
 
-If you upgrade an existing project you do not need to do anything.
+The one-time move of control state out of `~/.shared/roll/loop/` into each
+project's `.roll/loop/` is over, and the automatic migration retired with the
+resident scheduler: no dual-path fallback, no rewrite on the way in.
 
-如果你升级一个既有项目，**无需任何手动操作**。outer runner 会在下一个 cycle 自动
-迁移老文件。
+把控制状态从 `~/.shared/roll/loop/` 搬进各项目 `.roll/loop/` 的一次性迁移已经结束，
+执行它的自动迁移也随常驻调度一起退役 —— cycle 不再在启动时改写路径，也没有双路回退。
+Roll 只读上表里的项目本地路径。
 
-**How it works:**
+If a project never made the move, copy its files by hand into
+`<project>/.roll/loop/`. Leftover `.migrated-*` markers are still reaped by
+`roll loop gc`.
 
-**工作原理：**
-
-1. Before reading control state, `旧路径迁移 helper <slug>` copies
-   `state` / `ALERT` / `PAUSE` / `mute` from home into the project, then renames
-   each legacy file `<name>.migrated-<timestamp>`.
-2. `旧运行记录迁移 helper` splits the machine-wide `runs.jsonl` by each
-   row's `project` slug into each project's file, then renames the legacy file.
-   Unresolvable rows are left behind so no history is lost.
-3. Migration is idempotent and never overwrites a newer target.
-
-1. 读控制状态之前，`旧路径迁移 helper <slug>` 把 `state` / `ALERT` /
-   `PAUSE` / `mute` 从家目录复制进项目，再把每个老文件改名为
-   `<name>.migrated-<时间戳>`。
-2. `旧运行记录迁移 helper` 把机器级 `runs.jsonl` 按每行的 `project` slug 拆
-   分进各项目文件，再把老文件改名。无法解析的行留在原处，不丢历史。
-3. 迁移幂等，已存在的更新目标永不被覆盖。
-
-**During the 7-day window**, control-plane reads use dual-path lookup
-(`控制状态路径解析器`): project-local first, legacy home as fallback. A
-separate FIX removes the fallback afterward.
-
-**在 7 天窗口期内**，控制平面文件的读取走双路查找（`控制状态路径解析器`）：
-优先项目本地路径，回退到家目录老路径。窗口结束后由单独的 FIX 移除回退。
-
-The `.migrated-*` artifacts are reaped by `roll loop gc` after they age out.
-
-`.migrated-*` 和 `runs.jsonl.migrated-*` 残骸到期后由 `roll loop gc` 回收，家目录不
-会堆积。
+如果某个项目从未迁移过，手工把 `state-<slug>.yaml`、`ALERT-<slug>.md`、
+`PAUSE-<slug>`、`mute-<slug>`，以及机器级 `runs.jsonl` 里属于它的行，复制进
+`<project>/.roll/loop/`。老迁移留下的 `.migrated-*` 标记到期后仍由 `roll loop gc` 回收。
 
 ---
 

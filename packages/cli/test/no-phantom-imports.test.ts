@@ -39,7 +39,15 @@ function testFiles(): string[] {
  * this file's own first run.
  */
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return (
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+      // codex r4: fixtures embed sample diffs, so a line like `+import { … } from
+      // "@roll/core"` inside a template literal read as a real import of ours.
+      // Diff-body lines are never this file's own code.
+      .replace(/^\s*[+-]\s*import\b.*$/gm, "")
+  );
 }
 
 /**
@@ -65,8 +73,31 @@ function namedImports(src: string): Array<{ names: string[]; spec: string }> {
   return out;
 }
 
-/** Resolve a relative module spec (`./x.js`) to the .ts file that backs it. */
+/**
+ * Workspace packages, so `@roll/infra` resolves to its source barrel.
+ *
+ * codex r4: the first version only followed RELATIVE specs, which left the
+ * bigger hole — cross-package imports are exactly how a test reaches code
+ * another card deleted. It found `LaunchctlResult`, dead since infra/schedule.ts
+ * was removed in this very card, still imported here.
+ */
+const PKG_ROOT = resolve(TEST_DIR, "..", "..");
+function workspaceEntry(spec: string): string | undefined {
+  const m = /^@roll\/([a-z0-9-]+)$/.exec(spec);
+  if (m === null) return undefined;
+  const entry = join(PKG_ROOT, m[1]!, "src", "index.ts");
+  try {
+    return statSync(entry).isFile() ? entry : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve a module spec (`./x.js` or `@roll/infra`) to the .ts file behind it. */
 function resolveSpec(fromFile: string, spec: string): string | undefined {
+  const pkg = workspaceEntry(spec);
+  if (pkg !== undefined) return pkg;
+  if (!spec.startsWith(".")) return undefined;
   const base = resolve(dirname(fromFile), spec.replace(/\.js$/, ""));
   for (const candidate of [`${base}.ts`, join(base, "index.ts")]) {
     try {
@@ -153,8 +184,10 @@ describe("US-LOOP-117 — no test imports a phantom export", () => {
     const phantom: string[] = [];
     for (const f of testFiles()) {
       for (const { names, spec } of namedImports(code(readFileSync(f, "utf8")))) {
-        // Only our own relative source files — packages resolve via node.
-        if (!spec.startsWith(".") || !spec.includes("/src/")) continue;
+        // Our own code only: a relative source path, or a @roll/* workspace
+        // package (codex r4 — the cross-package case was the bigger hole).
+        const ours = (spec.startsWith(".") && spec.includes("/src/")) || workspaceEntry(spec) !== undefined;
+        if (!ours) continue;
         const target = resolveSpec(f, spec);
         if (target === undefined) {
           phantom.push(`${f.replace(TEST_DIR, "")}: cannot read ${spec}`);

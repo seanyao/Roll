@@ -28,7 +28,6 @@ import {
   type LoopRunState,
 } from "../src/commands/loop-sched.js";
 import { recordRootCauseFailure } from "../src/runner/failure-attribution.js";
-import { type LaunchctlResult } from "@roll/infra";
 import { parseGoalYaml } from "@roll/spec";
 
 const dirs: string[] = [];
