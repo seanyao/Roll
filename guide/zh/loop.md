@@ -191,11 +191,11 @@ Hold、Cut、未满足依赖、skip-list、open PR、已合并交付和 pending-
 `roll loop go` 运行期间会持有 `.roll/loop/go.lock`，所以另一个终端里再跑一次 `go`
 会让路，而不是启动一个互相竞争的 `roll loop run-once`。
 `roll loop go --cards <ids>` 对它触发的单次 runner 使用同一份卡片 allow-list，
-所以手动 tick 不能静默改选其他 backlog 卡。
+所以一次显式驱动不能静默改选其他 backlog 卡。
 
-goal mode 在 scheduler off 时也能运行，因为它自己启动会话，不依赖 launchd。loop 处于
-paused 状态时不建议直接启动：`PAUSE-<slug>` 标记仍会在 cycle 边界生效，所以应先执行
-`roll loop resume`，再启动 `roll loop go`。
+`go` 自成会话，不依赖任何已安装的东西。项目处于 paused 时先跑 `roll loop resume`
+——`PAUSE-<slug>` 标记仍会在 cycle 边界生效——或者用 `--cards` 显式点名卡片，
+那种一次性在 paused 下也会跑（FIX-1472）。
 
 ### Goal Mode 安全闸
 

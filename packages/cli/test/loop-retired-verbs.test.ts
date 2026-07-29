@@ -108,3 +108,19 @@ describe("US-LOOP-113 — no roll command can arm a scheduler", () => {
     }
   });
 });
+
+/**
+ * US-LOOP-113 (codex review r7) — a removed verb must answer "unknown subcommand"
+ * even offline. It used to sit on the network gate's list, so an offline user typing
+ * it got a connectivity error for a command that does not exist.
+ */
+describe("US-LOOP-113 — removed verbs are not network-gated", () => {
+  it("the gate no longer claims a required-network name for them", async () => {
+    const { networkNeeds } = await import("../src/lib/require-network.js");
+    for (const sub of ["on", "off", "now", "fallback"]) {
+      expect(networkNeeds("loop", [sub]), `${sub} must not be network-gated`).toBeNull();
+    }
+    // Sanity: the live verb that DOES need the network still is.
+    expect(networkNeeds("loop", ["go"])).toBe("roll loop go");
+  });
+});
