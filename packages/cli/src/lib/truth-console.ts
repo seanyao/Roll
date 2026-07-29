@@ -346,23 +346,23 @@ function loopStateBanner(input: TruthConsoleInput): string {
     `</section>`;
 
   if (state === "DORMANT") {
-    const laneEn =
-      (laneRunning("backlog") ? "loop lane active" : "loop lane unloaded · zero idle") +
-      " · " +
-      (laneRunning("dream") ? "Dream lane active" : "Dream lane off");
-    const laneZh =
-      (laneRunning("backlog") ? "loop lane 活跃" : "loop lane 已卸载 · 零闲置") +
-      " · " +
-      (laneRunning("dream") ? "Dream lane 活跃" : "Dream lane 关闭");
+    // US-LOOP-115: DORMANT is never WRITTEN any more, but an old dossier snapshot on
+    // disk may carry it, so it must still render. What it must NOT do is promise wake
+    // sources that no longer exist (new Todo / PR merge / dream scan / resume all
+    // re-armed a lane). It is labelled as a historical state instead.
     return wrap(
       C.purple,
       "#f7f5fc",
       [
         `💤 <b>DORMANT</b> · since ${since}${reason}`,
-        laneEn,
-        "Wakes on: new Todo · PR merge · dream scan · roll loop resume",
+        "historical state — resident scheduling is retired (US-LOOP-115)",
+        "Delivery runs in the agent session that drives roll loop go",
       ],
-      [`💤 休眠 · 自 ${since}${reason}`, laneZh, "唤醒于：新 Todo · PR 合并 · dream 扫描 · roll loop resume"],
+      [
+        `💤 休眠 · 自 ${since}${reason}`,
+        "历史状态——常驻调度已退役(US-LOOP-115)",
+        "交付由跑 roll loop go 的那个 agent 会话驱动",
+      ],
     );
   }
   if (state === "PAUSED") {

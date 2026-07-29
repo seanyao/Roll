@@ -1695,7 +1695,12 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
   ];
   const withLoop = (loop: TruthSnapshot["loop"]): TruthSnapshot => ({ ...SNAP, loop });
 
-  it("AC2: DORMANT header spells out since + reason + per-lane load state + wake hint", () => {
+
+
+  // US-LOOP-115: DORMANT is never written any more, but an OLD dossier snapshot can
+  // carry it, so it must still render — labelled as history, and without promising
+  // wake sources (new Todo / PR merge / dream scan / resume) that no longer exist.
+  it("a historical DORMANT snapshot still renders, labelled as history", () => {
     const html = render(
       withLoop({
         runState: "DORMANT",
@@ -1705,23 +1710,13 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
       }),
     );
     expect(html).toContain('data-loop-state="DORMANT"');
-    expect(html).toContain("2026-06-25T03:00:00Z"); // since
-    expect(html).toContain("idle 6h, no Todo"); // reason
-    // AC2 exact lane phrasing: loop lane unloaded, Dream active (PR loop retired).
-    expect(html).toContain("loop lane unloaded · zero idle");
-    expect(html).toContain("Dream lane active");
-    // next-wake hint
-    expect(html).toContain("Wakes on: new Todo · PR merge · dream scan · roll loop resume");
-  });
-
-  it("AC4: DORMANT header is bilingual EN + ZH (separate lines, no inline mix)", () => {
-    const html = render(
-      withLoop({ runState: "DORMANT", stateSince: "2026-06-25T03:00:00Z", stateReason: "idle 6h", lanes: LANES_DORMANT }),
-    );
-    expect(html).toContain("DORMANT"); // EN
-    expect(html).toContain("休眠"); // ZH
-    expect(html).toContain("唤醒于"); // ZH wake hint
-    expect(html).toContain("loop lane 已卸载 · 零闲置"); // ZH lane line
+    expect(html).toContain("2026-06-25T03:00:00Z");
+    expect(html).toContain("idle 6h, no Todo");
+    expect(html).toContain("historical state");
+    expect(html).toContain("常驻调度已退役");
+    // No retired wake promises.
+    expect(html).not.toContain("Wakes on:");
+    expect(html).not.toContain("唤醒于");
   });
 
   it("AC3: render honours the resolver verdict — PAUSED snapshot renders PAUSED, not dormant/active", () => {
@@ -1748,9 +1743,4 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
     expect(html).toContain('data-loop-state="ACTIVE"');
   });
 
-  it("DORMANT with loop lane somehow still armed shows 'loop lane active' (state is lane-derived, not hardcoded)", () => {
-    const html = render(withLoop({ runState: "DORMANT", stateSince: "2026-06-25T03:00:00Z", stateReason: "x", lanes: LANES_ALL_ON }));
-    expect(html).toContain("loop lane active");
-    expect(html).not.toContain("loop lane unloaded · zero idle");
-  });
 });

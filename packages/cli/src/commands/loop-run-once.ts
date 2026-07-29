@@ -17,6 +17,7 @@ import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present
 import { createScheduler, isOwnerHeld, launchdLabel, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce } from "../runner/index.js";
 import { clearCardFailure, recordCardFailure } from "../runner/skip-cards.js";
 import { addPendingPublish, removePendingPublish } from "../runner/pending-publish.js";
@@ -570,6 +571,22 @@ export function resetConsecutiveIdle(projectPath: string, slug: string): void {
 }
 
 // ─── US-LOOP-079h2: enter-dormancy decision ──────────────────────────────────
+
+/**
+ * US-LOOP-115 (codex review r2): does a leftover launchd lane for this project still
+ * exist on disk? Roll installs none, so a hit means an older install left one armed
+ * and it is what invoked this command. Detection only — Roll never touches
+ * LaunchAgents itself; `roll doctor` prints the disarm command.
+ */
+export function leftoverLoopLaneLabel(slug: string): string | null {
+  const dir = process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
+  const label = `com.roll.loop.${slug}`;
+  try {
+    return existsSync(join(dir, `${label}.plist`)) ? label : null;
+  } catch {
+    return null;
+  }
+}
 
 export function shouldSuppressGoalChildFailureCounter(input: {
   isGoalChild: boolean;
@@ -1181,11 +1198,25 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
     );
     // idle outcomes are not failures — a no-work cycle is expected behaviour.
     // The consecutive-failure counter is NOT ticked.
-    const idleCount = incrementConsecutiveIdle(id.path, id.slug); // US-LOOP-079h1: idle → increment counter
+    incrementConsecutiveIdle(id.path, id.slug); // US-LOOP-079h1: idle → increment counter
     // US-LOOP-115: no dormancy. DORMANT existed because a launchd lane woke every
-    // 30 minutes and had to unload itself once the backlog drained, so it stopped
-    // writing idle records. A session-driven loop cannot idle-spin: `roll loop go`
-    // finishes when there is nothing pickable. There is no lane to unload.
+    // 30 minutes and had to unload itself once the backlog drained — otherwise it
+    // logged an idle row forever. Roll installs no lane now (`roll loop on` is gone,
+    // US-LOOP-113) and `roll loop go` simply finishes when nothing is pickable, so
+    // there is nothing to unload.
+    //
+    // codex review r2: a machine that ran an OLDER Roll may still carry a leftover
+    // `com.roll.loop.*` lane, and that lane invokes THIS command. Without dormancy
+    // it would keep logging idle rows unattended, so say so on the way out and name
+    // the disarm path rather than letting it accumulate silently.
+    if (leftoverLoopLaneLabel(id.slug)) {
+      process.stdout.write(
+        "loop run-once: this ran from a leftover launchd lane — Roll no longer installs timers.\n" +
+          "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n" +
+          "loop run-once: 本次由旧版残留的 launchd lane 触发——Roll 不再安装定时器。\n" +
+          "  卸载方法:roll doctor(列出全部 com.roll.* lane 与卸载命令)\n",
+      );
+    }
     return 0;
   }
 
