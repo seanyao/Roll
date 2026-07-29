@@ -722,6 +722,32 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
     }
   });
 
+  it("US-LOOP-118: freshness uses the SHARED render clock, not Date.now() (codex r13)", () => {
+    // The live-feed panel judges live.log against the selector's nowSec. If the
+    // heartbeat used Date.now(), the two surfaces could disagree about the same file
+    // under ROLL_RENDER_NOW — one showing a live stream, the other no session.
+    const dir = mkdtempSync(join(tmpdir(), "roll-hb-clock-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      const live = join(rt, "live.log");
+      writeFileSync(live, "streaming\n");
+      const writtenAt = Math.floor(Date.parse("2026-06-20T12:00:00Z") / 1000);
+      utimesSync(live, writtenAt, writtenAt);
+
+      // A render clock just after the write: streaming.
+      const near = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-clock", join(dir, "la"), writtenAt + 30));
+      expect(near.lanes.find((l) => l.source === "goal")?.running).toBe(true);
+
+      // A render clock hours later against the SAME file: not streaming. With
+      // Date.now() this could not be expressed at all.
+      const far = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-clock", join(dir, "la"), writtenAt + 7200));
+      expect(far.lanes.some((l) => l.source === "goal")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("US-LOOP-118: pr reads runs.jsonl as JSONL, not as a dream text log (codex r6)", () => {
     // The file choice keyed on `svc === "dream"` while the PARSE keyed on
     // `svc === "loop"`, so pr read runs.jsonl through the dream bracket-timestamp

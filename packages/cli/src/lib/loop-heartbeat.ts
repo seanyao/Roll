@@ -80,7 +80,18 @@ function loopRuntimeDir(projectPath: string): string {
   return (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() || join(projectPath, ".roll", "loop");
 }
 
-export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAgentsDir: string): HeartbeatDeps {
+/**
+ * @param nowSec The SHARED render clock (renderNowSec / the selector's nowSec).
+ *   codex r13: freshness used `Date.now()`, so under `ROLL_RENDER_NOW` the live-feed
+ *   panel and the heartbeat could judge the SAME live.log against different clocks
+ *   and disagree — one showing a live stream, the other no session.
+ */
+export function defaultHeartbeatDeps(
+  projectPath: string,
+  slug: string,
+  launchAgentsDir: string,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): HeartbeatDeps {
   const lastRunAt = (svc: string): string | null => {
     // codex r6: the FILE and the FORMAT must be chosen together. `dream` reads a
     // bracketed text log; everything else reads JSONL rows with a `ts` field.
@@ -139,7 +150,7 @@ export function defaultHeartbeatDeps(projectPath: string, slug: string, launchAg
       try {
         const st = statSync(join(loopRuntimeDir(projectPath), "live.log"));
         const at = new Date(st.mtimeMs).toISOString().replace(/\.\d{3}Z$/, "Z");
-        const fresh = Math.floor(Date.now() / 1000) - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
+        const fresh = nowSec - Math.floor(st.mtimeMs / 1000) <= LIVE_FRESH_SEC;
         return fresh ? { running: true, at } : { running: false };
       } catch {
         return { running: false };
