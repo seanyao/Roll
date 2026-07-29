@@ -68,7 +68,7 @@ Keep the first story tiny: one visible behavior, one clear test path.
 
 ## 5. Run The Loop
 
-Delivery only advances while you are sitting in front of it. Open an agent
+Delivery advances because you start it — nothing starts a run for you. Open an agent
 session in the project and run:
 
 ```bash

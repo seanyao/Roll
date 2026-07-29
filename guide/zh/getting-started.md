@@ -63,7 +63,7 @@ roll idea "Add a health check endpoint"
 
 ## 5. 跑 Loop
 
-交付只在你盯着它的时候前进。在项目里打开一个 agent 会话，然后执行：
+交付之所以前进是因为你启动了它 —— 没有任何东西会替你开始。在项目里打开一个 agent 会话，然后执行：
 
 ```bash
 roll loop go

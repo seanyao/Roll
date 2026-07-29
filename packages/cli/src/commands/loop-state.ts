@@ -310,7 +310,7 @@ export async function loopResumeCommand(_args: string[], deps: LoopSchedDeps = r
   // US-LOOP-116: nothing starts on its own. Resume only clears the gate; a session
   // still has to drive, and every other gate still applies.
   process.stdout.write(
-    "`roll loop go` can now pick eligible Todo within budget/route/evidence/Evaluator/release gates\n",
+    "`roll loop go` can now pick eligible Todo within route/evidence/Evaluator/release gates\n",
   );
   return 0;
 }

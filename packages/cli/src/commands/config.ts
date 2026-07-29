@@ -25,6 +25,7 @@
  * facades outright is FIX-1485; until then they must not imply they took effect.
  */
 import { CONFIG_KEYS, configKeyFile, configResolve, configSet, configValidate } from "@roll/infra";
+import { INACTIVE_KEYS } from "./config-get.js";
 import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";
 import { CONFIG_FACADE_KEYS, configGetCommand } from "./config-get.js";
 
@@ -171,20 +172,6 @@ function dreamTime(value: string, scope: Scope): number {
   process.stdout.write(`说明:这个值没人读 —— 想扫就跑 \`roll ${svc} run-once\`\n`);
   return 0;
 }
-
-/**
- * Keys that are still stored and printed but that nothing reads: the retired
- * quiet window, the retired period/offset, and the retired dream fire time. Both
- * the facades and a raw `roll config <key> <value>` write must disclose this.
- */
-const INACTIVE_KEYS = new Set([
-  "loop_active_start",
-  "loop_active_end",
-  "loop_schedule.period_minutes",
-  "loop_schedule.offset_minute",
-  "loop_dream_hour",
-  "loop_dream_minute",
-]);
 
 // ─── lang facade (REFACTOR-049) ───────────────────────────────────────────
 

@@ -149,6 +149,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "loop_active_start = 9  (from .roll/local.yaml)
+      note: this key is inactive — nothing reads it
       ",
       }
     `);
@@ -159,6 +160,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "loop_active_end = 24  (from default)
+      note: this key is inactive — nothing reads it
       ",
       }
     `);
@@ -169,6 +171,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "loop_schedule.period_minutes = 30  (from .roll/local.yaml)
+      note: this key is inactive — nothing reads it
       ",
       }
     `);
@@ -179,6 +182,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "loop_schedule.offset_minute = 0  (from default)
+      note: this key is inactive — nothing reads it
       ",
       }
     `);
@@ -189,6 +193,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "loop_dream_hour = 5  (from <HOME>/.roll/config.yaml)
+      note: this key is inactive — nothing reads it
       ",
       }
     `);
@@ -199,6 +204,7 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "loop_dream_minute = -  (from default)
+      note: this key is inactive — nothing reads it
       ",
       }
     `);

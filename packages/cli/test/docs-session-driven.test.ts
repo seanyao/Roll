@@ -126,6 +126,11 @@ const UNATTENDED_CLAIM = [
   /关门[,，]?\s*活儿就在那儿等着/,
   /(advances|moves forward) only while[^.]{0,60}session (open|running)/i,
   /会话结束[,，]\s*推进就停/,
+  // codex r9: three more — "only advances while you are sitting in front of it",
+  // "只在你盯着它的时候前进", "只在 owner 开着 … 的期间前进".
+  /(only )?advances only while|advances while you are sitting/i,
+  /交付只在[^。]{0,40}(的时候|期间)(前进|推进)/,
+  /没有会话就没有推进/,
   /budget (runs out|in force)/i,
   /预算(用尽|生效)/,
 ];

@@ -15,6 +15,19 @@ import { join } from "node:path";
 
 export const CONFIG_FACADE_KEYS = ["loop-window", "loop-schedule", "dream-time"];
 
+/**
+ * Keys still stored and printed that nothing reads. Shared with the write path in
+ * config.ts so the two can never disagree about which keys are dead.
+ */
+export const INACTIVE_KEYS = new Set([
+  "loop_active_start",
+  "loop_active_end",
+  "loop_schedule.period_minutes",
+  "loop_schedule.offset_minute",
+  "loop_dream_hour",
+  "loop_dream_minute",
+]);
+
 const HELP = `Usage: roll config <key>                 print current value + source
        roll config --list                list all loop/dream config keys
        roll config <key> <value> [--global|--project]   set a value
@@ -141,5 +154,10 @@ export function configGetCommand(args: string[]): number {
   }
   const [v, src] = resolved;
   process.stdout.write(`${key} = ${v}  (from ${src})\n`);
+  // codex r9: a raw READ of a dead key printed a bare value, reading as effective.
+  // Writes already disclosed it; both directions must.
+  if (INACTIVE_KEYS.has(key)) {
+    process.stdout.write("note: this key is inactive — nothing reads it\n");
+  }
   return 0;
 }
