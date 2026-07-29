@@ -231,7 +231,7 @@ function stringArray(value: unknown): value is readonly string[] {
 
 function validEvidence(value: unknown): boolean {
   if (!exactRecord(value, ["kind", "value", "hard", "score", "source", "provenance", "detail"])) return false;
-  return ["issue_exact", "requirement_source_exact", "repository_exact", "path_contained", "semantic_supported"].includes(String(value["kind"])) &&
+  return ["workspace_id_exact", "issue_exact", "requirement_source_exact", "repository_exact", "path_contained", "semantic_supported"].includes(String(value["kind"])) &&
     typeof value["value"] === "string" && typeof value["hard"] === "boolean" &&
     typeof value["score"] === "number" && Number.isFinite(value["score"]) &&
     typeof value["source"] === "string" &&

@@ -174,6 +174,7 @@ export async function workspaceSkillHandoffCommand(args: readonly string[]): Pro
     scope: baseScope,
     ...(parsed.workspace === undefined ? {} : { explicitWorkspace: parsed.workspace }),
     requirement,
+    requirementText: parsed.requirement,
   });
 
   if (loaded.ok) {
@@ -234,6 +235,22 @@ export async function workspaceSkillHandoffCommand(args: readonly string[]): Pro
     cwd,
     requirement,
   };
+  if (loaded.code === "workspace_activation_required" && loaded.candidate !== undefined) {
+    const question = beginAgentWorkspaceClarification({
+      intent,
+      reason: loaded.code,
+      candidates: [loaded.candidate],
+      diagnostics: discovery.diagnostics,
+      discovery,
+    });
+    return emit({
+      schema: WORKSPACE_SKILL_BOOTSTRAP_V1,
+      route: "workspace_target",
+      stopped: true,
+      code: loaded.code,
+      question,
+    }, parsed.json, question.prompt);
+  }
   const decision = discoverWorkspaceForIntent({
     intent,
     workspaces: discovery.workspaces,

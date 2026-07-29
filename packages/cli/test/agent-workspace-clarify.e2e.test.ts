@@ -323,6 +323,126 @@ describe("US-WS-029 agent Workspace clarification host", () => {
     }
   });
 
+  it("selects one active Workspace when the requirement names its exact registered ID", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const output: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    process.stdout.write = ((chunk: string | Uint8Array) => (output.push(String(chunk)), true)) as typeof process.stdout.write;
+    try {
+      process.chdir(fixture.home);
+      const before = snapshotDurableAuthorityTree(fixture.home);
+      const status = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-idea",
+        "--operation", "capture",
+        "--requirement", "roll Workspace 中新增一个批量配置功能",
+        "--json",
+      ]);
+      expect(status).toBe(0);
+      const resolved = JSON.parse(output.join("")) as {
+        route: string;
+        stopped: boolean;
+        context: {
+          workspace: { workspaceId: string };
+          resolution: { source: string; evidence: Array<{ kind: string; value: string; hard: boolean }> };
+        };
+      };
+      expect(resolved).toMatchObject({
+        route: "context",
+        stopped: false,
+        context: {
+          workspace: { workspaceId: "roll" },
+          resolution: {
+            source: "requirement_discovery",
+            evidence: [{ kind: "workspace_id_exact", value: "roll", hard: true }],
+          },
+        },
+      });
+      expect(snapshotDurableAuthorityTree(fixture.home)).toEqual(before);
+    } finally {
+      process.stdout.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps clarification for partial or multiple Workspace ID mentions", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    try {
+      process.chdir(fixture.home);
+      for (const requirement of ["controller improvements", "compare roll and fields Workspaces"]) {
+        const output: string[] = [];
+        process.stdout.write = ((chunk: string | Uint8Array) => (output.push(String(chunk)), true)) as typeof process.stdout.write;
+        const status = await workspaceCommand([
+          "handoff",
+          "--skill", "roll-design",
+          "--operation", "design",
+          "--requirement", requirement,
+          "--json",
+        ]);
+        expect(status).toBe(0);
+        expect(JSON.parse(output.join(""))).toMatchObject({ route: "workspace_target", stopped: true });
+      }
+    } finally {
+      process.stdout.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
+  it("narrows an exact inactive Workspace ID mention to the activation-required target", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const output: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    process.stdout.write = ((chunk: string | Uint8Array) => (output.push(String(chunk)), true)) as typeof process.stdout.write;
+    try {
+      process.chdir(fixture.home);
+      const status = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-design",
+        "--operation", "design",
+        "--requirement", "继续讨论 fields Workspace 的批量配置方案",
+        "--json",
+      ]);
+      expect(status).toBe(0);
+      expect(JSON.parse(output.join(""))).toMatchObject({
+        route: "workspace_target",
+        stopped: true,
+        code: "workspace_activation_required",
+        question: {
+          handoff: {
+            reason: "workspace_activation_required",
+            candidates: [{
+              workspaceId: "fields",
+              lifecycle: "registered",
+              evidence: [{ kind: "workspace_id_exact", value: "fields", hard: true }],
+            }],
+          },
+        },
+      });
+    } finally {
+      process.stdout.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
   it("keeps isolated HOME, ROLL_HOME, registry, events, manifests, and journals byte-identical", () => {
     const fixture = isolatedAuthorityFixture();
     vi.stubEnv("HOME", fixture.home);

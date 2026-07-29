@@ -349,6 +349,12 @@ Retained support surfaces live under their owners: `roll config prices`, `roll c
 Historical top-level aliases for those capabilities now return the standard
 unknown-command response.
 
+Direct skill handoffs may omit `--workspace` when the owner text names exactly
+one registered Workspace ID (for example, `axis 中的 Fields...`). Roll selects
+that active Workspace with `workspace_id_exact` evidence. Partial matches and
+requirements that name multiple Workspace IDs still stop for clarification;
+registered or paused matches still require explicit activation.
+
 ## Observability Now
 
 Roll's current observability is CLI-first. Persistent facts flow through one
