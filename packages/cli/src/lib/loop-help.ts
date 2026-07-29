@@ -23,17 +23,18 @@ interface Band {
 }
 
 const BANDS: Band[] = [
-  // US-LOOP-113: `on`/`off`/`now`/`pause`/`resume`/`fallback` installed, removed,
-  // or poked a resident scheduler. Delivery is driven by the agent session that
-  // runs `roll loop go`, so those verbs no longer exist.
-  { key: "control", color: "amber", en: "control", zh: "作动", verbs: "go · goal · reset · recover · reconcile" },
-  { key: "observe", color: "green", en: "observe", zh: "传感", verbs: "watch · status · runs · log · events · signals · eval" },
+  // US-LOOP-113: `on`/`off`/`now`/`fallback` installed, removed, or poked a
+  // resident scheduler and are gone. `pause`/`resume` stay — PAUSE is a live gate
+  // the correction circuit breaker writes automatically, so `resume` is the only
+  // supported way out of a paused project.
+  { key: "control", color: "amber", en: "control", zh: "作动", verbs: "go · goal · pause · resume · reset · recover · reconcile" },
+  { key: "observe", color: "green", en: "observe", zh: "传感", verbs: "watch · status · runs · log · events · signals · eval · cycles · cycle" },
   { key: "alerts", color: "red", en: "alerts", zh: "告警", verbs: "alert list · alert ack · alert resolve · alert log" },
-  { key: "maintain", color: "muted", en: "maintain", zh: "维护", verbs: "gc · fmt · mute · unmute · reconcile-pending" },
+  { key: "maintain", color: "muted", en: "maintain", zh: "维护", verbs: "gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list" },
   // Agent-invoked entry points — live, but not user-facing daily verbs. Listed
   // so AC5's "no live subcommand dropped" holds without polluting the four
   // design bands.
-  { key: "internal", color: "faint", en: "internal", zh: "内部", verbs: "test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes" },
+  { key: "internal", color: "faint", en: "internal", zh: "内部", verbs: "test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split" },
 ];
 
 /** US-LOOP-113: the run-state model in `--help`. The old three states described a
@@ -43,11 +44,11 @@ const BANDS: Band[] = [
  *  has paused autonomous progress. EN and 中 each get their own block. */
 const STATE_LINES: Record<Lang, string[]> = {
   en: [
-    `${c("blue", pad("states", 10))}ACTIVE (a session may drive cards) · PAUSED (you stopped autonomous progress)`,
+    `${c("blue", pad("states", 10))}ACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)`,
     `${c("blue", pad("drive", 10))}open an agent session and run roll loop go — nothing advances on its own`,
   ],
   zh: [
-    `${c("blue", pad("状态", 10))}ACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你停掉了自主推进)`,
+    `${c("blue", pad("状态", 10))}ACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)`,
     `${c("blue", pad("驱动", 10))}开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进`,
   ],
 };

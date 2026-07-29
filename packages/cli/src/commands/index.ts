@@ -69,8 +69,7 @@ import { loopReviewResizeCommand } from "./loop-review-resize.js";
 import { loopExhaustionSplitCommand } from "./loop-exhaustion-split.js";
 import { loopRunOnceCommand } from "./loop-run-once.js";
 import { loopSelfDowngradeCommand } from "./loop-self-downgrade.js";
-import {
-} from "./loop-sched.js";
+import { loopPauseCommand, loopResumeCommand } from "./loop-sched.js";
 import { offboardCommand } from "./offboard.js";
 import { pricesCommand } from "./prices.js";
 import { pulseCommand } from "./pulse.js";
@@ -501,10 +500,17 @@ export function registerAll(): void {
     // `loop reconcile-pending`: FIX-1052 bounded PR polling reconciler — polls
     // pending-merge PRs, fetches origin/main on merge, and updates delivery truth.
     if (args[0] === "reconcile-pending") return loopReconcilePendingCommand(args.slice(1));
-    // US-LOOP-113: `on` / `off` / `fallback` / `pause` / `resume` / `now` are gone.
-    // They existed to install, remove, or poke a resident scheduler; delivery now
-    // runs in the agent session that drives it (`roll loop go`). No stub is left —
-    // they fall through to the unknown-subcommand path like any other typo.
+    // US-LOOP-113: `on` / `off` / `now` / `fallback` are gone — they existed to
+    // install, remove, or poke a resident scheduler. No stub is left; they fall
+    // through to the unknown-subcommand path like any other typo.
+    //
+    // `pause` / `resume` STAY (codex review r1). They are not scheduler verbs: the
+    // PAUSE marker is a live gate that `loop go` and `loop run-once` still honor,
+    // and the correction circuit breaker WRITES it automatically after repeated
+    // failures. Cutting `resume` would strand the owner in a paused project with no
+    // supported way out.
+    if (args[0] === "pause") return loopPauseCommand(args.slice(1));
+    if (args[0] === "resume") return loopResumeCommand(args.slice(1));
     // `loop reset` / `loop mute` / `loop unmute`: residual write/maintenance
     // subcommands (US-PORT-022) — clear per-project state + heal counters, and
     // the auto-attach popup toggle pair. No bash fallback.

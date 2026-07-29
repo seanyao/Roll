@@ -38,7 +38,7 @@ macOS 上通过 npm 安装时，会顺手从 `seanyao/roll-capture` 最新 GitHu
 cd your-project
 roll init           # 在当前项目落地 Roll（交互式确认）
 roll next           # 接续 design、apply、repair、migrate、loop 或 status
-roll loop on        # 可选：让 AI 自动跑 backlog
+roll loop go        # 在本会话里让 AI 跑 backlog
 ```
 
 `roll init` 会先诊断当前目录：完整 Roll 项目提示 `roll status`；部分接入
@@ -96,16 +96,15 @@ Roll V4 把项目协调和单 Story 交付拆开：
 
 ### 运行模式
 
-Roll 有两个产品模式，它们共用同一套 backlog、truth、路由剖面、执行剖面、证据、Evaluator 和发布闸：
+Roll 只有一种驱动方式，它共用同一套 backlog、truth、路由剖面、执行剖面、证据、
+Evaluator 和发布闸：
 
-- **guided** —— owner 通过 `roll supervisor status/next/why` 驱动，并用
-  `roll loop go --cards <id>` 等命令显式启动工作。guided 模式不会静默开启长时间
-  Story 执行。scheduler off 时，`roll loop go` 执行一次手动 goal；loop paused 时，
-  先 `roll loop resume`，定时工作才会继续。
-- **autonomous** —— `roll loop on` 安装 scheduler；符合条件的 Story 会在 pause、
-  budget、route、evidence、Evaluator、release gates 内被调度。`roll loop pause` /
-  `roll loop off` 回到 guided；`roll loop resume` / `roll loop on` 显式切回
-  autonomous。
+- **会话驱动。** owner 读 `roll supervisor status/next/why`，然后在这个会话里用
+  `roll loop go`（可加 `--epic <name>` 或 `--cards <id>`）开工。跑它的那个 agent
+  会话就是 Supervisor。没有任何东西会自行推进 —— 没有定时器、没有常驻进程。
+- **pause 停掉自主推进。** `roll loop pause` 让卡不再被摘取，`roll loop resume`
+  解除。纠错熔断器在反复失败后也会自动 pause，所以 `resume` 是回到运行态的正规
+  出口。显式一次性（`roll loop go --cards <id>`）在 paused 下仍可跑。
 
 项目可以声明 Story 默认角色绑定：
 
@@ -143,7 +142,7 @@ roll init
 # 在交互终端描述需求、指向 PRD，或让 Roll 从已有笔记写 .roll/brief.md。
 roll next
 roll design --from-file .roll/brief.md
-roll loop on
+roll loop go
 ```
 
 Roll 会说明下一步设计动作，而不是静默创建假工作。Designer 把需求拆成 Stories，Supervisor 为每张 Story 选择 `standard`、`verified` 或 `designed`，角色通过 fresh session 执行，owner 查看按 Story 收口的 attest 证据。
@@ -155,7 +154,7 @@ cd existing-codebase
 roll init
 roll next
 roll init --apply        # 审阅生成的 onboard plan 后再执行
-roll loop on
+roll loop go
 ```
 
 Roll 先无破坏地诊断仓库；只有审阅后才写入或更新 Roll metadata。随后 Supervisor 基于已有 backlog、docs、context、open PR 与 scoped role bindings 推理。当前状态通过 CLI-first 可观测入口查看：`roll status`、`roll loop watch`、`roll loop runs`、`roll loop cycle <id>`、`roll loop alert` 和 Story 报告。
@@ -171,7 +170,7 @@ roll init
 # 2. 推送当前分支，让 loop 有地方落地工作成果
 git push -u origin main
 # 3. 启动自主循环
-roll loop on
+roll loop go
 ```
 
 如果仓库不存在或不可达，loop 会快速失败并发出 ALERT，避免在无法推送的目

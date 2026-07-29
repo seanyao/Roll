@@ -1,5 +1,12 @@
 # roll loop — 自主 BACKLOG 执行器
 
+> **正在重写（US-LOOP-113 → US-LOOP-120）。** 常驻调度已退役：`roll loop on` /
+> `off` / `now` / `fallback` 不再存在，也没有任何东西按定时器运行。交付由跑
+> `roll loop go` 的那个 agent 会话驱动，那个会话就是 Supervisor。
+> `roll loop pause` / `resume` 仍然把守自主推进。
+> 下文中关于安装、修复或唤醒调度器的段落均已过时，由 US-LOOP-120 重写；
+> 在此期间以 `roll loop --help` 的命令清单为准。
+
 `roll loop` 负责调度和管理 BACKLOG 故事的自主执行。
 开启后，loop 按可配置的频次（在活跃窗口内）醒来，摘取最高优先级的待办故事，
 通过 TCR 微提交完成代码交付。

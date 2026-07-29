@@ -1,5 +1,13 @@
 # roll loop — Autonomous BACKLOG Executor
 
+> **Being rewritten (US-LOOP-113 → US-LOOP-120).** Resident scheduling is retired:
+> `roll loop on` / `off` / `now` / `fallback` no longer exist, and nothing runs on a
+> timer. Delivery is driven by the agent session that runs `roll loop go`, which is
+> the Supervisor. `roll loop pause` / `resume` still gate autonomous progress.
+> Sections below that describe installing, repairing, or waking a scheduler are
+> stale and are being rewritten by US-LOOP-120; the command reference in
+> `roll loop --help` is authoritative in the meantime.
+
 `roll loop` schedules and manages the autonomous execution of BACKLOG stories.
 When enabled, it wakes up on a configurable schedule (within your active
 window), picks the top pending story, and executes it — committing changes in

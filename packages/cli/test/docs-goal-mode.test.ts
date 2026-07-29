@@ -26,11 +26,19 @@ describe("FIX-256 — goal mode docs and site wording", () => {
     expect(zh).toContain("resume");
   });
 
-  it("READMEs summarize the off/pause distinction near roll loop go", () => {
-    expect(doc("README.md")).toMatch(/roll loop go[\s\S]{0,500}scheduler is off/i);
-    expect(doc("README.md")).toMatch(/roll loop go[\s\S]{0,700}paused[\s\S]{0,120}resume/i);
-    expect(doc("README_CN.md")).toMatch(/roll loop go[\s\S]{0,500}off/);
-    expect(doc("README_CN.md")).toMatch(/roll loop go[\s\S]{0,700}paused[\s\S]{0,120}resume/);
+  // US-LOOP-113: there is no "scheduler is off" state to distinguish from paused —
+  // resident scheduling is retired. What the READMEs must still explain is that the
+  // session drives, and that pause/resume gate autonomous progress.
+  it("READMEs explain session-driven delivery and the pause/resume gate", () => {
+    for (const f of ["README.md", "README_CN.md"]) {
+      const d = doc(f);
+      expect(d, f).toMatch(/roll loop go/);
+      expect(d, f).toMatch(/roll loop pause[\s\S]{0,400}roll loop resume/);
+      // And no longer advertises the removed scheduler verbs.
+      expect(d, f).not.toMatch(/roll loop on\b/);
+      expect(d, f).not.toMatch(/roll loop off\b/);
+      expect(d, f).not.toMatch(/roll loop fallback\b/);
+    }
   });
 
   it("site exposes goal mode and no longer advertises loop / dream / brief as active lanes", () => {

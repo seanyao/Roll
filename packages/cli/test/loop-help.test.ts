@@ -5,6 +5,7 @@
  * maintain); every live loop subcommand lands in a band (no verb dropped);
  * EN/中 single-language snapshots.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderLoopHelp } from "../src/lib/loop-help.js";
 import { stripAnsi } from "../src/render.js";
@@ -13,15 +14,25 @@ const help = (lang: "en" | "zh"): string => stripAnsi(renderLoopHelp(lang));
 
 // Every live `roll loop <sub>` arm in commands/index.ts (retired stubs excluded:
 // monitor / attach / branches / test-quality-check just print a redirect).
-const LIVE_SUBCOMMANDS = [
-  "watch", "status", "eval", "story", "runs", "goal", "go", "signals", "log", "events",
-  "alert", "run-once", "fmt", "reconcile-pending", "reset", "mute", "unmute", "gc",
-  "test", "notify", "enforce-tcr", "precheck-ci", "hotfix-head-context", "agent-routes",
-];
+/**
+ * US-LOOP-113 (codex review r1): the old hand-maintained list had drifted — it
+ * listed verbs that no longer exist and omitted live ones. DERIVE the live set
+ * from the dispatch source instead, so the help can never silently fall behind.
+ */
+const INDEX_SRC = readFileSync(new URL("../src/commands/index.ts", import.meta.url), "utf8");
+const LOOP_DISPATCH = INDEX_SRC.slice(INDEX_SRC.indexOf('command === "loop"'));
+const DISPATCHED = [...new Set([...LOOP_DISPATCH.matchAll(/args\[0\] === "([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!))];
+
+// Retirement stubs that only print a redirect (US-PORT-007/022) — deliberately
+// not advertised as live verbs.
+const STUBS = new Set(["monitor", "attach", "branches", "test-quality-check"]);
+const LIVE_SUBCOMMANDS = DISPATCHED.filter((s) => !STUBS.has(s));
 
 // US-LOOP-113: these installed, removed, or poked a resident scheduler. They are
-// gone with no stub, so the help must NOT advertise them.
-const RETIRED_SUBCOMMANDS = ["on", "off", "pause", "resume", "now", "fallback"];
+// gone with no stub, so the help must NOT advertise them. `pause`/`resume` are NOT
+// here — PAUSE is a live gate the correction circuit breaker writes automatically,
+// so `resume` is the only supported way out of a paused project.
+const RETIRED_SUBCOMMANDS = ["on", "off", "now", "fallback"];
 
 describe("roll loop --help groups — US-DOSSIER-035", () => {
   it("AC5: four labeled bands in the design order, replacing the flat pipe list", () => {
@@ -40,10 +51,10 @@ describe("roll loop --help groups — US-DOSSIER-035", () => {
 
   it("AC5: the design verbs sit in their assigned band", () => {
     const out = help("en");
-    expect(out).toMatch(/control\s+go · goal · reset · recover · reconcile/);
-    expect(out).toMatch(/observe\s+watch · status · runs · log · events · signals · eval/);
+    expect(out).toMatch(/control\s+go · goal · pause · resume · reset · recover · reconcile/);
+    expect(out).toMatch(/observe\s+watch · status · runs · log · events · signals · eval · cycles · cycle/);
     expect(out).toMatch(/alerts\s+alert list · alert ack · alert resolve · alert log/);
-    expect(out).toMatch(/maintain\s+gc · fmt · mute · unmute · reconcile-pending/);
+    expect(out).toMatch(/maintain\s+gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list/);
   });
 
   it("AC5: no live loop subcommand is dropped — each appears somewhere in the help", () => {
@@ -74,6 +85,8 @@ describe("roll loop --help groups — US-DOSSIER-035", () => {
     // Two states. DORMANT described a lane unloading itself; there is no lane.
     expect(en).toMatch(/states\s+ACTIVE.*PAUSED/);
     expect(en).not.toContain("DORMANT");
+    // A tripped breaker also pauses, so the way out must be named.
+    expect(en).toContain("roll loop resume");
     // And it says plainly that nothing advances without a session.
     expect(en).toMatch(/drive\s+open an agent session and run roll loop go/);
     expect(en).toContain("nothing advances on its own");
