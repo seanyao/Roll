@@ -317,7 +317,6 @@ export interface RequirementHintV1 {
 }
 
 export type WorkspaceMatchEvidenceKind =
-  | "workspace_id_exact"
   | "issue_exact"
   | "requirement_source_exact"
   | "repository_exact"
@@ -1095,7 +1094,7 @@ const workspaceMatchEvidenceSchema = objectSchema(
   {
     kind: {
       type: "string",
-      enum: ["workspace_id_exact", "issue_exact", "requirement_source_exact", "repository_exact", "path_contained", "semantic_supported"],
+      enum: ["issue_exact", "requirement_source_exact", "repository_exact", "path_contained", "semantic_supported"],
     },
     value: stringSchema,
     hard: { type: "boolean" },

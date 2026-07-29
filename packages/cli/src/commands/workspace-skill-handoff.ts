@@ -1,6 +1,6 @@
-import { discoverWorkspaceForIntent } from "@roll/core";
+import { discoverWorkspaceForIntent, type WorkspaceDiscoveryFactsV1 } from "@roll/core";
 import { loadWorkspaceDiscovery } from "@roll/infra";
-import { WORKSPACE_INTENT_V1 } from "@roll/spec";
+import { WORKSPACE_INTENT_V1, type WorkspaceMatchCandidateV1 } from "@roll/spec";
 import {
   buildRepositoryWorkspaceExecutionContext,
   resolveRepositoryExecutionContext,
@@ -16,6 +16,42 @@ import {
 import { workspaceRollHome } from "./workspace-target.js";
 
 const WORKSPACE_SKILL_BOOTSTRAP_V1 = "roll.workspace-skill-bootstrap/v1" as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function suggestedWorkspaceMention(
+  text: string,
+  workspaces: readonly WorkspaceDiscoveryFactsV1[],
+  diagnostics: readonly { readonly workspaceId: string }[],
+): WorkspaceMatchCandidateV1 | undefined {
+  const matches = workspaces
+    .filter((facts) => facts.candidate.lifecycle !== "archived")
+    .filter((facts) => !diagnostics.some((diagnostic) => diagnostic.workspaceId === facts.candidate.workspaceId))
+    .filter((facts) => {
+      const id = escapeRegExp(facts.candidate.workspaceId);
+      return new RegExp(`(^|[^A-Za-z0-9_-])${id}(?=$|[^A-Za-z0-9_-])`, "iu").test(text);
+    });
+  const facts = matches.length === 1 ? matches[0] : undefined;
+  if (facts === undefined) return undefined;
+  return {
+    workspaceId: facts.candidate.workspaceId,
+    root: facts.candidate.canonicalRoot,
+    lifecycle: facts.candidate.lifecycle,
+    evidence: [{
+      kind: "semantic_supported",
+      value: facts.candidate.workspaceId,
+      hard: false,
+      score: 10,
+      source: `owner-text:${facts.candidate.workspaceId}`,
+      provenance: "semantic_inference",
+      detail: `Owner text mentioned Workspace ID ${facts.candidate.workspaceId}; confirmation is required`,
+    }],
+    hardMatch: false,
+    score: 10,
+  };
+}
 
 interface ParsedHandoffArgs {
   readonly skill: string;
@@ -174,7 +210,6 @@ export async function workspaceSkillHandoffCommand(args: readonly string[]): Pro
     scope: baseScope,
     ...(parsed.workspace === undefined ? {} : { explicitWorkspace: parsed.workspace }),
     requirement,
-    requirementText: parsed.requirement,
   });
 
   if (loaded.ok) {
@@ -235,22 +270,6 @@ export async function workspaceSkillHandoffCommand(args: readonly string[]): Pro
     cwd,
     requirement,
   };
-  if (loaded.code === "workspace_activation_required" && loaded.candidate !== undefined) {
-    const question = beginAgentWorkspaceClarification({
-      intent,
-      reason: loaded.code,
-      candidates: [loaded.candidate],
-      diagnostics: discovery.diagnostics,
-      discovery,
-    });
-    return emit({
-      schema: WORKSPACE_SKILL_BOOTSTRAP_V1,
-      route: "workspace_target",
-      stopped: true,
-      code: loaded.code,
-      question,
-    }, parsed.json, question.prompt);
-  }
   const decision = discoverWorkspaceForIntent({
     intent,
     workspaces: discovery.workspaces,
@@ -259,18 +278,20 @@ export async function workspaceSkillHandoffCommand(args: readonly string[]): Pro
   if (decision.ok || decision.code === "invalid_requirement_hint") {
     return emitError(loaded.code, parsed.json);
   }
+  const suggested = suggestedWorkspaceMention(parsed.requirement, discovery.workspaces, discovery.diagnostics);
+  const reason = suggested === undefined ? decision.code : "requirement_match_required";
   const question = beginAgentWorkspaceClarification({
     intent,
-    reason: decision.code,
-    candidates: decision.candidates,
-    diagnostics: decision.diagnostics,
+    reason,
+    candidates: suggested === undefined ? decision.candidates : [suggested],
+    diagnostics: suggested === undefined ? decision.diagnostics : [],
     discovery,
   });
   return emit({
     schema: WORKSPACE_SKILL_BOOTSTRAP_V1,
     route: "workspace_target",
     stopped: true,
-    code: decision.code,
+    code: reason,
     question,
   }, parsed.json, question.prompt);
 }

@@ -40,7 +40,6 @@ const CLARIFICATION_REASONS = [
 ] as const;
 const CLARIFICATION_ACTIONS = ["select_existing", "create_new", "repair_discovery"] as const;
 const EVIDENCE_KINDS = [
-  "workspace_id_exact",
   "issue_exact",
   "requirement_source_exact",
   "repository_exact",

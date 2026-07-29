@@ -349,11 +349,12 @@ Retained support surfaces live under their owners: `roll config prices`, `roll c
 Historical top-level aliases for those capabilities now return the standard
 unknown-command response.
 
-Direct skill handoffs may omit `--workspace` when the owner text names exactly
-one registered Workspace ID (for example, `axis 中的 Fields...`). Roll selects
-that active Workspace with `workspace_id_exact` evidence. Partial matches and
-requirements that name multiple Workspace IDs still stop for clarification;
-registered or paused matches still require explicit activation.
+Direct skill handoffs never acquire Workspace authority from requirement
+keywords. When owner text mentions exactly one registered Workspace ID, Roll
+presents it as a soft suggestion and waits for confirmation. Partial matches,
+multiple mentions, or no safe suggestion present the available Workspaces for
+the owner to choose. Only an explicit selector or an already resolved authority
+continues into the skill context.
 
 ## Observability Now
 

@@ -323,7 +323,7 @@ describe("US-WS-029 agent Workspace clarification host", () => {
     }
   });
 
-  it("selects one active Workspace when the requirement names its exact registered ID", async () => {
+  it("asks for confirmation when owner text suggests one active Workspace ID", async () => {
     const fixture = isolatedAuthorityFixture();
     const originalCwd = process.cwd();
     const output: string[] = [];
@@ -343,22 +343,18 @@ describe("US-WS-029 agent Workspace clarification host", () => {
         "--json",
       ]);
       expect(status).toBe(0);
-      const resolved = JSON.parse(output.join("")) as {
-        route: string;
-        stopped: boolean;
-        context: {
-          workspace: { workspaceId: string };
-          resolution: { source: string; evidence: Array<{ kind: string; value: string; hard: boolean }> };
-        };
-      };
-      expect(resolved).toMatchObject({
-        route: "context",
-        stopped: false,
-        context: {
-          workspace: { workspaceId: "roll" },
-          resolution: {
-            source: "requirement_discovery",
-            evidence: [{ kind: "workspace_id_exact", value: "roll", hard: true }],
+      expect(JSON.parse(output.join(""))).toMatchObject({
+        route: "workspace_target",
+        stopped: true,
+        code: "requirement_match_required",
+        question: {
+          handoff: {
+            reason: "requirement_match_required",
+            candidates: [{
+              workspaceId: "roll",
+              lifecycle: "active",
+              evidence: [{ kind: "semantic_supported", value: "roll", hard: false }],
+            }],
           },
         },
       });
@@ -401,7 +397,7 @@ describe("US-WS-029 agent Workspace clarification host", () => {
     }
   });
 
-  it("narrows an exact inactive Workspace ID mention to the activation-required target", async () => {
+  it("asks for confirmation before resolving an inactive Workspace ID suggestion", async () => {
     const fixture = isolatedAuthorityFixture();
     const originalCwd = process.cwd();
     const output: string[] = [];
@@ -423,14 +419,14 @@ describe("US-WS-029 agent Workspace clarification host", () => {
       expect(JSON.parse(output.join(""))).toMatchObject({
         route: "workspace_target",
         stopped: true,
-        code: "workspace_activation_required",
+        code: "requirement_match_required",
         question: {
           handoff: {
-            reason: "workspace_activation_required",
+            reason: "requirement_match_required",
             candidates: [{
               workspaceId: "fields",
               lifecycle: "registered",
-              evidence: [{ kind: "workspace_id_exact", value: "fields", hard: true }],
+              evidence: [{ kind: "semantic_supported", value: "fields", hard: false }],
             }],
           },
         },
