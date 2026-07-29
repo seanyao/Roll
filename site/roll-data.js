@@ -356,7 +356,7 @@ window.RollData = (function () {
       { id: "dream", title: "Dream 巡检", blurb: "想扫就扫。", features: [
         { name: "代码健康扫描", desc: "识别死代码、架构漂移、过度工程候选项。", badges: ["highlight"] },
         { name: "文档覆盖率",   desc: "标记缺失指南、过时文档、未记录的 ENV 变量。", badges: [] },
-        { name: "REFACTOR 队列", desc: "把 REFACTOR-NNN 写进 Backlog,次日 loop 自己拣。", badges: [] },
+        { name: "REFACTOR 队列", desc: "把 REFACTOR-NNN 写进 Backlog,后面的运行会领到。", badges: [] },
       ]},
       { id: "lifecycle", title: "故事生命周期", blurb: "从想法到合入,同一条流。", features: [
         { name: "Backlog 捕获", desc: "一句话进入 IDEA 或 FIX,不强行开启完整规划会。", badges: ["core"] },

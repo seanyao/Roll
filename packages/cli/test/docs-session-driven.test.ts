@@ -137,7 +137,13 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     // terminal, so the loop guide and the overview must say otherwise.
     const loopEn = readFileSync(join(ROOT, "guide/en/loop.md"), "utf8");
     expect(loopEn).toMatch(/nothing runs on a timer/i);
-    expect(loopEn).toMatch(/when it ends, progress stops/i);
+    // codex r4 caught my banner OVERSTATING this: `go` detaches a tmux worker, so a
+    // run does outlive the terminal. The honest pair of claims is "no work between
+    // runs" and "no run you did not start" — plus naming what actually ends a run.
+    expect(loopEn).toMatch(/no work between runs/i);
+    expect(loopEn).toMatch(/no run you did not start/i);
+    expect(loopEn).toMatch(/detached tmux/i);
+    expect(loopEn).not.toMatch(/when it ends, progress stops/i);
 
     const overviewEn = readFileSync(join(ROOT, "guide/en/overview.md"), "utf8");
     expect(overviewEn).toMatch(/nothing advances while no session is driving/i);

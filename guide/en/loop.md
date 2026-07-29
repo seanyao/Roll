@@ -1,9 +1,16 @@
 # roll loop — Session-Driven BACKLOG Executor
 
-> **Nothing runs on a timer.** Delivery is driven by the agent session that runs
-> `roll loop go` — that session is the Supervisor, and when it ends, progress stops.
-> Roll installs no scheduler and leaves no background process.
-> `roll loop pause` / `resume` gate autonomous progress within a session.
+> **Nothing runs on a timer.** Delivery only happens because someone ran
+> `roll loop go`; Roll installs no scheduler and starts nothing on its own.
+>
+> A run you start does outlive the terminal: by default `go` puts the worker in a
+> detached tmux window, so closing your window (or Ctrl-C while following the feed)
+> stops you *watching*, not the run. What ends a run is its own scope — the cards
+> finishing, `--max-cycles` / `--for` being reached, the dead-loop breaker tripping,
+> `roll loop pause`, or killing the tmux session. Use `--no-tmux` to keep it in the
+> foreground of the terminal you started it in.
+>
+> So: no work between runs, and no run you did not start.
 
 `roll loop` executes BACKLOG stories: it picks the top pending story and delivers
 it — committing changes in TCR micro-steps — for as long as the session driving it
@@ -127,22 +134,21 @@ roll loop go --epic <name>        # Scope to one epic
 roll loop go --cards US-1,FIX-2   # Scope to explicit cards (runs while paused)
 roll loop go --max-cycles 1       # A single cycle, to try the flow
 
-roll loop status      # Show scheduler state and current loop state
+roll loop status      # Show run state (ACTIVE / PAUSED), queue, alerts, recent cycles
 roll loop watch       # Default owner view: phase, quiet time, TCR count, last signal, plus live activity
 roll loop watch -n 50 # Look back 50 lines before following (default 200; 'all' = whole log)
 roll loop watch --events      # Compact developer event stream from .roll/loop/events.ndjson
 roll loop watch --raw-events  # Raw JSON event stream for audit/debug only
 roll loop watch --verbose  # Also show the raw agent transcript (default folds it away)
 roll loop watch --attach   # Read-only attach to the loop's tmux observe window (tmux attach -r)
-roll loop go          # Run goal mode manually for all backlog until complete/pause/guardrail
+roll loop go          # Work all backlog until done, paused, or a guardrail stops it
 roll loop go --epic <name>              # Limit the goal to one epic
 roll loop go --cards US-1,FIX-2         # Limit the goal to selected cards
-roll loop go --budget 10                # Stop conservatively when goal cost reaches $10
-roll loop go --usage-threshold 0.85     # Pause when five-hour or weekly usage reaches this ratio
-roll loop go --no-wait                  # On usage limit, pause and return instead of waiting for reset
 roll loop go --for 5h                   # Stop after the current cycle once the timebox is reached
 roll loop go --max-cycles 3             # Stop after this many cycles
 roll loop go --review <auto|hetero|self|off>  # Set the final review policy
+roll loop go --no-tmux                  # Stay in this terminal instead of a detached tmux window
+roll loop go --attach                   # Follow the live feed after starting
 roll loop goal        # Show persisted goal status, scope, review mode, usage, limits, and safety gate
 
 roll loop runs        # Show last 10 run summaries (story IDs, TCR count, duration, slowest phase)
@@ -220,11 +226,10 @@ runs even while paused (FIX-1472).
 
 ### Goal Mode Safety Gates
 
-Budget and run limits are explicit per `roll loop go`. `--budget`,
-`--max-cycles`, and `--for` apply to THIS invocation only; omitting one means no
-limit for this run — Roll never silently inherits a budget or cap from a prior
-session's persisted goal, so a flagless `roll loop go` can neither be capped nor
-bricked by a limit you set days ago. Scope (`--epic`/`--cards`) and `--review`
+Run limits are explicit per `roll loop go`. `--max-cycles` and `--for` apply to
+THIS invocation only; omitting one means no limit for this run — Roll never
+silently inherits a cap from a prior session's persisted goal, so a flagless
+`roll loop go` can neither be capped nor bricked by a limit you set days ago. Scope (`--epic`/`--cards`) and `--review`
 persist only while the goal is unfinished. When a goal is `complete`, the next
 `roll loop go` archives it under `.roll/loop/goal-archive/`, records
 `goal:archived`, and starts a distinct goal from that invocation's flags. With
@@ -264,18 +269,13 @@ work. They fail loud with `runner_stale_for_repo` if the repo-local
 `@seanyao/roll` package version is newer than the running runner; install or
 publish the local build before resuming autonomous work.
 
-`roll loop go` enforces safety only at cycle boundaries. `--budget <usd>` uses
-the effective run cost ledger and moves the goal to `budget_limited` when the
-budget is reached. An idle or aborted cycle that ran no agent counts as a known
-$0, not as an unknown-cost row. Only a row where an agent actually executed but
-left no parseable usage is recorded as unknown; those still stop conservatively
-rather than being counted as zero. Usage headroom is checked against five-hour
-and weekly windows; by default Roll pauses at 85% and waits for the reset
-window, while `--no-wait` leaves the goal paused for the owner. The recovery
-wait is bounded — a hung usage API cannot stall the session forever; on timeout
-Roll records a `usage_wait_timeout` audit event and leaves the goal paused.
-`--for <duration>` is a wall-clock box: the in-flight cycle finishes, then the
-goal pauses with reason `timebox`.
+`roll loop go` enforces safety only at cycle boundaries. The global backstop is
+the **dead-loop breaker**: after a run of consecutive whole-goal no-progress
+cycles — none of which delivered a card — the goal is STOPPED with a loud ALERT,
+so an unmergeable card can never spin indefinitely and the loop provably halts
+within K cycles. `--for <duration>` is a wall-clock box: the in-flight cycle
+finishes, then the goal pauses with reason `timebox`. `--max-cycles <n>` stops
+after n cycles.
 
 Each safety trip records `goal:gate_tripped`, and `roll loop goal` shows the
 last safety gate reading.
@@ -287,13 +287,13 @@ goal events. The key fields are:
 
 | Field | Meaning |
 |-------|---------|
-| `Status` | `active`, `paused`, `budget_limited`, or `complete`. |
+| `Status` | `active`, `paused`, or `complete` (a historical goal's `budget_limited` reads as `paused`). |
 | `Scope` | All backlog, one epic, or an explicit card list. |
 | `Review` | Completion review policy: `auto`, `hetero`, `self`, or `off`. |
 | `Usage` | Goal cycle count, effective cost, and unknown-cost-row count. |
-| `Limits` | Explicit `--budget`, `--max-cycles`, and `--for` settings. |
-| `Safety gate` | The latest budget, usage, or timebox trip and its reading. |
-| `Last decision` | Why the goal continued, paused, became budget-limited, or completed. |
+| `Limits` | Explicit `--max-cycles` and `--for` settings. |
+| `Safety gate` | The latest timebox or dead-loop-breaker trip and its reading. |
+| `Last decision` | Why the goal continued, paused, or completed. |
 
 When `auto` final review degrades to same-provider review, the status view
 shows the recorded degradation reason from `goal:review_degraded`. When a goal

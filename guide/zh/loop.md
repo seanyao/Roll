@@ -1,8 +1,14 @@
 # roll loop — 会话驱动的 BACKLOG 执行器
 
-> **没有任何东西按定时器运行。** 交付由跑 `roll loop go` 的那个 agent 会话驱动 ——
-> 那个会话就是 Supervisor，会话结束，推进就停。Roll 不安装任何调度器，也不留后台进程。
-> `roll loop pause` / `resume` 在会话内把守自主推进。
+> **没有任何东西按定时器运行。** 交付只因为有人跑了 `roll loop go` 才发生;Roll 不安装
+> 任何调度器,也不会自己启动任何东西。
+>
+> 但你启动的这次运行**会活过终端**:默认 `go` 把 worker 放进 detached 的 tmux 窗口,
+> 所以关掉你的窗口(或跟随输出时按 Ctrl-C)只是停止**观看**,不是停止运行。真正结束一次
+> 运行的是它自己的范围 —— 卡跑完、`--max-cycles` / `--for` 到点、死循环熔断器跳闸、
+> `roll loop pause`,或者杀掉那个 tmux session。想让它留在当前终端前台就加 `--no-tmux`。
+>
+> 所以:两次运行之间没有活动,也不会有你没启动过的运行。
 
 `roll loop` 执行 BACKLOG 故事：摘取最高优先级的待办故事，通过 TCR 微提交完成代码
 交付 —— 只要驱动它的那个会话还在跑。
@@ -111,7 +117,7 @@ roll loop go --epic <name>        # 限定到一个史诗
 roll loop go --cards US-1,FIX-2   # 限定到指定卡片（paused 下也会跑）
 roll loop go --max-cycles 1       # 只跑一个 cycle，试一下流程
 
-roll loop status      # 显示调度器状态和当前 loop 状态
+roll loop status      # 显示运行态(ACTIVE / PAUSED)、队列、告警、最近 cycle
 roll loop watch       # 默认 owner 视图：phase、quiet 时间、TCR 数、last signal + 实时活动
 roll loop watch -n 50 # 跟随前回看 50 行（默认 200；'all' = 整份日志）
 roll loop watch --events      # 从 .roll/loop/events.ndjson 渲染 compact 事件流
@@ -121,9 +127,6 @@ roll loop watch --attach   # 以只读方式 attach 到 loop 的 tmux 观测窗�
 roll loop go          # 手动运行 goal mode，默认覆盖全部 backlog，直到完成/暂停/触发护栏
 roll loop go --epic <name>              # 将 goal 限定到一个 epic
 roll loop go --cards US-1,FIX-2         # 将 goal 限定到指定卡片
-roll loop go --budget 10                # goal 成本达到 $10 后保守停止
-roll loop go --usage-threshold 0.85     # 5 小时或 7 天用量达到该比例后暂停
-roll loop go --no-wait                  # 触发用量闸后直接暂停返回，不等窗口恢复
 roll loop go --for 5h                   # 到时间盒后等当前 cycle 收尾再停
 roll loop go --max-cycles 3             # 跑满指定 cycle 数后停止
 roll loop go --review <auto|hetero|self|off>  # 设置完成前终审策略
@@ -198,21 +201,17 @@ Hold、Cut、未满足依赖、skip-list、open PR、已合并交付和 pending-
 
 ### Goal Mode 安全闸
 
-预算与运行上限每次 `roll loop go` 都是显式的。`--budget`、`--max-cycles`、`--for`
-只对本次调用生效；省略某项即代表本轮不设该限制——Roll 绝不从上一次会话持久化的
-goal 静默沿用预算或上限，因此一条不带 flag 的 `roll loop go` 既不会被几天前设的
-上限封顶，也不会被它卡死。范围（`--epic`/`--cards`）与 `--review` 只会在 goal 尚未
+运行上限每次 `roll loop go` 都是显式的。`--max-cycles`、`--for` 只对本次调用生效；
+省略即代表本轮不设该限制——Roll 绝不从上一次会话持久化的 goal 静默沿用上限，因此一条
+不带 flag 的 `roll loop go` 既不会被几天前设的上限封顶，也不会被它卡死。范围（`--epic`/`--cards`）与 `--review` 只会在 goal 尚未
 结束时于省略 flag 后沿用。goal 已 `complete` 时，下一次 `roll loop go` 会将它归档到
 `.roll/loop/goal-archive/`、记录 `goal:archived`，并完全按本次 flags 新建 goal；不带
 scope flag 则覆盖全部合格 backlog 卡，绝不会静默沿用已完成 goal 的范围。
 
-`roll loop go` 的安全闸只在 cycle 边界生效。`--budget <usd>` 使用有效成本账本；
-达到预算时 goal 进入 `budget_limited`。未执行 agent 的 idle 或 aborted 周期记为
-已知 $0，不算 unknown cost 行；只有真正执行了 agent 却测不到可解析用量的行才记为
-unknown，这类行仍按保守侧停止，不当作 0。用量闸检查 5 小时与 7 天窗口；默认 85%
-暂停并等待窗口恢复，`--no-wait` 则停下等 owner。恢复等待是有界的——卡死的用量 API
-不会让会话无限停摆；超时后 Roll 记录 `usage_wait_timeout` 审计事件并让 goal 保持暂停。
-`--for <duration>` 是墙钟时间盒：当前 cycle 收尾后，goal 以 `timebox` 原因暂停。
+`roll loop go` 的安全闸只在 cycle 边界生效。全局兜底是**死循环熔断器**:连续若干个
+整 goal 无进展(没交付任何卡)的 cycle 之后,goal 会被停下并大声告警 —— 一张合不进去的卡
+不可能无限打转,循环必然在 K 轮内停。`--for <duration>` 是墙钟时间盒:当前 cycle 收尾后
+goal 以 `timebox` 原因暂停;`--max-cycles <n>` 按轮数停。
 
 每个 builder cycle 前，`roll loop go` 会对主 checkout 的**完整** `git status`
 列表（绝不截断）与 runner 的**待交付证据 manifest** 逐条比对。每个 manifest 按 cycle
@@ -249,13 +248,13 @@ fail-loud；先安装或发布本地构建，再恢复自治施工。
 
 | 字段 | 含义 |
 |------|------|
-| `Status` | `active`、`paused`、`budget_limited` 或 `complete`。 |
+| `Status` | `active`、`paused` 或 `complete`（历史 goal 里的 `budget_limited` 读作 `paused`）。 |
 | `Scope` | 全 backlog、单个 epic 或显式卡片列表。 |
 | `Review` | 完成前终审策略：`auto`、`hetero`、`self` 或 `off`。 |
 | `Usage` | goal 已跑 cycle 数、有效成本、unknown cost 行数。 |
-| `Limits` | 显式传入的 `--budget`、`--max-cycles`、`--for` 限制。 |
-| `Safety gate` | 最近一次预算、用量或时间盒闸及其读数。 |
-| `Last decision` | goal 继续、暂停、预算限停或完成的原因。 |
+| `Limits` | 显式传入的 `--max-cycles`、`--for` 限制。 |
+| `Safety gate` | 最近一次时间盒或死循环熔断闸及其读数。 |
+| `Last decision` | goal 继续、暂停或完成的原因。 |
 
 `auto` 终审降级为同 provider review 时，状态视图会显示 `goal:review_degraded`
 记录的降级原因。goal 暂不能完成时，`Last decision` 会带上未达成的真相裁定原因
