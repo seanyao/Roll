@@ -697,14 +697,17 @@ function nowTab(input: TruthConsoleInput): string {
   const total = s.story.total || 1;
   const mergedPct = Math.round((spectrum.done / total) * 100);
 
-  const runningCount = lanes.filter((l) => l.running).length;
-  const hbPillColor = runningCount > 0 ? C.amber : C.slate;
-  const hbPillBg = runningCount > 0 ? "#fbf1df" : "#eef1f7";
+  // codex r5: the Now tab carried the SAME "N/M running" pill I replaced on the
+  // Loop tab, so a leftover-only lane still read "0/1 running" here. Both tabs use
+  // the one helper now — sessions driving, plus debris.
+  const sessionsDriving = lanes.filter((l) => l.source === "goal" && l.running).length;
+  const hbPillColor = sessionsDriving > 0 ? C.amber : C.slate;
+  const hbPillBg = sessionsDriving > 0 ? "#fbf1df" : "#eef1f7";
   const heartbeat =
     `<section style="border:1px solid ${C.line};border-radius:12px;background:${C.card};overflow:hidden;margin:20px 0 14px;box-shadow:0 1px 2px rgba(17,26,69,.05);">` +
     `<div style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid ${C.hair};">` +
     sectionLabel(bi("Loop heartbeat", "循环心跳")) +
-    `<span style="${MONO}font-size:11px;padding:2px 9px;border-radius:999px;color:${hbPillColor};background:${hbPillBg};font-weight:600;white-space:nowrap;">${runningCount}/${lanes.length} ${bi("running", "运行中")}</span>` +
+    `<span style="${MONO}font-size:11px;padding:2px 9px;border-radius:999px;color:${hbPillColor};background:${hbPillBg};font-weight:600;white-space:nowrap;">${leftoverAndSessionCount(lanes)}</span>` +
     `<span style="flex:1;"></span>` +
     `<a href="#loop" data-tab-link="loop" style="${MONO}font-size:11.5px;color:${C.blue};cursor:pointer;text-decoration:none;">${bi("open loop", "打开循环页")} →</a></div>` +
     (lanes.length > 0

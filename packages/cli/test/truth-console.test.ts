@@ -357,7 +357,11 @@ describe("renderTruthConsole — US-DOSSIER-011", () => {
     expect(html).toContain("zombie");
     expect(html).toContain("僵尸");
     expect(html).toContain("#d23b3b");
-    expect(html).toContain("1/1"); // running lanes
+    // US-LOOP-118: the heartbeat pill no longer counts lanes ("1/1"); it reports
+    // sessions driving and leftover debris. This fixture's lane is a running
+    // non-goal lane from an old snapshot, so no session is driving.
+    expect(html).not.toContain("1/1");
+    expect(html).toContain("no session driving");
     expect(html).toContain('data-tab-link="backlog"');
     expect(html).toContain('data-tab-link="loop"');
     expect(html).toContain('data-tab-link="release"');
@@ -1320,6 +1324,30 @@ describe("command chips + freshness — US-DOSSIER-018", () => {
     expect(html).toContain("go sessions · leftover lanes");
     expect(html).toContain("1 session driving");
     expect(html).toContain("1 leftover");
+    // codex r5: BOTH tabs must use the pill. A leftover-only lane read "0/1
+    // running" on the Now tab after the Loop tab was fixed — the same defect
+    // surviving in the second of two copies.
+    const leftoverOnly = render({
+      ...SNAP,
+      loop: {
+        lanes: [
+          { name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+        ],
+      },
+    });
+    expect(leftoverOnly).not.toContain("0/1");
+    // Both pills (Now tab heartbeat + Loop tab) plus the ACTIVE banner speak the
+    // same way — assert the property, not an occurrence count, since a third
+    // legitimate site (the banner) makes the count brittle.
+    // Three legitimate sites say it: the Now-tab pill, the Loop-tab pill, and the
+    // ACTIVE banner ("1 leftover lane(s) to disarm"). Assert each shape rather than
+    // a total, so adding a fourth honest site does not fail this test spuriously.
+    expect(leftoverOnly.split("1 leftover").length - 1).toBe(3);
+    expect(leftoverOnly).toContain("1 leftover lane(s) to disarm"); // banner
+    expect(leftoverOnly).toContain("no session driving");
+    // And nothing anywhere counts lanes as "running".
+    expect(leftoverOnly).not.toMatch(/\d+\/\d+ <span class="lang-en">running/);
+
     // A clean repo says so rather than counting lanes. Assert the pill's own text
     // positively — a page-wide negative on "0/0" false-positives on other pills.
     const clean = render({ ...SNAP, loop: { lanes: [] } });
