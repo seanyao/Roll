@@ -216,9 +216,9 @@ not rewrite paths on the way in. `roll loop gc` reaps markers older than 7 days,
 you can also just leave them alone. If you have a project that never made the move,
 copy the files to their new paths by hand using the table above.
 
-这是一次性迁移到当前布局时留下的。现在已经没有任何东西会再写它们 —— 自动迁移随常驻
-调度一起退役了，cycle 不再在启动时改写路径。`roll loop gc` 仍会回收 7 天以上的标记，
-所以放着不管也可以。如果某个项目从未迁移过，照上面的表把文件手工复制到新路径即可。
+这是一次性迁移到当前布局时留下的。没有任何东西会再写它们:cycle 不会在启动时改写路径。
+`roll loop gc` 会回收 7 天以上的标记，所以放着不管也可以。如果某个项目从未迁移过，
+照上面的表把文件手工复制到新路径即可。
 
 See also: [roll loop](loop.md) · [Migration 2.0](migration-2.0.md) · [FAQ](faq.md)
 

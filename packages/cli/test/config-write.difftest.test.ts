@@ -117,9 +117,9 @@ function frozen(c: Case): { status: number; stdout: string; stderr: string; file
     case "dream-time facade":
       return { status: 0, stdout: "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml\nnote: nothing reads this — run `roll dream run-once` when you want a scan\n说明:这个值没人读 —— 想扫就跑 `roll dream run-once`\n", stderr: "", fileContent: "loop_dream_hour: 3\nloop_dream_minute: 20\n" };
     case "loop-window read default":
-      return { status: 0, stdout: "loop-window: 0-24 (from default)\n", stderr: "", fileContent: null };
+      return { status: 0, stdout: "loop-window: 0-24 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "loop-schedule read default":
-      return { status: 0, stdout: "loop-schedule: every 60min (offset :0) (from default)\n", stderr: "", fileContent: null };
+      return { status: 0, stdout: "loop-schedule: 60min / offset :0 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "dream-time read default":
       return { status: 0, stdout: "dream-time: 03:00 (from default)\n", stderr: "", fileContent: null };
     case "above max":

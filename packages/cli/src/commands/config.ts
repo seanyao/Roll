@@ -60,7 +60,7 @@ function loopWindow(value: string, scope: Scope): number {
   if (value === "") {
     const [vs, s1] = configResolve("loop_active_start") ?? ["", "default"];
     const [ve] = configResolve("loop_active_end") ?? ["", "default"];
-    process.stdout.write(`loop-window: ${vs}-${ve} (${fromSource(s1)})\n`);
+    process.stdout.write(`loop-window: ${vs}-${ve} (${fromSource(s1)}) — inactive, nothing reads this\n`);
     return 0;
   }
   if (!/^[0-9]+-[0-9]+$/.test(value)) {
@@ -99,7 +99,9 @@ function loopSchedule(value: string, scope: Scope): number {
   if (value === "") {
     const [vp, sp] = configResolve("loop_schedule.period_minutes") ?? ["", "default"];
     const [vo] = configResolve("loop_schedule.offset_minute") ?? ["", "default"];
-    process.stdout.write(`loop-schedule: every ${vp}min (offset :${vo}) (${fromSource(sp)})\n`);
+    // codex r2: printing "every 60min" reads as a schedule in effect. Show the
+    // stored value, then say plainly that nothing acts on it.
+    process.stdout.write(`loop-schedule: ${vp}min / offset :${vo} (${fromSource(sp)}) — inactive, nothing reads this\n`);
     return 0;
   }
   if (!/^[0-9]+(\/[0-9]+)?$/.test(value)) {

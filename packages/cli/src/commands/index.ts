@@ -332,10 +332,9 @@ export function registerAll(): void {
   // `config`: FULLY TS now (US-PORT-006 — 整个 config 命令收口). Read surface
   // (help/--list/key read) + write surface + the three compact facades
   // (loop-window/loop-schedule/dream-time) all run native; no bash fallback.
-  // DELIBERATE divergence: a config write no longer implicitly remounts launchd
-  // (apply a new schedule with `roll loop on`); CLI output stays byte-identical
-  // to v2, and the v2 `_config_resolve` `set -u` crash on a missing global file
-  // is fixed. See config.ts header.
+  // The v2 `_config_resolve` `set -u` crash on a missing global file is fixed.
+  // See the config.ts header for why loop-window/loop-schedule still exist while
+  // nothing reads their values.
   registerPorted("config", (args) => {
     if (args[0] === "prices") return pricesCommand(args.slice(1));
     if (args[0] === "tune") return tuneCommand(args.slice(1));
