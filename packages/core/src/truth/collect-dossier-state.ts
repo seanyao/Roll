@@ -216,6 +216,16 @@ function defaultCollectTruthBoard(cwd: string, nowSec: number): TruthBoardInput 
   };
 }
 
+/**
+ * The default loop lane for a freshly collected snapshot.
+ *
+ * US-LOOP-118 (codex r8): this lane was labelled `source: "launchd"`, so a fresh
+ * snapshot presented it as a resident lane — readers then counted it, and a stale
+ * `lastAt` painted it red as a "zombie". Nothing here reads a plist: `running`
+ * comes from `live.log` existing and `lastAt` from runs.jsonl, both of which
+ * describe a SESSION. Labelling it `goal` puts it under the semantics it actually
+ * has, and leaves `launchd` to mean only "leftover plist on disk".
+ */
 function defaultCollectLoopHeartbeat(cwd: string): TruthSnapshotLoop {
   const loopDir = join(cwd, ".roll", "loop");
   let lastAt: string | undefined;
@@ -237,10 +247,10 @@ function defaultCollectLoopHeartbeat(cwd: string): TruthSnapshotLoop {
   const running = existsSync(join(loopDir, "live.log"));
   return {
     lanes: [{
-      name: "backlog loop",
-      source: "launchd" as const,
+      name: "go session",
+      source: "goal" as const,
       running,
-      mode: "backlog" as const,
+      mode: "go" as const,
       ...(lastAt !== undefined ? { lastAt } : {}),
     }],
   };

@@ -276,3 +276,37 @@ describe("collectDossierState — US-OBS-016 view-model selector", () => {
     expect(snapshot.story.total).toBeGreaterThan(0);
   });
 });
+
+describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane", () => {
+  it("labels the collected lane `goal`, so no reader treats it as a resident lane", () => {
+    // codex r8: it was labelled source:"launchd", so a FRESH snapshot presented it
+    // as a resident lane — readers counted it, and a stale lastAt painted it red as
+    // a "zombie". Nothing here reads a plist: `running` comes from live.log and
+    // `lastAt` from runs.jsonl, both of which describe a session.
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    writeFileSync(join(loopDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-20T11:00:00Z" })}\n`);
+    writeFileSync(join(loopDir, "live.log"), "streaming\n");
+
+    const snap = collectDossierState(cwd);
+    const lanes = snap.loop?.lanes ?? [];
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0]?.source).toBe("goal");
+    expect(lanes[0]?.running).toBe(true);
+    expect(lanes[0]?.lastAt).toBe("2026-06-20T11:00:00Z");
+    // No fresh snapshot may claim a launchd lane — that label now means only
+    // "a leftover plist is on disk", which this collector never checks.
+    expect(lanes.some((l) => l.source === "launchd")).toBe(false);
+  });
+
+  it("without live.log the session lane is not running, and still not a launchd lane", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-idle-"));
+    dirs.push(cwd);
+    mkdirSync(join(cwd, ".roll", "loop"), { recursive: true });
+    const lanes = collectDossierState(cwd).loop?.lanes ?? [];
+    expect(lanes[0]?.running).toBe(false);
+    expect(lanes[0]?.source).toBe("goal");
+  });
+});
