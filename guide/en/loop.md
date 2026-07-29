@@ -1302,8 +1302,9 @@ doubles as a heartbeat. The cycle runner calls
 roll-meta. Output goes to `~/.shared/roll/push-status.log` (rotated at 1MB, 2
 copies kept).
 
-Because the loop runs on its normal schedule, `status/loop.md` stays **≤35min
-fresh** — the watch prompt always sees recent data. The push is best-effort: a
+`status/loop.md` is refreshed by each cycle, so it is as fresh as the last cycle of
+the last run — not a fixed window. Between runs it does not change, which is itself
+the honest signal: a stale timestamp means nobody has driven the loop since. The push is best-effort: a
 network error, git conflict, or a >60s timeout is logged to push-status.log, the
 process is killed if it hangs, and the cycle continues. No ALERT, no retry.
 
@@ -1328,7 +1329,7 @@ stale. It only reads — it never modifies `seanyao/roll`.
 
 ### Troubleshooting: `status/loop.md` is stale
 
-If the snapshot's timestamp is far older than 35 minutes:
+If the snapshot's timestamp is far older than your last run:
 
 1. Check `~/.shared/roll/push-status.log` — it records every push attempt and
    any timeout or git error.
@@ -1363,7 +1364,7 @@ cron 日志打一条 WARNING 并跳过推送（绝不影响 cycle）。
 用 `${roll_meta_dir}/ops/push-loop-status.sh`。脚本写出 `status/loop.md` 并提交 +
 push 到 roll-meta。输出写到 `~/.shared/roll/push-status.log`（1MB 轮转，保留 2 份）。
 
-因为 loop 按固定节奏运行，`status/loop.md` 始终保持 **≤35min 新鲜**——巡检 prompt 总
+`status/loop.md` 由每个 cycle 刷新,新鲜度就是上一次运行的最后一个 cycle——不是固定窗口。两次运行之间它不变,这本身就是诚实的信号。巡检 prompt 总
 能看到近期数据。推送是 best-effort：网络错误、git 冲突或 >60s 超时都记进
 push-status.log，进程卡住会被 kill，cycle 继续。不设 ALERT，不重试。
 
@@ -1387,7 +1388,7 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 
 ### 排障：`status/loop.md` 不更新
 
-若快照时间戳远早于 35 分钟：
+若快照时间戳远早于你最近一次运行：
 
 1. 看 `~/.shared/roll/push-status.log`——它记录每次推送尝试以及任何超时或 git 错误。
 2. 确认 `roll_meta_dir` 已配置且路径存在（`roll config get roll_meta_dir`）。

@@ -1851,8 +1851,11 @@ function render(
   out.push("");
 
   if (cycles.length === 0) {
-    out.push("  " + c("dim", "no cycles yet — first run fires on next cron tick"));
-    out.push("  " + c("dim", "尚无 cycle · 等待下一次 cron 触发"));
+    // codex r11: this told a new owner to WAIT for a tick that will never come —
+    // the worst possible first impression, because nothing happens and the UI said
+    // to expect something. Name the command that actually starts one.
+    out.push("  " + c("dim", "no cycles yet — run `roll loop go` to start one"));
+    out.push("  " + c("dim", "尚无 cycle · 跑 `roll loop go` 开始一轮"));
     return;
   }
 

@@ -317,7 +317,7 @@ building ──attest earned──► publishable ──push+PR──► awaitin
 
 **记录内容**：`(agent, model, 输入 token, 输出 token, 预估成本, 回退次数, 含回退的有效成本)`。
 
-**Budget guardrails**：项目/全局设日和周上限。逼近上限 → 自动降级到便宜模型或暂停并通知。便宜模型回退率高导致总成本反超 → 建议升级。
+**成本可见,不设自动闸**:上面这些数按 cycle 记账并在 `roll loop status` / 轮次账本里可读,但 Roll 不会因为成本自动降级或暂停 —— 全局兜底是死循环熔断器(连续无进展即停),范围与轮数上限由 owner 每次用 `--max-cycles` / `--for` 显式给。
 
 ### BC8.5 · 驱动方式与运行态
 

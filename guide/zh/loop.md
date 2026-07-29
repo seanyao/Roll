@@ -1158,7 +1158,7 @@ idle cycle，所以快照同时充当心跳。cycle runner 在 `cycle_end` 事�
 `${roll_meta_dir}/ops/push-loop-status.sh`。脚本写出 `status/loop.md` 并提交 + push 到
 roll-meta。输出写到 `~/.shared/roll/push-status.log`（1MB 轮转，保留 2 份）。
 
-因为 loop 按固定节奏运行，`status/loop.md` 始终保持 **≤35min 新鲜**——巡检 prompt 总能
+`status/loop.md` 由每个 cycle 刷新，所以它的新鲜度就是上一次运行的最后一个 cycle——不是一个固定窗口。两次运行之间它不变,而这本身就是诚实的信号:时间戳很旧就意味着从那以后没人驱动过 loop。巡检 prompt 看到的
 看到近期数据。推送是 best-effort：网络错误、git 冲突或 >60s 超时都记进
 push-status.log，进程卡住会被 kill，cycle 继续。不设 ALERT，不重试。
 
@@ -1182,7 +1182,7 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 
 ### 排障：`status/loop.md` 不更新
 
-若快照时间戳远早于 35 分钟：
+若快照时间戳远早于你最近一次运行：
 
 1. 看 `~/.shared/roll/push-status.log`——它记录每次推送尝试以及任何超时或 git 错误。
 2. 确认 `roll_meta_dir` 已配置且路径存在（`roll config get roll_meta_dir`）。
