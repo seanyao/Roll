@@ -85,19 +85,24 @@ describe("US-LOOP-113 — no roll command can arm a scheduler", () => {
         "| Story | Description | Status |\n|---|---|---|\n| US-X-1 | work | 📋 Todo |\n",
       );
       const launchd = mkdtempSync(join(tmpdir(), "roll-l113-launchd-"));
-      execFileSync("node", [BIN, "status"], {
-        cwd: dir,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, ROLL_MAIN_SLUG: "proj-abc123", _LAUNCHD_DIR: launchd, ROLL_LANG: "en" },
-      });
+      // codex review r5: run the command in a try/catch of its OWN — a non-zero exit
+      // from `roll status` in a bare fixture is fine — but the ASSERTIONS must sit
+      // outside it. The first version wrapped both, so an armed lane would have been
+      // swallowed and the test could not fail.
+      try {
+        execFileSync("node", [BIN, "status"], {
+          cwd: dir,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, ROLL_MAIN_SLUG: "proj-abc123", _LAUNCHD_DIR: launchd, ROLL_LANG: "en" },
+        });
+      } catch {
+        /* exit code is not the subject; the assertions below are */
+      }
       // Nothing was written into the LaunchAgents dir.
       expect(readdirSync(launchd)).toEqual([]);
       // And the marker was not consumed/renamed into a waking state.
       expect(existsSync(join(rt, "DORMANT-proj-abc123"))).toBe(true);
-    } catch {
-      // A non-zero exit from `roll status` in a bare fixture is fine — the
-      // assertion that matters is that no lane was armed, checked above.
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

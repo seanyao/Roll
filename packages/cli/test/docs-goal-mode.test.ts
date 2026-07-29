@@ -9,21 +9,22 @@ function doc(path: string): string {
 }
 
 describe("FIX-256 — goal mode docs and site wording", () => {
-  it("English and Chinese loop guides document goal mode versus scheduled mode", () => {
+  // US-LOOP-113: there is no scheduled mode to contrast goal mode WITH. What the
+  // guides must still document is the go lock (two sessions cannot race) and the
+  // pause/resume path.
+  it("English and Chinese loop guides document the go lock and pause/resume", () => {
     const en = doc("guide/en/loop.md");
-    expect(en).toContain("### Goal Mode vs Scheduled Mode");
+    expect(en).toContain("### The go lock");
     expect(en).toContain("go.lock");
-    expect(en).toMatch(/scheduled .*yield/i);
-    expect(en).toMatch(/scheduler .*off/i);
-    expect(en).toMatch(/paused.*resume/i);
+    expect(en).toMatch(/paused[\s\S]{0,200}resume/i);
+    expect(en).not.toMatch(/scheduled tick/i);
 
     const zh = doc("guide/zh/loop.md");
-    expect(zh).toContain("### Goal Mode 与定时模式");
+    expect(zh).toContain("### go 锁");
     expect(zh).toContain("go.lock");
-    expect(zh).toContain("定时");
-    expect(zh).toContain("off");
-    expect(zh).toContain("paused");
+    expect(zh).toMatch(/paused|已暂停/);
     expect(zh).toContain("resume");
+    expect(zh).not.toContain("定时 tick");
   });
 
   // US-LOOP-113: there is no "scheduler is off" state to distinguish from paused —

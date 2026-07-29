@@ -207,17 +207,17 @@ racing (carried to child cycles as `ROLL_LOOP_RACE=1`). On the FIRST merge,
 (`delivery:reconciled{superseded}`), so racing costs at most one merge plus
 discarded sibling work — never duplicate deliveries.
 
-### Goal Mode vs Scheduled Mode
+### The go lock
 
-`roll loop go` is a manual goal session, not a launchd scheduler tick. While it
-runs, Roll holds `.roll/loop/go.lock`; scheduled ticks yield when they see that
-lock, record `goal:tick_skipped`, and do not start another `roll loop run-once`.
+While `roll loop go` runs it holds `.roll/loop/go.lock`, so a second `go` in
+another terminal yields instead of starting a competing `roll loop run-once`.
 `roll loop go --cards <ids>` uses the same card allow-list for its one-shot
 runner, so a manual tick cannot silently pick a different backlog card.
 
-Goal mode can run when the scheduler is off because it starts its own session
-and does not depend on launchd. For paused projects, run `roll loop resume`
-first: the `PAUSE-<slug>` marker is still respected at cycle boundaries.
+`go` starts its own session and depends on nothing else being installed. For a
+paused project, run `roll loop resume` first — the `PAUSE-<slug>` marker is still
+respected at cycle boundaries — or name the card explicitly with `--cards`, which
+runs even while paused (FIX-1472).
 
 ### Goal Mode Safety Gates
 

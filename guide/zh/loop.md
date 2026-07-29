@@ -186,11 +186,10 @@ Hold、Cut、未满足依赖、skip-list、open PR、已合并交付和 pending-
 （`delivery:reconciled{superseded}`），竞速的代价至多是一份合入加 sibling 废活，
 绝不产生重复交付。
 
-### Goal Mode 与定时模式
+### go 锁
 
-`roll loop go` 是手动 goal session，不是 launchd 定时 tick。运行期间 Roll 会持有
-`.roll/loop/go.lock`；定时 tick 看到该锁就让路，记录 `goal:tick_skipped`，不会再启动
-另一个 `roll loop run-once`。
+`roll loop go` 运行期间会持有 `.roll/loop/go.lock`，所以另一个终端里再跑一次 `go`
+会让路，而不是启动一个互相竞争的 `roll loop run-once`。
 `roll loop go --cards <ids>` 对它触发的单次 runner 使用同一份卡片 allow-list，
 所以手动 tick 不能静默改选其他 backlog 卡。
 
