@@ -78,6 +78,28 @@ function resolveSpec(fromFile: string, spec: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The names an `export { … }` clause actually publishes.
+ *
+ * In `export { local as published }` only `published` is importable — `local` is
+ * not. codex r3 caught the earlier version accepting both, because it tested the
+ * whole brace body for the name.
+ */
+export function exportClauseNames(src: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/g)) {
+    for (const raw of (m[1] ?? "").split(",")) {
+      const clause = raw.trim().replace(/^type\s+/, "");
+      if (clause === "") continue;
+      const parts = clause.split(/\s+as\s+/);
+      // `a as b` publishes b; a bare `a` publishes a.
+      const published = (parts.length > 1 ? parts[parts.length - 1] : parts[0])!.trim();
+      if (published !== "") out.push(published);
+    }
+  }
+  return out;
+}
+
 /** `export * from "./x.js"` targets declared in this file. */
 function starReexports(src: string): string[] {
   const out: string[] = [];
@@ -112,13 +134,12 @@ function exportsName(file: string, name: string, seen = new Set<string>()): bool
     new RegExp(`export\\s+(async\\s+)?(function|class)\\s+${name}\\b`),
     new RegExp(`export\\s+(const|let|var)\\s+${name}\\b`),
     new RegExp(`export\\s+(interface|type|enum)\\s+${name}\\b`),
-    // `export { a, b as name }` / `export type { ... }`, incl. named re-export
-    // from another module. The `type` keyword is why several real exports first
-    // read as phantoms while I was building this.
-    new RegExp(`export\\s+(type\\s+)?\\{[^}]*\\b${name}\\b[^}]*\\}`),
-    new RegExp(`export\\s*\\{[^}]*\\b${name}\\b[^}]*\\}`),
   ];
   if (direct.some((re) => re.test(src))) return true;
+  // `export { a, b as c }` — only the EXPORTED side counts. codex r3: matching
+  // the whole brace body accepted `local as public`, so importing the local name
+  // (which is NOT exported) passed.
+  if (exportClauseNames(src).includes(name)) return true;
   for (const spec of starReexports(src)) {
     const target = resolveSpec(file, spec);
     if (target === undefined) return true; // unresolvable hop: do not accuse
@@ -178,6 +199,20 @@ describe("US-LOOP-117 — no test imports a phantom export", () => {
     expect(found).toHaveLength(1);
     expect(found[0]!.names).toEqual(["Alpha", "Beta"]);
     expect(found[0]!.spec).toBe("some-package");
+  });
+
+  it("an export alias publishes only the RIGHT-hand name (codex r3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-alias-"));
+    try {
+      const f = join(dir, "aliased.ts");
+      writeFileSync(f, "function localOnly(): void {}\nexport { localOnly as publishedName };\n");
+      expect(exportsName(f, "publishedName")).toBe(true);
+      // `localOnly` is NOT importable — accepting it was the r3 finding.
+      expect(exportsName(f, "localOnly")).toBe(false);
+      expect(exportClauseNames("export { a, b as c, type D as E };")).toEqual(["a", "c", "E"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("a cyclic barrel pair terminates instead of recursing forever", () => {
