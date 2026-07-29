@@ -509,7 +509,9 @@ function leftoverLaneSection(lang: Lang, probe: LaneProbe): void {
   const hits: string[] = [];
   try {
     for (const name of readdirSync(dir)) {
-      if (!/^com\.roll\.loop\..+\.plist$/.test(name)) continue;
+      // codex review r1: ANY com.roll.* lane is resident work, not just loop —
+      // dream was installed by the same retired command.
+      if (!/^com\.roll\..+\.plist$/.test(name)) continue;
       const wd = readWorkingDirectory(join(dir, name));
       if (wd === "" || !sameRealPath(wd, root)) continue;
       hits.push(name.replace(/\.plist$/, ""));

@@ -36,24 +36,23 @@ describe("US-LOOP-116 — the fallback scheduler is gone", () => {
     // `run-once` detached — but it AWAITS the child's exit, so it is a foreground
     // step of the session, not a daemon.
     //
-    // The daemon signature is different: detached AND abandoned (`unref()`), so the
-    // process outlives the command that started it. That is what US-LOOP-107's
-    // fallback did, and it is what must never come back.
+    // The daemon signature is: detached AND abandoned (unref) AND re-entering Roll's
+    // own runner, so the process outlives the command that started it. That is what
+    // US-LOOP-107's fallback did.
+    //
+    // codex review r1: scan the WHOLE file per spawn rather than a fixed window (an
+    // unref can sit far from the spawn), and match `unref` in any call shape
+    // (`child.unref()`, `child.unref?.()`, `.unref!()`).
     const offenders: string[] = [];
     for (const f of ALL_SRC) {
       const src = readFileSync(f, "utf8");
-      const lines = src.split("\n");
-      lines.forEach((line, i) => {
-        if (!/detached:\s*true/.test(line)) return;
-        const window = lines.slice(Math.max(0, i - 14), i + 10).join("\n");
-        const abandoned = /\.unref\(\)/.test(window);
-        // Match the spawned ARGV, not prose: a self-re-entry passes "loop" plus
-        // "run-once" as arguments. (An earlier version matched the words anywhere in
-        // the window, so `spawn("open", …)` inside loop-run-once.ts self-incriminated
-        // via its own filename.)
-        const reentersRoll = /["'`]loop["'`]\s*,\s*["'`]run-once["'`]/.test(window) || /fallbackRunner/.test(window);
-        if (abandoned && reentersRoll) offenders.push(`${f.replace(PKG, "")}:${i + 1}`);
-      });
+      if (!/detached:\s*true/.test(src)) continue;
+      const abandonedAnywhere = /\.unref\s*[?!]?\s*(?:\.\s*call\s*)?\(/.test(src);
+      if (!abandonedAnywhere) continue;
+      // Re-entry is judged from the spawned ARGV, never from prose or a filename
+      // (the first version self-incriminated via `loop-run-once.ts`).
+      const reenters = /["'`]loop["'`]\s*,\s*["'`]run-once["'`]/.test(src);
+      if (reenters) offenders.push(f.replace(PKG, ""));
     }
     expect(offenders).toEqual([]);
   });

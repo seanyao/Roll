@@ -407,9 +407,15 @@ function liveData(): StatusData {
   // a leftover from an older install and is worth naming, not obeying.
   const paused = existsSync(join(root, ".roll", "loop", `PAUSE-${slug}`));
   const driver: "session" | "paused" = paused ? "paused" : "session";
+  // codex review r1: a leftover DREAM lane is resident work too — it was installed
+  // by the same retired `roll loop on`. Notice either lane, not just loop.
+  const leftoverLanes = [
+    loopState !== "not-installed" ? "loop" : null,
+    launchdState("dream", slug) !== "not-installed" ? "dream" : null,
+  ].filter((x): x is string => x !== null);
   const note =
-    loopState !== "not-installed"
-      ? "leftover launchd lane from an older install — run roll doctor to remove it"
+    leftoverLanes.length > 0
+      ? `leftover launchd lane(s) from an older install: ${leftoverLanes.join(", ")} — run roll doctor to remove`
       : paused
         ? "autonomous progress paused — roll loop resume, or roll loop go --cards <id>"
         : "";
