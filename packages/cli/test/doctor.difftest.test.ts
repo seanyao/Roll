@@ -907,7 +907,7 @@ describe("frozen: roll doctor", () => {
       launchd lanes (all com.roll.* jobs)
 
         These are leftovers from an older install — Roll no longer uses timers. Disarm each:
-          launchctl bootout gui/$(id -u)/<label> && rm ~/Library/LaunchAgents/<label>.plist
+          launchctl bootout gui/$(id -u)/<label>; rm -f ~/Library/LaunchAgents/<label>.plist
 
         ✗ com.roll.loop.demo · not loaded
           → /tmp/roll-doctor-this-dir-does-not-exist-xyz  [missing — STALE lane]

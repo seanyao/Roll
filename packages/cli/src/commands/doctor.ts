@@ -434,7 +434,10 @@ export function lanesSection(lang: Lang, probe?: LaneProbe): string[] {
       ? "  这些是旧版安装留下的残留 lane —— Roll 不再使用定时调度。逐个卸载："
       : "  These are leftovers from an older install — Roll no longer uses timers. Disarm each:",
   );
-  lines.push("    launchctl bootout gui/$(id -u)/<label> && rm ~/Library/LaunchAgents/<label>.plist");
+  // `;` not `&&` (codex review r3): a lane listed as "not loaded" has nothing to
+  // boot out, so bootout exits non-zero and `&&` would leave the plist on disk —
+  // exactly the leftover this block is telling the user to remove.
+  lines.push("    launchctl bootout gui/$(id -u)/<label>; rm -f ~/Library/LaunchAgents/<label>.plist");
   lines.push("");
   for (const name of plists) {
     const label = name.replace(/\.plist$/, "");

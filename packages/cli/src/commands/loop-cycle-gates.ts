@@ -367,8 +367,11 @@ export function loopTestQualityCheckRetired(): number {
 }
 
 // FIX-240: live subcommands only — monitor/attach retired under the v3 runner.
-const LOOP_USAGE =
-  "Usage: roll loop <on|off|now|test|status|runs|log|story|events|eval|signals|fmt|mute|unmute|pause|resume|reset|gc>\n";
+// US-LOOP-113 (codex review r3): `on|off|now|fallback` are gone. This string is
+// what a user sees after typing a REMOVED verb, so advertising it here would tell
+// them the command they just tried is valid. Point at the grouped help instead of
+// maintaining a second, drift-prone verb list.
+const LOOP_USAGE = "Usage: roll loop <subcommand>  ·  see `roll loop --help` for the full list\n";
 
 /**
  * An unrecognised `roll loop <x>` — the final dispatch arm. With bin/roll

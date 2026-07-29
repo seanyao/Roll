@@ -35,6 +35,13 @@ describe("US-LOOP-113 — retired scheduler verbs are unreachable", () => {
       // No stub message: the owner ruled against tombstones, so the output must be
       // the generic unknown-subcommand path, not a bespoke "retired" notice.
       expect(`${r.stderr}${r.stdout}`.toLowerCase()).not.toContain("retired");
+      // codex review r3: and the usage line must not advertise the very verb the
+      // user just tried — that would say "this command is valid" right after
+      // refusing it.
+      const out = `${r.stderr}${r.stdout}`;
+      const usage = out.split("\n").find((l) => l.startsWith("Usage: roll loop")) ?? "";
+      expect(usage, "usage line must exist").not.toBe("");
+      expect(usage.includes(`|${sub}|`) || usage.includes(`<${sub}|`) || usage.includes(`|${sub}>`)).toBe(false);
     });
   }
 
