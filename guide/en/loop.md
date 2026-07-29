@@ -126,7 +126,6 @@ roll loop go          # Drive the backlog from this session
 roll loop go --epic <name>        # Scope to one epic
 roll loop go --cards US-1,FIX-2   # Scope to explicit cards (runs while paused)
 roll loop go --max-cycles 1       # A single cycle, to try the flow
-roll loop test        # Quick smoke test: verify tmux/popup/stream chain works
 
 roll loop status      # Show scheduler state and current loop state
 roll loop watch       # Default owner view: phase, quiet time, TCR count, last signal, plus live activity

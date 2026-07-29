@@ -34,7 +34,7 @@ const BANDS: Band[] = [
   // Agent-invoked entry points — live, but not user-facing daily verbs. Listed
   // so AC5's "no live subcommand dropped" holds without polluting the four
   // design bands.
-  { key: "internal", color: "faint", en: "internal", zh: "内部", verbs: "test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split" },
+  { key: "internal", color: "faint", en: "internal", zh: "内部", verbs: "run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split" },
 ];
 
 /** US-LOOP-113: the run-state model in `--help`. The old three states described a

@@ -50,7 +50,6 @@ import {
   reasonixEnv,
   realAgentSpawn,
   rescueLeakedMain,
-  resetDirective,
   startSpawnTimeoutWatchdog,
   startBuilderLivenessProbe,
   readCycleTimeoutThresholds,

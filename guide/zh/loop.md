@@ -110,7 +110,6 @@ roll loop go          # 在本会话推进 backlog
 roll loop go --epic <name>        # 限定到一个史诗
 roll loop go --cards US-1,FIX-2   # 限定到指定卡片（paused 下也会跑）
 roll loop go --max-cycles 1       # 只跑一个 cycle，试一下流程
-roll loop test        # 快速冒烟测试：验证 tmux/弹窗/流式输出链路是否正常
 
 roll loop status      # 显示调度器状态和当前 loop 状态
 roll loop watch       # 默认 owner 视图：phase、quiet 时间、TCR 数、last signal + 实时活动

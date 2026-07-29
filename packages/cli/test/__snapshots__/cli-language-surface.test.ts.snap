@@ -39,7 +39,7 @@ control   go · goal · pause · resume · reset · recover · reconcile
 observe   watch · status · runs · log · events · signals · eval · cycles · cycle
 alerts    alert list · alert ack · alert resolve · alert log
 maintain  gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
-internal  test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
+internal  run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
 [38;2;88;166;255mstates    [0mACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)
 [38;2;88;166;255mdrive     [0mopen an agent session and run roll loop go — nothing advances on its own
@@ -51,7 +51,7 @@ internal  test · run-once · story · notify · enforce-tcr · precheck-ci · h
 传感      watch · status · runs · log · events · signals · eval · cycles · cycle
 告警      alert list · alert ack · alert resolve · alert log
 维护      gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
-内部      test · run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
+内部      run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
 [38;2;88;166;255m状态      [0mACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)
 [38;2;88;166;255m驱动      [0m开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进

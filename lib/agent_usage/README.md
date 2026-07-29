@@ -28,7 +28,7 @@ The key must match `ROLL_LOOP_AGENT` env var (e.g. `kimi`, `deepseek`).
 Run a real cycle with the agent and save the stdout to a fixture:
 
 ```bash
-roll loop test 2>&1 | tee tests/fixtures/<agent>_output_sample.txt
+roll loop go --max-cycles 1 2>&1 | tee tests/fixtures/<agent>_output_sample.txt
 ```
 
 Or capture from a real cycle log.

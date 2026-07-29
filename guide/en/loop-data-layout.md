@@ -232,11 +232,10 @@ inside the project, or open the file directly.
 **怎么手动迁移？**
 
 You normally never need to — the next cycle does it. To force it without waiting,
-run `roll loop now` (or `roll loop test`) once; the runner migrates before
-reading state.
+run `roll loop go --max-cycles 1` once; the runner migrates before reading state.
 
-正常你永远不需要 —— 下一个 cycle 会做。要不等就触发，跑一次 `roll loop now`（或
-`roll loop test`）；runner 在读状态前会先迁移。
+正常你永远不需要 —— 下一个 cycle 会做。要不等就触发，跑一次
+`roll loop go --max-cycles 1`；runner 在读状态前会先迁移。
 
 **How do I roll back?**
 

@@ -213,11 +213,11 @@ the project.
 
 **怎么手动迁移？**
 
-You never need to — the next cycle does it. To force it, run `roll loop now`
-once.
+You never need to — the next cycle does it. To force it, run
+`roll loop go --max-cycles 1` once.
 
-正常你永远不需要 —— 下一个 cycle 会做。要不等就触发，跑一次 `roll loop now`（或
-`roll loop test`）；runner 在读状态前会先迁移。
+正常你永远不需要 —— 下一个 cycle 会做。要不等就触发，跑一次
+`roll loop go --max-cycles 1`；runner 在读状态前会先迁移。
 
 **How do I roll back?**
 
