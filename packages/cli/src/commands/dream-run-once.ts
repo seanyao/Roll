@@ -12,14 +12,11 @@
  * just spawns the agent with CWD = the project and streams its output to the
  * project-local machine log (.roll/dream/cron.log, mirroring loop's FIX-139).
  */
-import { projectIdentity, createScheduler } from "@roll/infra";
-import { BacklogStore, EventBus, buildDoneIndex, isEligible } from "@roll/core";
-import { existsSync, appendFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { projectIdentity } from "@roll/infra";
+import { existsSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { type AgentSpawn, realAgentSpawn } from "../runner/agent-spawn.js";
 import { readSkillBody } from "../runner/skill-body.js";
-import { dormantMarkerPath } from "./loop-sched.js";
 import { gcCommand } from "./gc.js";
 
 interface DreamStructureScanArtifact {
