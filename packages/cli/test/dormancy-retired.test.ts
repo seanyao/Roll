@@ -9,12 +9,12 @@
  * Roll's ledgers are append-only, so historical `loop:dormant` events and
  * `dormant_entered` run rows must stay fully readable.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseEventLine, TERMINAL_OUTCOMES } from "@roll/spec";
-import { resolveLoopRunState, type LoopRunState } from "../src/commands/loop-sched.js";
+import { resolveLoopRunState } from "../src/commands/loop-sched.js";
 
 function project(): string {
   const d = mkdtempSync(join(tmpdir(), "roll-l115-"));
@@ -48,10 +48,20 @@ describe("US-LOOP-115 — the run state is two-valued", () => {
     }
   });
 
-  it("DORMANT is not assignable to LoopRunState", () => {
-    // @ts-expect-error US-LOOP-115: the third state is gone from the type.
-    const bad: LoopRunState = "DORMANT";
-    expect(bad).toBe("DORMANT"); // runtime value is irrelevant; the type error is the assertion
+  it("the source declares exactly two states — no third value survives", () => {
+    // codex review r1: a `@ts-expect-error` here proves nothing. Vitest transpiles
+    // without typechecking and `tsc` excludes `test/`, so the assertion silently
+    // degraded to `"DORMANT" === "DORMANT"`. Read the declaration instead: this
+    // fails loudly if anyone widens the union again.
+    const src = readFileSync(new URL("../src/commands/loop-sched.ts", import.meta.url), "utf8");
+    const decl = /export type LoopRunState = ([^;]+);/.exec(src);
+    expect(decl, "LoopRunState declaration must exist").not.toBeNull();
+    const values = (decl?.[1] ?? "")
+      .split("|")
+      .map((v) => v.trim().replace(/^"|"$/g, ""))
+      .filter((v) => v !== "");
+    expect(values.sort()).toEqual(["ACTIVE", "PAUSED"]);
+    expect(values).not.toContain("DORMANT");
   });
 });
 

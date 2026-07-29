@@ -12,7 +12,7 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
 import { createScheduler, isOwnerHeld, launchdLabel, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
