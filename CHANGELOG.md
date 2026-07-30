@@ -3,13 +3,14 @@
 ## Unreleased
 
 ### 破坏性变更:定时任务全部退役,交付改由 agent 会话驱动
-- **以前用 `roll loop on` 让它按点自己跑的,现在改成打开一个 agent 会话、在里面跑 `roll loop go`。** 想只跑一张卡就 `roll loop go --cards US-123`,想试一轮就 `--max-cycles 1`,想限时就 `--for 2h`(US-LOOP-110~121)[loop]
-- **消失的六个命令**:`roll loop on`、`off`、`now`、`fallback`、`test`,以及 `roll loop off --all`。跑它们会说这个子命令不存在并指向 `roll loop --help`(不会替你猜该用哪条)。`roll loop pause` / `resume` 保留 —— 它们管的是"停自主推进",跟定时器无关;熔断器也仍会自动暂停,而显式指定卡片的一次性运行在暂停下照样能跑 [loop]
-- **能力边界(如实说)**:Roll 不再安装任何定时器,也不会自己启动任何东西 —— 两次运行之间不会有推进,也不会有你没启动过的运行。但**你启动的那次运行会活过终端**:默认 `go` 把 worker 放进 detached tmux 窗口,你的窗口关掉之后它仍在跑(你只是不再看着它)。真正结束一次运行的是:卡跑完、`--max-cycles`/`--for` 到点、死循环熔断跳闸、`roll loop pause`,或杀掉那个 tmux session;想留前台加 `--no-tmux` [loop]
-- **失效的配置**:`roll config loop-schedule`(执行频率)、`loop-window`(静默时段)、`dream-time` 现在还能设,但**没有任何东西会读它们** —— 读、写、`--list` 三处都会标 `[inactive]`。频率和时段由你什么时候开会话决定 [config]
-- **旧机器上的残留**:跑过旧版本的机器可能还留着 `com.roll.*` 的 launchd 文件;仍加载着的那种还会触发并调用 `roll loop run-once`(那条路径会如实说明)。`roll doctor` 会列出每一个并给出卸载命令;Roll 有意不替你删 —— 那是你机器上的任务。清理步骤见 [roll loop 指南](guide/en/loop.md#leftover-launchd-lanes) [loop]
-- `roll-.dream` 现在只有一个入口:`roll dream run-once` —— 想扫就扫,没有东西替你排期 [dream]
-- 读侧不再展示不存在的东西:`roll status` / `roll loop status` 去掉 launchd 状态行、周期反推与"下次触发"倒计时,空态改为直接告诉你跑 `roll loop go`;残留 lane 作为待清理的垃圾单独提示 [observability]
+- **以前用 `roll loop on` 让它按点自己跑的,现在改成打开一个 agent 会话、在里面跑 `roll loop go`。** 想只跑一张卡就 `roll loop go --cards US-123`,想试一轮就 `--max-cycles 1`,想限时就 `--for 2h`(US-LOOP-110 / US-LOOP-111 / US-LOOP-112)[loop]
+- **消失的六个命令**:`roll loop on`、`off`、`now`、`fallback`、`test`,以及 `roll loop off --all`。跑它们会说这个子命令不存在并指向 `roll loop --help`(不会替你猜该用哪条)。`roll loop pause` / `resume` 保留 —— 它们管的是"停自主推进",跟定时器无关;熔断器也仍会自动暂停,而显式指定卡片的一次性运行在暂停下照样能跑。随之拔掉的还有"跑任意 roll 命令就顺手唤醒"这条隐藏路径,以及那个在后台补跑的兜底调度进程(US-LOOP-113 / US-LOOP-114 / US-LOOP-116)[loop]
+- **能力边界(如实说)**:Roll 不再安装任何定时器,也不会自己启动任何东西 —— 两次运行之间不会有推进,也不会有你没启动过的运行。但**你启动的那次运行会活过终端**:默认 `go` 把 worker 放进 detached tmux 窗口,你的窗口关掉之后它仍在跑(你只是不再看着它)。真正结束一次运行的是:卡跑完、`--max-cycles`/`--for` 到点、死循环熔断跳闸、`roll loop pause`,或杀掉那个 tmux session;想留前台加 `--no-tmux`。运行态也从三态收成两态(跑 / 暂停),没有第三种"睡着但会自己醒"的状态了(US-LOOP-115)[loop]
+- **失效的配置**:`roll config loop-schedule`(执行频率)、`loop-window`(静默时段)、`dream-time` 现在还能设,但**没有任何东西会读它们** —— 读、写、`--list` 三处都会标 `[inactive]`。频率和时段由你什么时候开会话决定(US-LOOP-119)[config]
+- **旧机器上的残留**:跑过旧版本的机器可能还留着 `com.roll.*` 的 launchd 文件;仍加载着的那种还会触发并调用 `roll loop run-once`(那条路径会如实说明)。`roll doctor` 会列出每一个并给出卸载命令;Roll 有意不替你删 —— 那是你机器上的任务。清理步骤见 [roll loop 指南](guide/en/loop.md#leftover-launchd-lanes)(US-LOOP-117)[loop]
+- `roll-.dream` 现在只有一个入口:`roll dream run-once` —— 想扫就扫,没有东西替你排期(US-LOOP-117)[dream]
+- 读侧不再展示不存在的东西:`roll status` / `roll loop status` 去掉 launchd 状态行、周期反推与"下次触发"倒计时,空态改为直接告诉你跑 `roll loop go`;残留 lane 作为待清理的垃圾单独提示(US-LOOP-118)[observability]
+- 文档、中英指南、站点与技能说明全部改写成会话驱动的说法,不再教你去跑那些已经不存在的命令;并配了一次性的旧定时任务清理指引(US-LOOP-120 / US-LOOP-121)[docs]
 
 ## v4.728.1 — 2026-07-28
 
