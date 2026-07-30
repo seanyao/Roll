@@ -113,7 +113,11 @@ const UNATTENDED_CLAIM = [
   /会话(一)?(关|结束)[,，]?\s*(推进|交付|工作)就停/,
   // codex r7: session-FIRST orderings, which the closing-first shapes above miss.
   /(session|window|terminal) (ends?|closes?)[^.]{0,60}(stops?|halts?|no (further )?progress)/i,
-  /(会话|窗口|终端)(一旦|一)?(结束|关闭|关掉)[^。]{0,30}(就停|停下|不再|没有(进展|推进))/,
+  // The `不再` alternative was too greedy: it fired on a CORRECT sentence
+  // ("窗口关掉之后它仍在跑,你只是不再看着它"). Drop it — the stop/halt words below
+  // carry the meaning, and a false positive on accurate text pushes the author
+  // toward worse wording, which is the opposite of the point.
+  /(会话|窗口|终端)(一旦|一)?(结束|关闭|关掉)[^。]{0,30}(就停|停下|没有(进展|推进))/,
   /no agent session means no progress/i,
   /没有 ?agent ?会话就没有(进展|推进)/,
   // codex r7 round two: four more phrasings the shapes above still missed —
@@ -275,7 +279,13 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     // replacement just strands the reader.
     expect(unreleased).toContain("roll loop on");
     expect(unreleased).toContain("roll loop go");
-    // And states the boundary plainly.
-    expect(unreleased).toContain("不开会话,就什么都不会发生");
+    // And states the boundary plainly — checked by SUBSTANCE, not by one sentence,
+    // so rewording the entry (e.g. into the repo's bullet convention) does not have
+    // to chase this assertion.
+    expect(unreleased).toMatch(/不会有你没启动过的运行/);
+    expect(unreleased).toMatch(/两次运行之间/);
+    // The detached-tmux reality must be stated too — omitting it is how the earlier
+    // draft ended up overclaiming the boundary.
+    expect(unreleased).toMatch(/detached tmux/);
   });
 });
