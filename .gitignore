@@ -64,5 +64,10 @@ packages/*/dist/
 # Pi workflow runtime state (per-machine, not tracked)
 .pi/
 
+# Kimi / Reasonix CLI local state (per-machine, not tracked) — FIX-1486
+.kimi/
+.kimi-code/
+.reasonix/
+
 # Root-level git worktrees (agent/manual, auto-created)
 .worktrees/
