@@ -125,7 +125,7 @@ Roll 绝不做的是:装下任何会启动你没要求过的工作的东西。
 要完全卸载：
 
 ```bash
-npm uninstall -g @seanyao/roll
+npm uninstall -g @bipo-ape/roll
 ~/.roll/uninstall.sh --dry-run    # 预览会删什么
 ~/.roll/uninstall.sh              # 实际执行
 ```

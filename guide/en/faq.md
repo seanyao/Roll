@@ -141,7 +141,7 @@ What Roll never does is install something that starts work you did not ask for.
 To remove everything:
 
 ```bash
-npm uninstall -g @seanyao/roll
+npm uninstall -g @bipo-ape/roll
 ~/.roll/uninstall.sh --dry-run    # preview removals
 ~/.roll/uninstall.sh              # actually remove
 ```

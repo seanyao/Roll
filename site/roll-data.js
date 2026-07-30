@@ -59,7 +59,7 @@ window.RollData = (function () {
       tagline: "It just works.",
       sub2: "Write a goal. Route it through Supervisor-led Story execution.",
       sub: "Roll diagnoses the project, turns intent into Stories, chooses an execution profile, routes Designer / Builder / Evaluator roles to available rigs, opens PRs, waits for green CI, and records story-scoped evidence. You stay on the loop, not in it.",
-      install: "npm install -g @seanyao/roll",
+      install: "npm install -g @bipo-ape/roll",
       ctas: [
         { label: "How roll-build works", href: "diagrams/roll-build-skill.html", primary: true, external: true },
         { label: "Read the guide", href: "#guides", primary: false },
@@ -267,7 +267,7 @@ window.RollData = (function () {
       tagline: "It just works.",
       sub2: "把目标写下来。交给 Supervisor-led Story 执行。",
       sub: "Roll 诊断项目、把意图变成 Stories、选择执行剖面，把 Designer / Builder / Evaluator 角色路由到可用 rig，开 PR、等 CI 绿，并记录按 Story 收口的证据。你掌舵，不掌桨。",
-      install: "npm install -g @seanyao/roll",
+      install: "npm install -g @bipo-ape/roll",
       ctas: [
         { label: "roll-build 详解", href: "diagrams/roll-build-skill.html", primary: true, external: true },
         { label: "查看文档", href: "#guides", primary: false },

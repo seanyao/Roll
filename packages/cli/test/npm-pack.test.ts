@@ -106,7 +106,11 @@ describe("npm pack → install → run (release packaging)", () => {
       run("npm", ["install", "--prefix", prefix, "--offline", "--no-audit", "--no-fund", tarball], prefix);
 
       const bin = join(prefix, "node_modules", ".bin", "roll");
-      const pkgRoot = join(prefix, "node_modules", "@seanyao", "roll");
+      // US-INSTALL-007: derive the install path from the package's OWN name —
+      // roll publishes under more than one scope, and a hard-coded one turns a
+      // rename into a packaging-test failure that says nothing about packaging.
+      const publishedName = String(JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")).name);
+      const pkgRoot = join(prefix, "node_modules", ...publishedName.split("/"));
       expect(existsSync(bin), `installed bin shim missing at ${bin}`).toBe(true);
       expect(existsSync(join(pkgRoot, "dist", "postinstall.mjs")), "postinstall bundle missing from package").toBe(true);
       expect(existsSync(join(pkgRoot, "scripts", "postinstall-roll-capture.mjs")), "postinstall wrapper missing from package").toBe(true);

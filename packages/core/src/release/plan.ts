@@ -48,8 +48,28 @@ export interface ReleaseDate {
 
 const DEFAULT_MAJOR = 3;
 
-/** roll's own npm package name — the ONLY project that uses the calver scheme. */
-export const ROLL_PACKAGE_NAME = "@seanyao/roll";
+/**
+ * roll's own npm package name — the ONLY project that uses the calver scheme.
+ *
+ * US-INSTALL-007: roll publishes ONE artifact under TWO names. `@bipo-ape/roll`
+ * is what the docs teach; `@seanyao/roll` is the equivalent alias that everyone
+ * already installed from keeps updating through. npm cannot re-scope a
+ * published package, so nothing in the registry ties them together — the
+ * release flow does, and every name here must be treated identically by
+ * version planning, self-update, and the release gate.
+ */
+export const ROLL_PACKAGE_NAME = "@bipo-ape/roll";
+
+/** Equivalent published names for the same artifact (see {@link ROLL_PACKAGE_NAME}). */
+export const ROLL_PACKAGE_ALIASES = ["@seanyao/roll"] as const;
+
+/** Every name roll is published under, primary first. */
+export const ROLL_PACKAGE_NAMES: readonly string[] = [ROLL_PACKAGE_NAME, ...ROLL_PACKAGE_ALIASES];
+
+/** True when `name` is one of roll's own published package names. */
+export function isRollPackageName(name: string): boolean {
+  return ROLL_PACKAGE_NAMES.includes(name);
+}
 
 /** Sensible first-release version for a target project with no version lineage. */
 export const INITIAL_SEMVER = "0.1.0";
@@ -64,7 +84,9 @@ export type VersionScheme = "calver" | "semver";
  * roll's build number (FIX-1247).
  */
 export function resolveVersionScheme(packageName: string | null | undefined): VersionScheme {
-  return packageName === ROLL_PACKAGE_NAME ? "calver" : "semver";
+  // US-INSTALL-007: EVERY name roll publishes under is roll — an alias falling
+  // through to semver would plan a different version for the same artifact.
+  return typeof packageName === "string" && isRollPackageName(packageName) ? "calver" : "semver";
 }
 
 /** Parse a `<major>.<mid>.<seq>` calver string, or null if it does not conform. */

@@ -28,7 +28,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isRollPackageName, ROLL_PACKAGE_NAME } from "@roll/core";
 import { resolveLang, t, v2Catalog, type Lang } from "@roll/spec";
+import { repoRoot } from "../bridge.js";
 import { rollHome, rollPkgDir } from "./setup-shared.js";
 import { setupCommand } from "./setup.js";
 import { rollVersion, treeVersion } from "./version.js";
@@ -144,19 +146,52 @@ function downloadAndInstallCurl(tag: string): { ok: boolean; newVersion?: string
   }
 }
 
+/**
+ * US-INSTALL-007 — which of roll's published names THIS install came from.
+ *
+ * roll ships one artifact under several names (`@bipo-ape/roll` primary,
+ * `@seanyao/roll` the equivalent alias). Self-update must stay on the name the
+ * owner actually installed: hard-coding one name would silently reinstall
+ * users of the other scope onto it — they would believe they run the package
+ * they chose while every update pulled the other one.
+ *
+ * Truth source is the running tree's own package.json; when that is unreadable
+ * or is not a roll name (dev checkout, renamed fork), fall back to the primary.
+ */
+export function installedPackageName(runningTreeName: string | null | undefined = selfPackageName()): string {
+  return typeof runningTreeName === "string" && isRollPackageName(runningTreeName) ? runningTreeName : ROLL_PACKAGE_NAME;
+}
+
+/** `name` from the running install's package.json, or null when unreadable. */
+function selfPackageName(): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(repoRoot(), "package.json"), "utf8")) as { name?: unknown };
+    return typeof pkg.name === "string" ? pkg.name : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `<npm root -g>/<@scope>/<name>` for a scoped package name. */
+function globalTreeFor(pkgRoot: string, pkg: string): string {
+  const parts = pkg.split("/");
+  return join(pkgRoot, ...parts);
+}
+
 // ─── _check_installed_version_or_retry (1947) ─────────────────────────────────
 function checkInstalledVersionOrRetry(): void {
-  const expected = (spawnSync("npm", ["view", "@seanyao/roll", "version"], { encoding: "utf8" }).stdout ?? "").trim();
+  const pkg = installedPackageName();
+  const expected = (spawnSync("npm", ["view", pkg, "version"], { encoding: "utf8" }).stdout ?? "").trim();
   const pkgRoot = (spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout ?? "").trim();
   // FIX-202: read the installed package's package.json (single source of truth),
   // not its fossil bin/roll VERSION= literal.
-  const installedTree = join(pkgRoot, "@seanyao", "roll");
+  const installedTree = globalTreeFor(pkgRoot, pkg);
   const installed = treeVersion(installedTree);
   if (expected === "" || installed === "") return;
   if (installed !== expected) {
     warn(m("update.version_mismatch", installed, expected));
     spawnSync("npm", ["cache", "clean", "--force"], { stdio: "ignore" });
-    spawnSync("npm", ["install", "-g", "@seanyao/roll@latest"], { stdio: "ignore" });
+    spawnSync("npm", ["install", "-g", `${pkg}@latest`], { stdio: "ignore" });
     const after = treeVersion(installedTree);
     if (after !== "" && after !== expected) warn(m("update.still_mismatch", after));
   }
@@ -222,7 +257,7 @@ export async function updateCommand(args: string[]): Promise<number> {
     info(m("update.upgrading_via_npm"));
     process.stdout.write("\n");
 
-    const npmStatus = runForward("npm", ["install", "-g", "@seanyao/roll@latest"]);
+    const npmStatus = runForward("npm", ["install", "-g", `${installedPackageName()}@latest`]);
     if (npmStatus !== 0) {
       err(m("update.npm_install_failed_check_network_proxy"));
       return 1;
