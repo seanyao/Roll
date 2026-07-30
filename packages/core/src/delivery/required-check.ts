@@ -39,28 +39,46 @@ const TOLERATED_FOR_OTHERS = new Set(["success", "skipped", "neutral"]);
  * Ordering matters: "still running" is reported before any refusal that the
  * caller might act on permanently, so a poller waits instead of giving up.
  */
-export function requiredCheckVerdict(checks: readonly CheckConclusion[], requiredName: string): RequiredCheckVerdict {
-  const required = checks.filter((c) => c.name === requiredName);
-  if (required.length === 0) {
+export function requiredCheckVerdict(
+  checks: readonly CheckConclusion[],
+  required: string | readonly string[],
+): RequiredCheckVerdict {
+  // FIX-1488: the required gate is a SET, not a name. Once the doc-drift gate
+  // flips to hard, two checks must both have run on this sha (`test-ts` and the
+  // drift check); a single-name contract cannot express that, and "the other one
+  // never ran" would pass silently — the exact hole FIX-1487 closed for one name.
+  const requiredNames = typeof required === "string" ? [required] : [...required];
+  if (requiredNames.length === 0) {
     return {
       ok: false,
       reason: "required-check-absent",
-      detail: `required check "${requiredName}" did not run on this commit — a gate that never ran is not a gate that passed`,
+      detail: "no required check configured — refusing to merge on an empty gate set",
     };
   }
-  if (required.some((c) => c.conclusion == null)) return { ok: false, reason: "pending" };
 
-  const notSuccess = required.filter((c) => c.conclusion !== "success");
+  const missing = requiredNames.filter((n) => !checks.some((c) => c.name === n));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: "required-check-absent",
+      detail: `required check${missing.length > 1 ? "s" : ""} ${missing.map((n) => `"${n}"`).join(", ")} did not run on this commit — a gate that never ran is not a gate that passed`,
+    };
+  }
+
+  const requiredRuns = checks.filter((c) => requiredNames.includes(c.name));
+  if (requiredRuns.some((c) => c.conclusion == null)) return { ok: false, reason: "pending" };
+
+  const notSuccess = requiredRuns.filter((c) => c.conclusion !== "success");
   if (notSuccess.length > 0) {
     return {
       ok: false,
       reason: "required-check-not-successful",
-      detail: `required check "${requiredName}" concluded ${notSuccess.map((c) => c.conclusion).join(", ")}`,
+      detail: notSuccess.map((c) => `${c.name}=${c.conclusion}`).join(", "),
     };
   }
 
   // Other checks: still running → wait; outright failure → block; skipped/neutral → fine.
-  const others = checks.filter((c) => c.name !== requiredName);
+  const others = checks.filter((c) => !requiredNames.includes(c.name));
   if (others.some((c) => c.conclusion == null)) return { ok: false, reason: "pending" };
   const failed = others.filter((c) => !TOLERATED_FOR_OTHERS.has(String(c.conclusion)));
   if (failed.length > 0) {

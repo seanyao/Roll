@@ -80,3 +80,55 @@ describe("FIX-1487 — the required check must have run AND passed", () => {
     expect(requiredCheckVerdict([], REQUIRED)).toMatchObject({ ok: false, reason: "required-check-absent" });
   });
 });
+
+describe("FIX-1488 — the required gate is a SET, not a name", () => {
+  it("requires EVERY name in the set to have run and passed", () => {
+    const both = [
+      { name: "test-ts", conclusion: "success" },
+      { name: "doc-drift", conclusion: "success" },
+    ];
+    expect(requiredCheckVerdict(both, ["test-ts", "doc-drift"]).ok).toBe(true);
+  });
+
+  it("refuses when one member of the set never ran — names which", () => {
+    const v = requiredCheckVerdict([{ name: "test-ts", conclusion: "success" }], ["test-ts", "doc-drift"]);
+    expect(v.ok).toBe(false);
+    expect(v.reason).toBe("required-check-absent");
+    expect(v.detail).toContain("doc-drift");
+    expect(v.detail, "must not blame the check that did run").not.toContain('"test-ts"');
+  });
+
+  it("refuses when one member of the set was skipped", () => {
+    const v = requiredCheckVerdict(
+      [
+        { name: "test-ts", conclusion: "success" },
+        { name: "doc-drift", conclusion: "skipped" },
+      ],
+      ["test-ts", "doc-drift"],
+    );
+    expect(v).toMatchObject({ ok: false, reason: "required-check-not-successful" });
+    expect(v.detail).toContain("doc-drift=skipped");
+  });
+
+  it("waits when one member of the set is still running", () => {
+    const v = requiredCheckVerdict(
+      [
+        { name: "test-ts", conclusion: "success" },
+        { name: "doc-drift", conclusion: null },
+      ],
+      ["test-ts", "doc-drift"],
+    );
+    expect(v.reason).toBe("pending");
+  });
+
+  it("refuses an empty set rather than merging on no gate at all", () => {
+    expect(requiredCheckVerdict([{ name: "test-ts", conclusion: "success" }], [])).toMatchObject({
+      ok: false,
+      reason: "required-check-absent",
+    });
+  });
+
+  it("keeps the single-name form working (soft period has one gate)", () => {
+    expect(requiredCheckVerdict([{ name: "test-ts", conclusion: "success" }], "test-ts").ok).toBe(true);
+  });
+});
