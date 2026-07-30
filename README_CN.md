@@ -21,10 +21,6 @@ Roll 是 Supervisor-led 的 CLI harness：把 AI agent 解析为按 Story 收口
 npm install -g @bipo-ape/roll
 ```
 
-```bash
-npm install -g @bipo-ape/roll
-```
-
 Roll 以两个等效的名字发布：`@bipo-ape/roll`（推荐用这个）和 `@seanyao/roll`
 （最初的 scope，为已安装的用户保留）。两者是同一份产物、同一个版本 —— 从哪边
 装、从哪边升级，得到的 `roll` 完全一样。
