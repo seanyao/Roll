@@ -45,20 +45,30 @@ export interface ReleaseVerifyOptions {
  * `promoted:false`.
  */
 export function verifyRelease(
-  pkg: string,
+  pkg: string | readonly string[],
   version: string,
   tag: string,
   seams: ReleaseVerifySeams,
   opts: ReleaseVerifyOptions = {},
 ): ReleaseVerifyResult {
   const gaps: string[] = [];
+  // US-INSTALL-007: roll publishes one artifact under several names. EVERY name
+  // must carry this version at `latest` before the release counts as done —
+  // otherwise a missed mirror publish leaves half the users on the old version
+  // while the GitHub Release says shipped. All names are checked (not
+  // short-circuited) so one run reports every gap.
+  const pkgs = typeof pkg === "string" ? [pkg] : [...pkg];
 
   if (!seams.tagExists(tag)) gaps.push(`git tag ${tag} does not exist`);
-  if (!seams.npmHasVersion(pkg, version)) gaps.push(`npm has no ${pkg}@${version} (publish it first — npm is the truth source)`);
-  if (opts.requireLatest !== false) {
-    const latest = seams.npmLatest(pkg);
-    if (latest !== version) {
-      gaps.push(`npm dist-tags.latest is ${latest ?? "unknown"}, expected ${version}`);
+  for (const name of pkgs) {
+    if (!seams.npmHasVersion(name, version)) {
+      gaps.push(`npm has no ${name}@${version} (publish it first — npm is the truth source)`);
+    }
+    if (opts.requireLatest !== false) {
+      const latest = seams.npmLatest(name);
+      if (latest !== version) {
+        gaps.push(`npm dist-tags.latest for ${name} is ${latest ?? "unknown"}, expected ${version}`);
+      }
     }
   }
   const release = seams.getRelease(tag);

@@ -19,10 +19,14 @@ curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
 ### npm
 
 ```bash
-npm install -g @seanyao/roll
+npm install -g @bipo-ape/roll
 ```
 
 需要 Node.js 22+。
+
+Roll 以两个等效的名字发布：`@bipo-ape/roll`（推荐用这个）和 `@seanyao/roll`
+（最初的 scope，为已安装的用户保留）。两者是同一份产物、同一个版本 —— 从哪边
+装、从哪边升级，得到的 `roll` 完全一样。
 
 macOS 上，npm 包会在 postinstall 中尽力从 `seanyao/roll-capture` 最新 GitHub
 Release 下载 `Roll-Capture.app.zip`，校验后安装 `Roll Capture.app` 到
@@ -60,7 +64,7 @@ Roll 自动检测安装方式并对应处理：
 | 安装方式 | `roll update` 的行为 |
 |---|---|
 | curl（默认） | 重新下载最新 tarball、原子替换，然后 `roll sync` |
-| npm | `npm update -g @seanyao/roll`，然后 `roll sync` |
+| npm | `npm update -g @bipo-ape/roll`，然后 `roll sync` |
 | git clone（贡献者） | 在包目录执行 `git pull`，然后 `roll sync` |
 
 ## 自动版本提示
@@ -78,7 +82,7 @@ rm -rf ~/.local/share/roll ~/.local/bin/roll
 ### npm
 
 ```bash
-npm uninstall -g @seanyao/roll
+npm uninstall -g @bipo-ape/roll
 ```
 
 不再需要时删除状态文件：

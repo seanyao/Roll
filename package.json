@@ -1,5 +1,5 @@
 {
-  "name": "@seanyao/roll",
+  "name": "@bipo-ape/roll",
   "version": "4.730.1",
   "description": "Roll — Roll out features with AI agents",
   "packageManager": "pnpm@11.1.3",
@@ -61,5 +61,8 @@
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

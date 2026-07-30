@@ -40,7 +40,7 @@ curl -fsSL https://seanyao.github.io/roll/install | bash
 Or via npm:
 
 ```bash
-npm install -g @seanyao/roll@latest
+npm install -g @bipo-ape/roll@latest
 ```
 
 Then:
@@ -179,7 +179,7 @@ Safety:
 
 ```bash
 roll setup offboard --confirm
-npm uninstall -g @seanyao/roll
+npm uninstall -g @bipo-ape/roll
 ```
 
 Your project is now exactly as it was before adoption.

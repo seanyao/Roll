@@ -40,7 +40,7 @@ curl -fsSL https://seanyao.github.io/roll/install | bash
 或通过 npm：
 
 ```bash
-npm install -g @seanyao/roll@latest
+npm install -g @bipo-ape/roll@latest
 ```
 
 然后：
@@ -177,7 +177,7 @@ Roll 不创建的文件 / 目录原封不动；已有用户文件里的 Roll mar
 
 ```bash
 roll setup offboard --confirm
-npm uninstall -g @seanyao/roll
+npm uninstall -g @bipo-ape/roll
 ```
 
 项目回到接入前的状态。

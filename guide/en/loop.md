@@ -267,7 +267,7 @@ still hash-match fails closed.
 For the Roll repository itself, `roll loop go`, `roll loop resume`, and
 `roll loop go` prints the runner binary and version before starting autonomous
 work. They fail loud with `runner_stale_for_repo` if the repo-local
-`@seanyao/roll` package version is newer than the running runner; install or
+`@bipo-ape/roll` package version is newer than the running runner; install or
 publish the local build before resuming autonomous work.
 
 `roll loop go` enforces safety only at cycle boundaries. The global backstop is

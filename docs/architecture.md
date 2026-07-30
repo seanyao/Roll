@@ -4,7 +4,7 @@
 
 roll 是 AI coding agent 的**外层控制系统**（agent harness / reliability layer）。它不进入 agent 内部（不管理 token 窗口、不压缩对话、不干预单次推理），而是在外部建立一个闭环：设定目标 → 调度执行 → 感知结果 → 修正方向。
 
-当前用户入口是 CLI-first：`roll init`、`roll supervisor`、`roll supervisor live`、`roll loop`、`roll status`、`roll loop cycle` 与按 Story 收口的 `roll attest` 验收 Review Page。浏览器/TUI 版 Supervisor Live Console 是下一阶段工作，不作为当前产品面承诺。安装方式：`npm install -g @seanyao/roll`。
+当前用户入口是 CLI-first：`roll init`、`roll supervisor`、`roll supervisor live`、`roll loop`、`roll status`、`roll loop cycle` 与按 Story 收口的 `roll attest` 验收 Review Page。浏览器/TUI 版 Supervisor Live Console 是下一阶段工作，不作为当前产品面承诺。安装方式：`npm install -g @bipo-ape/roll`。
 
 ## 为什么是分层闭环
 
