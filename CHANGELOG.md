@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v4.730.1 — 2026-07-30
+
 ### 破坏性变更:定时任务全部退役,交付改由 agent 会话驱动
 - **以前用 `roll loop on` 让它按点自己跑的,现在改成打开一个 agent 会话、在里面跑 `roll loop go`。** 想只跑一张卡就 `roll loop go --cards US-123`,想试一轮就 `--max-cycles 1`,想限时就 `--for 2h`(US-LOOP-110 / US-LOOP-111 / US-LOOP-112)[loop]
 - **消失的六个命令**:`roll loop on`、`off`、`now`、`fallback`、`test`,以及 `roll loop off --all`。跑它们会说这个子命令不存在并指向 `roll loop --help`(不会替你猜该用哪条)。`roll loop pause` / `resume` 保留 —— 它们管的是"停自主推进",跟定时器无关;熔断器也仍会自动暂停,而显式指定卡片的一次性运行在暂停下照样能跑。随之拔掉的还有"跑任意 roll 命令就顺手唤醒"这条隐藏路径,以及那个在后台补跑的兜底调度进程(US-LOOP-113 / US-LOOP-114 / US-LOOP-116)[loop]
