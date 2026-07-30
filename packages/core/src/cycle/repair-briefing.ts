@@ -345,7 +345,7 @@ export function buildRepairBriefingManifest(p: RepairBriefingManifestParams): De
     storyId: p.storyId,
     ...(p.cycleId !== undefined ? { cycleId: p.cycleId } : {}),
     role: p.role ?? "evaluator",
-    trigger: p.trigger ?? "loop-autonomous",
+    trigger: p.trigger ?? "host-guided",
     topology: p.topology ?? "full-delta-team",
     qualityProfile: p.qualityProfile,
     executionIdentity: {

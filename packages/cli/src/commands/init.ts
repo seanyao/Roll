@@ -1708,8 +1708,8 @@ function emitInitUi(
       ? [
           ...(nudgePair ? [nudgePair] : []),
           ["Edit .roll/backlog.md", "open the backlog and add your first US"],
-          ["Run roll loop now", "execute one cycle manually to test the flow"],
-          ["Enable loop scheduling", "roll loop on  — let it run hourly"],
+          ["Run roll loop go --max-cycles 1", "execute one cycle in this session to test the flow"],
+          ["Run roll loop go", "keep driving the backlog from this session"],
           ["Run roll pair status", "see the cross-agent pairing pool and what it cost"],
         ]
       : [
@@ -1717,7 +1717,7 @@ function emitInitUi(
           [m3("init.next_create_repo"), m3("init.next_push_commands")],
           [m3("init.next_loop_on"), m3("init.next_repo_required")],
           ["Edit .roll/backlog.md", "open the backlog and add your first US"],
-          ["Run roll loop now", "execute one cycle manually to test the flow"],
+          ["Run roll loop go --max-cycles 1", "execute one cycle in this session to test the flow"],
         ]);
   lines.push("");
   lines.push("  " + c("pink", "NEXT", { bold: true }) + c("dim", "  ·  下一步"));

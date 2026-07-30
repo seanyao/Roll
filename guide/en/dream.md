@@ -1,12 +1,11 @@
-# roll-.dream — Nightly Code Health Scanner
+# roll-.dream — Code Health Scanner
 
-`roll-.dream` is a nightly skill that scans the codebase for architectural friction,
-dead code, and technical debt. It runs automatically at 3am (via launchd, installed by
-`roll loop on`) and deposits `REFACTOR-NNN` entries into `BACKLOG.md` for loop to execute.
+`roll-.dream` scans the codebase for architectural friction, dead code, and technical
+debt, and deposits `REFACTOR-NNN` entries into the backlog for the loop to pick up.
 
-The schedule fires a self-contained v3 runner whose heart is `roll dream run-once`
-(the TS command that resolves the `roll-.dream` skill and spawns the agent in place) —
-the same shape as the loop runner, with no bash-engine dependency.
+You run it: `roll dream run-once` resolves the `roll-.dream` skill and spawns the agent
+in place. Nothing runs it for you — there is no schedule and no background process, so
+a scan happens when you ask for one.
 
 ## What Dream Does
 
@@ -61,59 +60,21 @@ Dream does **not** generate REFACTOR entries for:
 - Purely stylistic preferences
 - Issues already in BACKLOG as US or FIX items
 
-## Schedule Configuration
-
-Dream runs at 3am by default. The recommended way to change the time is the
-`roll config dream-time` facade — it writes both keys at once, no hand-editing yaml:
-推荐用 `roll config dream-time` 改时间 —— 一条命令同时写两个 key，免手工编辑 yaml：
+## Running a Scan
 
 ```bash
-roll config dream-time 03:20   # sets loop_dream_hour + loop_dream_minute
-```
+roll dream run-once   # scan now
 
-`roll config` writes to the project's `.roll/local.yaml` by default (`--project`);
-pass `--global` to write `~/.roll/config.yaml` instead:
-`roll config` 默认写项目的 `.roll/local.yaml`（`--project`）；加 `--global` 改写 `~/.roll/config.yaml`：
-
-```bash
-roll config loop_dream_hour 3            # set a single key, project scope
-roll config loop_dream_hour 3 --global   # set a single key, global scope
-roll config loop_dream_hour              # print current value + source
-roll config --list                       # list all loop/dream/brief schedule keys
-```
-
-The underlying keys (resolved here as `.roll/local.yaml`):
-底层 key（这里以 `.roll/local.yaml` 为例）：
-
-```yaml
-loop_dream_hour: 3     # 0-23, default 3
-loop_dream_minute: 12  # 0-59, omit to auto-derive
-```
-
-Changing the time writes config only; apply the new schedule by re-running
-`roll loop on` (a config write no longer remounts launchd — US-PORT-006).
-`roll loop on` installs the dream plist alongside the loop and pr plists.
-改完时间只写配置；用 `roll loop on` 重挂应用新调度（config 写入不再自动重挂
-launchd —— US-PORT-006）。`roll loop on` 会把 dream plist 和 loop、pr plist 一起安装。
-All three services are managed together:
-
-```bash
-roll loop on       # install loop + pr + dream
-roll loop off      # boot out loop + pr + dream
-roll loop status   # shows all three service states
-```
-
-## Manual Run
-
-To run a dream scan immediately (without waiting for the scheduled 3am run):
-
-```bash
-# v3-native — same heart the nightly runner uses
-roll dream run-once
-
-# Or drive the skill via Claude Code directly
+# or drive the skill from your agent session directly
 $roll-.dream
 ```
+
+Run it whenever a scan is useful — before a planning pass, after a large refactor, or
+as the first step of a session that will work through REFACTOR cards. Nothing runs it
+for you.
+
+想扫就扫:做规划之前、大重构之后,或者在准备处理 REFACTOR 卡的会话开头跑一次。没有任何
+东西会替你跑。
 
 Dream always writes to today's date file and always appends to BACKLOG.md —
 running it twice in one day appends a second pass (safe but redundant).

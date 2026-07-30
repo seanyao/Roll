@@ -31,7 +31,7 @@ core         领域逻辑（纯函数，不碰 I/O，通过接口注入外部依
              CostTracker · PolicyEngine · EventBus
 
 infra        I/O 适配层
-             Config · Git · GitHub · launchd/cron · Tmux · ProcessManager
+             Config · Git · GitHub · Tmux · ProcessManager
 
 cli          命令入口（薄壳，解析参数 → 调 core → 格式化输出）
 
@@ -48,7 +48,7 @@ web          站点与静态展示（当前不是活体 Supervisor 控制台）
 
 | 能力域 | 家 |
 |---|---|
-| **Orchestration** 编排 | `core`（StoryPicker / TCRPipeline / ReconcileEngine / CycleOrchestrator）+ `infra`（launchd/cron 调度） |
+| **Orchestration** 编排 | `core`（StoryPicker / TCRPipeline / ReconcileEngine / CycleOrchestrator）+ `infra`（worktree / 进程 / tmux 编排） |
 | **Sandboxing** 执行隔离 | `infra`（Git worktree / ProcessManager / Tmux） |
 | **Tool Use** 工具/多 agent | `core`（AgentRouter / AgentRegistry / CostTracker 的 usage 解析）+ `infra`（spawn / GitHub） |
 | **Context Engineering** 上下文 | skill 桥接（独立仓）+ `.roll/` 文档纪律（是契约） |
@@ -104,7 +104,7 @@ Workspace 复用。Repository Cache 是可重建 projection，不是 Story/Issue
 
 ### BC2 · Loop 编排
 
-这是系统的引擎。一个 Loop 是一个自治进程，按定时器唤醒，执行一个 Cycle。
+这是系统的引擎。一个 Loop 是 agent 会话里的一段连续交付：会话跑 `roll loop go`，逐个 Cycle 推进，直到范围做完、`--max-cycles`/`--for` 到点、死循环熔断跳闸,或被暂停。两次运行之间不会有任何推进,也不会有你没启动过的运行。
 
 **Cycle 生命周期**：选故事（先查租约 `deliveryLease`）→ 路由 agent → 创建隔离工作区 → agent 执行（TCR 循环）→ attest 硬闸 → 送交 PR → AWAITING_MERGE 挂起并释放 loop → pick 下一张卡。交付推进由 Delivery Reconciler 在任意 `roll` 调用时机会性对账完成——不依赖独立 daemon。
 
@@ -268,11 +268,11 @@ building ──attest earned──► publishable ──push+PR──► awaitin
 
 纯判定 + 薄 IO，在任意 `roll` 调用 / cycle 边界的 runner 内部时机会性运行：
 
-- **触发点**：(a) 每次 `roll loop` cycle 边界；(b) 任意 `roll` 命令的前置机会性 reconcile；(c) runner/CI 内部显式 tick
+- **触发点**：(a) 每次 `roll loop` cycle 边界；(b) 任意 `roll` 命令的前置机会性 reconcile；(c) 显式 `roll loop reconcile [--json]`；(d) runner/CI 内部显式 tick
 - **自驱合并**：CI 绿且未合 → `gh pr merge --squash`，不依赖仓库 auto-merge 开关、不依赖 launchd
 - **外部合并反查**：supervisor / 人手动合并被 patch-id / PR-state 自动回填为 `delivered_external`——手动合并是一等支持路径，不是泄漏
 - **幂等 & 崩溃可续**：reconcile 反复跑永远安全，向真相收敛
-- **退役守护进程**：原 `com.roll.pr.<slug>` launchd PR-loop 守护已退役，合并逻辑整体搬进 Delivery Reconciler，不再需要常驻进程
+- **无常驻进程**：合并逻辑住在 Delivery Reconciler 里，由驱动交付的那个会话调用
 
 #### 交付判定
 
@@ -447,15 +447,24 @@ projection 只能从 archive audit 为 `healthy` 的当前不可变 revision 重
 
 **记录内容**：`(agent, model, 输入 token, 输出 token, 预估成本, 回退次数, 含回退的有效成本)`。
 
-**Budget guardrails**：项目/全局设日和周上限。逼近上限 → 自动降级到便宜模型或暂停并通知。便宜模型回退率高导致总成本反超 → 建议升级。
+**成本可见,不设自动闸**:上面这些数按 cycle 记账并在 `roll loop status` / 轮次账本里可读,但 Roll 不会因为成本自动降级或暂停 —— 全局兜底是死循环熔断器(连续无进展即停),范围与轮数上限由 owner 每次用 `--max-cycles` / `--for` 显式给。
 
-### BC8.5 · 运行模式（guided / autonomous）
+### BC8.5 · 驱动方式与运行态
 
-Roll 的运行模式只有两个：`guided` 和 `autonomous`。它们不是两套 agent 配置，而是同一套 backlog、truth、route profile、execution profile、attest evidence、Evaluator 和 release gates 之上的两种触发方式。
+Roll 只有一种驱动方式：**agent 会话**。owner 打开会话、跑 `roll loop go`,那个会话就是
+Supervisor;它可以把活派给 Delta Team。没有第二种触发方式,也没有任何东西会自行唤醒。
 
-- `guided`：owner 通过 `roll supervisor status/next/why` 理解状态和下一步，再显式运行 `roll loop go --cards <id>` 等命令。guided 模式不会静默启动长时间 Story 执行。
-- `autonomous`：`roll loop on` 安装 scheduler；scheduler 可以在 pause、budget、route、evidence、Evaluator 和 release gates 内领取合格 Todo。`roll loop pause` / `roll loop off` 回到 guided；`roll loop off --all` 是本机所有 `com.roll.*` LaunchAgent 的急停；`roll loop resume` / `roll loop on` 显式切回 autonomous。
-- 持久化来源只使用已有 loop/supervisor 状态：launchd plist、PAUSE/DORMANT marker、events/runs/backlog。不得新增独立 `mode.yaml` 之类的第二真相。
+- **范围**由命令给定:`roll loop go`(全部 Todo)、`--epic <name>`、`--cards <id,...>`、
+  `--max-cycles N`、`--for <duration>`。同一套 backlog、truth、route profile、execution
+  profile、attest evidence、Evaluator 和 release gates 对所有范围一视同仁。
+- **运行态**只有两个:`ACTIVE` 与 `PAUSED`。`roll loop pause` 停自主推进,`roll loop resume`
+  放开;熔断器也会自动写 PAUSE。显式限定卡片的一次性运行(`roll loop go --cards <id>`)
+  在 PAUSED 下仍然执行 —— 那是 owner 当场的决定,不是自主推进。
+- **持久化来源**只用已有的 loop/supervisor 状态:PAUSE marker、events/runs/backlog。
+  不得新增 `mode.yaml` 之类的第二真相。
+
+**能力边界(如实):** 不开 agent 会话,backlog 不会动。Roll 不装任何定时器,也不在后台
+留任何常驻进程。
 
 ### BC9 · Supervisor 与执行剖面（v4）
 
@@ -543,9 +552,9 @@ Roll 有两种有名字的交付拓扑，二者不同，且都不同于健康修
 - **Host-guided 成本不可观测（`? (host_unobservable)`）。** 绝不估算、定价或写零；
   host-guided 委派不写 `runs.jsonl` usage 行、不派生每角色/总成本。
 
-Loop 准入 / Loop admission：loop 无隐式宿主主会话，故 `loop-autonomous + delta-team`
-被确定性阻塞 `host_supervisor_required`，绝不静默转 solo 或 Full Delta；
-`loop-autonomous + full-delta-team` 是显式 opt-in；默认自主 solo 交付字节不变。Host-guided
+委派总有 Supervisor / Every delegation has a Supervisor：loop 是宿主会话内的 cycle
+连续链，与任何交付一样拥有主会话与完整 sub-agent 能力。trigger 轴只有一个取值，
+不存在准入禁令——solo / Delta Team / Full Delta Team 三种拓扑对 loop 一律可用。Host-guided
 委派不创建 Cycle、`runs.jsonl` 行或 `cycle:terminal`，也不更新 `latest`。本节不引入
 daemon 或新状态存储；`events.ndjson` 里的 `delta:*` 事件是 Delegation 聚合的唯一生命周期
 真相。完整 host-guided 流程见 `roll-delta-team` 技能与 [ai-agents](../guide/en/ai-agents.md)。

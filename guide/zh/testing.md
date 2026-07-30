@@ -107,19 +107,17 @@ pnpm test:cov           # 全套 + v8 覆盖率
 dream 每轮最多 emit 5 条 REFACTOR，避免 backlog 被噪音淹没。
 按优先级逐个收拾。
 
-### 测试质量合并门（US-QA-012 / 013）
+### ❼ 和 ❽ 两类
 
-❼ 和 ❽ 两类是**硬阻断**：CI 绿后 loop 自动合并前会跑
-`roll loop test-quality-check <改动的测试文件>`。命中违规时 loop 写
-`ALERT-<slug>.md` 并卡住 PR，要么改测试要么 PR 描述加
-`[skip-test-quality]` 标记放行（大小写不敏感）。
+These two are the ones reviewers reject most often. Nothing blocks a merge on them
+automatically; `roll dream run-once` reports violations as REFACTOR rows and a
+reviewer is expected to catch them in the diff.
 
-❼ and ❽ are **blocking**: PR auto-merge is held until violations are fixed
-or the PR description carries `[skip-test-quality]`.
+这两类是评审最常打回的:不可能失败的测试、以及断言自己夹具的测试。写测试时当硬规则守。
+没有任何东西会因此自动拦合并 —— `roll dream run-once` 会把违规报成 REFACTOR 行,评审
+(人或 Evaluator)应当在 diff 里抓住它。
 
-绕过请谨慎使用——dream 仍会把违规登记为 REFACTOR,不会因为 skip 就被遗忘。
-
-❶..❻ 是建议性,dream 标 REFACTOR 但门不卡。常规迭代里慢慢清。
+❶..❻ 同样由 dream 标成 REFACTOR,在常规迭代里慢慢清。
 
 带 `# test-quality:allow` 注释的行会被扫描器跳过（文档校验类测试里
 合法使用 `awk` 解析 markdown 时用，不触碰生产代码）。

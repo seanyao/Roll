@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
-import { resolveLoopRunState, readDormantMarker, dormantMarkerPath, readFallbackHealthForProject } from "./loop-sched.js";
+import { resolveLoopRunState } from "./loop-state.js";
 import {
   COLS,
   c,
@@ -1319,97 +1319,36 @@ export function agentSummaryLine(records: RunRecord[], windowCycles = 50, minSam
 // ════════════════════════════════════════════════════════════════════════════
 // Install-state / schedule / tick lines (eyebrow)
 // ════════════════════════════════════════════════════════════════════════════
-function detectInstallState(): string {
+/**
+ * Is a plist for ANY retired lane of this project still on disk?
+ *
+ * US-LOOP-118: this used to grade the lane — "enabled" when `launchctl print`
+ * succeeded, "stale" when it did not — and the banner then promised a next run for
+ * an "enabled" one. Nothing fires, so the grade is meaningless and the probe is
+ * pointless: a plist is leftover debris either way.
+ *
+ * codex r3: it also checked only the LOOP lane, so a dream-only (or pr-only)
+ * leftover went unmentioned here — and the dream line that used to mention it was
+ * deleted in the same card, which would have made that plist silent everywhere.
+ * `pr` is included because it was retired earlier still (US-DELIV-006).
+ */
+const RETIRED_LANE_SERVICES = ["loop", "pr", "dream"] as const;
+
+function loopLaneLeftover(): boolean {
+  const dir = launchAgentsDir();
   const slug = projectSlug();
-  const label = `com.roll.loop.${slug}`;
-  const plist = join(launchAgentsDir(), `${label}.plist`);
-  if (!existsSync(plist)) return "not-installed";
-  try {
-    const uid = typeof process.getuid === "function" ? process.getuid() : 0;
-    const res = execFileSync("launchctl", ["print", `gui/${uid}/${label}`], {
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: 2000,
-    });
-    void res;
-    return "enabled";
-  } catch {
-    return "stale";
-  }
+  return RETIRED_LANE_SERVICES.some((svc) => existsSync(join(dir, `com.roll.${svc}.${slug}.plist`)));
 }
 
 function launchAgentsDir(): string {
   return process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
 }
 
-interface DailySchedule {
-  mode: "calendar" | "interval";
-  hour?: number;
-  minute?: number;
-}
-
-function readDailyPlistSchedule(svc: string): DailySchedule | null {
-  const slug = projectSlug();
-  const ladir = process.env["_LAUNCHD_DIR"] || join(homedir(), "Library", "LaunchAgents");
-  const plist = join(ladir, `com.roll.${svc}.${slug}.plist`);
-  if (!existsSync(plist)) return null;
-  let text: string;
-  try {
-    text = readFileSync(plist, "utf8");
-  } catch {
-    return null;
-  }
-  if (text.includes("StartCalendarInterval")) {
-    const h = /<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/.exec(text);
-    const m = /<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/.exec(text);
-    if (h) {
-      return {
-        mode: "calendar",
-        hour: parseInt(h[1] ?? "0", 10),
-        minute: m ? parseInt(m[1] ?? "0", 10) : 0,
-      };
-    }
-  }
-  if (text.includes("StartInterval")) return { mode: "interval" };
-  return null;
-}
-
-/** now is the display-local Date (UTC+8 wall clock represented as a Date). */
-function computeNextFire(hour: number, minute: number, base: Date): number {
-  // base is a real (UTC) Date; we anchor candidate to today's HH:MM in UTC+8.
-  const sh = toShanghai(base);
-  // candidate in UTC+8 wall clock
-  let candidateShanghai = Date.UTC(
-    sh.getUTCFullYear(),
-    sh.getUTCMonth(),
-    sh.getUTCDate(),
-    hour,
-    minute,
-    0,
-    0,
-  );
-  // convert candidate (UTC+8 wall) back to real epoch by subtracting offset
-  let candidateEpoch = candidateShanghai - TZ_OFFSET_MS;
-  if (candidateEpoch <= base.getTime()) candidateEpoch += 86400 * 1000;
-  return candidateEpoch / 1000;
-}
-
-function dailyScheduleLine(svc: string, now: Date): string | null {
-  const sched = readDailyPlistSchedule(svc);
-  if (sched === null) return null;
-  if (sched.mode === "calendar") {
-    const hh = sched.hour ?? 0;
-    const mm = sched.minute ?? 0;
-    const nxt = computeNextFire(hh, mm, now);
-    let line = `${svc}: ${pad2(hh)}:${pad2(mm)}`;
-    const delta = Math.trunc(nxt - now.getTime() / 1000);
-    const safe = Math.max(delta, 0);
-    const h = Math.floor(Math.floor(safe / 60) / 60);
-    const m = Math.floor(safe / 60) % 60;
-    line += ` (next fire in ${h}h ${m}m)`;
-    return line;
-  }
-  return `${svc}: daily (legacy interval)`;
-}
+// US-LOOP-118 (codex r2): the daily-plist schedule reader, computeNextFire(), and
+// dailyScheduleLine() are deleted. They printed "dream: 03:00 (next fire in 5h
+// 12m)" under the banner — the same prediction as the loop lane, one row down.
+// A leftover dream plist now surfaces the same way every other retired lane does:
+// as debris, via the leftover-lane note and roll doctor.
 
 function tickAgeLine(loopType: string, now: Date): string | null {
   const slug = projectSlug();
@@ -1453,106 +1392,11 @@ function deliveryGateDiagnosticLine(diagnostic: DeliveryGateDiagnostic): string 
   return c("red", "⚠ main CI red") + c("dim", `  ${diagnostic.storyId}${ci}`);
 }
 
-type LoopPlistSchedule =
-  | { mode: "calendar"; minutes: number[] }
-  | { mode: "interval"; intervalSec: number };
-
-function readLoopPlistSchedule(): LoopPlistSchedule | null {
-  const slug = projectSlug();
-  const plist = join(launchAgentsDir(), `com.roll.loop.${slug}.plist`);
-  if (!existsSync(plist)) return null;
-  let text: string;
-  try {
-    text = readFileSync(plist, "utf8");
-  } catch {
-    return null;
-  }
-  if (text.includes("StartCalendarInterval")) {
-    const minutes = [...text.matchAll(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/g)]
-      .map((m) => Number.parseInt(m[1] ?? "", 10))
-      .filter((n) => Number.isInteger(n) && n >= 0 && n < 60)
-      .sort((a, b) => a - b);
-    return minutes.length > 0 ? { mode: "calendar", minutes: [...new Set(minutes)] } : null;
-  }
-  const interval = /<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/.exec(text);
-  if (interval) {
-    const intervalSec = Number.parseInt(interval[1] ?? "", 10);
-    if (Number.isInteger(intervalSec) && intervalSec > 0) return { mode: "interval", intervalSec };
-  }
-  return null;
-}
-
-function lastLoopFireEpochSec(): number | null {
-  const slug = projectSlug();
-  const rtDir = loopRuntimeDir(slug);
-  const cronLog = rtDir !== null ? join(rtDir, "cron.log") : join(sharedRoot(), "loop", `cron-${slug}.log`);
-  if (!existsSync(cronLog)) return null;
-  try {
-    const lines = readFileSync(cronLog, "utf8").trim().split("\n").reverse();
-    for (const line of lines) {
-      if (!line.includes("cycle start")) continue;
-      const m = /^\[([^\]]+)\]/.exec(line);
-      if (!m) continue;
-      const raw = m[1] ?? "";
-      const normalized = raw.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
-      const ms = Date.parse(normalized);
-      if (Number.isFinite(ms)) return Math.floor(ms / 1000);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function nextLoopScheduleHint(zh: boolean): string {
-  const now = renderNow();
-  const sched = readLoopPlistSchedule();
-  if (sched === null) return "?";
-  const nowSec = Math.floor(now.getTime() / 1000);
-  const lastFire = lastLoopFireEpochSec();
-
-  if (sched.mode === "interval") {
-    if (lastFire === null || lastFire > nowSec || nowSec - lastFire > sched.intervalSec * 2) return "?";
-    let next = lastFire;
-    while (next <= nowSec) next += sched.intervalSec;
-    const delta = Math.max(next - nowSec, 0);
-    const mins = Math.floor(delta / 60);
-    const secs = delta % 60;
-    if (zh) return `约 ${mins} 分 ${pad2(secs)} 秒`;
-    const nxtSh = toShanghai(new Date(next * 1000));
-    return `${pad2(nxtSh.getUTCHours())}:${pad2(nxtSh.getUTCMinutes())} · est · in ${mins}m ${pad2(secs)}s`;
-  }
-
-  if (lastFire !== null && nowSec - lastFire <= 6 * 3600) {
-    const lastMinute = toShanghai(new Date(lastFire * 1000)).getUTCMinutes();
-    if (!sched.minutes.includes(lastMinute)) return "?";
-  }
-
-  const sh = toShanghai(now);
-  let nextEpoch: number | null = null;
-  for (const minute of sched.minutes) {
-    const candidate =
-      Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate(), sh.getUTCHours(), minute, 0, 0) -
-      TZ_OFFSET_MS;
-    if (candidate > now.getTime()) {
-      nextEpoch = candidate;
-      break;
-    }
-  }
-  if (nextEpoch === null) {
-    const first = sched.minutes[0];
-    if (first === undefined) return "?";
-    nextEpoch =
-      Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate(), sh.getUTCHours() + 1, first, 0, 0) -
-      TZ_OFFSET_MS;
-  }
-  const deltaMs = nextEpoch - now.getTime();
-  const mins = Math.floor(deltaMs / 1000 / 60);
-  const secs = Math.floor((deltaMs / 1000) % 60);
-  if (zh) return `${mins} 分 ${pad2(secs)} 秒`;
-  const nxtSh = toShanghai(new Date(nextEpoch));
-  return `${pad2(nxtSh.getUTCHours())}:${pad2(nxtSh.getUTCMinutes())} · in ${mins}m ${pad2(secs)}s`;
-}
+// US-LOOP-118 (codex r1): the loop-plist schedule reader, the last-fire probe, and
+// nextLoopScheduleHint() are deleted. Together they parsed StartInterval /
+// StartCalendarInterval out of a plist and projected the next fire time so the
+// banner could print "next run 14:30 · in 12m". Nothing fires, so every one of
+// those numbers was a promise about a timer that no longer exists.
 
 // ════════════════════════════════════════════════════════════════════════════
 // Fixture data (test-only; ROLL_RENDER_FIXTURE=1)
@@ -1762,68 +1606,49 @@ function render(
       c("muted", " · ") +
       c("dim", state["paused_reason"] ?? "");
     ebZh = c("dim", "  已暂停 · run: roll loop resume");
-  } else if (markerState === "DORMANT") {
-    // US-LOOP-079g: DORMANT state — loop suspended via idle detection,
-    // will auto-wake on a `roll loop resume` or new Todo item.
-    const proj = args.projectSlug !== null ? resolveProjectPath(args.projectSlug) : null;
-    let dormantSince = "—";
-    let dormantReason = "";
-    if (proj !== null && args.projectSlug !== null) {
-      const body = readDormantMarker(dormantMarkerPath(proj, args.projectSlug));
-      if (body !== null) {
-        dormantSince = body.since;
-        dormantReason = body.reason;
-      }
-    }
-    ebL =
-      c("fg", "💤 DORMANT", { bold: true }) +
-      c("muted", "   ") +
-      c("dim", "since ") +
-      c("fg", dormantSince) +
-      c("muted", " · ") +
-      c("dim", dormantReason);
-    ebZh = c("dim", "  休眠(闲置) · run: roll loop resume");
+  // US-LOOP-115: the DORMANT branch is gone — a session-driven loop cannot
+  // idle-spin, so there is no dormant state to render.
   } else {
-    const installState = detectInstallState();
-    if (installState === "not-installed") {
-      ebL =
-        c("muted", "○ not installed", { bold: true }) +
-        c("muted", "   ") +
-        c("dim", "run ") +
-        c("fg", "roll loop on", { bold: true }) +
-        c("dim", " to enable");
-      ebZh = c("dim", "  未安装 · 运行 ") + c("fg", "roll loop on") + c("dim", " 启用");
-    } else if (installState === "stale" || installState === "disabled") {
-      ebL =
-        c("amber", "◌ STALE — plist present, not loaded", { bold: true }) +
-        c("muted", "   ") +
-        c("dim", "run ") +
-        c("fg", "roll loop on", { bold: true }) +
-        c("dim", " to repair");
-      ebZh = c("dim", "  Plist 存在但未加载 · 运行 ") + c("fg", "roll loop on") + c("dim", " 修复");
-    } else {
-      // FIX-1268b: status reflects the latest durable lock state. An unlock
-      // event clears the wait copy, so stale lock events cannot lie forever.
-      let waitReasonEn = "";
-      let waitReasonZh = "";
-      if (args.projectSlug !== null) {
-        const proj = resolveProjectPath(args.projectSlug);
-        if (proj !== null) {
-          const eventsPath = join(proj, ".roll", "loop", "events.ndjson");
-          const en = screenLockWaitReason(eventsPath, "en");
-          const zh = screenLockWaitReason(eventsPath, "zh");
-          waitReasonEn = en === null ? "" : ` · ${en}`;
-          waitReasonZh = zh === null ? "" : ` · ${zh}`;
-        }
+    // FIX-1268b: status reflects the latest durable lock state. An unlock event
+    // clears the wait copy, so stale lock events cannot lie forever.
+    let waitReasonEn = "";
+    let waitReasonZh = "";
+    if (args.projectSlug !== null) {
+      const proj = resolveProjectPath(args.projectSlug);
+      if (proj !== null) {
+        const eventsPath = join(proj, ".roll", "loop", "events.ndjson");
+        const en = screenLockWaitReason(eventsPath, "en");
+        const zh = screenLockWaitReason(eventsPath, "zh");
+        waitReasonEn = en === null ? "" : ` · ${en}`;
+        waitReasonZh = zh === null ? "" : ` · ${zh}`;
       }
-      ebL =
-        c("blue", "● IDLE", { bold: true }) +
-        c("muted", " · ") +
-        c("dim", "enabled · next run ") +
-        c("fg", nextLoopScheduleHint(false), { bold: true }) +
-        c("dim", waitReasonEn);
-      ebZh = c("dim", `  已启用 · 闲置 · 距下一轮 ${nextLoopScheduleHint(true)}${waitReasonZh}`);
     }
+    // US-LOOP-118 (codex r1): the third branch is gone. It was the "lane loaded"
+    // case and printed "enabled · next run 14:30 · in 12m" — a fire time computed
+    // from a plist period, for a lane that fires never. Whether a leftover plist is
+    // loaded or not changes nothing about how delivery advances, so there are two
+    // states left: a session drives, and (separately) there may be debris to remove.
+    ebL =
+      c("muted", "◆ session-driven", { bold: true }) +
+      c("muted", "   ") +
+      c("dim", "run ") +
+      c("fg", "roll loop go", { bold: true }) +
+      c("dim", " in this session") +
+      c("dim", waitReasonEn);
+    ebZh = c("dim", "  会话驱动 · 在本会话运行 ") + c("fg", "roll loop go") + c("dim", waitReasonZh);
+  }
+
+  // US-LOOP-118 (codex r7): debris is independent of run state. Nested inside the
+  // idle branch, a real loop/pr/dream plist stayed hidden whenever a cycle was
+  // RUNNING or the project was PAUSED — the two states an owner is most likely to
+  // be looking at. A leftover lane is a fact about the machine, not about this
+  // cycle, so it is appended whatever the banner says.
+  if (loopLaneLeftover()) {
+    // US-LOOP-113 (codex r5): a plist on disk is a LEFTOVER from an older install,
+    // not something to repair — Roll installs no timers. Point at the disarm path
+    // (`roll doctor` lists every lane with the command to remove it).
+    ebL += c("amber", "   ◌ leftover plist — run ") + c("fg", "roll doctor", { bold: true });
+    ebZh += c("amber", " · 旧版安装留下的 plist,运行 ") + c("fg", "roll doctor");
   }
 
   // 'last' actionable cycle
@@ -1858,34 +1683,9 @@ function render(
   out.push(row(ebL, ebR));
   if (lang !== "en" && last) out.push(ebZh);
 
-  // US-LOOP-108: surface the owner-confirmed process-fallback backend when a
-  // lease is present. A stale/dead lease is reported as STALE, never as active,
-  // so `roll loop status` cannot read a dead fallback as running scheduling.
-  {
-    const projPath =
-      args.projectSlug !== null ? (resolveProjectPath(args.projectSlug) ?? process.cwd()) : process.cwd();
-    const fb = readFallbackHealthForProject(projPath);
-    if (fb !== null && fb.health.lease !== null) {
-      if (fb.health.alive) {
-        out.push(
-          "  " +
-            c("amber", "● backend: process-fallback", { bold: true }) +
-            c("dim", ` · owner-confirmed · pid ${fb.health.lease.pid} · not persistent across reboot/login`),
-        );
-      } else {
-        out.push(
-          "  " +
-            c("amber", "◌ process-fallback STALE — not active", { bold: true }) +
-            c("dim", ` · ${fb.health.reason} · recover: roll loop fallback start --confirm`),
-        );
-      }
-    }
-  }
+  // US-LOOP-116: no process-fallback backend to surface — the second resident
+  // scheduler is deleted, so there is no lease, PID or heartbeat to report.
 
-  for (const svc of ["dream"]) {
-    const sl = dailyScheduleLine(svc, now);
-    if (sl) out.push("  " + c("dim", sl));
-  }
   // Delivery gate diagnostics — read runs for recent main-CI-red cycles.
   if (args.projectSlug !== null) {
     const dt = deliveryGateDiagnosticsFromRows(args.runs, { nowSec: Math.floor(args.now.getTime() / 1000) });
@@ -2051,8 +1851,15 @@ function render(
   out.push("");
 
   if (cycles.length === 0) {
-    out.push("  " + c("dim", "no cycles yet — first run fires on next cron tick"));
-    out.push("  " + c("dim", "尚无 cycle · 等待下一次 cron 触发"));
+    // codex r11: this told a new owner to WAIT for a tick that will never come —
+    // the worst possible first impression, because nothing happens and the UI said
+    // to expect something. Name the command that actually starts one.
+    // codex r13: follow the render language like every other line here, instead of
+    // printing both.
+    out.push(
+      "  " +
+        c("dim", lang === "zh" ? "尚无 cycle · 跑 `roll loop go` 开始一轮" : "no cycles yet — run `roll loop go` to start one"),
+    );
     return;
   }
 

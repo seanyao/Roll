@@ -187,7 +187,9 @@ describe("FIX-298 networkNeeds — the ONE declarative model of which commands n
     expect(networkNeeds("showcase", [])).toBe("roll showcase");
     expect(networkNeeds("showcase", ["--json"])).toBe("roll showcase");
     expect(networkNeeds("loop", ["go"])).toBe("roll loop go");
-    expect(networkNeeds("loop", ["now"])).toBe("roll loop now");
+    // US-LOOP-113: `loop now` is removed. Gating it meant an offline user typing a
+    // nonexistent verb got a connectivity error instead of "unknown subcommand".
+    expect(networkNeeds("loop", ["now"])).toBeNull();
     expect(networkNeeds("release", [])).toBe("roll release");
   });
 

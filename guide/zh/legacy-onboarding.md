@@ -78,10 +78,12 @@ repository-local Roll。旧 runtime、lock、heartbeat、cache 与 generated pro
 ## Graft 做了什么
 
 - **读**你的项目，理解类型、领域、关键模块
-- **问**你 9 个问题，3 分钟内完成
+- **问**你一组范围问题，3 分钟内完成
 - **生成** `.roll/` 目录，与原代码并列（不动你的源文件）
 - **同步**Roll 约定到你用的 AI 工具
 - 你得到的项目同时拥有：原来的工作流 + Roll 的项目管理能力
+
+Roll 不会背着你跑：接入之后，只有你亲自打开 agent 会话时才会有活在推进。
 
 Graft 是**完全可逆**的：跑 `roll setup offboard` 让 Roll 自己撤销它加进来的全部痕迹（见下文"怎么退出"）。
 
@@ -140,9 +142,9 @@ $roll-onboard
 
 技能会：
 1. 浏览你的仓库，告诉你它看到的项目结构
-2. 第一组 3 问：确认推断的项目类型 / 领域 / 关键模块
-3. 第二组 3 问：要生成哪些 `.roll/` 产物，哪些现有文档要 include 而非重新生成
-4. 第三组 3 问：`.gitignore`、AI 工具同步、loop 启用与否
+2. 确认推断的项目类型 / 领域 / 关键模块
+3. 问要生成哪些 `.roll/` 产物，哪些现有文档要 include 而非重新生成
+4. 问 `.roll/` 是否加进 `.gitignore`，以及 Roll 约定同步到哪些 AI 工具
 5. 只写两个结构化产物：`.roll/init-diagnosis.yaml` 和 `.roll/onboard-plan.yaml`
 
 总耗时：3 分钟以内。
@@ -170,14 +172,22 @@ roll init --apply --auto
 - 按你选的 scope 创建 `.roll/` 子目录
 - 如果选了"生成 backlog"，写入初始 `.roll/backlog.md`
 - 你标记 include 的现有文档不会被覆盖
-- 如果 Q7 说 yes，把 `.roll/` 加入 `.gitignore`
+- 如果你选了把 `.roll/` 加进 `.gitignore`，就写进去
 - 把 Roll 约定同步到你选的 AI 工具
 
 完事。执行 `roll next` 接续下一步。
 
-### 5.（可选）启动自治 loop
+### 5. 跑第一轮
 
-如果 Q9 选了 yes，`roll loop on` 会按定时表激活 loop，自动从 `BACKLOG.md` 拉 `📋 Todo` 任务，跑 `$roll-build` / `$roll-fix`。
+交付之所以前进是因为你启动了它 —— 没有任何东西会替你开始。在项目里打开一个 agent 会话，然后执行：
+
+```bash
+roll loop go --max-cycles 1
+```
+
+这个 agent 会话就是 Supervisor：它从 backlog 拉一条 `📋 Todo`，跑 `$roll-build` / `$roll-fix`，也可以把活派给 Delta Team。去掉 `--max-cycles 1` 就会继续往下啃 backlog；也可以用 `--epic <名称>`、`--cards <id,...>`、`--for <时长>` 限定范围。
+
+你启动的运行会活过窗口(detached tmux),直到范围做完、`--max-cycles`/`--for` 到点、熔断跳闸或被暂停;两次运行之间不会有任何推进,也不会有你没启动过的运行。用 `roll loop pause` 暂时不让项目再跑周期，用 `roll loop resume` 放开。
 
 ## Graft 的边界
 
@@ -187,7 +197,7 @@ Roll 只动它**自己的**文件：
 |----------|------------|
 | `.roll/`（全部） | `src/`、`lib/`、`tests/` 等你的代码 |
 | `AGENTS.md`（不存在则创建，存在则 section 级合并） | `README.md` |
-| `.gitignore`（仅当 Q7 说 yes） | `package.json`、`pyproject.toml` 等 |
+| `.gitignore`（仅当你在接入时选了） | `package.json`、`pyproject.toml` 等 |
 
 如果你已有 `CONTRIBUTING.md` 或 `.github/` workflow，Roll 不会碰它们。如果想把 Roll 工作流接到现有 CI，需要你后续手动配置。
 
@@ -239,7 +249,7 @@ npm uninstall -g @seanyao/roll
 Roll 会检测为 pre-2.0 Roll 项目（不是已有代码库接入目标），让你跑 `npx @seanyao/roll@2 migrate`。如果文件来自完全不同的工具，先重命名（`mv BACKLOG.md old-backlog.md`）再跑 `roll init`。
 
 **Q: roll-onboard 推断的项目类型不对，怎么改？**
-在对话里告诉它。第一组 3 问就是为了让你纠正。Skill 把纠正后的理解写进 plan，bash 信任 plan。
+在对话里告诉它。确认类型 / 领域 / 模块的那几问就是为了让你纠正。Skill 把纠正后的理解写进 plan，apply 信任 plan。
 
 **Q: 能手动编辑 `.roll/onboard-plan.yaml` 吗？**
 可以，但要和 `.roll/init-diagnosis.yaml` 配套。`roll init --apply` 要求两边的 `factsHash` 一致，并会重新计算当前项目 facts hash；同时不允许 shell-command key，`file_operations` 只能声明那两个位于项目内且幂等的允许文件。超过 24 小时、相对当前项目已 stale，或由旧版 `$roll-onboard` 生成的 plan，都应该重新生成。
@@ -247,4 +257,4 @@ Roll 会检测为 pre-2.0 Roll 项目（不是已有代码库接入目标），�
 手动改过的 plan 仍然会进入同一个审阅检查点；没有交互确认或显式 `--auto` 时，不会修改文件。
 
 **Q: 我们团队用 GitHub Issues / Jira / Linear，Roll 会替代它们吗？**
-不会。Roll 的 `BACKLOG.md` 是给 AI loop 自治执行用的。你团队的外部 tracker 继续用。有的团队只把"AI-loop 能执行的 story"放 Roll，纯人工任务留在原 tracker。
+不会。Roll 的 `BACKLOG.md` 是 agent 会话里 `roll loop go` 取活的队列。你团队的外部 tracker 继续用。有的团队只把"agent 能执行的 story"放 Roll，纯人工任务留在原 tracker。

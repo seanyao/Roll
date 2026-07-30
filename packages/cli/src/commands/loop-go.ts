@@ -744,7 +744,13 @@ export function planGoTmuxCommands(input: StartTmuxInput, state: GoTmuxState): s
   const workspaceEnv = input.workspaceId === undefined
     ? ""
     : ` ROLL_WORKSPACE=${shellQuote(input.workspaceId)} ROLL_PROJECT_RUNTIME_DIR=${shellQuote(input.runtimeRoot ?? "")} ROLL_WORKSPACE_BACKLOG_PATH=${shellQuote(input.backlogPath ?? "")}`;
-  const command = `cd ${shellQuote(input.projectPath)} && ROLL_LOOP_GO_WORKER=1 ROLL_LOOP_NO_TMUX=1 ROLL_NO_SCREENCAP=1${workspaceEnv} ROLL_BIN=${shellQuote(input.rollBin)} ${shellQuote(input.rollBin)} loop go ${workerArgs}`;
+  // US-LOOP-117: the worker runs in a fresh tmux shell, so only the variables
+  // named here reach it. ROLL_LOOP_FORCE asks for readable text instead of a JSON
+  // stream — a display choice the owner made for THIS run, so forward it when set
+  // (codex r6: the docs promised it worked here, and it silently did not).
+  const force = (process.env["ROLL_LOOP_FORCE"] ?? "").trim();
+  const forceEnv = force === "" ? "" : `ROLL_LOOP_FORCE=${shellQuote(force)} `;
+  const command = `cd ${shellQuote(input.projectPath)} && ${forceEnv}ROLL_LOOP_GO_WORKER=1 ROLL_LOOP_NO_TMUX=1 ROLL_NO_SCREENCAP=1${workspaceEnv} ROLL_BIN=${shellQuote(input.rollBin)} ${shellQuote(input.rollBin)} loop go ${workerArgs}`;
   const plan: string[][] = [];
   if (!state.sessionExists) {
     plan.push(["new-session", "-d", "-s", session, "-x", "200", "-y", "50", "-n", "watch", watch]);

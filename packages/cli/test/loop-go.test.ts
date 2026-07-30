@@ -1790,6 +1790,28 @@ describe("FIX-289 — go startup feedback + reliable watch window", () => {
     expect(plan[1]).toContain("go");
   });
 
+  it("US-LOOP-117: ROLL_LOOP_FORCE reaches the tmux worker when set, and only then", () => {
+    const input = { projectPath: "/proj", slug: "proj-abc123", args: [], rollBin: "roll" };
+    const state = { sessionExists: true, watchWindowExists: true };
+    const saved = process.env["ROLL_LOOP_FORCE"];
+    try {
+      // Unset: the worker command must not invent the variable.
+      delete process.env["ROLL_LOOP_FORCE"];
+      expect(planGoTmuxCommands(input, state).at(-1)?.at(-1)).not.toContain("ROLL_LOOP_FORCE");
+      // Set: the worker runs in a fresh shell, so it only sees what we forward.
+      // codex r6: the docs promised readable output here and it was dropped.
+      process.env["ROLL_LOOP_FORCE"] = "1";
+      // Quoted, like every other value in this command line.
+      expect(planGoTmuxCommands(input, state).at(-1)?.at(-1)).toContain("ROLL_LOOP_FORCE='1'");
+      // Blank is not "set" — an empty value would read as interactive downstream.
+      process.env["ROLL_LOOP_FORCE"] = "   ";
+      expect(planGoTmuxCommands(input, state).at(-1)?.at(-1)).not.toContain("ROLL_LOOP_FORCE");
+    } finally {
+      if (saved === undefined) delete process.env["ROLL_LOOP_FORCE"];
+      else process.env["ROLL_LOOP_FORCE"] = saved;
+    }
+  });
+
   it("AC2: a reused session WITHOUT a watch window recreates the watch window", () => {
     const plan = planGoTmuxCommands(
       { projectPath: "/proj", slug: "proj-abc123", args: [], rollBin: "roll" },

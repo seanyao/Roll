@@ -7,6 +7,8 @@ import type { AgentId, AgentToolchainClassification, ArtifactRef, ExecutionProfi
 import type { CycleCost, CyclePhase } from "./cycle.js";
 import type {
   DelegationTrigger,
+  HistoricalDelegationTrigger,
+  HistoricalDeltaBlockReason,
   DeliveryTopology,
   QualityProfile,
   DeltaRole,
@@ -84,7 +86,9 @@ export type RollEvent =
   // FIX-1268: the screen is locked and at least one physical-surface card was held.
   // Emitted once per idle cycle that is blocked solely (or primarily) by this gate.
   | { type: "loop:screen_locked"; cycleId: string; storyId?: string; locked: boolean; reason: string; ts: number }
-  // US-LOOP-079e: dormant/wake/failed state transitions
+  // US-LOOP-115: loop:dormant / loop:woke / loop:dormant_failed are no longer
+  // EMITTED — the dormancy and wake paths are deleted. The event union is a read
+  // contract over an append-only ledger, so the shapes stay parseable forever.
   | { type: "loop:dormant"; loop: LoopType; ts: number; reason: string; since: number }
   | { type: "loop:woke"; loop: LoopType; ts: number; trigger: "roll-cmd" | "dream" | "pr" | "manual"; picked?: string; wakeEpoch: number }
   | { type: "loop:dormant_failed"; loop: LoopType; ts: number; reason: string; error: string }
@@ -732,7 +736,14 @@ export type RollEvent =
       runId: string;
       storyId: string;
       cycleId?: string;
-      trigger: DelegationTrigger;
+      /**
+       * US-LOOP-110 (codex r3/r4): the EVENT UNION is a read contract over an
+       * append-only ledger, so it must hold every value Roll has ever written —
+       * including the retired trigger. Emitters are constrained separately: `roll
+       * delta prepare` validates against the LIVE `DELEGATION_TRIGGERS`, so no new
+       * event can carry a retired literal.
+       */
+      trigger: DelegationTrigger | HistoricalDelegationTrigger;
       topology: DeliveryTopology;
       qualityProfile: QualityProfile;
       presetId: string;
@@ -794,7 +805,12 @@ export type RollEvent =
       delegationId: string;
       storyId: string;
       role?: DeltaRole;
-      reason: DeltaBlockReason;
+      /**
+       * Read contract: historical events carry the retired reason. Emitters must
+       * still write a LIVE reason only — `delta validate` enforces that and puts
+       * any prior/foreign value in `detail` verbatim.
+       */
+      reason: DeltaBlockReason | HistoricalDeltaBlockReason;
       detail: string;
       ts: number;
     };

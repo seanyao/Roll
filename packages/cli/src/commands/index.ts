@@ -81,7 +81,6 @@ import {
   loopGcCommand,
   loopMuteCommand,
   loopResetCommand,
-  loopTestCommand,
   loopUnmuteCommand,
 } from "./loop-maint.js";
 import { loopDeliveryReconcileCommand, loopReconcileCommand } from "./loop-reconcile.js";
@@ -91,14 +90,10 @@ import { loopExhaustionSplitCommand } from "./loop-exhaustion-split.js";
 import { loopRunOnceCommand } from "./loop-run-once.js";
 import { loopSelfDowngradeCommand } from "./loop-self-downgrade.js";
 import {
-  loopNowCommand,
-  loopOffCommand,
-  loopOnCommand,
   loopPauseCommand,
   loopResumeCommand,
-  loopFallbackCommand,
   loopWorkspaceStatusCommand,
-} from "./loop-sched.js";
+} from "./loop-state.js";
 import { offboardCommand } from "./offboard.js";
 import { pricesCommand } from "./prices.js";
 import { pulseCommand } from "./pulse.js";
@@ -450,7 +445,7 @@ export function registerAll(): void {
   // `dream`: full surface TS (US-PORT-020). `run-once` is the v3-native scan
   // heart; every other arg mirrors v2's generic unknown-command surface without
   // shelling to bin/roll.
-  registerPorted("dream", dreamCommand, { hidden: true, help: "Usage: roll dream run-once\n  Nightly self-scan (patterns, docs freshness, test quality) — run one pass now.\n夜间自检跑一遍。" });
+  registerPorted("dream", dreamCommand, { hidden: true, help: "Usage: roll dream run-once\n  Self-scan (patterns, docs freshness, test quality) — run one pass now.\n自检跑一遍(模式、文档新鲜度、测试质量)。" });
   // `agent`: full surface TS (view/list/use/set/unknown). The write face owns
   // .roll/agents.yaml plus legacy .roll/local.yaml sync; no bash fallback.
   registerPorted("agent", (args) => {
@@ -579,10 +574,9 @@ export function registerAll(): void {
   // `config`: FULLY TS now (US-PORT-006 — 整个 config 命令收口). Read surface
   // (help/--list/key read) + write surface + the three compact facades
   // (loop-window/loop-schedule/dream-time) all run native; no bash fallback.
-  // DELIBERATE divergence: a config write no longer implicitly remounts launchd
-  // (apply a new schedule with `roll loop on`); CLI output stays byte-identical
-  // to v2, and the v2 `_config_resolve` `set -u` crash on a missing global file
-  // is fixed. See config.ts header.
+  // The v2 `_config_resolve` `set -u` crash on a missing global file is fixed.
+  // See the config.ts header for why loop-window/loop-schedule still exist while
+  // nothing reads their values.
   registerPorted("config", (args) => {
     if (args[0] === "prices") return pricesCommand(args.slice(1));
     if (args[0] === "tune") return tuneCommand(args.slice(1));
@@ -815,16 +809,17 @@ export function registerAll(): void {
     // `loop reconcile-pending`: FIX-1052 bounded PR polling reconciler — polls
     // pending-merge PRs, fetches origin/main on merge, and updates delivery truth.
     if (args[0] === "reconcile-pending") return loopReconcilePendingCommand(args.slice(1));
-    if (args[0] === "on") return loopOnCommand(args.slice(1));
-    if (args[0] === "off") return loopOffCommand(args.slice(1));
-    // `loop fallback start --confirm | stop | status`: US-LOOP-108 owner-confirmed
-    // process fallback — the opt-in scheduler after a truthful launchd failure.
-    // (Bare `loop status` stays the dashboard; `loop fallback status` is the
-    // read-only backend/liveness view.)
-    if (args[0] === "fallback") return loopFallbackCommand(args.slice(1));
+    // US-LOOP-113: `on` / `off` / `now` / `fallback` are gone — they existed to
+    // install, remove, or poke a resident scheduler. No stub is left; they fall
+    // through to the unknown-subcommand path like any other typo.
+    //
+    // `pause` / `resume` STAY (codex review r1). They are not scheduler verbs: the
+    // PAUSE marker is a live gate that `loop go` and `loop run-once` still honor,
+    // and the correction circuit breaker WRITES it automatically after repeated
+    // failures. Cutting `resume` would strand the owner in a paused project with no
+    // supported way out.
     if (args[0] === "pause") return loopPauseCommand(args.slice(1));
     if (args[0] === "resume") return loopResumeCommand(args.slice(1));
-    if (args[0] === "now") return loopNowCommand(args.slice(1));
     // `loop reset` / `loop mute` / `loop unmute`: residual write/maintenance
     // subcommands (US-PORT-022) — clear per-project state + heal counters, and
     // the auto-attach popup toggle pair. No bash fallback.
@@ -834,9 +829,9 @@ export function registerAll(): void {
     // `loop gc` (≠ top-level `roll gc`): garbage-collect orphan slugs + tmp
     // debris + expired backups (US-PORT-022 / US-LOOP-021). FIX-125 gated.
     if (args[0] === "gc") return loopGcCommand(args.slice(1));
-    // `loop test` (≠ top-level `roll test`): manual smoke gate — generates the
-    // v3 test runner and runs it once with ROLL_LOOP_FORCE=1 (US-PORT-022).
-    if (args[0] === "test") return loopTestCommand(args.slice(1));
+    // `loop test`: retired with the runner-script generator (US-LOOP-117).
+    // `loop branches`: retired and no longer dispatched.
+    if (args[0] === "branches") return loopUnknownSubcommand(args[0]);
     // Cycle-gate subcommands the loop AGENT invokes per the roll-loop skill
     // (US-PORT-021 prerequisite — the last loop fallbacks, now native TS).
     if (args[0] === "notify") return loopNotifyCommand(args.slice(1));
@@ -852,30 +847,9 @@ export function registerAll(): void {
       ...[
         "eval", "story", "runs", "cycles", "cycle", "goal", "recover", "pardon-skip-list", "signals", "adversarial",
         "log", "events", "alert", "self-downgrade", "review-resize", "exhaustion-split", "fmt", "watch", "reconcile-pending",
-        "off", "now", "reset", "mute", "unmute", "gc", "test", "notify", "enforce-tcr", "precheck-ci",
+        "reset", "mute", "unmute", "gc", "notify", "enforce-tcr", "precheck-ci",
         "hotfix-head-context", "agent-routes",
       ].map((name) => cliOperation("loop", name, [name])),
-      cliMatchedOperation(
-        "loop",
-        "fallback.status",
-        ["fallback"],
-        ["fallback", "status"],
-        (args) => args[0] === "fallback" && (args[1] === undefined || args[1] === "status" || isHelp(args[1])),
-      ),
-      cliMatchedOperation(
-        "loop",
-        "fallback.start",
-        ["fallback"],
-        ["fallback", "start", "--confirm"],
-        (args) => args[0] === "fallback" && args[1] === "start",
-      ),
-      cliMatchedOperation(
-        "loop",
-        "fallback.stop",
-        ["fallback"],
-        ["fallback", "stop"],
-        (args) => args[0] === "fallback" && args[1] === "stop",
-      ),
       cliMatchedSelectorOperation(
         "loop",
         "status",
@@ -883,10 +857,10 @@ export function registerAll(): void {
         withWorkspaceSelector(["status"], "roll"),
         (args) => args[0] === undefined || args[0] === "status",
       ),
-      ...["go", "run-once", "reconcile", "on", "pause", "resume"].map((name) =>
+      ...["go", "run-once", "reconcile", "pause", "resume"].map((name) =>
         cliSelectorOperation("loop", name, [name], withWorkspaceSelector([name], "roll"))),
     ],
-    rejectedRoutes: ["monitor", "attach", "branches", "test-quality-check"].map((route) => ({
+    rejectedRoutes: ["monitor", "attach", "branches", "test-quality-check", "on", "off", "now", "fallback", "test"].map((route) => ({
       route: [route],
       message: loopUnknownSubcommandText(route),
     })),

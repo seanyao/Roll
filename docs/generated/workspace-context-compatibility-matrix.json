@@ -2,7 +2,7 @@
   "schema": "roll.workspace-context-compatibility-matrix/v1",
   "summary": {
     "cliFamilies": 24,
-    "cliOperations": 124,
+    "cliOperations": 117,
     "skillFamilies": 23,
     "skillOperations": 33,
     "toolAdapters": 8,
@@ -547,33 +547,6 @@
     {
       "surface": "cli",
       "id": "loop",
-      "operation": "fallback.start",
-      "scope": "workspace_required_mutation",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
-      "operation": "fallback.status",
-      "scope": "workspace_required_read",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
-      "operation": "fallback.stop",
-      "scope": "workspace_required_mutation",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
       "operation": "fmt",
       "scope": "workspace_required_read",
       "allowsAmbientCwd": false,
@@ -643,34 +616,6 @@
       "allowsAmbientCwd": false,
       "allowsLegacyRollPath": false,
       "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
-      "operation": "now",
-      "scope": "workspace_required_mutation",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
-      "operation": "off",
-      "scope": "workspace_required_mutation",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
-      "operation": "on",
-      "scope": "workspace_required_mutation",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace",
-      "acceptsWorkspaceSelector": true
     },
     {
       "surface": "cli",
@@ -808,15 +753,6 @@
       "id": "loop",
       "operation": "story",
       "scope": "workspace_required_read",
-      "allowsAmbientCwd": false,
-      "allowsLegacyRollPath": false,
-      "contextConsumer": "workspace"
-    },
-    {
-      "surface": "cli",
-      "id": "loop",
-      "operation": "test",
-      "scope": "workspace_required_mutation",
       "allowsAmbientCwd": false,
       "allowsLegacyRollPath": false,
       "contextConsumer": "workspace"

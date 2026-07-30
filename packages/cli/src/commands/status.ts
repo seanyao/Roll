@@ -17,14 +17,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { resolveLang, type Lang } from "@roll/spec";
+import { isLeftoverLane, resolveLang, type Lang } from "@roll/spec";
 import type { TruthSnapshot } from "@roll/spec";
 import { c, COLS, hr, pad, renderState, row, sectionHead } from "../render.js";
 import { attestCoverage, isSnapshotStale, loadTruthSnapshot, renderNowMs, snapshotVerdict } from "../lib/truth-read.js";
 import type { TruthSnapshotCycle } from "@roll/spec";
 import { detectDesignHandoff, renderDesignNudge } from "../lib/onboard-nudge.js";
 import { loadNorthStarReport, renderNorthStatusSummary } from "./north.js";
-import { decideBackend, readFallbackHealthSync, type SchedulerBackendName } from "./loop-sched.js";
 
 /** FIX-361: format a cycle snapshot's cost with correct currency symbols,
  *  separating by currency so ¥ and $ are never blindly summed. */
@@ -97,12 +96,19 @@ interface StatusData {
   project_has_agents: boolean;
   project_has_backlog: boolean;
   project_features_count: number;
-  loop_state: string;
-  dream_state: string;
-  /** US-LOOP-108: effective scheduler backend (launchd|process-fallback|none). */
-  scheduler_backend: SchedulerBackendName;
-  /** US-LOOP-108: one-line backend health note (PID/heartbeat, stale, or ""). */
-  scheduler_note: string;
+  /**
+   * US-LOOP-116: how delivery is driven. There is no scheduler backend to choose
+   * between any more — a session drives, or the owner has paused it.
+   *
+   * US-LOOP-118: `loop_state` / `dream_state` are gone with the rows they fed.
+   * They reported whether a launchd plist existed and was loaded, which read as
+   * live state ("loop · launchd enabled") for something that no longer drives
+   * anything. A lane still on disk survives here only as a leftover named in
+   * `driver_note`.
+   */
+  driver: "session" | "paused";
+  /** One-line note (e.g. a leftover launchd lane worth disarming), or "". */
+  driver_note: string;
 }
 
 function globalConventions(): Conventions {
@@ -205,19 +211,21 @@ function skillsInstalled(): number {
   }
 }
 
-function launchdState(service: string, slug: string): string {
-  const label = `com.roll.${service}.${slug}`;
-  const plist = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-  if (!existsSync(plist)) return "not-installed";
-  try {
-    const out = execFileSync("launchctl", ["list", label], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return out.trim() !== "" ? "enabled" : "installed-off";
-  } catch {
-    return "installed-off";
-  }
+/**
+ * Is a `com.roll.<service>.<slug>` plist still sitting in LaunchAgents?
+ *
+ * US-LOOP-118: this used to grade the lane (enabled / installed-off /
+ * not-installed) because those grades drove a status row. Nothing obeys a lane
+ * any more, so the only question left is whether debris exists to remove — no
+ * `launchctl list` call, no three-way verdict.
+ */
+function launchdLaneLeftover(service: string, slug: string): boolean {
+  // codex r4: honour `_LAUNCHD_DIR` the way dashboard / doctor / index do.
+  // Hardcoding the home path made this the ONE surface that could not see a lane
+  // in a configured or sandboxed environment — so its verdict silently disagreed
+  // with the others, and tests could never cover it.
+  const dir = process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
+  return existsSync(join(dir, `com.roll.${service}.${slug}.plist`));
 }
 
 // ── Fixture data (test-only; opt in via ROLL_RENDER_FIXTURE=1) ──────────────
@@ -244,10 +252,8 @@ function fixtureData(): StatusData {
     project_has_agents: true,
     project_has_backlog: true,
     project_features_count: 23,
-    loop_state: "enabled",
-    dream_state: "not-installed",
-    scheduler_backend: "launchd",
-    scheduler_note: "",
+    driver: "session",
+    driver_note: "",
   };
 }
 
@@ -347,39 +353,24 @@ function renderThisProject(out: string[], d: StatusData): void {
   fileRow(".roll/backlog.md", d.project_has_backlog);
   fileRow(".roll/features/", d.project_features_count > 0, `${d.project_features_count} feature docs`);
 
-  for (const [svc, state] of [
-    ["loop", d.loop_state],
-    ["dream", d.dream_state],
-  ] as const) {
-    let dot: string, word: string;
-    if (state === "enabled") {
-      dot = c("green", "●");
-      word = c("green", `${svc} · launchd enabled`);
-    } else if (state === "installed-off") {
-      dot = c("amber", "⚠");
-      word = c("amber", `${svc} · launchd off`);
-    } else {
-      dot = c("red", "○");
-      word = c("dim", `${svc} · launchd not installed`);
-    }
-    out.push("  " + dot + " " + word);
-  }
+  // US-LOOP-118: the two `<svc> · launchd enabled/off/not installed` rows are
+  // gone. They dressed plist presence as delivery state — green meant "a timer is
+  // installed", and red "not installed" read as something missing that the owner
+  // should go install. Neither is true now; a leftover lane appears in the driver
+  // note below instead, as debris to remove rather than a state to obey.
 
-  // US-LOOP-108: effective scheduler backend — launchd | process-fallback | none.
+  // US-LOOP-116: who drives — a session, or nobody because it is paused.
   {
     let dot: string, word: string;
-    if (d.scheduler_backend === "launchd") {
-      dot = c("green", "●");
-      word = c("green", "backend · launchd");
-    } else if (d.scheduler_backend === "process-fallback") {
-      dot = c("amber", "⚠");
-      word = c("amber", "backend · process-fallback");
+    if (d.driver === "session") {
+      dot = c("green", "◆");
+      word = c("green", "driver · session");
     } else {
-      dot = c("red", "○");
-      word = c("red", "backend · none");
+      dot = c("amber", "⏸");
+      word = c("amber", "driver · paused");
     }
     let line = "  " + dot + " " + word;
-    if (d.scheduler_note !== "") line += c("dim", `  ${d.scheduler_note}`);
+    if (d.driver_note !== "") line += c("dim", `  ${d.driver_note}`);
     out.push(line);
   }
   out.push("");
@@ -402,19 +393,23 @@ function liveData(): StatusData {
   if (existsSync(featDir)) {
     featCount = readdirSync(featDir).filter((n) => n.endsWith(".md")).length;
   }
-  const loopState = launchdState("loop", slug);
-  // US-LOOP-108: derive the effective backend. A stale/dead fallback lease is
-  // never reported as an active backend (evaluateFallbackLiveness gates alive).
-  const fbHealth = readFallbackHealthSync(root, slug);
-  const backend = decideBackend(loopState === "enabled", fbHealth);
-  let note = "";
-  if (backend === "process-fallback" && fbHealth.lease !== null) {
-    note = `owner-confirmed · pid ${fbHealth.lease.pid} · not persistent across reboot/login`;
-  } else if (fbHealth.status === "stale" && fbHealth.lease !== null) {
-    note = `stale fallback lease (${fbHealth.reason}) — not active`;
-  } else if (backend === "none") {
-    note = "unarmed — no autonomous work will run";
-  }
+  // US-LOOP-116: no backend to derive. Delivery is session-driven; the only real
+  // state is whether autonomous progress is paused. A launchd lane still on disk is
+  // a leftover from an older install and is worth naming, not obeying.
+  const paused = existsSync(join(root, ".roll", "loop", `PAUSE-${slug}`));
+  const driver: "session" | "paused" = paused ? "paused" : "session";
+  // codex review r1: a leftover DREAM lane is resident work too — it was installed
+  // by the same retired `roll loop on`. Notice either lane, not just loop.
+  // Every lane Roll has ever installed, so no leftover plist is invisible. `pr`
+  // was retired earlier (US-DELIV-006) but an upgraded machine can still hold it
+  // — codex r1 caught its omission here.
+  const leftoverLanes = ["loop", "pr", "dream"].filter((svc) => launchdLaneLeftover(svc, slug));
+  const note =
+    leftoverLanes.length > 0
+      ? `leftover launchd lane(s) from an older install: ${leftoverLanes.join(", ")} — run roll doctor to remove`
+      : paused
+        ? "autonomous progress paused — roll loop resume, or roll loop go --cards <id>"
+        : "";
   return {
     conventions: globalConventions(),
     ai_clients: aiClients,
@@ -423,10 +418,8 @@ function liveData(): StatusData {
     project_has_agents: existsSync("AGENTS.md"),
     project_has_backlog: existsSync(".roll/backlog.md"),
     project_features_count: featCount,
-    loop_state: loopState,
-    dream_state: launchdState("dream", slug),
-    scheduler_backend: backend,
-    scheduler_note: note,
+    driver,
+    driver_note: note,
   };
 }
 
@@ -444,13 +437,6 @@ const VERDICT_REASON: Record<string, { en: string; zh: string }> = {
   fail: { en: "a dimension is failing", zh: "有维度不通过" },
   unknown: { en: "no consistency audit yet", zh: "尚无一致性审计" },
 };
-
-/** Compact `HH:MMZ` for a lane's nextAt (UTC, byte-stable). */
-function laneNext(iso: string | undefined): string {
-  if (iso === undefined || iso === "") return "—";
-  const m = /T(\d{2}:\d{2})/.exec(iso);
-  return m?.[1] !== undefined ? `${m[1]}Z` : "—";
-}
 
 function statusLabel(label: string): string {
   return c("muted", pad(label, 10));
@@ -491,14 +477,30 @@ export function renderTruthSummary(
   if (northSummary !== undefined) out.push(northSummary);
   out.push("");
 
-  // LOOP — loop lanes + running count (the web Now tab's loop heartbeat).
+  // LOOP — the run-state and who drives (the web Now tab's loop heartbeat).
+  // US-LOOP-118: the old line was "N loops · M running   next HH:MMZ". Every part
+  // of it described resident scheduling: the count came from the two hard-listed
+  // launchd lanes, `running` meant a plist existed, and `next` was last-run plus a
+  // period read out of that plist. Nothing fires on a schedule now, so the honest
+  // line is the run-state plus a leftover-lane warning when there is one.
   const lanes = snapshot.loop?.lanes ?? [];
-  const running = lanes.filter((l) => l.running).length;
-  const nextLane = lanes.find((l) => l.running && l.nextAt !== undefined);
-  const loopRight =
-    lang === "zh"
-      ? `${lanes.length} 个循环 · ${c("green", `${running} 运行中`)}` + (nextLane !== undefined ? `   下次 ${c("fg", laneNext(nextLane.nextAt))}` : "")
-      : `${lanes.length} loops · ${c("green", `${running} running`)}` + (nextLane !== undefined ? `   next ${c("fg", laneNext(nextLane.nextAt))}` : "");
+  // Key on the leftover MARKER, not on source: a pre-US-LOOP-118 snapshot lists
+  // all three retired lanes whether or not any plist exists, which would print a
+  // "3 leftover lane(s)" warning on a machine with none.
+  const leftovers = lanes.filter(isLeftoverLane).length;
+  const goOpen = lanes.some((l) => l.source === "goal" && l.running);
+  const paused = (snapshot.loop?.runState ?? "ACTIVE") === "PAUSED";
+  let loopRight: string;
+  if (paused) {
+    loopRight = lang === "zh" ? c("amber", "已暂停") + " · roll loop resume" : c("amber", "PAUSED") + " · roll loop resume";
+  } else if (goOpen) {
+    loopRight = lang === "zh" ? c("green", "会话驱动") + " · go 会话进行中" : c("green", "session-driven") + " · go session open";
+  } else {
+    loopRight = lang === "zh" ? c("green", "会话驱动") + " · 无进行中的 go 会话" : c("green", "session-driven") + " · no open go session";
+  }
+  if (leftovers > 0) {
+    loopRight += lang === "zh" ? c("amber", `   ${leftovers} 个残留 lane`) : c("amber", `   ${leftovers} leftover lane(s)`);
+  }
   out.push("  " + statusLabel("LOOP") + loopRight);
 
   // CYCLE — cycles/3d + failed + cost (the web Cycle tile).
@@ -579,7 +581,14 @@ export function statusTruthJson(snapshot: TruthSnapshot | undefined, stale: bool
     exit,
     snapshot: true,
     stale,
-    loop: { lanes: lanes.length, running: lanes.filter((l) => l.running).length },
+    // US-LOOP-118 (codex r6): was `{ lanes, running }` — a count of retired lanes
+    // where an OLD snapshot's `running: true` launchd rows inflated "running".
+    // The machine view now mirrors the human line: is a session driving, and how
+    // much debris is left.
+    loop: {
+      sessionsDriving: lanes.filter((l) => l.source === "goal" && l.running).length,
+      leftoverLanes: lanes.filter(isLeftoverLane).length,
+    },
     cycle:
       snapshot.cycle !== undefined
         ? { cycles3d: snapshot.cycle.cycles3d, failed3d: snapshot.cycle.failed3d, costUsd3d: snapshot.cycle.costUsd3d }
@@ -677,8 +686,7 @@ function truthFixture(): TruthSnapshot {
     release: { latestTag: "v3.611.2", verdict: "pass", collectedAt: "2026-06-12T03:09:03Z" },
     loop: {
       lanes: [
-        { name: "loop", running: true, mode: "cron", everyMin: 30, lastAt: "2026-06-13T08:32:00Z", nextAt: "2026-06-13T08:55:00Z" },
-        { name: "dream", running: false, mode: "nightly", everyMin: 1440 },
+        { name: "go session", source: "goal", running: true, mode: "go", status: "active", scope: "all", lastAt: "2026-06-13T08:32:00Z" },
       ],
     },
     stories: [

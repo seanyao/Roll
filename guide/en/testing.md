@@ -101,7 +101,7 @@ and a safe next step instead of silently passing.
 ## Test Quality Rubric
 
 `guide/en/testing/quality-rubric.md` (referenced from `$roll-.dream` Scan 7)
-catalogs eight recurring antipatterns the dream nightly scan flags as
+catalogs eight recurring antipatterns the dream scan flags as
 `REFACTOR-XXX [test-quality:❶|❷|...|❽]`:
 
 | # | Antipattern | Fix |
@@ -118,14 +118,17 @@ catalogs eight recurring antipatterns the dream nightly scan flags as
 The dream skill emits at most 5 REFACTOR entries per scan, so the backlog
 doesn't drown in noise. Refactor them in priority order.
 
-### Test-quality merge gate (US-QA-012 / 013)
+### Categories ❼ and ❽
 
-Categories ❼ and ❽ are **blocking**: loop runs
-`roll loop test-quality-check <changed-test-files>` between CI green and
-auto-merge. Violations write `ALERT-<slug>.md` and hold the PR until either
-the test is reshaped or the PR description carries `[skip-test-quality]`
-(case-insensitive). Use the bypass sparingly — the violation still gets
-reported through dream as a REFACTOR row, so it doesn't quietly accumulate.
+These two are the ones reviewers reject most often, so treat them as hard rules when
+you write a test: a test that cannot fail, and a test that asserts its own fixture.
+Nothing blocks a merge on them automatically — `roll dream run-once` surfaces
+violations as REFACTOR rows, and a reviewer (human or Evaluator) is expected to catch
+them in the diff.
+
+这两类是评审最常打回的:不可能失败的测试、以及断言自己夹具的测试。写测试时当硬规则守。
+没有任何东西会因此自动拦合并 —— `roll dream run-once` 会把违规报成 REFACTOR 行,评审
+(人或 Evaluator)应当在 diff 里抓住它。
 
 Categories ❶..❻ remain advisory: dream flags them as REFACTOR entries but
 the gate doesn't block on them. Triage them in your usual queue.

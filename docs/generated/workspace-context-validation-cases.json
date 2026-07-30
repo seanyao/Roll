@@ -652,39 +652,6 @@
       ]
     },
     {
-      "id": "operation:cli:loop:fallback.start",
-      "policyKey": "cli:loop:fallback.start",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:fallback.start",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
-      "id": "operation:cli:loop:fallback.status",
-      "policyKey": "cli:loop:fallback.status",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:fallback.status",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
-      "id": "operation:cli:loop:fallback.stop",
-      "policyKey": "cli:loop:fallback.stop",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:fallback.stop",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
       "id": "operation:cli:loop:fmt",
       "policyKey": "cli:loop:fmt",
       "surface": "cli",
@@ -767,39 +734,6 @@
       "surface": "cli",
       "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
       "testName": "executes registered CLI probe for cli:loop:notify",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
-      "id": "operation:cli:loop:now",
-      "policyKey": "cli:loop:now",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:now",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
-      "id": "operation:cli:loop:off",
-      "policyKey": "cli:loop:off",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:off",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
-      "id": "operation:cli:loop:on",
-      "policyKey": "cli:loop:on",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:on",
       "proves": [
         "operation_policy",
         "cli_registration_probe"
@@ -965,17 +899,6 @@
       "surface": "cli",
       "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
       "testName": "executes registered CLI probe for cli:loop:story",
-      "proves": [
-        "operation_policy",
-        "cli_registration_probe"
-      ]
-    },
-    {
-      "id": "operation:cli:loop:test",
-      "policyKey": "cli:loop:test",
-      "surface": "cli",
-      "testFile": "packages/cli/test/workspace-context-operation-evidence.test.ts",
-      "testName": "executes registered CLI probe for cli:loop:test",
       "proves": [
         "operation_policy",
         "cli_registration_probe"
@@ -2144,18 +2067,6 @@
       "caseId": "operation:cli:loop:exhaustion-split"
     },
     {
-      "policyKey": "cli:loop:fallback.start",
-      "caseId": "operation:cli:loop:fallback.start"
-    },
-    {
-      "policyKey": "cli:loop:fallback.status",
-      "caseId": "operation:cli:loop:fallback.status"
-    },
-    {
-      "policyKey": "cli:loop:fallback.stop",
-      "caseId": "operation:cli:loop:fallback.stop"
-    },
-    {
       "policyKey": "cli:loop:fmt",
       "caseId": "operation:cli:loop:fmt"
     },
@@ -2186,18 +2097,6 @@
     {
       "policyKey": "cli:loop:notify",
       "caseId": "operation:cli:loop:notify"
-    },
-    {
-      "policyKey": "cli:loop:now",
-      "caseId": "operation:cli:loop:now"
-    },
-    {
-      "policyKey": "cli:loop:off",
-      "caseId": "operation:cli:loop:off"
-    },
-    {
-      "policyKey": "cli:loop:on",
-      "caseId": "operation:cli:loop:on"
     },
     {
       "policyKey": "cli:loop:pardon-skip-list",
@@ -2258,10 +2157,6 @@
     {
       "policyKey": "cli:loop:story",
       "caseId": "operation:cli:loop:story"
-    },
-    {
-      "policyKey": "cli:loop:test",
-      "caseId": "operation:cli:loop:test"
     },
     {
       "policyKey": "cli:loop:unmute",

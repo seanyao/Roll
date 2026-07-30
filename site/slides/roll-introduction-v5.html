@@ -679,8 +679,8 @@
         <span class="lang-zh">自主交付</span>
       </h3>
       <p>
-        <span class="lang-en"><code>roll loop on</code> runs BACKLOG items hourly. Dream scans code health nightly. <strong>Humans retain sole release authority.</strong></span>
-        <span class="lang-zh"><code>roll loop on</code> 每小时执行 BACKLOG。Dream 夜间扫描代码健康。<strong>发布权始终在人手里。</strong></span>
+        <span class="lang-en"><code>roll loop go</code> works the BACKLOG in your agent session, cycle after cycle. <code>roll dream run-once</code> scans code health on demand. <strong>Humans retain sole release authority.</strong></span>
+        <span class="lang-zh"><code>roll loop go</code> 在你的 agent 会话里一轮接一轮推进 BACKLOG。<code>roll dream run-once</code> 按需扫代码健康。<strong>发布权始终在人手里。</strong></span>
       </p>
     </div>
     <div class="card" style="border-left:3px solid var(--accent-light);">
@@ -726,8 +726,8 @@
       <span class="lang-zh">一句话</span>
     </div>
     <p>
-      <span class="lang-en">ROLL turns a BACKLOG into shipped code continuously. Engineering practices are encoded as executable skills — <strong>reliable enough for an agent to run unattended, disciplined enough to ship production code</strong>.</span>
-      <span class="lang-zh">ROLL 持续把 BACKLOG 变成上线代码。工程实践被编码为可执行 Skill——<strong>可靠到 Agent 无人值守也能跑，严谨到能上生产</strong>。</span>
+      <span class="lang-en">ROLL turns a BACKLOG into shipped code continuously. Engineering practices are encoded as executable skills — <strong>reliable enough for an agent to work through without step-by-step approval, disciplined enough to ship production code</strong>.</span>
+      <span class="lang-zh">ROLL 持续把 BACKLOG 变成上线代码。工程实践被编码为可执行 Skill——<strong>可靠到 Agent 一路做下去不必逐步确认，严谨到能上生产</strong>。</span>
     </p>
   </div>
   <span class="slide-number">04 / 20</span>
@@ -816,7 +816,7 @@
     <div class="hai-zone hai-ai">
       <div class="emoji">🤖 ⚡</div>
       <h4><span class="lang-en">AI Self-Drives</span><span class="lang-zh">AI 自驱</span></h4>
-      <p><span class="lang-en">ROLL Loop auto-delivers. No babysitting needed.</span><span class="lang-zh">ROLL Loop 自动交付，无须看守。</span></p>
+      <p><span class="lang-en">ROLL Loop delivers card after card while your session runs.</span><span class="lang-zh">ROLL Loop 在你的会话里一张接一张地交付。</span></p>
       <p style="margin-top:6px;font-size:10px;color:var(--green-text);">Backlog → Build → Verify</p>
     </div>
     <div class="hai-zone hai-push">
@@ -891,7 +891,7 @@
     </div>
     <div class="card" style="border-left: 3px solid var(--cyan);">
       <h3 style="font-size:14px;color:var(--cyan-text);">Refactor</h3>
-      <p><span class="lang-en">Tech debt, architecture cleanup. Often surfaced by $roll-.dream nightly scans. Medium Loop A.</span><span class="lang-zh">技术债、架构改良。常由 $roll-.dream 夜间扫描产出。中等 Loop A。</span></p>
+      <p><span class="lang-en">Tech debt, architecture cleanup. Often surfaced by $roll-.dream scans. Medium Loop A.</span><span class="lang-zh">技术债、架构改良。常由 $roll-.dream 巡检产出。中等 Loop A。</span></p>
       <p style="margin-top:6px;font-size:11px;color:var(--cyan-text);">ID: REFACTOR-XXX</p>
     </div>
     <div class="card" style="border-left: 3px solid var(--red);">
@@ -908,8 +908,8 @@
   <div class="analogy fade-in">
     <div class="analogy-label"><span class="lang-en">Priority Order</span><span class="lang-zh">优先级顺序</span></div>
     <p>
-      <span class="lang-en">FIX (bugs first) > US (user value) > REFACTOR (tech debt). Automated by <strong>$roll-loop</strong> — the autonomous executor scans BACKLOG hourly and routes each item to the right skill.</span>
-      <span class="lang-zh">FIX（先修 bug）> US（用户价值）> REFACTOR（技术债）。由 <strong>$roll-loop</strong> 自动执行——每小时扫描 BACKLOG，路由到对应的 Skill。</span>
+      <span class="lang-en">FIX (bugs first) > US (user value) > REFACTOR (tech debt). Driven by <strong>$roll-loop</strong> — in your agent session it takes the next BACKLOG item and routes it to the right skill.</span>
+      <span class="lang-zh">FIX（先修 bug）> US（用户价值）> REFACTOR（技术债）。由 <strong>$roll-loop</strong> 驱动——在 agent 会话里领取下一张 BACKLOG 卡，路由到对应的 Skill。</span>
     </p>
   </div>
   <span class="slide-number">08 / 20</span>
@@ -961,7 +961,7 @@
       <div class="number" style="color:var(--accent-light);font-size:24px;line-height:1.4;">
         <span class="lang-en">Fully Auto</span><span class="lang-zh">完全自动</span>
       </div>
-      <div class="label"><span class="lang-en">AI runs unattended · no babysitting</span><span class="lang-zh">AI 自主执行 · 无须看守</span></div>
+      <div class="label"><span class="lang-en">AI works the queue · you set the scope</span><span class="lang-zh">AI 啃队列 · 范围由你定</span></div>
     </div>
   </div>
   <span class="slide-number">09 / 20</span>
@@ -1051,8 +1051,8 @@
         <span class="lang-zh">L3：多阶段评审</span>
       </h3>
       <p>
-        <span class="lang-en"><strong>Self</strong> — per-commit 6-dim check.<br><strong>Peer</strong> — cross-agent negotiation.<br><strong>Dream</strong> — nightly code health scan.</span>
-        <span class="lang-zh"><strong>Self</strong>——每次提交 6 维自查。<br><strong>Peer</strong>——跨 Agent 协商。<br><strong>Dream</strong>——夜间代码健康扫描。</span>
+        <span class="lang-en"><strong>Self</strong> — per-commit 6-dim check.<br><strong>Peer</strong> — cross-agent negotiation.<br><strong>Dream</strong> — on-demand code health scan.</span>
+        <span class="lang-zh"><strong>Self</strong>——每次提交 6 维自查。<br><strong>Peer</strong>——跨 Agent 协商。<br><strong>Dream</strong>——按需代码健康巡检。</span>
       </p>
       <p style="margin-top:6px;font-size:10px;font-family:monospace;color:var(--accent-light);">$roll-.review · $roll-peer · $roll-.dream</p>
     </div>
@@ -1062,8 +1062,8 @@
         <span class="lang-zh">L4：Sentinel 生产巡逻</span>
       </h3>
       <p>
-        <span class="lang-en">24/7 random-sample monitoring. Alerts only after 3 consecutive failures. Auto-creates Fix tasks.</span>
-        <span class="lang-zh">7×24 抽样巡检。连续 3 次失败才告警（防误报）。自动创建 Fix 任务。</span>
+        <span class="lang-en">Random-sample production checks. Alerts only after 3 consecutive failures. Auto-creates Fix tasks.</span>
+        <span class="lang-zh">对生产做抽样巡检。连续 3 次失败才告警（防误报）。自动创建 Fix 任务。</span>
       </p>
       <p style="margin-top:6px;font-size:10px;font-family:monospace;color:var(--orange-text);">$roll-sentinel</p>
     </div>
@@ -1089,12 +1089,12 @@
       <h3 style="font-size:15px;color:var(--orange-text);">$roll-sentinel — <span class="lang-en">Runtime Patrol</span><span class="lang-zh">运行时巡逻</span></h3>
       <p><span class="lang-en">Random-sample monitoring of production. Cost-controlled AI validation with intelligent spot-checking.</span><span class="lang-zh">对生产做抽样巡检。成本可控的 AI 验证 + 智能点检逻辑。</span></p>
       <p style="margin-top:8px;"><strong><span class="lang-en">Patrol Modes:</span><span class="lang-zh">巡检模式：</span></strong></p>
-      <p><span class="lang-en">Light: 5/day · Intensive: 20/hr (post-release) · Full sweep: weekly</span><span class="lang-zh">轻量：每天 5 次 · 密集：发布后每小时 20 次 · 全量扫描：每周一次</span></p>
+      <p><span class="lang-en">Light: 5 samples · Intensive: 20 samples (post-release) · Full sweep: every route</span><span class="lang-zh">轻量：抽 5 次 · 密集：发布后抽 20 次 · 全量扫描：覆盖所有路由</span></p>
       <p style="margin-top:8px;"><strong><span class="lang-en">Output:</span><span class="lang-zh">输出：</span></strong> <span class="lang-en">FIX-XXX entries in BACKLOG</span><span class="lang-zh">在 BACKLOG 中生成 FIX-XXX 条目</span></p>
     </div>
     <div class="card" style="border-top: 3px solid var(--accent-light);">
-      <h3 style="font-size:15px;color:var(--accent-light);">$roll-.dream — <span class="lang-en">Nightly Health Scan</span><span class="lang-zh">夜间健康扫描</span></h3>
-      <p><span class="lang-en">Runs at 3am. Six dimensions of code health:</span><span class="lang-zh">凌晨 3 点运行。代码健康的六个维度：</span></p>
+      <h3 style="font-size:15px;color:var(--accent-light);">$roll-.dream — <span class="lang-en">Health Scan</span><span class="lang-zh">健康巡检</span></h3>
+      <p><span class="lang-en">Run it on demand. Six dimensions of code health:</span><span class="lang-zh">按需跑一遍。代码健康的六个维度：</span></p>
       <p style="margin-top:8px;"><span class="lang-en">1. Dead Code · 2. Architectural Drift · 3. Pruning Candidates · 4. Emerging Patterns · 5. Doc Coverage · 6. Doc Freshness</span><span class="lang-zh">1. 死代码 · 2. 架构漂移 · 3. 可裁剪项 · 4. 涌现模式 · 5. 文档覆盖 · 6. 文档新鲜度</span></p>
       <p style="margin-top:8px;"><strong><span class="lang-en">Output:</span><span class="lang-zh">输出：</span></strong> <span class="lang-en">REFACTOR-XXX entries in BACKLOG</span><span class="lang-zh">在 BACKLOG 中生成 REFACTOR-XXX 条目</span></p>
     </div>
@@ -1131,13 +1131,13 @@
     <div class="auto-layer">
       <div class="al-icon">🔄</div>
       <h4><span class="lang-en">Loop Layer</span><span class="lang-zh">Loop 层</span></h4>
-      <p><span class="lang-en">Hourly BACKLOG scan. Auto-routes each item to the right skill. FIX > US > REFACTOR.</span><span class="lang-zh">每小时扫描 BACKLOG，自动路由到对应 Skill。FIX > US > REFACTOR。</span></p>
+      <p><span class="lang-en">Takes the next BACKLOG item while your session drives it. Routes each item to the right skill. FIX > US > REFACTOR.</span><span class="lang-zh">会话驱动时领取下一张 BACKLOG 卡，路由到对应 Skill。FIX > US > REFACTOR。</span></p>
       <div class="al-skills">roll-loop · roll-brief</div>
     </div>
     <div class="auto-layer">
-      <div class="al-icon">🌙</div>
+      <div class="al-icon">🔍</div>
       <h4><span class="lang-en">Dream Layer</span><span class="lang-zh">Dream 层</span></h4>
-      <p><span class="lang-en">3am nightly code health scan. 6 dimensions. Generates REFACTOR entries autonomously.</span><span class="lang-zh">凌晨 3 点代码健康扫描，6 个维度，自动产出 REFACTOR 条目。</span></p>
+      <p><span class="lang-en">On-demand code health scan. 6 dimensions. Generates REFACTOR entries autonomously.</span><span class="lang-zh">按需代码健康巡检，6 个维度，自动产出 REFACTOR 条目。</span></p>
       <div class="al-skills">roll-.dream</div>
     </div>
     <div class="auto-layer">
@@ -1190,10 +1190,10 @@
       <tr><td class="skill-name">$roll-doc-audit</td><td><span class="phase-tag phase-support"><span class="lang-en">Document</span><span class="lang-zh">文档</span></span></td><td><span class="lang-en">Auto-scan, index, gap analysis, fill for project docs</span><span class="lang-zh">自动扫描、建索引、找缺口、补写项目文档</span></td></tr>
       <tr><td class="skill-name">$roll-notes</td><td><span class="phase-tag phase-support"><span class="lang-en">Journal</span><span class="lang-zh">日志</span></span></td><td><span class="lang-en">Project diary — records dev moments chronologically</span><span class="lang-zh">项目日记——按时间记录开发瞬间</span></td></tr>
       <tr><td class="skill-name">$roll-doctor</td><td><span class="phase-tag phase-support"><span class="lang-en">Maintain</span><span class="lang-zh">体检</span></span></td><td><span class="lang-en">ROLL self-health check (skills/symlinks/config/templates)</span><span class="lang-zh">ROLL 自身健康检查（Skill/链接/配置/模板）</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-loop</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Hourly BACKLOG executor — routes items to skills</span><span class="lang-zh">每小时 BACKLOG 执行器——路由到对应 Skill</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-peer</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Cross-agent peer review, up to 3 negotiation rounds</span><span class="lang-zh">跨 Agent 同行评审，最多 3 轮协商</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-brief</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Owner-facing briefing: done, in-progress, queue, escalations</span><span class="lang-zh">面向负责人的简报：已完成、进行中、队列、待升级</span></td></tr>
-      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-.dream</td><td><span class="phase-tag phase-auto"><span class="lang-en">Auto</span><span class="lang-zh">自治</span></span></td><td><span class="lang-en">Nightly 6-dimension code health scan → REFACTOR entries</span><span class="lang-zh">夜间 6 维代码健康扫描 → REFACTOR 条目</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-loop</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Session-driven BACKLOG executor — routes items to skills</span><span class="lang-zh">会话驱动的 BACKLOG 执行器——路由到对应 Skill</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-peer</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Cross-agent peer review, up to 3 negotiation rounds</span><span class="lang-zh">跨 Agent 同行评审，最多 3 轮协商</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-brief</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">Owner-facing briefing: done, in-progress, queue, escalations</span><span class="lang-zh">面向负责人的简报：已完成、进行中、队列、待升级</span></td></tr>
+      <tr><td class="skill-name" style="color:var(--cyan-text);">$roll-.dream</td><td><span class="phase-tag phase-auto"><span class="lang-en">Session</span><span class="lang-zh">会话</span></span></td><td><span class="lang-en">On-demand 6-dimension code health scan → REFACTOR entries</span><span class="lang-zh">按需 6 维代码健康巡检 → REFACTOR 条目</span></td></tr>
       <tr><td class="skill-name" style="color:var(--text-dim);">$roll-.review</td><td><span class="phase-tag phase-support"><span class="lang-en">Hidden</span><span class="lang-zh">隐式</span></span></td><td><span class="lang-en">Per-commit self-review: correctness, security, maintainability</span><span class="lang-zh">每次提交自查：正确性、安全、可维护性</span></td></tr>
       <tr><td class="skill-name" style="color:var(--text-dim);">$roll-.changelog</td><td><span class="phase-tag phase-support"><span class="lang-en">Hidden</span><span class="lang-zh">隐式</span></span></td><td><span class="lang-en">Auto-generates CHANGELOG.md from completed stories</span><span class="lang-zh">从已完成 Story 自动生成 CHANGELOG.md</span></td></tr>
       <tr><td class="skill-name" style="color:var(--text-dim);">$roll-.qa</td><td><span class="phase-tag phase-support"><span class="lang-en">Hidden</span><span class="lang-zh">隐式</span></span></td><td><span class="lang-en">Test pyramid standards: unit/E2E/visual/smoke + CI gates</span><span class="lang-zh">测试金字塔标准：单元 / E2E / 视觉 / 冒烟 + CI 闸门</span></td></tr>
@@ -1231,7 +1231,7 @@
       <h3 style="color:var(--green-text);"><span class="lang-en">ROLL Auto-QA</span><span class="lang-zh">ROLL 自动 QA</span></h3>
       <div class="compare-item"><span class="icon">⚡</span><span><span class="lang-en">Test while writing — bugs caught at birth</span><span class="lang-zh">边写边测——bug 出生即被抓</span></span></div>
       <div class="compare-item"><span class="icon">⚡</span><span><span class="lang-en">Fix cost approaches zero (max 5-min loss)</span><span class="lang-zh">修复成本趋近零（最多损失 5 分钟）</span></span></div>
-      <div class="compare-item"><span class="icon">⚡</span><span><span class="lang-en">Auto regression + nightly Dream scans</span><span class="lang-zh">自动回归 + 每晚 Dream 扫描</span></span></div>
+      <div class="compare-item"><span class="icon">⚡</span><span><span class="lang-en">Auto regression + Dream health scans</span><span class="lang-zh">自动回归 + Dream 健康巡检</span></span></div>
       <div class="compare-item"><span class="icon">⚡</span><span><span class="lang-en">Issues found before users notice (Sentinel)</span><span class="lang-zh">用户察觉前就被 Sentinel 发现</span></span></div>
       <div class="compare-item"><span class="icon">⚡</span><span><span class="lang-en">Standards built into the system, not people</span><span class="lang-zh">标准嵌进系统，不寄望于人</span></span></div>
     </div>
@@ -1259,11 +1259,11 @@
     │&nbsp;&nbsp;&nbsp;├── <span class="dir">features/</span> <span class="comment"><span class="lang-en">← Story details + AC</span><span class="lang-zh">← Story 详情与验收标准</span></span><br>
     │&nbsp;&nbsp;&nbsp;├── <span class="dir">domain/</span> <span class="comment"><span class="lang-en">← DDD context maps</span><span class="lang-zh">← DDD 上下文映射</span></span><br>
     │&nbsp;&nbsp;&nbsp;├── <span class="dir">decisions/</span> <span class="comment"><span class="lang-en">← ADRs</span><span class="lang-zh">← 架构决策记录</span></span><br>
-    │&nbsp;&nbsp;&nbsp;├── <span class="dir">dream/</span> <span class="comment"><span class="lang-en">← Nightly health reports</span><span class="lang-zh">← 夜间健康报告</span></span><br>
+    │&nbsp;&nbsp;&nbsp;├── <span class="dir">dream/</span> <span class="comment"><span class="lang-en">← Health scan reports</span><span class="lang-zh">← 健康巡检报告</span></span><br>
     │&nbsp;&nbsp;&nbsp;└── <span class="dir">briefs/</span> <span class="comment"><span class="lang-en">← Owner-facing digests</span><span class="lang-zh">← 面向负责人的简报</span></span><br>
     ├── <span class="dir">.github/workflows/</span><br>
     │&nbsp;&nbsp;&nbsp;├── <span class="file">ci.yml</span> <span class="comment"><span class="lang-en">← Quality gate on every commit</span><span class="lang-zh">← 每次提交的质量闸门</span></span><br>
-    │&nbsp;&nbsp;&nbsp;└── <span class="file">sentinel.yml</span> <span class="comment"><span class="lang-en">← Scheduled production patrols</span><span class="lang-zh">← 定时生产巡逻</span></span><br>
+    │&nbsp;&nbsp;&nbsp;└── <span class="file">sentinel.yml</span> <span class="comment"><span class="lang-en">← On-demand production patrols</span><span class="lang-zh">← 按需生产巡逻</span></span><br>
     └── <span class="comment"><span class="lang-en">... source code</span><span class="lang-zh">... 源代码</span></span>
   </div>
   <span class="slide-number">16 / 20</span>
@@ -1343,14 +1343,14 @@
     </div>
     <div class="timeline-item">
       <h4><span class="lang-en">10:45 AM — Human approves → Release</span><span class="lang-zh">10:45 — 人审批 → 发布</span></h4>
-      <p><span class="lang-en">Deployed. BACKLOG status: ✅ Done. $roll-sentinel begins monitoring.</span><span class="lang-zh">已发布。BACKLOG 状态变 ✅ Done。$roll-sentinel 接手监控。</span></p>
+      <p><span class="lang-en">Deployed. BACKLOG status: ✅ Done. $roll-sentinel is ready to patrol the new endpoints.</span><span class="lang-zh">已发布。BACKLOG 状态变 ✅ Done。$roll-sentinel 可对新端点开巡。</span></p>
     </div>
     <div class="timeline-item">
-      <h4><span class="lang-en">3:00 AM — $roll-.dream nightly scan</span><span class="lang-zh">凌晨 3:00 — $roll-.dream 夜间扫描</span></h4>
+      <h4><span class="lang-en">11:00 AM — you run a $roll-.dream scan</span><span class="lang-zh">11:00 — 你跑一次 $roll-.dream 巡检</span></h4>
       <p><span class="lang-en">Detects an emerging pattern: 3 similar auth helpers could be extracted. Creates REFACTOR-015 in BACKLOG.</span><span class="lang-zh">检出涌现模式：3 处相似的认证辅助函数可抽取。创建 REFACTOR-015。</span></p>
     </div>
     <div class="timeline-item">
-      <h4><span class="lang-en">Next Day — $roll-sentinel catches anomaly</span><span class="lang-zh">次日 — $roll-sentinel 捕获异常</span></h4>
+      <h4><span class="lang-en">Next patrol — $roll-sentinel catches anomaly</span><span class="lang-zh">下一次巡检 — $roll-sentinel 捕获异常</span></h4>
       <p><span class="lang-en">OAuth endpoint response time degrading (3 consecutive failures). Auto-creates FIX-012. $roll-fix patches + regression test. Resolved before users notice.</span><span class="lang-zh">OAuth 端点响应变慢（连续 3 次失败）。自动创建 FIX-012。$roll-fix 修补 + 回归测试。用户察觉前已解决。</span></p>
     </div>
   </div>
@@ -1383,8 +1383,8 @@
       <div style="font-size:24px;margin-bottom:6px;">🛡️</div>
       <h3 style="color:var(--cyan-text);font-size:15px;"><span class="lang-en">Solid · 稳</span><span class="lang-zh">稳</span></h3>
       <p>
-        <span class="lang-en">Four automated lines of defense<br>Live-evidence verification<br>Sentinel + Dream 24/7 watch</span>
-        <span class="lang-zh">四道自动化防线<br>活证据验证<br>Sentinel + Dream 7×24 守望</span>
+        <span class="lang-en">Four automated lines of defense<br>Live-evidence verification<br>Sentinel + Dream double watch</span>
+        <span class="lang-zh">四道自动化防线<br>活证据验证<br>Sentinel + Dream 双重守望</span>
       </p>
     </div>
     <div class="card" style="text-align:center;border-top:3px solid var(--orange);">

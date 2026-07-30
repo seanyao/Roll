@@ -1,21 +1,32 @@
-# roll loop — Autonomous BACKLOG Executor
+# roll loop — Session-Driven BACKLOG Executor
 
-`roll loop` schedules and manages the autonomous execution of BACKLOG stories.
-When enabled, it wakes up on a configurable schedule (within your active
-window), picks the top pending story, and executes it — committing changes in
-TCR micro-steps.
+> **Nothing runs on a timer.** Delivery only happens because someone ran
+> `roll loop go`; Roll installs no scheduler and starts nothing on its own.
+>
+> A run you start does outlive the terminal: by default `go` puts the worker in a
+> detached tmux window, so closing your window (or Ctrl-C while following the feed)
+> stops you *watching*, not the run. What ends a run is its own scope — the cards
+> finishing, `--max-cycles` / `--for` being reached, the dead-loop breaker tripping,
+> `roll loop pause`, or killing the tmux session. Use `--no-tmux` to keep it in the
+> foreground of the terminal you started it in.
+>
+> So: no work between runs, and no run you did not start.
 
-`roll loop on` is the explicit switch into **autonomous** mode. `roll loop off`
-or `roll loop pause` returns the project to **guided** operation, where the
-owner asks `roll supervisor next/why` and starts any long-running Story work
-explicitly. `roll loop resume` switches back to autonomous without changing
-agent bindings.
+`roll loop` executes BACKLOG stories: it picks the top pending story and delivers
+it — committing changes in TCR micro-steps — for as long as the session driving it
+keeps going.
 
-Workspace mode keys each scheduler by immutable Workspace ID. `roll loop on`,
-`go`, `pause`, and `resume` accept or derive exactly one Workspace target and
-keep runtime, events, locks, and failure state under that Workspace. Multiple
-active Workspaces can run independently; `roll loop status --all` is the
-read-only aggregate view and never mutates any Workspace.
+You drive it: `roll loop go` in an agent session runs cycles until the scoped
+backlog is done, paused, or capped. `roll loop pause` stops cards from being
+picked and `roll loop resume` clears it; the owner asks `roll supervisor
+next/why` to decide what to drive.
+
+Workspace mode binds each session-driven runtime to an immutable Workspace ID.
+`roll loop go`, `roll loop pause`, and `roll loop resume` accept or derive
+exactly one Workspace target and keep runtime, events, locks, and failure state
+under that Workspace. Multiple active Workspaces can run independently;
+`roll loop status --all` is the read-only aggregate view and never mutates any
+Workspace.
 
 ## How It Works
 
@@ -104,220 +115,48 @@ Claim rescued dirty work from the manifest. Bookmarked ahead commits stay on
 `main` (and on their `rescue/leaked-*` ref) — inspect them and reset main
 yourself only if you want them gone.
 
-## Scheduling
+## How work is driven
 
-Loop is scheduled via **launchd** (macOS). By default, every hour at a
-project-derived minute (different projects get different offsets to avoid
-collisions).
-
-`roll loop on` is safe to run again when the scheduler is already installed.
-It rewrites the current runner and plist, applies them with
-`launchctl bootout` followed by `launchctl bootstrap`, and verifies the live
-job before reporting success. If launchd still rejects the job, the command
-exits non-zero and prints the exact domain, label, plist path, and diagnostic
-commands; it never leaves a failed bootstrap looking enabled.
-
-```
-Active window: 0–24 (always on — the shipped default)
-```
-
-### Recovering from a launchd bootstrap failure
-
-A failed `roll loop on` is **unarmed**. The presence of a plist file in
-`~/Library/LaunchAgents/` does **not** mean autonomous scheduling is active —
-only `launchctl list` showing the loaded label means the loop is armed. Run
-`roll loop status` to see the effective backend (`launchd`,
-`process-fallback`, or `none`).
-
-**Repair launchd first.** The error output already prints the exact commands;
-the generic form uses the label reported by `launchctl list`:
+Nothing runs on a timer. A `roll loop go` chain exists because you started it, and
+the session that started it is the Supervisor. Closing your window does not stop the
+run — see the note at the top of this guide for what does. The contract is: no work
+between runs, and no run you did not start.
 
 ```bash
-UID=$(id -u)
-LABEL=$(launchctl list | awk '$3 ~ /^com\.roll\.loop\./ {print $3; exit}')
-# If launchctl list returns nothing, use the exact label from the roll loop on error output.
-launchctl bootout gui/$UID/$LABEL
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/$LABEL.plist
-launchctl print gui/$UID/$LABEL
-roll loop status
+roll loop go                      # drive the whole Todo backlog
+roll loop go --epic <name>        # scope to one epic
+roll loop go --cards US-X-1       # one explicit card (runs even while paused)
+roll loop go --max-cycles 1       # a single cycle, to try the flow
 ```
 
-If `launchctl bootstrap` succeeds and `print` shows the job, run `roll loop on`
-again to regenerate the current runner and confirm the schedule.
-
-**If launchd cannot be repaired**, Roll provides an owner-confirmed process
-fallback that is started only when you explicitly confirm it:
-
-```bash
-roll loop fallback start --confirm
-roll loop fallback status
-roll loop fallback stop        # when you no longer need it
-```
-
-The fallback is **not** a launchd replacement. It does not survive reboot or
-login session exit. After a reboot or logout you must stop any stale lease and
-re-confirm:
-
-```bash
-roll loop fallback stop
-roll loop fallback start --confirm
-```
-
-Prefer repairing launchd; use the fallback only when launchd is unavailable.
-
-#### macOS live verification procedure (Bootstrap failed: 5)
-
-When `roll loop on` fails with a `Bootstrap failed: 5: Input/output error`
-class error, capture a sanitized, non-root diagnostic bundle:
-
-```bash
-mkdir -p .roll/loop
-TS=$(date +%Y%m%d-%H%M%S)
-OUT=.roll/loop/launchd-verify-$TS.log
-{
-  echo "roll version: $(roll version)"
-  echo "uid: $(id -u)"
-  echo "---"
-  echo "roll loop status:"
-  roll loop status
-  echo "---"
-  echo "launchctl list (roll lanes):"
-  launchctl list | grep com.roll\. || true
-  echo "---"
-  echo "plists on disk:"
-  ls -1 ~/Library/LaunchAgents/com.roll.loop.*.plist 2>/dev/null || true
-} > "$OUT"
-# Sanitize before sharing: replace the literal home path with ~.
-sed -i.bak "s|$HOME|~|g" "$OUT" && rm -f "$OUT".bak
-```
-
-This procedure uses only user-level (`gui/<uid>`) launchctl commands. It does
-not require `sudo` and does not claim root-only diagnostics such as
-`launchctl dumpstate` are available.
-
-By default the active window is the full day (`loop_active_start=0`,
-`loop_active_end=24`), so loop fires on every scheduled tick. Narrow it to a
-working window with `roll config loop-window` — e.g. `roll config loop-window
-10-18` for 10am – 6pm. Outside the configured window, loop silently exits
-without doing anything.
-
-## Configuring the schedule
-
-Instead of hand-editing `~/.roll/config.yaml` and `.roll/local.yaml` and then
-hoping the launchd plist picks up your change, use the `roll config` command
-family. Each write lands in the right yaml file **and** automatically
-regenerates the runner, re-bootstraps the launchd plist, and is reflected
-immediately by `roll loop status` — no manual reload step.
-
-| Command | What it sets |
-|---------|--------------|
-| `roll config loop-window <start>-<end>` | loop active window hours (`loop_active_start` + `loop_active_end`) |
-| `roll config loop-schedule <period>[/<offset>]` | fire interval (`loop_schedule.period_minutes` + `offset_minute`) |
-| `roll config dream-time <HH:MM>` | dream daily fire time (`loop_dream_hour` + `loop_dream_minute`) |
-
-```bash
-roll config loop-window 9-18        # active 9am – 6pm; start < end, both in [0,24]
-roll config loop-schedule 30        # fire every 30 minutes (period in [1,1440])
-roll config loop-schedule 30/7      # every 30 minutes, offset :07 (offset in [0, period-1])
-roll config dream-time 03:20        # dream fires at exactly 03:20; HH in [0,23], MM in [0,59]
-```
-
-**Reading the current value.** Run any facade with no value to print the
-effective combination and where it comes from:
-
-```bash
-roll config loop-window             # loop-window: 0-24 (from default)
-roll config dream-time              # dream-time: 03:20 (from ~/.roll/config.yaml)
-```
-
-**Range validation.** Out-of-range or non-numeric input is rejected with a
-locale-selected error and exit code 2. For example, with `ROLL_LANG=en`,
-`roll config loop-window 9-25` prints `loop-window end must be <= 24`.
-
-**`--global` vs `--project`.** Writes default to `--project` (`.roll/local.yaml`,
-this project only). Pass `--global` to write `~/.roll/config.yaml` as the
-default for every project that has no project-level override.
-
-```bash
-roll config dream-time 03:20             # this project (.roll/local.yaml)
-roll config dream-time 03:20 --global    # all projects (~/.roll/config.yaml)
-```
-
-**Auto-reload.** After writing a schedule key, `roll config` re-installs the
-launchd plists for loop / pr / dream so the change fires on the next
-window. If reload fails (e.g. in a sandbox), the yaml is still the source of
-truth — run `roll loop on` to apply it by hand. See `roll config --help` for
-the full key list and ranges.
-
-### Per-project frequency
-
-Set the fire interval with one command:
-
-```bash
-roll config loop-schedule 30        # every 30 minutes (period 1–1440, any interval)
-roll config loop-schedule 45        # every 45 minutes (no longer restricted to divisors of 60)
-```
-
-This writes a `loop_schedule` block to `.roll/local.yaml`:
-
-```yaml
-loop_schedule:
-  period_minutes: 30   # 1-1440 (any minute interval)
-  offset_minute: 7     # 0–(period-1) (deprecated; for backward compat only)
-```
-
-- `period_minutes` — how often loop fires. Any value 1–1440.
-- `offset_minute` — (deprecated since US-LOOP-032) no longer affects timing.
-  Kept for backward compat.
-
-If no `.roll/local.yaml` or no `loop_schedule` block is present, Roll falls
-back to the global value (set with `roll config loop-schedule … --global`), or
-derives a per-project default from the project path hash.
-
-`roll loop status` and `roll loop on` display the actual schedule frequency
-so you can verify it at a glance. An invalid value (e.g. `period_minutes: 0` or
-`1441`) is rejected at write time with exit code 2.
-
-### Global defaults (backward-compatible)
-
-For a single global default across all projects, write with `--global`:
-
-```bash
-roll config loop-window 10-18 --global   # active window for every project
-roll config loop-schedule 60 --global    # default interval for every project
-```
-
-(Agent selection is no longer a global config key. It is resolved from Machine
-Scope and Project Scope agent files. See [Autonomous Role Resolution](#autonomous-role-resolution).)
-
-Project-level `.roll/local.yaml` always takes priority over the global default.
+`roll loop pause` stops cards from being picked; `roll loop resume` clears it. The
+correction circuit breaker also pauses automatically after repeated failures, so
+`resume` is the supported way back. An explicit `--cards` one-shot still runs while
+paused (FIX-1472).
 
 ## Subcommands
 
 ```bash
-roll loop on          # Install launchd scheduler (loop + pr + dream)
-roll loop off         # Remove launchd scheduler
+roll loop go          # Drive the backlog from this session
+roll loop go --epic <name>        # Scope to one epic
+roll loop go --cards US-1,FIX-2   # Scope to explicit cards (runs while paused)
+roll loop go --max-cycles 1       # A single cycle, to try the flow
 
-roll loop now         # Run one cycle immediately (same as launchd fires)
-roll loop now --cards US-1,FIX-2  # Run one immediate cycle scoped to selected cards
-roll loop test        # Quick smoke test: verify tmux/popup/stream chain works
-
-roll loop status      # Show scheduler state and current loop state
+roll loop status      # Show run state (ACTIVE / PAUSED), queue, alerts, recent cycles
 roll loop watch       # Default owner view: phase, quiet time, TCR count, last signal, plus live activity
 roll loop watch -n 50 # Look back 50 lines before following (default 200; 'all' = whole log)
 roll loop watch --events      # Compact developer event stream from .roll/loop/events.ndjson
 roll loop watch --raw-events  # Raw JSON event stream for audit/debug only
 roll loop watch --verbose  # Also show the raw agent transcript (default folds it away)
 roll loop watch --attach   # Read-only attach to the loop's tmux observe window (tmux attach -r)
-roll loop go          # Run goal mode manually for all backlog until complete/pause/guardrail
+roll loop go          # Work all backlog until done, paused, or a guardrail stops it
 roll loop go --epic <name>              # Limit the goal to one epic
 roll loop go --cards US-1,FIX-2         # Limit the goal to selected cards
-roll loop go --budget 10                # Stop conservatively when goal cost reaches $10
-roll loop go --usage-threshold 0.85     # Pause when five-hour or weekly usage reaches this ratio
-roll loop go --no-wait                  # On usage limit, pause and return instead of waiting for reset
 roll loop go --for 5h                   # Stop after the current cycle once the timebox is reached
 roll loop go --max-cycles 3             # Stop after this many cycles
 roll loop go --review <auto|hetero|self|off>  # Set the final review policy
+roll loop go --no-tmux                  # Stay in this terminal instead of a detached tmux window
+roll loop go --attach                   # Follow the live feed after starting
 roll loop goal        # Show persisted goal status, scope, review mode, usage, limits, and safety gate
 
 roll loop runs        # Show last 10 run summaries (story IDs, TCR count, duration, slowest phase)
@@ -381,25 +220,24 @@ racing (carried to child cycles as `ROLL_LOOP_RACE=1`). On the FIRST merge,
 (`delivery:reconciled{superseded}`), so racing costs at most one merge plus
 discarded sibling work — never duplicate deliveries.
 
-### Goal Mode vs Scheduled Mode
+### The go lock
 
-`roll loop go` is a manual goal session, not a launchd scheduler tick. While it
-runs, Roll holds `.roll/loop/go.lock`; scheduled ticks yield when they see that
-lock, record `goal:tick_skipped`, and do not start another `roll loop run-once`.
-`roll loop now --cards <ids>` uses the same card allow-list for its one-shot
+While `roll loop go` runs it holds `.roll/loop/go.lock`, so a second `go` in
+another terminal yields instead of starting a competing `roll loop run-once`.
+`roll loop go --cards <ids>` uses the same card allow-list for its one-shot
 runner, so a manual tick cannot silently pick a different backlog card.
 
-Goal mode can run when the scheduler is off because it starts its own session
-and does not depend on launchd. For paused projects, run `roll loop resume`
-first: the `PAUSE-<slug>` marker is still respected at cycle boundaries.
+`go` starts its own session and depends on nothing else being installed. For a
+paused project, run `roll loop resume` first — the `PAUSE-<slug>` marker is still
+respected at cycle boundaries — or name the card explicitly with `--cards`, which
+runs even while paused (FIX-1472).
 
 ### Goal Mode Safety Gates
 
-Budget and run limits are explicit per `roll loop go`. `--budget`,
-`--max-cycles`, and `--for` apply to THIS invocation only; omitting one means no
-limit for this run — Roll never silently inherits a budget or cap from a prior
-session's persisted goal, so a flagless `roll loop go` can neither be capped nor
-bricked by a limit you set days ago. Scope (`--epic`/`--cards`) and `--review`
+Run limits are explicit per `roll loop go`. `--max-cycles` and `--for` apply to
+THIS invocation only; omitting one means no limit for this run — Roll never
+silently inherits a cap from a prior session's persisted goal, so a flagless
+`roll loop go` can neither be capped nor bricked by a limit you set days ago. Scope (`--epic`/`--cards`) and `--review`
 persist only while the goal is unfinished. When a goal is `complete`, the next
 `roll loop go` archives it under `.roll/loop/goal-archive/`, records
 `goal:archived`, and starts a distinct goal from that invocation's flags. With
@@ -434,23 +272,18 @@ can never make the gate permissive; anything the runner did not record and
 still hash-match fails closed.
 
 For the Roll repository itself, `roll loop go`, `roll loop resume`, and
-`roll loop now` print the runner binary and version before starting autonomous
+`roll loop go` prints the runner binary and version before starting autonomous
 work. They fail loud with `runner_stale_for_repo` if the repo-local
 `@seanyao/roll` package version is newer than the running runner; install or
 publish the local build before resuming autonomous work.
 
-`roll loop go` enforces safety only at cycle boundaries. `--budget <usd>` uses
-the effective run cost ledger and moves the goal to `budget_limited` when the
-budget is reached. An idle or aborted cycle that ran no agent counts as a known
-$0, not as an unknown-cost row. Only a row where an agent actually executed but
-left no parseable usage is recorded as unknown; those still stop conservatively
-rather than being counted as zero. Usage headroom is checked against five-hour
-and weekly windows; by default Roll pauses at 85% and waits for the reset
-window, while `--no-wait` leaves the goal paused for the owner. The recovery
-wait is bounded — a hung usage API cannot stall the session forever; on timeout
-Roll records a `usage_wait_timeout` audit event and leaves the goal paused.
-`--for <duration>` is a wall-clock box: the in-flight cycle finishes, then the
-goal pauses with reason `timebox`.
+`roll loop go` enforces safety only at cycle boundaries. The global backstop is
+the **dead-loop breaker**: after a run of consecutive whole-goal no-progress
+cycles — none of which delivered a card — the goal is STOPPED with a loud ALERT,
+so an unmergeable card can never spin indefinitely and the loop provably halts
+within K cycles. `--for <duration>` is a wall-clock box: the in-flight cycle
+finishes, then the goal pauses with reason `timebox`. `--max-cycles <n>` stops
+after n cycles.
 
 Each safety trip records `goal:gate_tripped`, and `roll loop goal` shows the
 last safety gate reading.
@@ -462,13 +295,13 @@ goal events. The key fields are:
 
 | Field | Meaning |
 |-------|---------|
-| `Status` | `active`, `paused`, `budget_limited`, or `complete`. |
+| `Status` | `active`, `paused`, or `complete` (a historical goal's `budget_limited` reads as `paused`). |
 | `Scope` | All backlog, one epic, or an explicit card list. |
 | `Review` | Completion review policy: `auto`, `hetero`, `self`, or `off`. |
 | `Usage` | Goal cycle count, effective cost, and unknown-cost-row count. |
-| `Limits` | Explicit `--budget`, `--max-cycles`, and `--for` settings. |
-| `Safety gate` | The latest budget, usage, or timebox trip and its reading. |
-| `Last decision` | Why the goal continued, paused, became budget-limited, or completed. |
+| `Limits` | Explicit `--max-cycles` and `--for` settings. |
+| `Safety gate` | The latest timebox or dead-loop-breaker trip and its reading. |
+| `Last decision` | Why the goal continued, paused, or completed. |
 
 When `auto` final review degrades to same-provider review, the status view
 shows the recorded degradation reason from `goal:review_degraded`. When a goal
@@ -1007,8 +840,8 @@ agent into `Connection error` (FIX-230), and env-only agent credentials do not
 depend on the stale tmux session. Each cycle also logs its effective proxy env as
 an `env:` line in `.roll/loop/cron.log`, so an environment-shaped failure is
 readable straight from the log. Other variables still come from the session
-created at `roll loop on` time; if you rotate something exotic, `roll loop off &&
-roll loop on` rebuilds the session fresh.
+created when the tmux session was started; if you rotate something exotic, kill
+that session and let the next `roll loop go` rebuild it fresh.
 
 ### Edit fold
 
@@ -1099,7 +932,7 @@ redirects and captured output stay plain text. To force colour off on a TTY,
 set `NO_COLOR=1` (per [no-color.org](https://no-color.org)):
 
 ```bash
-NO_COLOR=1 roll loop now
+NO_COLOR=1 roll loop go --max-cycles 1
 ```
 
 ### Troubleshooting: no summary appears
@@ -1312,7 +1145,7 @@ so the tmux viewer never looks frozen.
 | 5 | `publish_push` | push branch + open PR (or doc-only merge) | 5 – 30 s |
 | 6 | `cleanup` | env cleanup + emit PR final state + worktree teardown | < 1 s |
 
-> **US-AUTO-044**: the main loop exits after opening the PR and **no longer waits for merge**. The event-backed Delivery Reconciler advances it at cycle boundaries, read paths, or via `roll loop reconcile`; there is no dedicated merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
+> A cycle ends when the PR is open — it does **not** wait for merge. The event-backed Delivery Reconciler advances delivery at cycle boundaries, on read paths, or via `roll loop reconcile`; there is no merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
 
 Idle / failed / aborted cycles only emit the phases they actually entered.
 At cycle exit, the inner runner prints a phase breakdown panel sorted by
@@ -1476,8 +1309,9 @@ doubles as a heartbeat. The cycle runner calls
 roll-meta. Output goes to `~/.shared/roll/push-status.log` (rotated at 1MB, 2
 copies kept).
 
-Because the loop runs on its normal schedule, `status/loop.md` stays **≤35min
-fresh** — the watch prompt always sees recent data. The push is best-effort: a
+`status/loop.md` is refreshed by each cycle, so it is as fresh as the last cycle of
+the last run — not a fixed window. Between runs it does not change, which is itself
+the honest signal: a stale timestamp means nobody has driven the loop since. The push is best-effort: a
 network error, git conflict, or a >60s timeout is logged to push-status.log, the
 process is killed if it hangs, and the cycle continues. No ALERT, no retry.
 
@@ -1502,7 +1336,7 @@ stale. It only reads — it never modifies `seanyao/roll`.
 
 ### Troubleshooting: `status/loop.md` is stale
 
-If the snapshot's timestamp is far older than 35 minutes:
+If the snapshot's timestamp is far older than your last run:
 
 1. Check `~/.shared/roll/push-status.log` — it records every push attempt and
    any timeout or git error.
@@ -1537,7 +1371,7 @@ cron 日志打一条 WARNING 并跳过推送（绝不影响 cycle）。
 用 `${roll_meta_dir}/ops/push-loop-status.sh`。脚本写出 `status/loop.md` 并提交 +
 push 到 roll-meta。输出写到 `~/.shared/roll/push-status.log`（1MB 轮转，保留 2 份）。
 
-因为 loop 按固定节奏运行，`status/loop.md` 始终保持 **≤35min 新鲜**——巡检 prompt 总
+`status/loop.md` 由每个 cycle 刷新,新鲜度就是上一次运行的最后一个 cycle——不是固定窗口。两次运行之间它不变,这本身就是诚实的信号。巡检 prompt 总
 能看到近期数据。推送是 best-effort：网络错误、git 冲突或 >60s 超时都记进
 push-status.log，进程卡住会被 kill，cycle 继续。不设 ALERT，不重试。
 
@@ -1561,7 +1395,7 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 
 ### 排障：`status/loop.md` 不更新
 
-若快照时间戳远早于 35 分钟：
+若快照时间戳远早于你最近一次运行：
 
 1. 看 `~/.shared/roll/push-status.log`——它记录每次推送尝试以及任何超时或 git 错误。
 2. 确认 `roll_meta_dir` 已配置且路径存在（`roll config get roll_meta_dir`）。
@@ -1571,14 +1405,13 @@ IDE）。该 prompt 首次执行做一次全量体检，之后每 15min 轮询�
 ## State Files
 
 Since Phase 2.0, a project's loop state lives **inside the project** at
-`<project>/.roll/loop/`. Only machine-level binding files (launchd runners,
-attach scripts) and the global mute switch stay in `~/.shared/roll/`. See
-[Loop Data Layout](loop-data-layout.md) for the full layout, migration, and
-`roll loop gc`.
+`<project>/.roll/loop/`. Only machine-level files — the attach script and the
+global mute switch — stay in `~/.shared/roll/`. See
+[Loop Data Layout](loop-data-layout.md) for the full layout and `roll loop gc`.
 
 自 Phase 2.0 起，项目的 loop 状态搬进了**项目目录** `<project>/.roll/loop/`。只有机
-器级绑定文件（launchd runner、attach 脚本）和全局静音开关留在 `~/.shared/roll/`。完
-整布局、迁移与 `roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
+器级文件——attach 脚本和全局静音开关——留在 `~/.shared/roll/`。完整布局与
+`roll loop gc` 见 [Loop 数据布局](loop-data-layout.md)。
 
 | File | Content |
 |------|---------|
@@ -1603,17 +1436,57 @@ attach scripts) and the global mute switch stay in `~/.shared/roll/`. See
   the observation window instead of buffering until exit; claude streams over
   its own protocol unchanged.
 
-## Launchd lanes
+## Leftover launchd lanes
 
-Roll owns exactly three launchd jobs per project slug: `com.roll.loop.<slug>`
-(the cycle scheduler), `com.roll.dream.<slug>` (nightly scan) and
-`com.roll.pr.<slug>` (PR inbox). `roll loop on` installs them; `roll loop off`
-uninstalls them AND sweeps any other `com.roll.*.<slug>` plist it finds —
-retired shapes from older versions (ci/alert/brief) once survived for weeks as
-zombies pointing at deleted engines. `roll doctor` lists every `com.roll.*`
-job on the machine with its target directory and load state; a lane whose
-WorkingDirectory no longer exists is marked STALE in red.
+Roll installs no launchd job and owns none. A machine that ran an older version may
+still carry `com.roll.*` plists. A loaded one can still fire and invoke
+`roll loop run-once` — that path stays honest about it, but it is unattended work you
+did not ask for, so clear it. `roll status` / `roll loop status` keep naming leftover
+lanes until you do.
 
-A plist left on disk after a bootstrap failure or a manual `bootout` is **not**
-the same as an armed loop. Always trust `roll loop status` (effective scheduler
-backend) and `launchctl list` over the mere presence of a `.plist` file.
+Roll deliberately does NOT remove them for you: they live in your `~/Library/
+LaunchAgents/`, and silently unloading jobs on your machine is not Roll's call.
+
+Roll 不安装、也不持有任何 launchd 任务。跑过旧版本的机器上可能还留着 `com.roll.*`
+plist。仍然加载着的那种还会触发并调用 `roll loop run-once`——那条路径会如实说明，
+但这属于你没要求过的无人驱动的活，该清掉。清掉之前，`roll status` / `roll loop status`
+会一直提示残留 lane。
+
+Roll 有意**不**替你删:它们在你的 `~/Library/LaunchAgents/` 下,悄悄卸载你机器上的任务
+不是 Roll 该做的决定。
+
+**See what is there / 先看有什么:**
+
+```bash
+roll doctor                          # lists every com.roll.* lane, its target dir, load state
+ls ~/Library/LaunchAgents/com.roll.* # or look directly
+```
+
+**Disarm one lane / 卸载一条:**
+
+```bash
+launchctl bootout gui/$(id -u)/com.roll.loop.<slug>; rm -f ~/Library/LaunchAgents/com.roll.loop.<slug>.plist
+```
+
+`;` rather than `&&` on purpose: a lane that is not loaded makes `bootout` exit
+non-zero, and `&&` would then leave the plist on disk — the exact debris you are
+removing.
+
+这里用 `;` 而不是 `&&` 是有意的:未加载的 lane 会让 `bootout` 以非零退出,用 `&&` 就会
+把 plist 留在盘上 —— 正是你要清的那个垃圾。
+
+**Disarm every roll lane on this machine / 清掉本机所有 roll lane:**
+
+```bash
+for p in ~/Library/LaunchAgents/com.roll.*.plist; do
+  [ -e "$p" ] || continue
+  label=$(basename "$p" .plist)
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+  rm -f "$p"
+done
+```
+
+Then confirm with `roll doctor` — the leftover-lane section disappears when the
+last plist is gone.
+
+之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。

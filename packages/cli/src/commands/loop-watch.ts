@@ -428,8 +428,8 @@ export async function loopWatchCommand(args: string[], deps: LoopWatchDeps = rea
     } else {
       deps.emit(`roll loop watch: no live feed at ${watchPath} yet — the loop has not run a cycle in this project.`);
       deps.emit(`此项目还没有实时输出（${watchPath} 不存在）——loop 尚未在本项目跑过 cycle。`);
-      deps.emit("Start it with `roll loop go` (or `roll loop on`), then watch.");
-      deps.emit("先用 `roll loop go`（或 `roll loop on`）启动，再观察。");
+      deps.emit("Start it with `roll loop go` in this session, then watch.");
+      deps.emit("先在本会话用 `roll loop go` 启动，再观察。");
     }
     return 1;
   }

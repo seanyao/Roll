@@ -30,7 +30,6 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { loopRuntimeDir, projectSlug, sharedRoot } from "./dashboard.js";
-import { buildLoopTestRunnerScript } from "./loop-sched.js";
 
 // ─── presentation (mirrors bin/roll ok/info/warn/err: "[roll] <line>") ────────
 interface Palette {
@@ -355,90 +354,12 @@ function statSafeIsFile(f: string): boolean {
   }
 }
 
-// ─── loop test ──────────────────────────────────────────────────────────────
+// US-LOOP-117: `roll loop test` is gone, and so is `defaultSmokeCmd`. The command
+// smoke-tested the GENERATED launchd runner and hard-required it ("Run 'roll loop
+// on' first to generate it") — a runner nothing can generate any more. Its smoke
+// command builder had no other caller, so keeping it would have left an export that
+// only tests reach: worse than untested, because the tests would keep passing.
+// `roll loop go --max-cycles 1` is the honest way to try the flow end to end.
 
-/** Injectable surface so tests drive paths + a fake runner exec + clock. */
-export interface LoopTestDeps {
-  slug: () => string;
-  projectPath: () => string;
-  sharedRoot: () => string;
-  /** Run the generated test runner (ROLL_LOOP_FORCE=1); returns its exit code. */
-  exec: (runnerPath: string) => number;
-  nowSec: () => number;
-}
-function realTestDeps(): LoopTestDeps {
-  return {
-    slug: () => projectSlug(),
-    projectPath: () => process.cwd(),
-    sharedRoot: () => sharedRoot(),
-    exec: (runner) => {
-      const r = spawnSync("bash", [runner], {
-        stdio: "inherit",
-        env: { ...process.env, ROLL_LOOP_FORCE: "1" },
-      });
-      return r.status ?? 1;
-    },
-    nowSec: () => Math.floor(Date.now() / 1000),
-  };
-}
-
-/** The default smoke command for an agent (mirrors `_loop_test`). */
-export function defaultSmokeCmd(agent: string): string {
-  return `${agentSmokeCommand(agent)}; sleep 10`;
-}
-
-/**
- * `roll loop test [--agent <name>] [--cmd <command>]` — manual smoke gate before
- * a loop-runner change ships (US-PORT-022). TS port of `_loop_test` (10076),
- * re-pointed at the v3 self-contained runner shape: it generates a smoke runner
- * (the {@link buildLoopTestRunnerScript} tmux self-wrap, running the injected
- * command instead of a real cycle), runs it once with ROLL_LOOP_FORCE=1, and
- * reports pass/fail + elapsed. The installed runner is still required (the gate
- * presumes `roll loop on` has been run). `--agent` / `--cmd` injection kept.
- */
-export function loopTestCommand(args: string[] = [], deps: LoopTestDeps = realTestDeps()): number {
-  const slug = deps.slug();
-  const projectPath = deps.projectPath();
-  const loopDir = join(deps.sharedRoot(), "loop");
-  const runner = join(loopDir, `run-${slug}.sh`);
-  if (!existsSync(runner)) {
-    err(`Runner not found: ${runner}`);
-    err("Run 'roll loop on' first to generate it.");
-    return 1;
-  }
-
-  let agent = "claude";
-  let cmd = "";
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--agent") {
-      agent = args[i + 1] ?? "claude";
-      i++;
-    } else if (args[i] === "--cmd") {
-      cmd = args[i + 1] ?? "";
-      i++;
-    }
-  }
-  if (cmd === "") cmd = defaultSmokeCmd(agent);
-
-  const testRunner = join(loopDir, `run-${slug}-test.sh`);
-  mkdirSync(dirname(testRunner), { recursive: true });
-  writeFileSync(testRunner, buildLoopTestRunnerScript({ projectPath, slug, cmd }), { mode: 0o755 });
-
-  info(msg("loop.generating_test_runner_agent", agent));
-  info(msg("loop.starting_smoke_test_agent", agent));
-  info("Watch for: tmux session + terminal popup + stream-json events flowing");
-  info(msg("loop.observing_tmux_session_terminal_popup_stream"));
-
-  const start = deps.nowSec();
-  const exitCode = deps.exec(testRunner);
-  const elapsed = deps.nowSec() - start;
-
-  if (exitCode === 0) {
-    ok(msg("loop.smoke_test_passed_s_agent_smoke", elapsed, agent));
-    return 0;
-  }
-  err(msg("loop.smoke_test_failed_exit_s_agent", exitCode, elapsed, agent));
-  return 1;
-}
 
 export { err as _err, info as _info, ok as _ok, palette as _palette };

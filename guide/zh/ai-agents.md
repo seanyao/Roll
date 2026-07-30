@@ -39,8 +39,8 @@ Workspace 改变。auth/network/quota 等运行时信号只影响本次 trace，
 
 Roll 的 Agent 领域有三个核心角色：
 
-- `supervise` — 项目级协调。guided mode 下可以是你当前对话的 agent；autonomous
-  mode 下由 Roll 解析角色并驱动 loop。
+- `supervise` — 项目级协调。就是你当前对话的那个 agent 会话：它驱动 loop，
+  并可以把其它角色派出去。
 - `execute` — 通过选中的 skill 工作流构建或修复 Story。
 - `evaluate` — 用 fresh session 评审、打分或检查交付。
 
@@ -139,13 +139,14 @@ roll supervisor route --role evaluator --story US-123 --json
 trace 会列出每个候选、eligibility、score reasons、warnings、skipped runtime facts、
 最终选中 agent、策略和来源 binding。
 
-## Guided Mode 与 Autonomous Mode
+## 一个会话，多个角色
 
-Guided mode 下，你可以继续留在当前 agent 窗口里工作。这个会话就是 supervisor
-front door：它可以查看 `roll agent`、执行 migration，并通过 CLI 让 Roll 继续。
+你继续留在已有的那个 agent 窗口里工作。这个会话就是 supervisor front door：
+它可以查看 `roll agent`、执行 migration，并通过 CLI 驱动 loop。
 
-Autonomous mode 下，你不需要手动打开多个 agent 窗口。loop 会解析 `supervise`、
-`story.execute`、`story.evaluate`，再按绑定为各角色 spawn fresh agent session。
+你不需要为每个角色开一个窗口。cycle 需要 `story.execute` 或 `story.evaluate` 时，
+loop 解析绑定并为该角色 spawn 一个 fresh agent session —— 而你所在的会话始终是
+那个做协调的。
 
 ## 支持的 Agent
 
@@ -233,10 +234,9 @@ Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要
 - **Host-guided 成本不可观测。** 状态渲染 `? (host_unobservable)`；Roll 绝不为
   host-guided 子会话工作估算、定价或写零。
 
-**Loop 准入。** loop 没有隐式的宿主主会话，因此 `loop-autonomous + delta-team` 请求会
-被确定性地阻塞为 `host_supervisor_required`——绝不静默转成 solo 或 Full Delta。
-`loop-autonomous + full-delta-team` 是显式 opt-in。默认的自主 solo 交付保持不变。完整的
-host-guided 流程见 `roll-delta-team` 技能。
+**委派总有 Supervisor。** loop 是宿主会话内的 cycle 连续链——它有主会话、有完整的
+sub-agent 能力，与你手动驱动的交付毫无二致。trigger 轴只有一个取值，也不存在准入禁令：
+solo、Delta Team、Full Delta Team 三种拓扑对 loop 一律可用。完整流程见 `roll-delta-team` 技能。
 
 ## 另见
 

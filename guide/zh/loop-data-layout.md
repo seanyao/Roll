@@ -42,7 +42,7 @@ project-local directory.
 
 ## Dream 的 cron 日志
 
-`roll-.dream`（每晚代码健康扫描）的 cron stdout 捕获日志也改为项目本地：
+`roll-.dream`（代码健康扫描）的 stdout 捕获日志也改为项目本地：
 
 | 服务 | 路径 |
 |------|------|
@@ -51,7 +51,7 @@ project-local directory.
 以前放在 `~/.shared/roll/dream/cron-<slug>.log`。项目本地后，删项目即
 清日志，并发项目也不会互相穿插。
 
-`roll-.dream` (the nightly code-health scan) also writes its cron stdout capture
+`roll-.dream` (the code-health scan) also writes its stdout capture
 project-local:
 
 | Service | Path |
@@ -113,43 +113,22 @@ use.
 
 ---
 
-## 自动迁移（7 天双路窗口）
+## 家目录遗留文件
 
-If you upgrade an existing project you do not need to do anything.
+The one-time move of control state out of `~/.shared/roll/loop/` into each
+project's `.roll/loop/` is over. Roll reads the project-local paths only: no
+rewrite on the way in, no fallback to a second location.
 
-如果你升级一个既有项目，**无需任何手动操作**。outer runner 会在下一个 cycle 自动
-迁移老文件。
+把控制状态从 `~/.shared/roll/loop/` 搬进各项目 `.roll/loop/` 的一次性迁移已经结束。
+Roll 只读上表里的项目本地路径:cycle 不会在启动时改写路径,也没有第二个位置可回退。
 
-**How it works:**
+If a project never made the move, copy its files by hand into
+`<project>/.roll/loop/`. Leftover `.migrated-*` markers are still reaped by
+`roll loop gc`.
 
-**工作原理：**
-
-1. Before reading control state, `旧路径迁移 helper <slug>` copies
-   `state` / `ALERT` / `PAUSE` / `mute` from home into the project, then renames
-   each legacy file `<name>.migrated-<timestamp>`.
-2. `旧运行记录迁移 helper` splits the machine-wide `runs.jsonl` by each
-   row's `project` slug into each project's file, then renames the legacy file.
-   Unresolvable rows are left behind so no history is lost.
-3. Migration is idempotent and never overwrites a newer target.
-
-1. 读控制状态之前，`旧路径迁移 helper <slug>` 把 `state` / `ALERT` /
-   `PAUSE` / `mute` 从家目录复制进项目，再把每个老文件改名为
-   `<name>.migrated-<时间戳>`。
-2. `旧运行记录迁移 helper` 把机器级 `runs.jsonl` 按每行的 `project` slug 拆
-   分进各项目文件，再把老文件改名。无法解析的行留在原处，不丢历史。
-3. 迁移幂等，已存在的更新目标永不被覆盖。
-
-**During the 7-day window**, control-plane reads use dual-path lookup
-(`控制状态路径解析器`): project-local first, legacy home as fallback. A
-separate FIX removes the fallback afterward.
-
-**在 7 天窗口期内**，控制平面文件的读取走双路查找（`控制状态路径解析器`）：
-优先项目本地路径，回退到家目录老路径。窗口结束后由单独的 FIX 移除回退。
-
-The `.migrated-*` artifacts are reaped by `roll loop gc` after they age out.
-
-`.migrated-*` 和 `runs.jsonl.migrated-*` 残骸到期后由 `roll loop gc` 回收，家目录不
-会堆积。
+如果某个项目从未迁移过，手工把 `state-<slug>.yaml`、`ALERT-<slug>.md`、
+`PAUSE-<slug>`、`mute-<slug>`，以及机器级 `runs.jsonl` 里属于它的行，复制进
+`<project>/.roll/loop/`。老迁移留下的 `.migrated-*` 标记到期后仍由 `roll loop gc` 回收。
 
 ---
 
@@ -209,27 +188,19 @@ the project.
 现在在 `<project>/.roll/loop/ALERT-<slug>.md`。在项目里跑 `roll loop alert`，或直
 接打开文件。
 
-**How do I migrate manually?**
+**I still have `*.migrated-<timestamp>` files. What are they?**
 
-**怎么手动迁移？**
+**我这里还有 `*.migrated-<时间戳>` 文件，那是什么？**
 
-You never need to — the next cycle does it. To force it, run `roll loop now`
-once.
+Leftovers from the one-time move to this layout. Nothing writes them any more —
+a cycle does not rewrite paths on the way in. `roll loop gc` reaps markers older
+than 7 days, so you can also just leave them alone. If you have a project that
+never made the move, copy the files to their new paths by hand using the table
+above.
 
-正常你永远不需要 —— 下一个 cycle 会做。要不等就触发，跑一次 `roll loop now`（或
-`roll loop test`）；runner 在读状态前会先迁移。
-
-**How do I roll back?**
-
-**怎么回滚？**
-
-Legacy files are kept as `<name>.migrated-<timestamp>` for 7 days. Rename one
-back (drop the suffix) and remove the project-local copy. Roll back within the
-window before `roll loop gc` reaps the markers.
-
-老文件以 `<name>.migrated-<时间戳>` 形式保留 7 天。要回退某个文件，把它改名回去
-（去掉 `.migrated-<时间戳>` 后缀）并删掉项目本地副本。7 天后 `roll loop gc` 会回
-收这些标记，所以请在窗口期内回滚。
+这是一次性迁移到当前布局时留下的。现在已经没有任何东西会再写它们 —— 自动迁移随常驻
+调度一起退役了，cycle 不再在启动时改写路径。`roll loop gc` 仍会回收 7 天以上的标记，
+所以放着不管也可以。如果某个项目从未迁移过，照上面的表把文件手工复制到新路径即可。
 
 See also: [roll loop](loop.md) · [Migration 2.0](migration-2.0.md) · [FAQ](faq.md)
 

@@ -15,28 +15,45 @@ import { join } from "node:path";
 
 export const CONFIG_FACADE_KEYS = ["loop-window", "loop-schedule", "dream-time"];
 
+/**
+ * Keys still stored and printed that nothing reads. Shared with the write path in
+ * config.ts so the two can never disagree about which keys are dead.
+ */
+export const INACTIVE_KEYS = new Set([
+  "loop_active_start",
+  "loop_active_end",
+  "loop_schedule.period_minutes",
+  "loop_schedule.offset_minute",
+  "loop_dream_hour",
+  "loop_dream_minute",
+]);
+
 const HELP = `Usage: roll config <key>                 print current value + source
-       roll config --list                list all loop schedule keys
+       roll config --list                list all loop/dream config keys
        roll config <key> <value> [--global|--project]   set a value
                                                                   统一调度配置
-Read / list / set the loop and dream schedule keys without hand-editing
-yaml. Default write scope is --project (.roll/local.yaml); --global writes
-~/.roll/config.yaml.
-读 / 列 / 写 loop、dream 调度 key，免去手工编辑 yaml。默认写 --project
-（.roll/local.yaml）；--global 写 ~/.roll/config.yaml。
+Read / list / set loop and dream config keys without hand-editing yaml.
+Default write scope is --project (.roll/local.yaml); --global writes
+~/.roll/config.yaml. The window/period/time keys below are INACTIVE — they are
+still stored and printed, but nothing reads them.
+读 / 列 / 写 loop、dream 配置 key，免去手工编辑 yaml。默认写 --project
+（.roll/local.yaml）；--global 写 ~/.roll/config.yaml。下面的窗口/周期/时刻 key
+都已**失效**：仍然会存、会打印，但没有任何东西读它们。
 
 Supported keys (range):
-  loop_active_start              0-23    loop active window start hour
-  loop_active_end                1-24    loop active window end hour
-  loop_schedule.period_minutes   1-1440  fire interval in minutes
-  loop_schedule.offset_minute    0-59    minute offset within the period
-  loop_dream_hour                0-23    dream daily fire hour
-  loop_dream_minute              0-59    dream daily fire minute
+  loop_active_start              0-23    (inactive) stored hour, unread
+  loop_active_end                1-24    (inactive) stored hour, unread
+  loop_schedule.period_minutes   1-1440  (inactive) stored minutes, unread
+  loop_schedule.offset_minute    0-59    (inactive) stored offset, unread
+  loop_dream_hour                0-23    (inactive) stored hour, unread
+  loop_dream_minute              0-59    (inactive) stored minute, unread
 
 Compact facades (write multiple keys at once):
   roll config loop-window 9-18              loop_active_start + loop_active_end
   roll config loop-schedule 30/7            period_minutes + offset_minute
   roll config dream-time 03:20              loop_dream_hour + loop_dream_minute
+  (these three write values nothing reads — delivery is driven by "roll loop go"
+   in a session you open, and a scan by "roll dream run-once")
 
 Language (REFACTOR-049: roll lang → roll config lang):
   roll config lang                          show current language + source
@@ -117,7 +134,11 @@ export function configGetCommand(args: string[]): number {
       const resolved = configResolve(k);
       if (resolved === null) continue;
       const [v, src] = resolved;
-      out.push(`  ${padEndW(k, 30)} = ${padEndW(v, 8)} (${src})`);
+      // codex r10: --list is the THIRD read path. Marking it here too means all
+      // three (single read, --list, write) agree; a row without the marker is a key
+      // something actually reads.
+      const dead = INACTIVE_KEYS.has(k) ? "  [inactive]" : "";
+      out.push(`  ${padEndW(k, 30)} = ${padEndW(v, 8)} (${src})${dead}`);
     }
     process.stdout.write(out.join("\n") + "\n");
     return 0;
@@ -137,5 +158,12 @@ export function configGetCommand(args: string[]): number {
   }
   const [v, src] = resolved;
   process.stdout.write(`${key} = ${v}  (from ${src})\n`);
+  // codex r9: a raw READ of a dead key printed a bare value, reading as effective.
+  // Writes already disclosed it; both directions must.
+  if (INACTIVE_KEYS.has(key)) {
+    // codex r13: matches the language of the value line it annotates (that line is
+    // English-only), so the two never appear as an adjacent bilingual pair.
+    process.stdout.write("note: this key is inactive — nothing reads it\n");
+  }
   return 0;
 }

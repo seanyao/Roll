@@ -8,7 +8,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { RouteDeps, RollEvent } from "@roll/core";
+import type { RouteDeps } from "@roll/core";
+import type { RollEvent } from "@roll/spec";
 import {
   SELFHEAL_AGENT_BUDGET,
   autoRecoverEnabled,

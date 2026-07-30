@@ -164,7 +164,7 @@ describe("US-WS-032 actual Workspace surface inventory", () => {
     expect(cliOperationForArgs("status", [], ambiguous)).toBeUndefined();
   });
 
-  it("splits Workspace doctor and loop fallback read/mutation operations exactly", () => {
+  it("splits Workspace doctor read/mutation operations and excludes retired scheduler routes", () => {
     registerAll();
     const inventory = registeredCliOperations();
     const policies = cliWorkspaceContextPolicies(inventory);
@@ -178,22 +178,15 @@ describe("US-WS-032 actual Workspace surface inventory", () => {
     expect(policies.find((policy) => policy.id === "workspace" && policy.operation === "doctor.repair")?.scope)
       .toBe("workspace_required_mutation");
 
-    for (const args of [["fallback"], ["fallback", "status"]] as const) {
-      expect(cliOperationForArgs("loop", args, loop)?.operation).toBe("fallback.status");
-    }
-    expect(cliOperationForArgs("loop", ["fallback", "start", "--confirm"], loop)?.operation).toBe("fallback.start");
-    expect(cliOperationForArgs("loop", ["fallback", "stop"], loop)?.operation).toBe("fallback.stop");
-    expect(policies.find((policy) => policy.id === "loop" && policy.operation === "fallback.status")?.scope)
-      .toBe("workspace_required_read");
-    for (const operation of ["fallback.start", "fallback.stop"]) {
-      expect(policies.find((policy) => policy.id === "loop" && policy.operation === operation)?.scope)
-        .toBe("workspace_required_mutation");
+    for (const operation of ["on", "off", "now", "fallback", "fallback.status", "fallback.start", "fallback.stop", "test"]) {
+      expect(loop.find((entry) => entry.operation === operation)).toBeUndefined();
+      expect(policies.find((policy) => policy.id === "loop" && policy.operation === operation)).toBeUndefined();
     }
   });
 
   it("excludes retired loop routes from live inventory and the compatibility matrix", () => {
     registerAll();
-    const retired = new Set(["monitor", "attach", "branches", "test-quality-check"]);
+    const retired = new Set(["monitor", "attach", "branches", "test-quality-check", "on", "off", "now", "fallback", "test"]);
     const inventory = registeredCliOperations();
     const matrix = buildRegisteredWorkspaceContextMatrix({
       cliRegistrations: inventory,

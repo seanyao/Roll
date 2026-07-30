@@ -374,8 +374,8 @@ checks:
 ```
 
 These run as CI gates on every PR. Slower-burn issues — dead code, doc staleness,
-structural drift — are caught by `roll-.dream`, the nightly code-health scan that
-files `REFACTOR-XXX` entries back into the backlog.
+structural drift — are caught by `roll-.dream`, the `roll dream run-once`
+code-health scan that files `REFACTOR-XXX` entries back into the backlog.
 
 ### Pre-Commit Hook
 ```bash

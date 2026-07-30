@@ -7,7 +7,7 @@
  * overall crash.
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, afterEach, beforeEach } from "vitest";
@@ -274,5 +274,110 @@ describe("collectDossierState — US-OBS-016 view-model selector", () => {
     expect(snapshot.panels?.charter).toEqual({ status: "paused", data: null, note: "charter locked" });
     expect(snapshot.panels?.skills?.status).toBe("ready");
     expect(snapshot.story.total).toBeGreaterThan(0);
+  });
+});
+
+describe("US-LOOP-118 — the default loop lane is a session, not a launchd lane", () => {
+  it("labels the collected lane `goal`, so no reader treats it as a resident lane", () => {
+    // codex r8: it was labelled source:"launchd", so a FRESH snapshot presented it
+    // as a resident lane — readers counted it, and a stale lastAt painted it red as
+    // a "zombie". Nothing here reads a plist: `running` comes from live.log and
+    // `lastAt` from runs.jsonl, both of which describe a session.
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    writeFileSync(join(loopDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-20T11:00:00Z" })}\n`);
+    writeFileSync(join(loopDir, "live.log"), "streaming\n");
+
+    const snap = collectDossierState(cwd);
+    const lanes = snap.loop?.lanes ?? [];
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0]?.source).toBe("goal");
+    expect(lanes[0]?.running).toBe(true);
+    // codex r10: while streaming, lastAt is the STREAM's write time, not the
+    // previous run's ts from runs.jsonl — the two fields must agree. This file was
+    // just written, so it is "now"; the pairing itself is asserted precisely in the
+    // dedicated case below.
+    expect(lanes[0]?.lastAt).toBeDefined();
+    // No fresh snapshot may claim a launchd lane — that label now means only
+    // "a leftover plist is on disk", which this collector never checks.
+    expect(lanes.some((l) => l.source === "launchd")).toBe(false);
+  });
+
+  it("US-LOOP-118: a STALE live.log is not a running session (codex r9)", () => {
+    // live.log is never deleted, so its existence only proves a cycle once ran.
+    // Mere existence made a long-finished cycle read as "go session open".
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-stale-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    const live = join(loopDir, "live.log");
+    writeFileSync(live, "old activity\n");
+    // ROLL_RENDER_NOW is frozen at 2026-06-20T12:00:00Z; age this log a day.
+    const oldSec = Date.parse("2026-06-19T12:00:00Z") / 1000;
+    utimesSync(live, oldSec, oldSec);
+    // codex r12: with no completed run either, there is no signal at all — so no
+    // lane, rather than an idle one. (The "ran but not streaming" case is covered
+    // separately above.)
+    expect(collectDossierState(cwd).loop?.lanes ?? []).toEqual([]);
+
+    // A log touched inside the freshness window IS a running session.
+    const freshSec = Date.parse("2026-06-20T11:59:00Z") / 1000;
+    utimesSync(live, freshSec, freshSec);
+    expect(collectDossierState(cwd).loop?.lanes?.[0]?.running).toBe(true);
+  });
+
+  it("US-LOOP-118: a live stream's lastAt is its OWN write, not the previous run (codex r10)", () => {
+    // `running` and `lastAt` have to describe the same activity. Taking `running`
+    // from a fresh live.log while `lastAt` still pointed at the previous COMPLETED
+    // run meant a genuinely active stream got painted a zombie as soon as that
+    // earlier run aged past the staleness window.
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-pair-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    // A run that finished a day ago…
+    writeFileSync(join(loopDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-19T12:00:00Z" })}\n`);
+    // …and a stream writing right now (frozen now = 2026-06-20T12:00:00Z).
+    const live = join(loopDir, "live.log");
+    writeFileSync(live, "streaming\n");
+    const freshSec = Date.parse("2026-06-20T11:59:30Z") / 1000;
+    utimesSync(live, freshSec, freshSec);
+
+    const lane = collectDossierState(cwd).loop?.lanes?.[0];
+    expect(lane?.running).toBe(true);
+    // NOT the day-old run — the stream's own write time.
+    expect(lane?.lastAt).toBe("2026-06-20T11:59:30Z");
+
+    // Once the stream goes cold, lastAt falls back to the completed run.
+    const coldSec = Date.parse("2026-06-20T10:00:00Z") / 1000;
+    utimesSync(live, coldSec, coldSec);
+    const cold = collectDossierState(cwd).loop?.lanes?.[0];
+    expect(cold?.running).toBe(false);
+    expect(cold?.lastAt).toBe("2026-06-19T12:00:00Z");
+  });
+
+  it("US-LOOP-118: no signal at all means NO lane, matching the CLI collector (codex r12)", () => {
+    // A project that never ran has nothing to report. Emitting an unconditional
+    // "go session" lane here contradicted the CLI collector's own contract, where a
+    // clean project reports zero lanes rather than an idle one.
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-idle-"));
+    dirs.push(cwd);
+    mkdirSync(join(cwd, ".roll", "loop"), { recursive: true });
+    expect(collectDossierState(cwd).loop?.lanes ?? []).toEqual([]);
+  });
+
+  it("US-LOOP-118: a completed run (no live stream) still yields an idle lane", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "roll-l118-lane-ran-"));
+    dirs.push(cwd);
+    const loopDir = join(cwd, ".roll", "loop");
+    mkdirSync(loopDir, { recursive: true });
+    writeFileSync(join(loopDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-19T12:00:00Z" })}\n`);
+    const lanes = collectDossierState(cwd).loop?.lanes ?? [];
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0]?.running).toBe(false);
+    expect(lanes[0]?.source).toBe("goal");
+    expect(lanes[0]?.lastAt).toBe("2026-06-19T12:00:00Z");
   });
 });

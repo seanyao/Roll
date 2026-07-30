@@ -36,7 +36,7 @@ import { collectToolPanel } from "../lib/tool-panel.js"; // US-TOOL-016
 import { collectLoopHeartbeat, defaultHeartbeatDeps } from "../lib/loop-heartbeat.js";
 import { collectCasting, defaultCastingDeps, type CastingVM } from "../lib/casting.js";
 import { collectGitHooks, defaultGitHooksDeps, type GitHooksVM } from "../lib/git-hooks.js";
-import { launchAgentsDir } from "./loop-sched.js";
+import { launchAgentsDir } from "./loop-state.js";
 import { projectSlug } from "./dashboard.js";
 import { formatStream } from "./loop-fmt.js";
 import { loopDigestHref } from "../lib/morning-report.js";
@@ -569,8 +569,11 @@ export function generateDossierPages(cwd: string, rebuild: boolean): number {
         return storyHasMergeEvidence(rc.git, id) || storyHasSpecPrMergeEvidence(rc, id);
       },
       collectTruthBoard: (_cwd, nowSec) => collectTruthBoardInput(_cwd, nowSec, cycleRows),
-      collectLoopHeartbeat: (_cwd) =>
-        collectLoopHeartbeat(defaultHeartbeatDeps(_cwd, projectSlug(_cwd), launchAgentsDir())),
+      // codex r13: pass the SELECTOR's nowSec so the heartbeat and the live-feed
+      // panel judge the same live.log against the same clock (matters under
+      // ROLL_RENDER_NOW, where Date.now() would disagree with the frozen render time).
+      collectLoopHeartbeat: (_cwd, nowSec) =>
+        collectLoopHeartbeat(defaultHeartbeatDeps(_cwd, projectSlug(_cwd), launchAgentsDir(), nowSec)),
       collectEvidenceFlags: (_cwd, story) => storyEvidenceFlags(_cwd, story as Parameters<typeof storyEvidenceFlags>[1]),
       collectProjects: () => collectProjectsRegistry(),
       collectSkillsPanel: (_cwd, nowSec) => readyPanel(collectSkillsPanel(_cwd), nowSec),

@@ -171,9 +171,9 @@ export function loopEnforceTcrCommand(args: string[], deps: EnforceTcrDeps = rea
       `**Story**: ${storyId}\n` +
       `**Reason**: zero tcr: commits since story start (${startedAt})\n\n` +
       `**Action required** (choose one):\n` +
-      `- Add TCR commits and re-run: \`roll loop now\`\n` +
+      `- Add TCR commits, then drive another cycle: \`roll loop go --cards ${storyId}\`\n` +
       `- Take over manually: \`$roll-build ${storyId}\`\n` +
-      `- Reset and retry: \`roll loop reset\` then \`roll loop now\`\n`,
+      `- Reset and retry: \`roll loop reset\` then \`roll loop go --cards ${storyId}\`\n`,
   );
   deps.notify("roll ⚠ TCR Failed", `${storyId}: no tcr: commits found`);
   return 1;
@@ -264,7 +264,10 @@ export function loopPrecheckCiCommand(args: string[], deps: PrecheckDeps = realP
         `**Failing conclusions**: ${verdict.redConclusions.join(",")}\n\n` +
         `**Action required**:\n` +
         `- Investigate and fix CI: \`gh -R ${slug} run list --commit ${commit}\`\n` +
-        `- After fixing and pushing green commit: \`roll loop now\`\n`,
+        // No storyId here: this gate runs BEFORE a card is picked, so there is nothing
+        // to interpolate. Name the unscoped command rather than a placeholder the
+        // reader would have to fill in (codex r3).
+        `- After fixing and pushing a green commit, drive another cycle: \`roll loop go\`\n`,
     );
     deps.notify("roll ⚠ CI red", `loop refused to build on broken base (${sha8})`);
     return 1;
@@ -367,8 +370,11 @@ export function loopTestQualityCheckRetired(): number {
 }
 
 // FIX-240: live subcommands only — monitor/attach retired under the v3 runner.
-const LOOP_USAGE =
-  "Usage: roll loop <on|off|now|test|status|runs|log|story|events|eval|signals|fmt|mute|unmute|pause|resume|reset|gc>\n";
+// US-LOOP-113 (codex review r3): `on|off|now|fallback` are gone. This string is
+// what a user sees after typing a REMOVED verb, so advertising it here would tell
+// them the command they just tried is valid. Point at the grouped help instead of
+// maintaining a second, drift-prone verb list.
+const LOOP_USAGE = "Usage: roll loop <subcommand>  ·  see `roll loop --help` for the full list\n";
 
 /** Stable unknown-route text reused by bridge-level rejected route guards. */
 export function loopUnknownSubcommandText(sub: string): string {

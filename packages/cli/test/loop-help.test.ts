@@ -5,6 +5,7 @@
  * maintain); every live loop subcommand lands in a band (no verb dropped);
  * EN/中 single-language snapshots.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderLoopHelp } from "../src/lib/loop-help.js";
 import { stripAnsi } from "../src/render.js";
@@ -13,12 +14,48 @@ const help = (lang: "en" | "zh"): string => stripAnsi(renderLoopHelp(lang));
 
 // Every live `roll loop <sub>` arm in commands/index.ts (retired stubs excluded:
 // monitor / attach / branches / test-quality-check just print a redirect).
-const LIVE_SUBCOMMANDS = [
-  "watch", "status", "eval", "story", "runs", "goal", "go", "signals", "log", "events",
-  "alert", "run-once", "fmt", "reconcile", "reconcile-pending", "on", "off", "pause",
-  "resume", "now", "reset", "mute", "unmute", "gc", "test", "notify",
-  "enforce-tcr", "precheck-ci", "hotfix-head-context", "agent-routes", "fallback",
-];
+/**
+ * US-LOOP-113 (codex review r1): the old hand-maintained list had drifted — it
+ * listed verbs that no longer exist and omitted live ones. DERIVE the live set
+ * from the dispatch source instead, so the help can never silently fall behind.
+ */
+const INDEX_SRC = readFileSync(new URL("../src/commands/index.ts", import.meta.url), "utf8");
+// codex review r2: the first attempt anchored on a string that does not exist, so
+// indexOf returned -1, slice(-1) kept only the last character, and the derived set
+// was EMPTY — making the "every live verb is advertised" assertion vacuous. Anchor
+// on the real registration and FAIL LOUD if the anchor ever moves again.
+const LOOP_ANCHOR = 'registerPorted("loop"';
+const anchorAt = INDEX_SRC.indexOf(LOOP_ANCHOR);
+if (anchorAt < 0) throw new Error(`loop dispatch anchor ${LOOP_ANCHOR} not found in commands/index.ts`);
+const LOOP_DISPATCH = INDEX_SRC.slice(anchorAt);
+const DISPATCHED = [...new Set([...LOOP_DISPATCH.matchAll(/args\[0\] === "([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!))];
+if (DISPATCHED.length < 20) throw new Error(`derived only ${DISPATCHED.length} loop subcommands — the scan is broken`);
+
+// Retirement stubs that only print a redirect (US-PORT-007/022) — deliberately
+// not advertised as live verbs.
+const STUBS = new Set(["monitor", "attach", "branches", "test-quality-check"]);
+const LIVE_SUBCOMMANDS = DISPATCHED.filter((s) => !STUBS.has(s));
+
+// US-LOOP-113: these installed, removed, or poked a resident scheduler. They are
+// gone with no stub, so the help must NOT advertise them. `pause`/`resume` are NOT
+// here — PAUSE is a live gate the correction circuit breaker writes automatically,
+// so `resume` is the only supported way out of a paused project.
+const RETIRED_SUBCOMMANDS = ["on", "off", "now", "fallback"];
+
+/**
+ * The verbs actually advertised in the banded help. Scoped to the band LINES, not
+ * the prose — English sentences legally contain words like "on".
+ *
+ * Multi-word entries ("alert list") contribute their first token, which is the
+ * dispatched verb; the sub-verb is dispatched inside it.
+ */
+function advertisedVerbs(out: string): string[] {
+  const bands = out
+    .split("\n")
+    .filter((l) => /^(control|observe|alerts|maintain|internal)\s/.test(l))
+    .map((l) => l.replace(/^\S+\s+/, "").split(" · ").map((v) => v.trim()));
+  return [...new Set(bands.flat().map((v) => v.split(/\s+/)[0]!).filter((v) => v !== ""))];
+}
 
 describe("roll loop --help groups — US-DOSSIER-035", () => {
   it("AC5: four labeled bands in the design order, replacing the flat pipe list", () => {
@@ -37,19 +74,21 @@ describe("roll loop --help groups — US-DOSSIER-035", () => {
 
   it("AC5: the design verbs sit in their assigned band", () => {
     const out = help("en");
-    expect(out).toMatch(/control\s+on --workspace <id\|path> · off \[--all\] · now · pause --workspace <id\|path> · resume --workspace <id\|path> · reset · go --workspace <id\|path> · goal · recover · fallback/);
-    expect(out).toMatch(/observe\s+watch · status \[--workspace <id\|path>\|--all\] · runs · log · events · signals · eval/);
+    expect(out).toMatch(/control\s+go --workspace <id\|path> · goal · pause --workspace <id\|path> · resume --workspace <id\|path> · reset · recover · reconcile --workspace <id\|path>/);
+    expect(out).toMatch(/observe\s+watch · status \[--workspace <id\|path>\|--all\] · runs · log · events · signals · eval · cycles · cycle/);
     expect(out).toMatch(/alerts\s+alert list · alert ack · alert resolve · alert log/);
-    expect(out).toMatch(/maintain\s+gc · fmt · mute · unmute · reconcile --workspace <id\|path> · reconcile-pending/);
+    expect(out).toMatch(/maintain\s+gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list/);
   });
 
-  it("US-WS-016: top-level help exposes Workspace targeting for scheduler controls", () => {
+  it("US-WS-016: surviving controls expose Workspace targeting without reviving scheduler verbs", () => {
     const out = help("en");
-    expect(out).toContain("on --workspace <id|path>");
     expect(out).toContain("pause --workspace <id|path>");
     expect(out).toContain("resume --workspace <id|path>");
     expect(out).toContain("go --workspace <id|path>");
+    expect(out).toContain("reconcile --workspace <id|path>");
     expect(out).toContain("status [--workspace <id|path>|--all]");
+    const advertised = new Set(advertisedVerbs(out));
+    for (const retired of RETIRED_SUBCOMMANDS) expect(advertised.has(retired)).toBe(false);
   });
 
   it("AC5: no live loop subcommand is dropped — each appears somewhere in the help", () => {
@@ -59,24 +98,50 @@ describe("roll loop --help groups — US-DOSSIER-035", () => {
     }
   });
 
-  it("US-LOOP-079m AC1/AC3: --help documents the 3 run-states + dormancy + wake sources", () => {
+  /**
+   * codex r2 on US-LOOP-117: the drift check above only ran ONE WAY — every live
+   * verb must be advertised. Nothing asserted the converse, so `roll loop test`
+   * stayed in the `internal` band for a full card after its implementation was
+   * deleted, advertising a verb that errors out. Both directions now hold.
+   */
+  it("US-LOOP-117: every advertised verb is actually dispatched — no phantom verb", () => {
+    const dispatched = new Set(DISPATCHED);
+    const phantom = advertisedVerbs(help("en")).filter((v) => !dispatched.has(v));
+    expect(phantom, `help advertises verbs that no longer dispatch: ${phantom.join(", ")}`).toEqual([]);
+  });
+
+  it("US-LOOP-113: the retired scheduler verbs are not advertised", () => {
+    // Scope the check to the VERB BANDS, not the prose — English sentences legally
+    // contain words like "on", so scanning free text would false-positive.
+    const advertised = new Set(advertisedVerbs(help("en")));
+    for (const sub of RETIRED_SUBCOMMANDS) {
+      expect(advertised.has(sub), `retired verb "${sub}" must be gone from the bands`).toBe(false);
+    }
+    // Sanity: the check can actually see verbs (guards against an empty scan).
+    expect(advertised.has("go")).toBe(true);
+    expect(advertised.has("status")).toBe(true);
+  });
+
+  it("US-LOOP-113: --help documents the two honest run-states and who drives", () => {
     const en = help("en");
-    // the three states, each named
-    expect(en).toMatch(/states\s+ACTIVE.*DORMANT.*PAUSED/);
-    // DORMANT meaning: lane self-unloads + zero idle records
-    expect(en).toMatch(/DORMANT.*self-unloads.*zero idle records/);
-    // the three wake sources
-    expect(en).toMatch(/wake\s+a DORMANT loop wakes on.*roll command.*dream scan.*PR merge/);
+    // Two states. DORMANT described a lane unloading itself; there is no lane.
+    expect(en).toMatch(/states\s+ACTIVE.*PAUSED/);
+    expect(en).not.toContain("DORMANT");
+    // A tripped breaker also pauses, so the way out must be named.
+    expect(en).toContain("roll loop resume");
+    // And it says plainly that nothing advances without a session.
+    expect(en).toMatch(/drive\s+open an agent session and run roll loop go/);
+    expect(en).toContain("nothing advances on its own");
     const zh = help("zh");
-    expect(zh).toMatch(/状态\s+ACTIVE.*DORMANT.*PAUSED/);
-    expect(zh).toContain("自卸 loop lane");
-    expect(zh).toMatch(/唤醒.*roll 命令.*dream 扫描.*PR 合并/);
+    expect(zh).toMatch(/状态\s+ACTIVE.*PAUSED/);
+    expect(zh).not.toContain("DORMANT");
+    expect(zh).toContain("没有任何东西会自行推进");
   });
 
   it("US-LOOP-079m AC4: EN and 中 each their own block — no inline language mix on the state lines", () => {
     // EN block carries no CJK; 中 block carries the CJK labels.
     expect(/[一-鿿]/.test(help("en"))).toBe(false);
-    expect(help("zh")).toContain("休眠");
+    expect(help("zh")).toContain("已暂停");
   });
 
   it("AC6: EN/中 snapshots (single-language per locale, color scrubbed)", () => {

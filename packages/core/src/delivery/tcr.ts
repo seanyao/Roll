@@ -131,9 +131,9 @@ export function renderTcrAlert(storyId: string, nowStamp: string, startedAt: str
     `**Reason**: zero tcr: commits since story start (${startedAt})`,
     "",
     "**Action required** (choose one):",
-    "- Add TCR commits and re-run: `roll loop now`",
+    `- Add TCR commits, then drive another cycle: \`roll loop go --cards ${storyId}\``,
     `- Take over manually: \`$roll-build ${storyId}\``,
-    "- Reset and retry: `roll loop reset` then `roll loop now`",
+    `- Reset and retry: \`roll loop reset\` then \`roll loop go --cards ${storyId}\``,
     "",
   ].join("\n");
 }

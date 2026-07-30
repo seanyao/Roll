@@ -3,7 +3,7 @@
 exports[`roll status truth summary — US-DOSSIER-035 > AC6: EN/中 snapshots (single-language per locale, color scrubbed) 1`] = `
 "  WARN    main reconciled vs backlog   exit 1
 
-  LOOP      2 loops · 1 running   next 08:55Z
+  LOOP      session-driven · go session open   1 leftover lane(s)
   CYCLE     17 / 3d   12 failed · $0.59
   RELEASE   v3.611.2 staged   pass · f:0 w:44 ?:78 · 366 merged · 214 pending
   STORY     67% attest coverage      fail 0 · unknown 197
@@ -19,7 +19,7 @@ exports[`roll status truth summary — US-DOSSIER-035 > AC6: EN/中 snapshots (s
 exports[`roll status truth summary — US-DOSSIER-035 > AC6: EN/中 snapshots (single-language per locale, color scrubbed) 2`] = `
 "  WARN    主干对账待处理   exit 1
 
-  LOOP      2 个循环 · 1 运行中   下次 08:55Z
+  LOOP      会话驱动 · go 会话进行中   1 个残留 lane
   CYCLE     17 / 3天   12 失败 · $0.59
   RELEASE   v3.611.2 已就绪   pass · f:0 w:44 ?:78 · 366 已合 · 214 待交付
   STORY     67% 验收覆盖      失败 0 · 未知 197

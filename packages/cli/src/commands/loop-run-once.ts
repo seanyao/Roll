@@ -12,12 +12,12 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, branchCanaryVerdict, buildWorkspaceExecutionContext, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, deriveWorkspaceExecutionAuthorities, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, shouldSuppressDormancy, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { EventBus, assessBacklog, branchCanaryVerdict, buildWorkspaceExecutionContext, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, deriveWorkspaceExecutionAuthorities, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason, type WorkspaceMatchEvidence } from "@roll/spec";
-import { createScheduler, isOwnerHeld, launchdLabel, loadExplicitWorkspaceDiscovery, loadWorkspaceDiscovery, readLockOwner, releaseLock } from "@roll/infra";
-import { dormantMarkerPath, resolveLoopRunState, writeDormantMarker } from "./loop-sched.js";
+import { isOwnerHeld, loadExplicitWorkspaceDiscovery, loadWorkspaceDiscovery, readLockOwner, releaseLock } from "@roll/infra";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce } from "../runner/index.js";
 import { clearCardFailure, recordCardFailure } from "../runner/skip-cards.js";
 import { addPendingPublish, removePendingPublish } from "../runner/pending-publish.js";
@@ -60,6 +60,7 @@ import {
   validateRequirementMatchedWorkspace,
 } from "../runner/scoped-route.js";
 import { workspaceRollHome } from "./workspace-target.js";
+import { resolveCurrent } from "./lang.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
   "loop run-once: delivery published — PR open, awaiting reconciliation (Delivery Reconciler advances merge and credits main evidence)\n" +
@@ -615,80 +616,20 @@ export function resetConsecutiveIdle(projectPath: string, slug: string): void {
 
 // ─── US-LOOP-079h2: enter-dormancy decision ──────────────────────────────────
 
-/** Consecutive-idle count that triggers DORMANT. Mirrors PAUSE_THRESHOLD. */
-const DORMANCY_THRESHOLD = 3;
-
 /**
- * Backlog reasons that DO enter DORMANT: no eligible work AND the idle is not
- * temporary. These all have todoCount === 0 (every "stay active" reason —
- * blocked-by-deps / awaiting-merge / merged-pending / skip-listed — has
- * todoCount > 0), so `assessBacklog` returns one of these via the histogram
- * regardless of the open-PR/merged/skip predicates. That is WHY run-once can
- * call `assessBacklog` with DEFAULT opts here: when any todo exists, default
- * opts make it look eligible → hasWork=true → we stay ACTIVE (the conservative
- * behaviour US-LOOP-079k wants); only a genuinely drained backlog dorms.
+ * US-LOOP-115 (codex review r2): does a leftover launchd lane for this project still
+ * exist on disk? Roll installs none, so a hit means an older install left one armed
+ * and it is what invoked this command. Detection only — Roll never touches
+ * LaunchAgents itself; `roll doctor` prints the disarm command.
  */
-const DEEP_SLEEP_REASONS: ReadonlySet<BacklogReason> = new Set<BacklogReason>([
-  "all_done",
-  "backlog_empty",
-  "all_in_progress",
-]);
-
-export type DormancyOutcome = "active" | "dormant" | "dormant_failed";
-
-/**
- * The dormancy decision (US-LOOP-079h2). PURE over its injected deps so the AC
- * matrix is deterministic (no real launchctl / clock / fs). On `>= threshold`
- * consecutive idles with a deep-sleep reason it bootouts the loop lane, writes
- * the DORMANT marker + `loop:dormant` event, and upserts a `dormant_entered`
- * run row (which supersedes the cycle's `idle_no_work` row via readRuns
- * last-wins by (story_id, cycle_id)). A bootout failure degrades to a PAUSE
- * marker + observable `loop:dormant_failed` event and writes NO
- * `dormant_entered` row (never a "row says dormant but lane still armed" split).
- * The wake-epoch guard (AC7) is satisfied without a separate marker: US-LOOP-079i
- * resets the idle counter on rearm, so the first post-wake idle cycle sits below
- * the threshold and cannot re-dorm in the same epoch.
- */
-export async function maybeEnterDormancy(deps: {
-  slug: string;
-  count: number;
-  threshold?: number;
-  resolveState: () => "PAUSED" | "DORMANT" | "ACTIVE";
-  readBacklog: () => string;
-  assess?: (items: BacklogItem[]) => { hasWork: boolean; reason: BacklogReason };
-  scheduler: { dormant: (label: string) => Promise<boolean> };
-  loopLabel: string;
-  now: () => string;
-  emit: (event: Record<string, unknown>) => void;
-  writeDormant: (body: { since: string; reason: BacklogReason }) => void;
-  upsertDormantRun: () => void;
-  writePause: (reason: string) => void;
-}): Promise<DormancyOutcome> {
-  const threshold = deps.threshold ?? DORMANCY_THRESHOLD;
-  if (deps.count < threshold) return "active"; // anti-flap: need N consecutive idles
-  if (deps.resolveState() !== "ACTIVE") return "active"; // already PAUSED/DORMANT (precedence)
-  const assess = deps.assess ?? ((items: BacklogItem[]) => assessBacklog(items));
-  const { hasWork, reason } = assess(parseBacklog(deps.readBacklog()));
-  if (hasWork) return "active";
-  if (shouldSuppressDormancy(reason)) return "active"; // e.g. all_awaiting_merge — PR will merge
-  if (!DEEP_SLEEP_REASONS.has(reason)) return "active"; // e.g. all_blocked_by_deps — deps may complete
-  const since = deps.now();
-  let ok = false;
+export function leftoverLoopLaneLabel(slug: string): string | null {
+  const dir = process.env["_LAUNCHD_DIR"] ?? join(homedir(), "Library", "LaunchAgents");
+  const label = `com.roll.loop.${slug}`;
   try {
-    ok = await deps.scheduler.dormant(deps.loopLabel);
+    return existsSync(join(dir, `${label}.plist`)) ? label : null;
   } catch {
-    ok = false;
+    return null;
   }
-  if (!ok) {
-    // §8 bootout failure → PAUSE fallback + observable alert; NO dormant_entered.
-    deps.writePause(`dormancy bootout failed (reason=${reason})`);
-    deps.emit({ type: "loop:dormant_failed", loop: deps.slug, reason, error: "bootout_failed", ts: Date.parse(since) });
-    return "dormant_failed";
-  }
-  deps.writeDormant({ since, reason });
-  deps.emit({ type: "loop:dormant", loop: deps.slug, reason, since, ts: Date.parse(since) });
-  deps.upsertDormantRun(); // supersedes idle_no_work (readRuns last-wins by key)
-  return "dormant";
 }
 
 export function shouldSuppressGoalChildFailureCounter(input: {
@@ -1034,6 +975,32 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   }
   const cycleId = makeCycleId();
 
+  // A leftover `com.roll.loop.*` plist for this project is debris worth clearing.
+  //
+  // Three rounds of review taught the shape of this message the hard way:
+  //   r15 — it only printed on the IDLE path, so a leftover lane that actually built
+  //         a card said nothing: the loudest case was the silent one.
+  //   r16 — hoisting it here made it LIE, because `roll loop go` runs this command as
+  //         its worker: an owner-started run was told a lane had started it.
+  //   r17 — gating on ROLL_LOOP_GO_WORKER did not fix that either: `--no-tmux` never
+  //         sets it, and in any case the ABSENCE of a flag cannot prove launchd
+  //         provenance.
+  // So it no longer claims provenance at all. It states the fact it can actually
+  // verify — a leftover lane exists — and leaves causation unasserted.
+  if (leftoverLoopLaneLabel(id.slug)) {
+    // codex r18: `resolveCurrent()` (not a hand-rolled resolveLang call) — it also
+    // consults the SAVED `roll config lang`, so a user configured to zh without
+    // ROLL_LANG set gets Chinese. The other resolveLang sites in this file omit that
+    // too; they are pre-existing and out of this card's scope.
+    const noteLang = resolveCurrent();
+    process.stdout.write(
+      noteLang === "zh"
+        ? "loop run-once: 本项目还留着旧版的 launchd lane —— Roll 不再安装定时器。\n" +
+            "  卸载:roll doctor(列出全部 com.roll.* lane 与卸载命令)\n"
+        : "loop run-once: a leftover launchd lane exists for this project — Roll installs no timers.\n" +
+            "  Disarm it: roll doctor (lists every com.roll.* lane and the command to remove it)\n",
+    );
+  }
   // FIX-1209: identity assertion — if the resolved project path contains a cycle
   // worktree marker, identity has drifted despite the preflight guard. Refuse
   // execution with an explicit error (never silently idle/paused).
@@ -1318,9 +1285,10 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   // consulted by the execution path.
   const routeDeps: RouteDeps = (deps.buildRouteDeps ?? buildLoopRouteDeps)(id.path);
 
-  // FIX-220: manual `roll loop now` (ROLL_LOOP_FORCE=1) runs in an interactive
-  // terminal — strip --verbose and --output-format stream-json so the user sees
-  // readable text instead of a JSON flood.
+  // FIX-220: a run marked ROLL_LOOP_FORCE=1 is one an owner is watching in a
+  // terminal — strip --verbose and --output-format stream-json so they see
+  // readable text instead of a JSON flood. (US-LOOP-117: this used to be set for
+  // you by `roll loop now`; that verb is gone, so the owner exports it.)
   const isInteractive = (process.env["ROLL_LOOP_FORCE"] ?? "").trim() !== "";
   let interactiveAgentSpawn = deps.agentSpawn;
   if (interactiveAgentSpawn === undefined && isInteractive) {
@@ -1517,49 +1485,17 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     );
     // idle outcomes are not failures — a no-work cycle is expected behaviour.
     // The consecutive-failure counter is NOT ticked.
-    const idleCount = incrementConsecutiveIdle(id.path, id.slug); // US-LOOP-079h1: idle → increment counter
-    // US-LOOP-079h2: after N consecutive idles with a drained backlog, self-unload
-    // the loop lane (DORMANT) so the loop stops waking / writing idle_no_work.
-    // Best-effort: dormancy must NEVER break the idle cycle.
-    try {
-      const bus = new EventBus();
-      const backlogFile = resolvedBacklogFile(id.path);
-      const nowSec = Math.floor(Date.now() / 1000);
-      const outcome = await maybeEnterDormancy({
-        slug: id.slug,
-        count: idleCount,
-        resolveState: () => resolveLoopRunState(id.path, id.slug, runtimeDir(id.path)),
-        readBacklog: () => (existsSync(backlogFile) ? readFileSync(backlogFile, "utf8") : ""),
-        scheduler: createScheduler(process.platform, { uid: process.getuid?.() ?? 0 }),
-        loopLabel: launchdLabel("loop", id.slug),
-        now: () => new Date().toISOString(),
-        emit: (event) => bus.appendEvent(paths.eventsPath, event as never),
-        writeDormant: (body) => writeDormantMarker(dormantMarkerPath(id.path, id.slug, runtimeDir(id.path)), body),
-        upsertDormantRun: () =>
-          bus.upsertRun(
-            paths.runsPath,
-            { storyId: "", cycleId },
-            buildRunRow(
-              { kind: "append_run", status: "dormant", outcome: mapV2Status("dormant"), cycleId },
-              { cycleId, branch, loop: "ci" as never },
-              nowSec,
-            ),
-          ),
-        writePause: (reason) => {
-          const p = join(runtimeDir(id.path), `PAUSE-${id.slug}`);
-          mkdirSync(dirname(p), { recursive: true });
-          writeFileSync(p, `# loop paused — dormancy bootout failed\n\n${reason}\n`, "utf8");
-        },
-      });
-      if (outcome === "dormant") {
-        process.stdout.write(
-          "loop run-once: backlog drained — entering DORMANT (lane unloaded; no further idle records)\n" +
-            "loop run-once: backlog 抽干——进入休眠(已卸载 lane;此后不再产空转记录)\n",
-        );
-      }
-    } catch {
-      /* dormancy is best-effort — a failure here never breaks the idle cycle */
-    }
+    incrementConsecutiveIdle(id.path, id.slug); // US-LOOP-079h1: idle → increment counter
+    // US-LOOP-115: no dormancy. DORMANT existed because a launchd lane woke every
+    // 30 minutes and had to unload itself once the backlog drained — otherwise it
+    // logged an idle row forever. Roll installs no lane now (`roll loop on` is gone,
+    // US-LOOP-113) and `roll loop go` simply finishes when nothing is pickable, so
+    // there is nothing to unload.
+    //
+    // codex review r2: a machine that ran an OLDER Roll may still carry a leftover
+    // `com.roll.loop.*` lane, and that lane invokes THIS command. Without dormancy
+    // it would keep logging idle rows unattended, so say so on the way out and name
+    // the disarm path rather than letting it accumulate silently.
     return 0;
   }
 

@@ -13,7 +13,7 @@ shared conventions.
 | `ROLL_GLOBAL` | `$ROLL_HOME/conventions/global` | Global convention files (`AGENTS.md`, `CLAUDE.md`, etc.) synced into AI tool directories. |
 | `ROLL_LANG` | unset | Per-process language override for CLI/help/HTML user surfaces. Supported values are `en` and `zh`; when unset, Roll uses the saved config preference or locale detection. |
 | `ROLL_HEARTBEAT_TIMEOUT` | `1800` (seconds) | How long without a heartbeat write before the loop runner treats an inner cycle as orphan and heals state. Raise it if your cycles can legitimately stay quiet longer than 30 minutes. |
-| `ROLL_LOOP_FORCE` | unset | When set to any non-empty value, `roll loop` bypasses the active-window check and the pause file. `roll loop now` and `roll loop test` set this internally; export it manually only when you want a cron-scheduled run to ignore quiet hours. |
+| `ROLL_LOOP_FORCE` | unset | When set to any non-empty value, marks the run as interactive, so a cycle prints readable text instead of a JSON stream. Nothing sets it for you — export it before `roll loop go` and it is forwarded into the tmux worker. It bypasses nothing: there is no active-window check, and PAUSE is bypassed only by `roll loop go --cards <id>`. |
 | `ROLL_LOOP_NO_HEAL` | `0` | Set to `1` to disable post-build CI self-heal and restore fail-fast behaviour. Useful for debugging or when you want to cap autonomous spend per cycle. |
 | `ROLL_LOOP_HEAL_MAX` | `2` | Maximum number of CI self-heal attempts per story after the build commits land. Raise it for noisy CI environments; lower it to fail faster. |
 | `ROLL_PR_MERGE_TIMEOUT` | `600` (seconds) | **Deprecated (US-AUTO-044).** The main loop no longer waits for merge; the Delivery Reconciler advances eligible PRs opportunistically. |
@@ -149,7 +149,7 @@ isolated experimentation):
 ```bash
 export ROLL_HOME="$PWD/.roll-sandbox"
 roll setup
-roll loop now
+roll loop go --max-cycles 1
 ```
 
 Run roll against an alternate convention set without touching `~/.roll`:

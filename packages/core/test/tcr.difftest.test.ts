@@ -38,9 +38,9 @@ describe("frozen: zero-tcr cycle == tcrVerdict failure + renderTcrAlert body", (
     "**Reason**: zero tcr: commits since story start (10 years ago)",
     "",
     "**Action required** (choose one):",
-    "- Add TCR commits and re-run: `roll loop now`",
+    "- Add TCR commits, then drive another cycle: `roll loop go --cards US-X`",
     "- Take over manually: `$roll-build US-X`",
-    "- Reset and retry: `roll loop reset` then `roll loop now`",
+    "- Reset and retry: `roll loop reset` then `roll loop go --cards US-X`",
     "",
   ].join("\n");
 

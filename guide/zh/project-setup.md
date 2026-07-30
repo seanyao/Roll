@@ -67,7 +67,7 @@ roll setup                 # 全机器配置 AI 工具（仅需一次）
 cd my-project
 roll init                  # 诊断并路由该项目
 roll next                  # 接续 design/apply/repair/migrate/loop/status
-roll loop on               # 开启自主执行
+roll loop go               # 在本会话里推进 backlog
 ```
 
 `roll setup` 会为本机已安装的 AI 工具同步约定。Agent 语义写在

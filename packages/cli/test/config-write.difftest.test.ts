@@ -36,10 +36,20 @@ function freshSandbox(): Sandbox {
 }
 
 function tsCfg(sb: Sandbox, args: string[]): { status: number; stdout: string; stderr: string } {
-  const save = { HOME: process.env["HOME"], ROLL_HOME: process.env["ROLL_HOME"], NO_COLOR: process.env["NO_COLOR"] };
+  const save = {
+    HOME: process.env["HOME"],
+    ROLL_HOME: process.env["ROLL_HOME"],
+    NO_COLOR: process.env["NO_COLOR"],
+    ROLL_LANG: process.env["ROLL_LANG"],
+  };
   process.env["HOME"] = sb.home;
   process.env["ROLL_HOME"] = join(sb.home, ".roll");
   process.env["NO_COLOR"] = "1";
+  // US-LOOP-120: the inactive-key notes follow the locale, so a frozen value is only
+  // portable with the language PINNED — otherwise this passes on an en box and fails
+  // under ROLL_LANG=zh or in CI. Same class of trap this repo hit with TZ. The
+  // `finally` below restores every key in `save`, so adding it here is enough.
+  process.env["ROLL_LANG"] = "en";
   const saveCwd = process.cwd();
   process.chdir(sb.proj);
   const outChunks: string[] = [];
@@ -103,25 +113,25 @@ const CASES: Case[] = [
 function frozen(c: Case): { status: number; stdout: string; stderr: string; fileContent: string | null } {
   switch (c.name) {
     case "flat global write":
-      return { status: 0, stdout: "[roll] ✓ set loop_dream_hour = 5 in <HOME>/.roll/config.yaml\n", stderr: "", fileContent: "loop_dream_hour: 5\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop_dream_hour = 5 in <HOME>/.roll/config.yaml\nnote: this key is inactive — nothing reads it\n", stderr: "", fileContent: "loop_dream_hour: 5\n" };
     case "nested project write (default scope)":
-      return { status: 0, stdout: "[roll] ✓ set loop_schedule.period_minutes = 30 in .roll/local.yaml\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop_schedule.period_minutes = 30 in .roll/local.yaml\nnote: this key is inactive — nothing reads it\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
     case "nested project write (explicit --project)":
-      return { status: 0, stdout: "[roll] ✓ set loop_active_start = 9 in .roll/local.yaml\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop_active_start = 9 in .roll/local.yaml\nnote: this key is inactive — nothing reads it\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n" };
     case "loop-window facade":
-      return { status: 0, stdout: "[roll] ✓ set loop-window = 9-18 in .roll/local.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n  loop_active_end: 18\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop-window = 9-18 in .roll/local.yaml\nnote: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`\n", stderr: "", fileContent: "loop_schedule:\n  loop_active_start: 9\n  loop_active_end: 18\n" };
     case "loop-schedule facade with offset":
-      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 45/7 in .roll/local.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 45\n  offset_minute: 7\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 45/7 in .roll/local.yaml\nnote: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 45\n  offset_minute: 7\n" };
     case "loop-schedule facade no offset":
-      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 30 in .roll/local.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
+      return { status: 0, stdout: "[roll] ✓ set loop-schedule = 30 in .roll/local.yaml\nnote: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles\n", stderr: "", fileContent: "loop_schedule:\n  period_minutes: 30\n" };
     case "dream-time facade":
-      return { status: 0, stdout: "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml\nrun `roll loop on` to apply\n", stderr: "", fileContent: "loop_dream_hour: 3\nloop_dream_minute: 20\n" };
+      return { status: 0, stdout: "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml\nnote: nothing reads this — run `roll dream run-once` when you want a scan\n", stderr: "", fileContent: "loop_dream_hour: 3\nloop_dream_minute: 20\n" };
     case "loop-window read default":
-      return { status: 0, stdout: "loop-window: 0-24 (from default)\n", stderr: "", fileContent: null };
+      return { status: 0, stdout: "loop-window: 0-24 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "loop-schedule read default":
-      return { status: 0, stdout: "loop-schedule: every 60min (offset :0) (from default)\n", stderr: "", fileContent: null };
+      return { status: 0, stdout: "loop-schedule: 60min / offset :0 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "dream-time read default":
-      return { status: 0, stdout: "dream-time: 03:00 (from default)\n", stderr: "", fileContent: null };
+      return { status: 0, stdout: "dream-time: 03:00 (from default) — inactive, nothing reads this\n", stderr: "", fileContent: null };
     case "above max":
       return { status: 2, stdout: "", stderr: "[roll] config: 'loop_dream_hour' must be <= 23 (got 99)\n[roll] config：'loop_dream_hour' 必须 <= 23（收到 99）\n", fileContent: null };
     case "non-integer":

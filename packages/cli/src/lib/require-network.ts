@@ -113,7 +113,10 @@ export function networkNeeds(command: string, args: readonly string[]): string |
       // it must NOT be gated by the connectivity check.
       const sub = args[0];
       if (sub === "go") return "roll loop go";
-      if (sub === "now") return "roll loop now";
+      // US-LOOP-113 (codex review r7): `now` is gone. Leaving it gated meant an
+      // offline user typing a REMOVED verb hit a connectivity failure instead of the
+      // plain unknown-subcommand answer — a misleading error for a command that no
+      // longer exists.
       // `run-once` runs its OWN per-cycle guard (it needs the project path +
       // ALERT mirroring), so the central gate skips it to avoid a double check.
       return null;

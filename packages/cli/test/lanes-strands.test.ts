@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { cycleStep, initialCycleState, type CycleContext, type CycleEvent } from "@roll/core";
 import { AGENT_CAPACITY_LEASE_SCHEMA } from "@roll/spec";
 import { lanesSection } from "../src/commands/doctor.js";
-import { launchAgentsDir, listRollLaneLabels } from "../src/commands/loop-sched.js";
+import { launchAgentsDir, listRollLaneLabels } from "../src/commands/loop-state.js";
 
 const dirs: string[] = [];
 afterAll(() => {

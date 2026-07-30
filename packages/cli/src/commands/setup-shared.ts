@@ -409,12 +409,9 @@ default_language: zh
 default_project_type: fullstack
 editor: \${EDITOR:-vim}
 
-# Loop schedule (24h format, machine local timezone)
-# Minute fields auto-derive from project path hash when omitted — avoids contention across projects.
-# active_start/active_end moved to per-project .roll/local.yaml loop_schedule block (default 0/24).
-# loop_minute: 5        # omit to auto-derive from project hash
-loop_dream_hour: 3
-# loop_dream_minute: 10 # omit to auto-derive
+# Delivery is driven by \`roll loop go\` in an agent session you open; Roll installs
+# no timers. These schedule keys are kept for compatibility but NOTHING READS THEM —
+# \`roll config --list\` marks them [inactive]. A fresh config no longer seeds one.
 `;
 
 function firstInstalledAgent(): string | null {

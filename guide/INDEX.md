@@ -16,7 +16,7 @@
 | guide/en/context.md | Context Engineering | guide | 2026-07-24 |
 | guide/en/context-ape-migration.md | Migrating APE Context to Roll | guide | 2026-07-24 |
 | guide/en/conventions.md | Roll — Conventions & AGENTS.md | guide | 2026-07-02 |
-| guide/en/dream.md | roll-.dream — Nightly Code Health Scanner | guide | 2026-05-19 |
+| guide/en/dream.md | roll-.dream — Code Health Scanner | guide | 2026-05-19 |
 | guide/en/faq.md | Roll FAQ | guide | 2026-07-02 |
 | guide/en/getting-started.md | Roll — Getting Started | guide | 2026-06-08 |
 | guide/en/installation.md | Roll — Installation & Updates | guide | 2026-05-19 |
@@ -48,7 +48,7 @@
 | guide/zh/context.md | Context Engineering | guide | 2026-07-24 |
 | guide/zh/context-ape-migration.md | 从 APE Context 迁移到 Roll | guide | 2026-07-24 |
 | guide/zh/conventions.md | Roll — 约定与 AGENTS.md | guide | 2026-07-02 |
-| guide/zh/dream.md | roll-.dream — 夜间代码健康巡检 | guide | 2026-05-19 |
+| guide/zh/dream.md | roll-.dream — 代码健康巡检 | guide | 2026-05-19 |
 | guide/zh/faq.md | Roll 常见问题 | guide | 2026-07-02 |
 | guide/zh/getting-started.md | Roll — 快速上手 | guide | 2026-06-08 |
 | guide/zh/installation.md | Roll — 安装与更新 | guide | 2026-05-19 |

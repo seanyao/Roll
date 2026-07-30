@@ -4,15 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildLoopRunnerScript,
-  LOOP_ON_USAGE,
-  loopOnCommand,
   loopPauseCommand,
   loopResumeCommand,
   loopWorkspaceStatusCommand,
-  writeDormantMarker,
   type LoopSchedDeps,
-} from "../src/commands/loop-sched.js";
+} from "../src/commands/loop-state.js";
 import type { BacklogTargetDecision } from "../src/commands/backlog-target.js";
 import { loopGoCommand, planGoTmuxCommands, type LoopGoDeps, type StartTmuxInput } from "../src/commands/loop-go.js";
 import { loopRunOnceCommand, workspaceBranchCanaryTrips } from "../src/commands/loop-run-once.js";
@@ -24,7 +20,6 @@ import { executeSetupCommand } from "../src/runner/setup-handlers.js";
 import { WorkspaceRegistry } from "@roll/infra";
 import { readLeases, setLease, type RouteDeps } from "@roll/core";
 import { REPOSITORY_BINDING_V1, WORKSPACE_MANIFEST_V1, repositoryIdFromRemote } from "@roll/spec";
-import { workspaceSchedulerPaths } from "../src/lib/operating-mode.js";
 
 const dirs: string[] = [];
 
@@ -118,30 +113,12 @@ function target(workspaceId: string, workspaceRoot: string): BacklogTargetDecisi
   };
 }
 
-function schedulerDeps(
-  roots: Readonly<Record<string, string>>,
+function stateDeps(
   resolveTarget: (args: readonly string[], operation: "read" | "mutation") => BacklogTargetDecision,
-  armed: (label: string) => boolean = () => true,
-): { readonly deps: LoopSchedDeps; readonly calls: string[]; readonly shared: string; readonly launchd: string } {
-  const shared = workspaceRoot("shared");
-  const launchd = workspaceRoot("launchd");
-  const calls: string[] = [];
+): LoopSchedDeps {
   return {
-    shared,
-    launchd,
-    calls,
-    deps: {
-      identity: () => Promise.reject(new Error("legacy identity must not be used")),
-      uid: () => 501,
-      sharedRoot: () => shared,
-      launchdDir: () => launchd,
-      resolveTarget,
-      scheduler: {
-        wake: (label, plist) => (calls.push(`wake ${label} ${plist}`), Promise.resolve(true)),
-        dormant: (label) => (calls.push(`dormant ${label}`), Promise.resolve(true)),
-        isArmed: (label) => (calls.push(`isArmed ${label}`), Promise.resolve(armed(label))),
-      },
-    },
+    identity: () => Promise.reject(new Error("legacy identity must not be used")),
+    resolveTarget,
   };
 }
 
@@ -149,7 +126,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("US-WS-016 Workspace scheduler contract", () => {
+describe("US-WS-016 Workspace session-driven execution contract", () => {
   it("pauses a Workspace loop when aggregate branch pressure exceeds the canary threshold", () => {
     const root = workspaceRoot("workspace-canary");
     const runtimeRoot = join(root, "runtime");
@@ -288,194 +265,49 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     expect(existsSync(join(runtimeRoot, "story-leases.json"))).toBe(false);
   });
 
-  it("renders loop on help before target resolution or scheduler mutation", async () => {
-    const fixture = schedulerDeps({}, () => {
-      throw new Error("help must not resolve a target");
-    });
-    let stdout = "";
-    const original = process.stdout.write.bind(process.stdout);
-    // @ts-expect-error capture-only
-    process.stdout.write = (chunk: string | Uint8Array): boolean => (stdout += String(chunk), true);
-    try {
-      expect(await loopOnCommand(["--help"], fixture.deps)).toBe(0);
-    } finally {
-      process.stdout.write = original;
-    }
-    expect(stdout).toBe(`${LOOP_ON_USAGE}\n`);
-    expect(stdout).toContain("--workspace <id|path>");
-  });
-
-  it("derives disjoint runtime, event, lock and pause paths from immutable Workspace identity", () => {
-    const alpha = workspaceSchedulerPaths({ workspaceId: "ws-alpha", workspaceRoot: workspaceRoot("alpha") });
-    const beta = workspaceSchedulerPaths({ workspaceId: "ws-beta", workspaceRoot: workspaceRoot("beta") });
-
-    expect(alpha).toMatchObject({
-      workspaceId: "ws-alpha",
-      runtimeRoot: join(alpha.workspaceRoot, "runtime"),
-      eventsPath: join(alpha.workspaceRoot, "runtime", "events.ndjson"),
-      runsPath: join(alpha.workspaceRoot, "runtime", "runs.jsonl"),
-      cycleLockPath: join(alpha.workspaceRoot, "runtime", "locks", "cycle.lock"),
-      pauseMarkerPath: join(alpha.workspaceRoot, "runtime", "PAUSE-ws-alpha"),
-    });
-    const betaValues = new Set(Object.values(beta));
-    expect(Object.values(alpha).some((value) => betaValues.has(value))).toBe(false);
-  });
-
-  it("generates a Workspace runner that binds run-once to one target and never writes repo-local .roll state", () => {
-    const root = workspaceRoot("runner");
-    const script = buildLoopRunnerScript({
-      projectPath: root,
-      slug: "ws-alpha",
-      workspaceId: "ws-alpha",
-      runtimeRoot: join(root, "runtime"),
-      activeStart: 0,
-      activeEnd: 24,
-      rollBin: "/tmp/roll",
-    });
-
-    expect(script).toContain(`PROJECT='${root}'`);
-    expect(script).toContain(`RT='${join(root, "runtime")}'`);
-    expect(script).toContain("export ROLL_WORKSPACE='ws-alpha'");
-    expect(script).toContain(`export ROLL_PROJECT_RUNTIME_DIR='${join(root, "runtime")}'`);
-    expect(script).toContain(`export ROLL_WORKSPACE_BACKLOG_PATH='${join(root, "backlog", "index.md")}'`);
-    expect(script).toContain("loop run-once --workspace 'ws-alpha'");
-    expect(script).not.toContain(`${root}/.roll/loop`);
-  });
-
-  it("quotes adversarial Workspace and runtime paths without executing shell syntax", () => {
-    const root = workspaceRoot("runner-shell-safe");
-    const project = join(root, "workspace-$(touch project-dollar)-`touch project-tick`-'\"");
-    const runtime = join(root, "runtime-$(touch runtime-dollar)-`touch runtime-tick`-'\"");
-    mkdirSync(project, { recursive: true });
-    const runner = join(root, "runner.sh");
-    writeFileSync(runner, buildLoopRunnerScript({
-      projectPath: project,
-      slug: "ws-alpha",
-      workspaceId: "ws-alpha",
-      runtimeRoot: runtime,
-      activeStart: 0,
-      activeEnd: 24,
-      rollBin: "/usr/bin/true",
-    }));
-
-    execFileSync("/bin/bash", [runner], {
-      cwd: root,
-      env: { ...process.env, ROLL_LOOP_FORCE: "1", ROLL_TMUX_BIN: "/usr/bin/false" },
-    });
-
-    expect(existsSync(join(runtime, "cron.log"))).toBe(true);
-    expect(existsSync(join(root, "project-dollar"))).toBe(false);
-    expect(existsSync(join(root, "project-tick"))).toBe(false);
-    expect(existsSync(join(root, "runtime-dollar"))).toBe(false);
-    expect(existsSync(join(root, "runtime-tick"))).toBe(false);
-  });
-
-  it("installs independent scheduler identities and only mutates the selected Workspace", async () => {
-    const alpha = workspaceRoot("alpha-on");
-    const beta = workspaceRoot("beta-on");
-    const roots = { "ws-alpha": alpha, "ws-beta": beta };
-    const fixture = schedulerDeps(roots, (args) => {
-      const id = args[args.indexOf("--workspace") + 1] ?? "";
-      return target(id, roots[id as keyof typeof roots] ?? "");
-    });
-
-    expect(await loopOnCommand(["--workspace", "ws-alpha"], fixture.deps)).toBe(0);
-    expect(await loopOnCommand(["--workspace", "ws-beta"], fixture.deps)).toBe(0);
-
-    expect(fixture.calls).toContainEqual(expect.stringContaining("com.roll.loop.ws-alpha"));
-    expect(fixture.calls).toContainEqual(expect.stringContaining("com.roll.loop.ws-beta"));
-    expect(readFileSync(join(fixture.shared, "loop", "run-ws-alpha.sh"), "utf8")).toContain(
-      `ROLL_PROJECT_RUNTIME_DIR='${join(alpha, "runtime")}'`,
-    );
-    expect(readFileSync(join(fixture.shared, "loop", "run-ws-beta.sh"), "utf8")).toContain(
-      `ROLL_PROJECT_RUNTIME_DIR='${join(beta, "runtime")}'`,
-    );
-  });
-
-  it("atomically wakes a dormant Workspace without leaving an armed dormant marker", async () => {
-    const root = workspaceRoot("dormant-on");
-    const paths = workspaceSchedulerPaths({ workspaceId: "ws-alpha", workspaceRoot: root });
-    mkdirSync(paths.runtimeRoot, { recursive: true });
-    writeDormantMarker(paths.dormantMarkerPath, { since: "2026-07-21T00:00:00Z", reason: "idle" });
-    const fixture = schedulerDeps({ "ws-alpha": root }, () => target("ws-alpha", root));
-
-    expect(await loopOnCommand(["--workspace", "ws-alpha"], fixture.deps)).toBe(0);
-
-    expect(existsSync(paths.dormantMarkerPath)).toBe(false);
-    expect(existsSync(join(paths.runtimeRoot, ".waking-ws-alpha"))).toBe(false);
-    expect(readFileSync(paths.eventsPath, "utf8")).toContain('"type":"loop:woke"');
-    expect(fixture.calls).toContain("isArmed com.roll.loop.ws-alpha");
-  });
-
-  it("recovers an orphan Workspace wake claim and records the wake before cleanup", async () => {
-    const root = workspaceRoot("orphan-waking-on");
-    const paths = workspaceSchedulerPaths({ workspaceId: "ws-alpha", workspaceRoot: root });
-    mkdirSync(paths.runtimeRoot, { recursive: true });
-    writeFileSync(join(paths.runtimeRoot, ".waking-ws-alpha"), "orphan\n");
-    const fixture = schedulerDeps({ "ws-alpha": root }, () => target("ws-alpha", root));
-
-    expect(await loopOnCommand(["--workspace", "ws-alpha"], fixture.deps)).toBe(0);
-
-    expect(existsSync(join(paths.runtimeRoot, ".waking-ws-alpha"))).toBe(false);
-    expect(readFileSync(paths.eventsPath, "utf8")).toContain('"type":"loop:woke"');
-  });
-
-  it("restores Workspace dormancy when scheduler wake fails", async () => {
-    const root = workspaceRoot("dormant-on-fail");
-    const paths = workspaceSchedulerPaths({ workspaceId: "ws-alpha", workspaceRoot: root });
-    mkdirSync(paths.runtimeRoot, { recursive: true });
-    writeDormantMarker(paths.dormantMarkerPath, { since: "2026-07-21T00:00:00Z", reason: "idle" });
-    const fixture = schedulerDeps({ "ws-alpha": root }, () => target("ws-alpha", root), () => false);
-    fixture.deps.scheduler.wake = () => Promise.resolve(false);
-
-    expect(await loopOnCommand(["--workspace", "ws-alpha"], fixture.deps)).toBe(1);
-
-    expect(existsSync(paths.dormantMarkerPath)).toBe(true);
-    expect(existsSync(join(paths.runtimeRoot, ".waking-ws-alpha"))).toBe(false);
-    expect(existsSync(paths.eventsPath)).toBe(false);
-  });
-
   it("pauses and resumes one Workspace without changing another Workspace runtime", async () => {
     const alpha = workspaceRoot("alpha-pause");
     const beta = workspaceRoot("beta-pause");
     const roots = { "ws-alpha": alpha, "ws-beta": beta };
-    const fixture = schedulerDeps(roots, (args) => {
+    const deps = stateDeps((args) => {
       const id = args[args.indexOf("--workspace") + 1] ?? "";
       return target(id, roots[id as keyof typeof roots] ?? "");
     });
-    const alphaPaths = workspaceSchedulerPaths({ workspaceId: "ws-alpha", workspaceRoot: alpha });
-    const betaPaths = workspaceSchedulerPaths({ workspaceId: "ws-beta", workspaceRoot: beta });
-    mkdirSync(betaPaths.runtimeRoot, { recursive: true });
-    writeFileSync(betaPaths.pauseMarkerPath, "unchanged\n", { flag: "a" });
+    const alphaRuntime = join(alpha, "runtime");
+    const betaRuntime = join(beta, "runtime");
+    const alphaPause = join(alphaRuntime, "PAUSE-ws-alpha");
+    const betaPause = join(betaRuntime, "PAUSE-ws-beta");
+    mkdirSync(betaRuntime, { recursive: true });
+    writeFileSync(betaPause, "unchanged\n", { flag: "a" });
 
-    expect(await loopPauseCommand(["--workspace", "ws-alpha"], fixture.deps)).toBe(0);
-    expect(existsSync(alphaPaths.pauseMarkerPath)).toBe(true);
-    expect(readFileSync(betaPaths.pauseMarkerPath, "utf8")).toBe("unchanged\n");
+    expect(await loopPauseCommand(["--workspace", "ws-alpha"], deps)).toBe(0);
+    expect(existsSync(alphaPause)).toBe(true);
+    expect(readFileSync(betaPause, "utf8")).toBe("unchanged\n");
 
-    writeFileSync(join(alphaPaths.runtimeRoot, "consecutive-fails"), "3", { flag: "a" });
-    expect(await loopResumeCommand(["--workspace", "ws-alpha"], fixture.deps)).toBe(0);
-    expect(existsSync(alphaPaths.pauseMarkerPath)).toBe(false);
-    expect(readFileSync(join(alphaPaths.runtimeRoot, "consecutive-fails"), "utf8")).toBe("0");
-    expect(readFileSync(betaPaths.pauseMarkerPath, "utf8")).toBe("unchanged\n");
+    writeFileSync(join(alphaRuntime, "consecutive-fails"), "3", { flag: "a" });
+    expect(await loopResumeCommand(["--workspace", "ws-alpha"], deps)).toBe(0);
+    expect(existsSync(alphaPause)).toBe(false);
+    expect(readFileSync(join(alphaRuntime, "consecutive-fails"), "utf8")).toBe("0");
+    expect(readFileSync(betaPause, "utf8")).toBe("unchanged\n");
   });
 
   it("renders --all as a read-only aggregate over isolated Workspace state", async () => {
     const alpha = workspaceRoot("alpha-status");
     const beta = workspaceRoot("beta-status");
-    const alphaPaths = workspaceSchedulerPaths({ workspaceId: "ws-alpha", workspaceRoot: alpha });
-    const betaPaths = workspaceSchedulerPaths({ workspaceId: "ws-beta", workspaceRoot: beta });
-    mkdirSync(alphaPaths.runtimeRoot, { recursive: true });
-    mkdirSync(betaPaths.runtimeRoot, { recursive: true });
-    writeFileSync(alphaPaths.pauseMarkerPath, "paused\n", { flag: "a" });
+    const alphaRuntime = join(alpha, "runtime");
+    const betaRuntime = join(beta, "runtime");
+    mkdirSync(alphaRuntime, { recursive: true });
+    mkdirSync(betaRuntime, { recursive: true });
+    writeFileSync(join(alphaRuntime, "PAUSE-ws-alpha"), "paused\n", { flag: "a" });
     writeFileSync(
-      join(alphaPaths.runtimeRoot, "events.ndjson"),
+      join(alphaRuntime, "events.ndjson"),
       `${JSON.stringify({ type: "workspace:waiting_capacity", workspaceId: "ws-alpha", storyId: "US-A", cycleId: "cycle-a", spawnId: "spawn-a", agent: "codex", model: "gpt", retryAt: 1_800_000_000_000, contenders: ["codex"], suspect: false, ts: 1 })}\n`,
     );
     writeFileSync(
-      join(betaPaths.runtimeRoot, "events.ndjson"),
+      join(betaRuntime, "events.ndjson"),
       `${JSON.stringify({ type: "workspace:capacity_acquired", workspaceId: "ws-beta", storyId: "US-B", cycleId: "cycle-b", spawnId: "spawn-b", agent: "claude", model: "sonnet", ts: 1 })}\n`,
     );
-    const fixture = schedulerDeps({ "ws-alpha": alpha, "ws-beta": beta }, (_args, operation) => {
+    const deps = stateDeps((_args, operation) => {
       expect(operation).toBe("read");
       return {
         ok: true,
@@ -484,7 +316,7 @@ describe("US-WS-016 Workspace scheduler contract", () => {
           { workspaceId: "ws-beta", workspaceRoot: beta, canonicalRoot: beta, backlogPath: join(beta, "backlog", "index.md") },
         ],
       };
-    }, (label) => !label.includes("beta"));
+    });
     let stdout = "";
     const previousLang = process.env["ROLL_LANG"];
     const original = process.stdout.write.bind(process.stdout);
@@ -492,27 +324,20 @@ describe("US-WS-016 Workspace scheduler contract", () => {
     process.stdout.write = (chunk: string | Uint8Array): boolean => (stdout += String(chunk), true);
     try {
       process.env["ROLL_LANG"] = "en";
-      expect(await loopWorkspaceStatusCommand(["--all"], fixture.deps)).toBe(0);
-      expect(stdout).toContain(`ws-alpha  paused  armed  ${alphaPaths.runtimeRoot}  capacity=waiting agent=codex model=gpt retry=2027-01-15T08:00:00.000Z`);
-      expect(stdout).toContain(`ws-beta  active  unarmed  ${betaPaths.runtimeRoot}  capacity=acquired agent=claude model=sonnet`);
+      expect(await loopWorkspaceStatusCommand(["--all"], deps)).toBe(0);
+      expect(stdout).toContain(`ws-alpha  paused  session-driven  ${alphaRuntime}  capacity=waiting agent=codex model=gpt retry=2027-01-15T08:00:00.000Z`);
+      expect(stdout).toContain(`ws-beta  active  session-driven  ${betaRuntime}  capacity=acquired agent=claude model=sonnet`);
 
       stdout = "";
       process.env["ROLL_LANG"] = "zh";
-      expect(await loopWorkspaceStatusCommand(["--all"], fixture.deps)).toBe(0);
-      expect(stdout).toContain(`ws-alpha  paused  armed  ${alphaPaths.runtimeRoot}  容量=等待 agent=codex model=gpt retry=2027-01-15T08:00:00.000Z`);
-      expect(stdout).toContain(`ws-beta  active  unarmed  ${betaPaths.runtimeRoot}  容量=已获取 agent=claude model=sonnet`);
+      expect(await loopWorkspaceStatusCommand(["--all"], deps)).toBe(0);
+      expect(stdout).toContain(`ws-alpha  paused  session-driven  ${alphaRuntime}  容量=等待 agent=codex model=gpt retry=2027-01-15T08:00:00.000Z`);
+      expect(stdout).toContain(`ws-beta  active  session-driven  ${betaRuntime}  容量=已获取 agent=claude model=sonnet`);
     } finally {
       process.stdout.write = original;
       if (previousLang === undefined) delete process.env["ROLL_LANG"];
       else process.env["ROLL_LANG"] = previousLang;
     }
-
-    expect(fixture.calls).toEqual([
-      "isArmed com.roll.loop.ws-alpha",
-      "isArmed com.roll.loop.ws-beta",
-      "isArmed com.roll.loop.ws-alpha",
-      "isArmed com.roll.loop.ws-beta",
-    ]);
   });
 
   it("binds loop go and its tmux worker to the selected Workspace runtime and backlog", async () => {

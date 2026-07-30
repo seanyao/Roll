@@ -8,7 +8,7 @@
  * runs. Zero engine spawn.
  */
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -135,8 +135,8 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                              <NOW> · 12 cycles / 72h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                              <NOW> · 12 cycles / 72h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -235,8 +235,8 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                              <NOW> · 12 cycles / 72h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -285,8 +285,8 @@ describe("frozen: roll loop status (fixture)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                             <NOW> · 12 cycles / 168h
 
-      ○ not installed   run roll loop on to enable         last ✓ 04:48  FIX-040  8/12 tests failed → bail
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session  last ✓ 04:48  FIX-040  8/12 tests failed → bail
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -389,7 +389,19 @@ describe("frozen: roll loop status (fixture)", () => {
 });
 
 describe("frozen: roll loop status (live)", () => {
-  it("FIX-254: enabled interval schedule estimates next run from the latest real launchd fire", () => {
+  /**
+   * US-LOOP-118 — what FIX-254 was defending is now structurally impossible.
+   *
+   * FIX-254 stopped `roll loop status` from INVENTING a next-run time: with an
+   * interval plist it estimated from the latest real launchd fire, and on a
+   * calendar/fire mismatch it printed "?" rather than a made-up clock time. Both
+   * behaviours are gone because the thing they described is gone — no lane fires,
+   * so there is no next run to estimate correctly or incorrectly.
+   *
+   * These two cases replace them: whatever a leftover plist says, the banner must
+   * never print a next run, and must say a session drives instead.
+   */
+  it("US-LOOP-118: an interval plist yields NO next-run promise", () => {
     const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
     installLaunchctlShim(env);
     writeLoopPlist(env, ["<key>StartInterval</key>", "<integer>1800</integer>"].join("\n"));
@@ -397,16 +409,147 @@ describe("frozen: roll loop status (live)", () => {
       join(env["ROLL_PROJECT_RUNTIME_DIR"] as string, "cron.log"),
       "[2026-06-07T10:52:00+0800] cycle start (v3 run-once)\n",
     );
-    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-fix254-"));
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-interval-"));
     dirs.push(proj);
     mkdirSync(join(proj, ".roll"), { recursive: true });
 
     const ts = tsRun(env, ["--no-color"], proj);
-    expect(ts).toContain("● IDLE · enabled · next run 11:22 · est · in 22m 00s");
-    expect(ts).not.toContain("11:07");
+    expect(ts).not.toContain("next run");
+    expect(ts).not.toContain("enabled");
+    // A 30-minute StartInterval used to make this read "in 22m 00s".
+    expect(ts).not.toMatch(/in \d+m/);
+    expect(ts).toContain("session-driven");
+    // The plist is still on disk, so it is named as debris to remove.
+    expect(ts).toContain("leftover plist");
   });
 
-  it("FIX-254: calendar schedule and latest fire mismatch renders unknown instead of inventing a time", () => {
+  /**
+   * US-LOOP-118 (codex r2) — one tripwire for the whole class.
+   *
+   * Two separate prediction sites shipped in this file's history: the loop banner
+   * ("next run 14:30 · in 12m") and a dream line one row below it ("dream: 03:00
+   * (next fire in 5h 12m)"). I removed the first and codex found the second. So
+   * assert the PROPERTY rather than each site: with plists for every retired lane
+   * present, roll loop status must not name a future time at all.
+   */
+  it("US-LOOP-118: no lane's plist can produce a future-time promise anywhere", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    writeLoopPlist(env, ["<key>StartInterval</key>", "<integer>1800</integer>"].join("\n"));
+    // A dream plist with a calendar entry — the shape that produced "next fire in".
+    const la = env["_LAUNCHD_DIR"] as string;
+    writeFileSync(
+      join(la, `com.roll.dream.${env["ROLL_MAIN_SLUG"] as string}.plist`),
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<plist version=\"1.0\"><dict>",
+        "<key>StartCalendarInterval</key>",
+        "<dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>",
+        "</dict></plist>",
+        "",
+      ].join("\n"),
+    );
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-nofire-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    expect(ts).not.toContain("next fire");
+    expect(ts).not.toContain("next run");
+    // No "in 5h 12m" / "in 22m 00s" style countdown from any lane.
+    expect(ts).not.toMatch(/in \d+h \d+m/);
+    expect(ts).not.toMatch(/in \d+m \d+s/);
+    // And the dream plist is not silently ignored: it is debris to remove.
+    expect(ts).toContain("session-driven");
+    expect(ts).toContain("leftover plist");
+  });
+
+  /**
+   * codex r3: the tripwire above always writes a LOOP plist, which masked a real
+   * gap — the leftover check only looked at the loop lane, and the dream line that
+   * used to mention a dream plist was deleted in this same card. So a dream-only
+   * leftover would have been silent everywhere. Test each lane ALONE.
+   */
+  it("US-LOOP-118: a dream-only leftover is reported, with no loop plist present", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const la = env["_LAUNCHD_DIR"] as string;
+    const slug = env["ROLL_MAIN_SLUG"] as string;
+    // writeLoopPlist() normally creates this dir; these cases skip it on purpose.
+    mkdirSync(la, { recursive: true });
+    writeFileSync(
+      join(la, `com.roll.dream.${slug}.plist`),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict></dict></plist>\n',
+    );
+    // Deliberately NO loop plist — that is the case the old predicate missed.
+    expect(existsSync(join(la, `com.roll.loop.${slug}.plist`))).toBe(false);
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-dreamonly-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    expect(ts).toContain("leftover plist");
+    expect(ts).not.toContain("next fire");
+  });
+
+  it("US-LOOP-118: a pr-only leftover is reported too (retired by US-DELIV-006)", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const la = env["_LAUNCHD_DIR"] as string;
+    mkdirSync(la, { recursive: true });
+    writeFileSync(
+      join(la, `com.roll.pr.${env["ROLL_MAIN_SLUG"] as string}.plist`),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict></dict></plist>\n',
+    );
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-pronly-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    expect(tsRun(env, ["--no-color"], proj)).toContain("leftover plist");
+  });
+
+  /**
+   * codex r7 — debris is a fact about the MACHINE, not about this cycle.
+   *
+   * The leftover note was nested inside the idle/session-driven branch, so a real
+   * plist stayed hidden while a cycle was RUNNING or the project was PAUSED — the
+   * two states an owner is most likely to be staring at.
+   */
+  it("US-LOOP-118: a leftover lane is reported even while PAUSED", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const la = env["_LAUNCHD_DIR"] as string;
+    mkdirSync(la, { recursive: true });
+    writeFileSync(join(la, `com.roll.loop.${env["ROLL_MAIN_SLUG"] as string}.plist`), "<plist/>\n");
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-paused-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+    // Pause the project so the idle branch — which used to OWN the leftover note —
+    // is skipped. The marker is resolved under the PROJECT path (resolveLoopRunState),
+    // not the runtime dir.
+    mkdirSync(join(proj, ".roll", "loop"), { recursive: true });
+    writeFileSync(join(proj, ".roll", "loop", `PAUSE-${env["ROLL_MAIN_SLUG"] as string}`), "paused by owner\n");
+
+    // resolveProjectPath needs ROLL_MAIN_PROJECT for the marker to be found.
+    const ts = tsRun({ ...env, ROLL_MAIN_PROJECT: proj }, ["--no-color"], proj);
+    expect(ts).toContain("leftover plist");
+    // And the pause is still reported — the note is additive, not a replacement.
+    expect(ts.toLowerCase()).toContain("paused");
+  });
+
+  it("US-LOOP-118: a clean machine says nothing about leftovers", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
+    installLaunchctlShim(env);
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-clean-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    expect(ts).toContain("session-driven");
+    expect(ts).not.toContain("leftover plist");
+  });
+
+  it("US-LOOP-118: a calendar plist yields NO next-run promise either", () => {
     const env = sandboxEnv({ ROLL_RENDER_NOW: "2026-06-07T03:00:00Z" });
     installLaunchctlShim(env);
     writeLoopPlist(
@@ -423,13 +566,15 @@ describe("frozen: roll loop status (live)", () => {
       join(env["ROLL_PROJECT_RUNTIME_DIR"] as string, "cron.log"),
       "[2026-06-07T10:07:00+0800] cycle start (v3 run-once)\n",
     );
-    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-fix254-mismatch-"));
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-proj-l118-calendar-"));
     dirs.push(proj);
     mkdirSync(join(proj, ".roll"), { recursive: true });
 
     const ts = tsRun(env, ["--no-color"], proj);
-    expect(ts).toContain("● IDLE · enabled · next run ?");
-    expect(ts).not.toContain("11:22 · in 22m 00s");
+    // Not even the honest "?" survives: there is no next-run field at all.
+    expect(ts).not.toContain("next run");
+    expect(ts).toContain("session-driven");
+    expect(ts).toContain("leftover plist");
   });
 
   it("synthetic events + runs render", () => {
@@ -520,8 +665,8 @@ describe("frozen: roll loop status (live)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                               <NOW> · 2 cycles / 72h
 
-      ○ not installed   run roll loop on to enable                              last ✓ 10:48  US-CLI-006  
-        未安装 · 运行 roll loop on 启用
+      ◆ session-driven   run roll loop go in this session                       last ✓ 10:48  US-CLI-006${"  "}
+        会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -662,40 +807,30 @@ describe("frozen: roll loop status (live)", () => {
     `);
   });
 
-  it("dormant state renders from DORMANT marker (US-LOOP-079g)", () => {
+  // US-LOOP-115: DORMANT is retired. This case asserted the dormant RENDER; it now
+  // asserts the inverse — a leftover marker is inert and never renders a state.
+  it("a leftover DORMANT marker renders nothing (US-LOOP-115)", () => {
     const proj = mkdtempSync(join(tmpdir(), "roll-dash-dorm-"));
     dirs.push(proj);
     const env = sandboxEnv({ ROLL_RENDER_NOW: LIVE_NOW, ROLL_MAIN_PROJECT: proj });
     const rt = env["ROLL_PROJECT_RUNTIME_DIR"] as string;
     const slug = env["ROLL_MAIN_SLUG"] as string;
 
-    writeFileSync(
-      join(rt, "state.yaml"),
-      ['status: "idle"', ""].join("\n"),
-    );
+    writeFileSync(join(rt, "state.yaml"), ['status: "idle"', ""].join("\n"));
 
     const loopDir = join(proj, ".roll", "loop");
     mkdirSync(loopDir, { recursive: true });
     const dormantBody = JSON.stringify({ since: "2026-06-25T04:00:00Z", reason: "idle for 6h — no Todo items" });
     writeFileSync(join(loopDir, `DORMANT-${slug}`), dormantBody + "\n");
 
-    const base = new Date(LIVE_NOW);
-    const start1 = new Date(base.getTime() - 3 * 3600 * 1000);
-    const end1 = new Date(start1.getTime() + 300 * 1000);
-    const lab1 = label(start1);
-    const events = [
-      { ts: iso(start1), stage: "cycle_start", label: lab1, detail: "", outcome: "" },
-      { ts: iso(end1), stage: "cycle_end", label: lab1, detail: "", outcome: "done" },
-    ];
-    writeFileSync(join(rt, "events.ndjson"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
-
     mkdirSync(join(proj, ".roll"), { recursive: true });
     writeFileSync(join(proj, ".roll", "backlog.md"), "");
 
     const ts = tsRun(env, ["--no-color"], proj);
-    expect(ts).toContain("💤 DORMANT");
-    expect(ts).toContain("since 2026-06-25T04:00:00Z");
-    expect(ts).toContain("idle for 6h — no Todo items");
-    expect(ts).toContain("休眠(闲置)");
+    expect(ts).not.toContain("DORMANT");
+    expect(ts).not.toContain("休眠");
+    // The marker's contents never reach the screen.
+    expect(ts).not.toContain("2026-06-25T04:00:00Z");
+    expect(ts).not.toContain("idle for 6h");
   });
 });

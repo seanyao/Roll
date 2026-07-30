@@ -43,7 +43,7 @@ graph TB
         C1["roll status / roll loop cycle / story reports<br/>CLI-first Truth Surface"] --> C2{"Drift or health issue?"}
         C2 -->|Yes| C3["$roll-debug / $roll-doc-audit / $roll-doctor<br/>Diagnostics + Root Cause Analysis"]
         C3 --> C5["$roll-fix / REFACTOR<br/>Correction filed to backlog"]
-        C6["$roll-.dream<br/>Nightly Code-Health Scan"] --> C2
+        C6["$roll-.dream<br/>Code-Health Scan Pass"] --> C2
         C5 --> C1
         C2 -->|No| C1
     end
@@ -67,7 +67,7 @@ How the three loops interact:
 - **Loop B → Loop C**: Each delivery feeds the truth ledger, so the maintenance loop sees shipped / in-progress / queue / truth drift / release readiness as facts.
 - **Loop C → Loop A**: Drift or code-health issues surfaced by the observability surfaces become `FIX-XXX` / `REFACTOR-XXX` entries; anything beyond a quick fix escalates back to the design loop for reassessment.
 
-**Optional autonomous layer** (enabled via `roll loop on`): `roll-loop` executes pending BACKLOG items on a configurable schedule; `roll-.dream` scans code health nightly and produces `REFACTOR` entries. The human reads CLI-first surfaces (`roll status`, `roll loop watch`, `roll loop cycle`, alerts, and story reports). The human retains sole authority over `roll-release`. See §9 for details.
+**Optional continuous-run layer** (started via `roll loop go`): while that run is open, `roll-loop` keeps picking pending BACKLOG items cycle after cycle; `roll-.dream` scans code health and produces `REFACTOR` entries. The owner reads CLI-first surfaces (`roll status`, `roll loop watch`, `roll loop cycle`, alerts, and story reports). The owner retains sole authority over `roll-release`. See §9 for details.
 
 ---
 
@@ -432,7 +432,7 @@ Loop C is observability and maintenance: status, cycle trace, story reports, deb
 |----------------------|--------------------|
 | SRE (Site Reliability Engineering) | `roll status` / `roll loop cycle` / story reports: delivery truth surface from a single ledger |
 | Observability | CLI-first truth signals (`roll loop watch`, `roll loop status`, cycle traces, release readiness) |
-| Continuous maintenance | `$roll-.dream`: nightly code-health scans that file `REFACTOR-XXX` entries |
+| Continuous maintenance | `$roll-.dream`: code-health scan passes that file `REFACTOR-XXX` entries |
 | Digital Forensics + RCA | `$roll-debug` / `$roll-doc-audit` / `$roll-doctor`: project-owned diagnostics, documentation, and toolchain health |
 
 ### 5.2 Delivery Truth Surface: CLI-first status, cycle trace, and story reports
@@ -453,9 +453,9 @@ Loop C is not production patrol. It is the mature delivery-control surface: it r
 
 **Corrections feed back to the backlog** — anything the surfaces reveal as a problem becomes a `FIX-XXX` or `REFACTOR-XXX` entry that re-enters the loop. Loop C → Loop A: anything beyond a quick fix escalates to design.
 
-> **Scenario**: Following the TaskFlow v1.3 release, the owner runs `roll status` and opens the US-007 story report. The status output shows a truth-drift flag: the latest acceptance evidence captured `GET /api/audit` returning audit events with an empty `timestamp` field, which contradicts US-007's AC ("events include a timestamp"). At the same time, the most recent `$roll-.dream` nightly scan flagged the serialization layer as a code-health hot spot after the v1.3 ORM upgrade.
+> **Scenario**: Following the TaskFlow v1.3 release, the owner runs `roll status` and opens the US-007 story report. The status output shows a truth-drift flag: the latest acceptance evidence captured `GET /api/audit` returning audit events with an empty `timestamp` field, which contradicts US-007's AC ("events include a timestamp"). At the same time, the most recent `$roll-.dream` scan flagged the serialization layer as a code-health hot spot after the v1.3 ORM upgrade.
 >
-> The drift is real, so `FIX-012: audit event timestamp is null` is filed to the Backlog. On the next loop cycle it is routed to `$roll-fix`, and the release-readiness signal stays red until the fix lands.
+> The drift is real, so `FIX-012: audit event timestamp is null` is filed to the Backlog. On the next `roll loop go` cycle it is routed to `$roll-fix`, and the release-readiness signal stays red until the fix lands.
 
 ### 5.3 Automated Forensics and Root Cause Diagnosis: `$roll-debug`
 
@@ -567,50 +567,43 @@ The key distinction lies in the shift of execution subject: these methodologies 
 
 ---
 
-## 9. Autonomous Evolution Layer (Optional)
+## 9. Continuous-Run Layer (Optional)
 
 ### 9.1 Design Principle
 
-The three-loop architecture (Loop A → B → C) describes how a human developer works *with* Roll. The autonomous evolution layer is a **separate, optional overlay** that lets the agent continue working without the human present — picking up pending BACKLOG items and reflecting on code health nightly, while keeping the delivery truth surface up to date for the human to read on their own schedule.
+The three-loop architecture (Loop A → B → C) describes how an owner works *with* Roll one story at a time. The continuous-run layer is a **separate, optional overlay**: the owner opens an agent session and starts `roll loop go`, and for as long as that run lasts the loop keeps pulling pending BACKLOG items and reflecting on code health, keeping the delivery truth surface current.
 
-It is off by default. Enabling it requires an explicit `roll loop on`.
+The boundary is explicit: **nothing advances between runs, and no run starts that you did not start.** There is no timer, no scheduled service, and no wake-on-command hook. A run you started does outlive your window — it is a detached tmux worker — and ends on its own scope: cards finishing, `--max-cycles` / `--for`, the dead-loop breaker, or `roll loop pause`. The agent session that runs `roll loop go` *is* the Supervisor; it may delegate implementation to a Delta Team.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Base layer (always active)                             │
+│  Base layer (per invocation)                            │
 │  $roll-design → $roll-build → $roll-fix → $roll-spar   │
-│  Human drives every action                              │
+│  Owner drives every action                               │
 ├─────────────────────────────────────────────────────────┤
-│  Autonomous layer (opt-in: roll loop on)                │
-│  roll-loop   — BACKLOG executor (configurable schedule)  │
-│  roll-.dream — nightly code health scan                 │
-│  Human reads status / cycle / reports; release stays human   │
+│  Continuous-run layer (owner starts: roll loop go)      │
+│  roll-loop   — BACKLOG executor, cycle after cycle       │
+│  roll-.dream — code health scan pass                    │
+│  Owner reads status / cycle / reports; release stays owner   │
+│  Run ends → nothing further happens                      │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### 9.2 Components
 
-**`roll-loop`** — Runs on a configurable schedule via macOS launchd (Linux: crontab). Scans BACKLOG for `📋 Todo` items and routes them: `US-XXX → $roll-build`, `FIX-XXX → $roll-fix`, `REFACTOR-XXX → $roll-build`. Caps items per run to limit blast radius. Rebuilds the Loop Digest from windowed `events.ndjson` / `runs.jsonl` facts as it goes; contradictory digest data is marked degraded and emits an ALERT instead of being reported as normal. Built-in TCR enforcement: after a story completes, checks for `tcr:` micro-commits — if zero are found, reverts the story to Todo with an ALERT, preventing agents from skipping the TCR rhythm.
+**`roll-loop`** — Each cycle of an open `roll loop go` run scans BACKLOG for `📋 Todo` items and routes them: `US-XXX → $roll-build`, `FIX-XXX → $roll-fix`, `REFACTOR-XXX → $roll-build`. The run's scope can be narrowed with `--epic <name>` or `--cards <id,...>`, and its length bounded with `--max-cycles N` or `--for <duration>`. Rebuilds the Loop Digest from windowed `events.ndjson` / `runs.jsonl` facts as it goes; contradictory digest data is marked degraded and emits an ALERT instead of being reported as normal. Built-in TCR enforcement: after a story completes, checks for `tcr:` micro-commits — if zero are found, reverts the story to Todo with an ALERT, preventing agents from skipping the TCR rhythm.
 
-**`roll-.dream`** — Runs nightly (03:00 local) via macOS launchd (Linux: crontab). Scans the codebase for dead code, architectural drift against `.roll/domain/`, pruning candidates, and emerging patterns. Outputs `REFACTOR-XXX` entries to BACKLOG and a log to `.roll/dream/YYYY-MM-DD.md`.
+**`roll-.dream`** — A code-health scan pass over the codebase: dead code, architectural drift against `.roll/domain/`, pruning candidates, and emerging patterns. Outputs `REFACTOR-XXX` entries to BACKLOG and a log to `.roll/dream/YYYY-MM-DD.md`.
 
-**Reading delivery state** — There is no owner-brief skill. The human reads CLI-first surfaces (`roll status`, `roll loop watch`, `roll loop cycle <id>`, `roll loop status`, alerts, and story reports) on their own schedule. This is distinct from `roll-.changelog` (the user-facing changelog).
+**Reading delivery state** — There is no owner-brief skill. The owner reads CLI-first surfaces (`roll status`, `roll loop watch`, `roll loop cycle <id>`, `roll loop status`, alerts, and story reports). This is distinct from `roll-.changelog` (the user-facing changelog).
 
-### 9.3 Why Local Scheduling, Not GitHub Actions
+### 9.3 Why Local Execution, Not GitHub Actions
 
 GitHub Actions runs on remote servers with no access to the local codebase, local test runner, or local agent CLI. The TCR loop — which is the core of `$roll-build` — requires local execution. Using GitHub Actions would mean the agent could only read the repo as a snapshot, not run tests, not observe the dev environment.
 
-On macOS, Roll uses **launchd** (plists installed to `~/Library/LaunchAgents/`); on Linux, crontab. `roll loop on` automatically installs scheduling for both services (loop/dream); `roll loop off` removes them.
+So every cycle runs on the owner's machine, inside the session that started it. `roll loop status` reports the run state (ACTIVE or PAUSED), pending queue, alerts, and recent run history. For the live terminal, use `roll loop watch`, or attach directly with `tmux attach -t roll-loop-<project-slug>`.
 
-```bash
-# macOS launchd plists (auto-generated, no manual editing needed)
-~/Library/LaunchAgents/com.roll.loop.<project-slug>.plist
-~/Library/LaunchAgents/com.roll.dream.<project-slug>.plist
-```
-
-`roll loop status` provides the scheduler snapshot: launchd status, current execution state, pending queue, alerts, and recent run history. For the live terminal, attach directly with `tmux attach -t roll-loop-<project-slug>`.
-
-If the agent supports native scheduling (e.g. Claude Code hooks), that is preferred over raw launchd/cron for cleaner lifecycle management.
+`roll loop pause` and `roll loop resume` gate story pickup without ending the run. While PAUSED, a guided one-shot `roll loop go --cards <id>` still executes — the pause holds back autonomous selection, not the owner's explicit instruction.
 
 ### 9.4 Scoped Agent Roles
 
@@ -637,23 +630,29 @@ Runtime availability is checked at resolution/spawn time. A failed auth,
 network, VPN, account, or binary probe skips that candidate for the current
 resolution; it does not rewrite the static pool.
 
-### 9.5 Human Authority
+### 9.5 Owner Authority
 
-The autonomous layer **never** invokes `roll-release`. Production deployment is always a human decision, made after reading the delivery truth surface and optionally inspecting the diff. CLI-first surfaces provide:
+The continuous-run layer **never** invokes `roll-release`. Production deployment is always an owner decision, made after reading the delivery truth surface and optionally inspecting the diff. CLI-first surfaces provide:
 
-- What the agent completed since the human last looked
-- Any escalations that require human input
+- What the agent completed during the run
+- Any escalations that need an answer
 - A release-readiness signal (heuristic, not a gate)
 
-This keeps the human informed without requiring them to be present for every step.
+The owner stays informed without having to watch every step of a run — but the run itself only exists because the owner started it.
 
 ### 9.6 CLI Management
 
 ```bash
-roll loop on|off          # enable / disable scheduled execution for this project
-roll loop now             # trigger one cycle immediately
-roll loop status          # show scheduler state + any ALERT
-roll loop cycle <id>           # inspect one cycle trace and evidence pointers
+roll loop go              # start a run: pick and deliver ready stories, cycle after cycle
+roll loop go --epic <name>       # scope the run to one epic
+roll loop go --cards <id,...>    # scope the run to specific cards
+roll loop go --max-cycles 1      # bound the run to a single cycle
+roll loop pause|resume    # hold back / release autonomous story pickup
+roll loop status          # show run state (ACTIVE / PAUSED) + any ALERT
+roll loop watch           # read-only live view of the current cycle
+roll loop cycle <id>      # inspect one cycle trace and evidence pointers
+roll loop reconcile       # advance awaiting-merge PRs against main
+roll loop gc              # sweep orphan slugs and runtime debris
 roll agent                # inspect Machine Scope, Project Scope, roles, pool
 roll agent migrate        # convert legacy agent files to roll-agents/v1
 roll agent list           # show installed agents
@@ -676,7 +675,8 @@ roll                      # project dashboard (in project dir): loop status + su
 
 - **Multi-Agent coordination overhead**: `$roll-build` evaluates Action dependencies to determine whether to launch parallel sub-Agents, but cross-Agent state synchronization and conflict resolution currently depend on conventions rather than enforced protocols, incurring coordination overhead in high-concurrency scenarios.
 - **Framework coupling**: Skill definitions are written in Markdown and rely on AI clients' ability to interpret natural language instructions — execution precision varies across different models. Each Skill now pins a model in its frontmatter (`model:` — e.g. Opus for `roll-design`, Haiku for `roll-idea`) and declares a tool allowlist (`allowed-tools:`), mitigating precision drift and accidental tool misuse, though both fields still depend on the client honoring them.
-- **Observability is reactive**: Loop C's truth surfaces (`roll status`, `roll loop cycle`, story reports) and `$roll-.dream` scans surface drift and code-health issues from delivery facts and nightly analysis, but they do not continuously re-exercise shipped features the way a live regression suite would — a regression that produces no new evidence and no failing test can persist until the next acceptance run or scan touches it.
+- **Observability is reactive**: Loop C's truth surfaces (`roll status`, `roll loop cycle`, story reports) and `$roll-.dream` scans surface drift and code-health issues from delivery facts, but they do not continuously re-exercise shipped features the way a live regression suite would — a regression that produces no new evidence and no failing test can persist until the next acceptance run or scan touches it.
+- **No progress without a run you started**: delivery advances because an owner ran `roll loop go`. The run outlives their window and ends on its own scope. Nothing is scheduled, so throughput is bounded by how often the owner starts a run, and a run that ends mid-backlog leaves the remainder untouched until the next one.
 
 ---
 
@@ -693,8 +693,8 @@ roll                      # project dashboard (in project dir): loop status + su
 | `$roll-debug` | Debugging & Diagnosis | URL | Diagnostic JSON + screenshots + root cause analysis |
 | `$roll-doc-audit` | Docs/product audit | Codebase + docs/site/help | Drift findings + docs inventory + draft fills |
 | `$roll-doctor` | Toolchain health | Install state | Conventions sync / skill health / config validity report |
-| `$roll-loop` | Autonomous execution | BACKLOG todos | Completed Story / Fix / Refactor |
-| `$roll-.dream` | Autonomous scan | Codebase | REFACTOR entries + scan log |
+| `$roll-loop` | Continuous run | BACKLOG todos | Completed Story / Fix / Refactor |
+| `$roll-.dream` | Code-health scan | Codebase | REFACTOR entries + scan log |
 
 ## Appendix B: CLI Command Quick Reference
 
@@ -708,7 +708,7 @@ Commands fall into two categories: bash commands run pure shell logic; agent com
 | `roll status` | Display current sync status, skill links, and detected AI tools |
 | `roll backlog` | Show all pending tasks from `.roll/backlog.md` |
 | `roll agent [migrate\|list]` | Inspect/migrate scoped agent roles in `~/.roll/agents.yaml` and `.roll/agents.yaml` |
-| `roll loop <on\|off\|now\|status\|runs\|log\|story\|events\|eval\|signals\|pause\|resume\|reset\|gc>` | 🤖 Manage the autonomous BACKLOG executor (three lanes: loop/dream/pr) |
+| `roll loop <go\|status\|runs\|log\|story\|events\|eval\|signals\|watch\|pause\|resume\|reconcile\|recover\|reset\|gc>` | 🤖 Start and inspect a BACKLOG delivery run — `go` is the only way work advances |
 | `roll loop cycle <id>` | Show one cycle's trace tape, PR/diff pointers, and evidence links |
 | Loop pairing evidence | 🤖 Pairing observability and explicit review scoring; new defaults live in `.roll/agents.yaml` |
 | `roll release [ship\|waiver]` | Release guidance · gated tag push · recorded drift waiver — npm publish stays human |

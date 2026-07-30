@@ -7,12 +7,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
-import { renderTruthConsole, renderMachineStubPage, rollScope, type ProjectRegistryEntry } from "../src/lib/truth-console.js";
+import { LEFTOVER_LANE_STATUS, serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
+import { leftoverAndSessionCount, renderTruthConsole, renderMachineStubPage, rollScope, type ProjectRegistryEntry } from "../src/lib/truth-console.js";
 import { collectLoopLiveFeed } from "../src/commands/index-gen.js";
 import { renderAgentsMachinePage } from "../src/lib/page-agents.js";
 import { renderSkillsPage } from "../src/lib/page-skills.js";
-import { collectLoopHeartbeat } from "../src/lib/loop-heartbeat.js";
+import { collectLoopHeartbeat, defaultHeartbeatDeps } from "../src/lib/loop-heartbeat.js";
 import { collectCasting } from "../src/lib/casting.js";
 import { collectGitHooks, type GitHooksVM } from "../src/lib/git-hooks.js";
 import { parseProjectsRegistry, reachableProjects } from "../src/lib/projects-registry.js";
@@ -357,7 +357,11 @@ describe("renderTruthConsole — US-DOSSIER-011", () => {
     expect(html).toContain("zombie");
     expect(html).toContain("僵尸");
     expect(html).toContain("#d23b3b");
-    expect(html).toContain("1/1"); // running lanes
+    // US-LOOP-118: the heartbeat pill no longer counts lanes ("1/1"); it reports
+    // sessions driving and leftover debris. This fixture's lane is a running
+    // non-goal lane from an old snapshot, so no session is driving.
+    expect(html).not.toContain("1/1");
+    expect(html).toContain("no session driving");
     expect(html).toContain('data-tab-link="backlog"');
     expect(html).toContain('data-tab-link="loop"');
     expect(html).toContain('data-tab-link="release"');
@@ -459,7 +463,11 @@ describe("renderTruthConsole — US-DOSSIER-011", () => {
     expect(html).toContain('data-now-section="heartbeat-head"');
     expect(html).toContain(">Lane<");
     // the header and rows share ONE grid track template so they align.
-    expect(html).toContain("grid-template-columns:1.6fr .8fr .7fr 1fr 1fr;");
+    // US-LOOP-118: three columns now — EVERY and NEXT described a launchd period
+    // and a fire predicted from it, neither of which exists.
+    expect(html).toContain("grid-template-columns:2fr 1fr 1.2fr;");
+    expect(html).not.toContain(">every<");
+    expect(html).not.toContain(">next<");
   });
 
   it("US-DOSSIER-044: Now embeds a read-only loop watch live stream with polling continuity", () => {
@@ -590,36 +598,180 @@ describe("collectLoopLiveFeed — US-DOSSIER-044", () => {
 });
 
 describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
-  it("reads plist presence, period, last run; derives next; off lanes stay visible", () => {
+  it("US-LOOP-118: a leftover plist is reported as debris — never running, never a next fire", () => {
     const hb = collectLoopHeartbeat({
-      plistText: (svc) =>
-        svc === "loop" ? "<key>StartInterval</key>\n<integer>3600</integer>" : null,
+      laneLeftover: (svc) => svc === "loop",
       lastRunAt: () => "2026-06-12T23:30:00Z",
     });
-    expect(hb.lanes).toHaveLength(2);
+    // Only the lane whose plist still exists appears at all.
+    expect(hb.lanes).toHaveLength(1);
     const loop = hb.lanes[0];
-    expect(loop?.running).toBe(true);
-    expect(loop?.everyMin).toBe(60);
+    expect(loop?.name).toContain("leftover");
+    // A plist drives nothing, so it is NOT running however loaded it looks.
+    expect(loop?.running).toBe(false);
+    expect(loop?.status).toContain("bootout");
+    // lastAt is real history and stays; everyMin/nextAt were derived from the
+    // plist's period and are never written again.
     expect(loop?.lastAt).toBe("2026-06-12T23:30:00Z");
-    expect(loop?.nextAt).toBe("2026-06-13T00:30:00Z");
-    expect(hb.lanes[1]?.running).toBe(false);
+    expect(loop?.everyMin).toBeUndefined();
+    expect(loop?.nextAt).toBeUndefined();
   });
 
-  it("never throws on a machine with nothing scheduled", () => {
-    const hb = collectLoopHeartbeat({ plistText: () => null, lastRunAt: () => null });
-    expect(hb.lanes.every((l) => !l.running)).toBe(true);
+  it("US-LOOP-118: a clean machine reports NO lanes rather than several off ones", () => {
+    const hb = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null });
+    // The old contract always listed the retired lanes so the console could say
+    // "0/2 lanes armed" — which read as things missing and worth installing.
+    expect(hb.lanes).toEqual([]);
+  });
+
+  it("US-LOOP-118: every lane Roll ever installed is scanned, pr included (codex r1)", () => {
+    // A machine upgraded across BOTH retirements (US-DELIV-006 for pr, this epic
+    // for loop/dream) can hold any of the three plists. A lane omitted from the
+    // scan is a leftover nothing would ever report.
+    const probed: string[] = [];
+    collectLoopHeartbeat({
+      laneLeftover: (svc) => {
+        probed.push(svc);
+        return false;
+      },
+      lastRunAt: () => null,
+    });
+    expect(probed).toEqual(["loop", "pr", "dream"]);
+    // And a lone pr plist is surfaced on its own.
+    const prOnly = collectLoopHeartbeat({ laneLeftover: (svc) => svc === "pr", lastRunAt: () => null });
+    expect(prOnly.lanes).toHaveLength(1);
+    expect(prOnly.lanes[0]?.mode).toBe("pr");
+    expect(prOnly.lanes[0]?.running).toBe(false);
+  });
+
+  it("US-LOOP-118: a streaming cycle with NO goal is still a running lane (codex r11)", () => {
+    // Only `roll loop go` writes goal events; a bare `roll loop run-once` writes
+    // none, so the production collector reported no active session at all while a
+    // cycle was streaming. The live stream is proof of running on its own.
+    const hb = collectLoopHeartbeat({
+      laneLeftover: () => false,
+      lastRunAt: () => "2026-06-19T12:00:00Z", // a run that finished yesterday
+      goalText: () => null,
+      eventsText: () => null,
+      liveStream: () => ({ running: true, at: "2026-06-20T11:59:30Z" }),
+    });
+    const go = hb.lanes.find((l) => l.source === "goal");
+    expect(go).toBeDefined();
+    expect(go?.running).toBe(true);
+    // lastAt is the STREAM's write, not yesterday's run — the r10 pairing rule.
+    expect(go?.lastAt).toBe("2026-06-20T11:59:30Z");
+  });
+
+  it("US-LOOP-118: no goal and no stream means no session lane at all", () => {
+    const hb = collectLoopHeartbeat({
+      laneLeftover: () => false,
+      lastRunAt: () => null,
+      goalText: () => null,
+      eventsText: () => null,
+      liveStream: () => ({ running: false }),
+    });
+    expect(hb.lanes.some((l) => l.source === "goal")).toBe(false);
+  });
+
+  it("US-LOOP-118: defaultHeartbeatDeps reads a real live.log for the stream signal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-hb-live-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      const live = join(rt, "live.log");
+      writeFileSync(live, "streaming\n");
+      const fresh = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-live", join(dir, "la")));
+      expect(fresh.lanes.find((l) => l.source === "goal")?.running).toBe(true);
+
+      // Age it past the window: no longer streaming.
+      const old = Math.floor(Date.now() / 1000) - 3600;
+      utimesSync(live, old, old);
+      const cold = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-live", join(dir, "la")));
+      expect(cold.lanes.find((l) => l.source === "goal")?.running ?? false).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("US-LOOP-118: defaultHeartbeatDeps honours ROLL_PROJECT_RUNTIME_DIR (codex r12)", () => {
+    // run-once, the live-feed collector, alerts and the scoped route all honour this
+    // override. This module hardcoded <project>/.roll/loop, so with an overridden
+    // runtime dir the UI could show a live stream while the heartbeat said nothing
+    // was running.
+    const projectDir = mkdtempSync(join(tmpdir(), "roll-hb-rt-proj-"));
+    const runtimeDir = mkdtempSync(join(tmpdir(), "roll-hb-rt-runtime-"));
+    const saved = process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    try {
+      // The stream lives ONLY in the overridden runtime dir.
+      writeFileSync(join(runtimeDir, "live.log"), "streaming\n");
+      writeFileSync(join(runtimeDir, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-19T12:00:00Z" })}\n`);
+      process.env["ROLL_PROJECT_RUNTIME_DIR"] = runtimeDir;
+      const hb = collectLoopHeartbeat(defaultHeartbeatDeps(projectDir, "hb-rt", join(projectDir, "la")));
+      expect(hb.lanes.find((l) => l.source === "goal")?.running).toBe(true);
+
+      // Without the override the same project sees nothing — proving the override
+      // is what made it visible, not some path that happens to exist anyway.
+      delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+      const blind = collectLoopHeartbeat(defaultHeartbeatDeps(projectDir, "hb-rt", join(projectDir, "la")));
+      expect(blind.lanes.some((l) => l.source === "goal")).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
+      else process.env["ROLL_PROJECT_RUNTIME_DIR"] = saved;
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("US-LOOP-118: freshness uses the SHARED render clock, not Date.now() (codex r13)", () => {
+    // The live-feed panel judges live.log against the selector's nowSec. If the
+    // heartbeat used Date.now(), the two surfaces could disagree about the same file
+    // under ROLL_RENDER_NOW — one showing a live stream, the other no session.
+    const dir = mkdtempSync(join(tmpdir(), "roll-hb-clock-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      const live = join(rt, "live.log");
+      writeFileSync(live, "streaming\n");
+      const writtenAt = Math.floor(Date.parse("2026-06-20T12:00:00Z") / 1000);
+      utimesSync(live, writtenAt, writtenAt);
+
+      // A render clock just after the write: streaming.
+      const near = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-clock", join(dir, "la"), writtenAt + 30));
+      expect(near.lanes.find((l) => l.source === "goal")?.running).toBe(true);
+
+      // A render clock hours later against the SAME file: not streaming. With
+      // Date.now() this could not be expressed at all.
+      const far = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-clock", join(dir, "la"), writtenAt + 7200));
+      expect(far.lanes.some((l) => l.source === "goal")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("US-LOOP-118: pr reads runs.jsonl as JSONL, not as a dream text log (codex r6)", () => {
+    // The file choice keyed on `svc === "dream"` while the PARSE keyed on
+    // `svc === "loop"`, so pr read runs.jsonl through the dream bracket-timestamp
+    // regex and a real PR leftover could never keep its lastAt.
+    const dir = mkdtempSync(join(tmpdir(), "roll-hb-pr-"));
+    try {
+      const rt = join(dir, ".roll", "loop");
+      mkdirSync(rt, { recursive: true });
+      writeFileSync(join(rt, "runs.jsonl"), `${JSON.stringify({ ts: "2026-06-12T23:35:00Z" })}\n`);
+      const la = join(dir, "la");
+      mkdirSync(la, { recursive: true });
+      writeFileSync(join(la, "com.roll.pr.hb-probe.plist"), "<plist/>\n");
+      const hb = collectLoopHeartbeat(defaultHeartbeatDeps(dir, "hb-probe", la));
+      const pr = hb.lanes.find((l) => l.mode === "pr");
+      expect(pr).toBeDefined();
+      expect(pr?.lastAt).toBe("2026-06-12T23:35:00Z");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("US-DOSSIER-042: collects backlog, PR, dream launchd lanes and an active go session", () => {
     const hb = collectLoopHeartbeat({
-      plistText: (svc) =>
-        svc === "loop"
-          ? "<key>StartInterval</key>\n<integer>1800</integer>"
-          : svc === "pr"
-            ? "<key>StartInterval</key>\n<integer>300</integer>"
-            : svc === "dream"
-              ? "<key>StartInterval</key>\n<integer>86400</integer>"
-              : null,
+      laneLeftover: (svc) => svc === "loop" || svc === "pr" || svc === "dream",
       lastRunAt: (svc) =>
         svc === "loop"
           ? "2026-06-12T23:30:00Z"
@@ -651,8 +803,22 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
         ].join("\n"),
     });
 
-    expect(hb.lanes.map((l) => l.name)).toEqual(["backlog loop", "Dream loop", "go session"]);
-    expect(hb.lanes.map((l) => l.source)).toEqual(["launchd", "launchd", "goal"]);
+    // US-LOOP-118: all three retired lanes appear because their plists are on disk,
+    // but as leftovers; the go session is the only lane that can be running.
+    //
+    // codex r1: the earlier version of this assertion made `pr` present and then
+    // expected it MISSING — a vacuous check that hid a real gap, since the PR lane
+    // was retired by US-DELIV-006 and its plist can still exist on an upgraded box.
+    expect(hb.lanes.map((l) => l.name)).toEqual([
+      "backlog loop (leftover lane)",
+      "PR loop (leftover lane)",
+      "Dream loop (leftover lane)",
+      "go session",
+    ]);
+    expect(hb.lanes.map((l) => l.source)).toEqual(["launchd", "launchd", "launchd", "goal"]);
+    expect(hb.lanes.filter((l) => l.source === "launchd").every((l) => !l.running)).toBe(true);
+    // The PR lane's real last-run stamp survives — it is history, not a prediction.
+    expect(hb.lanes.find((l) => l.mode === "pr")?.lastAt).toBe("2026-06-12T23:35:00Z");
     expect(hb.lanes.find((l) => l.name === "go session")).toMatchObject({
       running: true,
       mode: "go",
@@ -664,7 +830,7 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
 
   it("US-LOOP-079l: carries the resolved runState (+ DORMANT since/reason) onto the snapshot", () => {
     const hb = collectLoopHeartbeat({
-      plistText: () => null,
+      laneLeftover: () => false,
       lastRunAt: () => null,
       runState: () => ({ state: "DORMANT", since: "2026-06-25T03:00:00Z", reason: "idle 6h, no Todo" }),
     });
@@ -674,11 +840,11 @@ describe("collectLoopHeartbeat — US-DOSSIER-011", () => {
   });
 
   it("US-LOOP-079l: ACTIVE state carries no since/reason; absent dep stays additive (undefined)", () => {
-    const active = collectLoopHeartbeat({ plistText: () => null, lastRunAt: () => null, runState: () => ({ state: "ACTIVE" }) });
+    const active = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null, runState: () => ({ state: "ACTIVE" }) });
     expect(active.runState).toBe("ACTIVE");
     expect(active.stateSince).toBeUndefined();
     expect(active.stateReason).toBeUndefined();
-    const legacy = collectLoopHeartbeat({ plistText: () => null, lastRunAt: () => null });
+    const legacy = collectLoopHeartbeat({ laneLeftover: () => false, lastRunAt: () => null });
     expect(legacy.runState).toBeUndefined();
   });
 });
@@ -705,9 +871,17 @@ describe("loop tab active loops — US-DOSSIER-042", () => {
     expect(html).toContain("go session");
     expect(html).toContain("cards: US-A-1, FIX-9");
     expect(html).toContain("mode");
-    expect(html).toContain("周期");
     expect(html).toContain("上次");
-    expect(html).toContain("下次");
+    // US-LOOP-118: the every/next columns are gone from the HEARTBEAT HEADER —
+    // both described a launchd period and a fire predicted from it. Scope the
+    // check to that header: 周期/下次 legitimately appear elsewhere on the page.
+    // An old snapshot still carrying everyMin/nextAt (as this fixture does) must
+    // keep RENDERING; those values are simply no longer shown.
+    const head = /data-now-section="heartbeat-head"[\s\S]*?<\/div>\s*<div/.exec(html)?.[0] ?? "";
+    expect(head).not.toBe("");
+    expect(head).toContain("上次");
+    expect(head).not.toContain("周期");
+    expect(head).not.toContain("下次");
   });
 });
 
@@ -1235,10 +1409,120 @@ describe("command chips + freshness — US-DOSSIER-018", () => {
     expect(html).toContain("applyFreshness");
   });
 
-  it("AC4: heartbeat next is a client-side countdown anchor", () => {
-    expect(html).toContain('class="hb-next"');
-    expect(html).toContain('data-next="2026-06-13T00:30:00Z"');
-    expect(html).toContain("tickCountdown");
+  it("US-LOOP-118: only a lane CLAIMING to run can be a zombie (codex r9)", () => {
+    // r4 guarded the leftover marker; r9 pointed out that only treated one symptom.
+    // Any not-running lane with an old lastAt was painted red — but "not running,
+    // last activity a while ago" is just a finished session.
+    const finishedSession = render({
+      ...SNAP,
+      generatedAt: "2026-06-13T00:00:00Z",
+      loop: {
+        lanes: [
+          { name: "go session", source: "goal", running: false, mode: "go", status: "complete", lastAt: "2026-06-12T03:00:00Z" },
+        ],
+      },
+    });
+    expect(finishedSession).not.toContain("zombie");
+    // A lane that DOES claim to be running with stale activity is still a zombie.
+    const claimsRunning = render({
+      ...SNAP,
+      generatedAt: "2026-06-13T00:00:00Z",
+      loop: {
+        lanes: [
+          { name: "go session", source: "goal", running: true, mode: "go", status: "active", lastAt: "2026-06-12T03:00:00Z" },
+        ],
+      },
+    });
+    expect(claimsRunning).toContain("zombie");
+  });
+
+  it("US-LOOP-118: a leftover lane is debris, not a red zombie (codex r4)", () => {
+    // `stale` means "this should be beating and is not". A leftover plist is
+    // EXPECTED to be silent, and its lastAt is old precisely because it stopped —
+    // so painting it red as a zombie contradicts the debris semantics.
+    const withLeftover = render({
+      ...SNAP,
+      generatedAt: "2026-06-13T00:00:00Z",
+      loop: {
+        lanes: [
+          {
+            name: "backlog loop (leftover lane)",
+            source: "launchd",
+            running: false,
+            mode: "backlog",
+            status: LEFTOVER_LANE_STATUS,
+            // Hours stale — the old rule flagged anything past 60s.
+            lastAt: "2026-06-12T03:00:00Z",
+          },
+        ],
+      },
+    });
+    expect(withLeftover).not.toContain("zombie");
+    expect(withLeftover).not.toContain("僵尸");
+  });
+
+  it("US-LOOP-118: the repo loops pill counts sessions and debris, not 'running' lanes (codex r4)", () => {
+    const html = render({
+      ...SNAP,
+      loop: {
+        lanes: [
+          { name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+          { name: "go session", source: "goal", running: true, mode: "go", status: "active" },
+        ],
+      },
+    });
+    // The subtitle no longer advertises retired lanes as live categories.
+    expect(html).not.toContain("backlog · PR · dream · go sessions");
+    expect(html).toContain("go sessions · leftover lanes");
+    expect(html).toContain("1 session driving");
+    expect(html).toContain("1 leftover");
+    // codex r5: BOTH tabs must use the pill. A leftover-only lane read "0/1
+    // running" on the Now tab after the Loop tab was fixed — the same defect
+    // surviving in the second of two copies.
+    const leftoverOnly = render({
+      ...SNAP,
+      loop: {
+        lanes: [
+          { name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+        ],
+      },
+    });
+    expect(leftoverOnly).not.toContain("0/1");
+    // Both pills (Now tab heartbeat + Loop tab) plus the ACTIVE banner speak the
+    // same way — assert the property, not an occurrence count, since a third
+    // legitimate site (the banner) makes the count brittle.
+    // Three legitimate sites say it: the Now-tab pill, the Loop-tab pill, and the
+    // ACTIVE banner ("1 leftover lane(s) to disarm"). Assert each shape rather than
+    // a total, so adding a fourth honest site does not fail this test spuriously.
+    expect(leftoverOnly.split("1 leftover").length - 1).toBe(3);
+    expect(leftoverOnly).toContain("1 leftover lane(s) to disarm"); // banner
+    expect(leftoverOnly).toContain("no session driving");
+    // And nothing anywhere counts lanes as "running".
+    expect(leftoverOnly).not.toMatch(/\d+\/\d+ <span class="lang-en">running/);
+
+    // A clean repo says so rather than counting lanes. Assert the pill's own text
+    // positively — a page-wide negative on "0/0" false-positives on other pills.
+    const clean = render({ ...SNAP, loop: { lanes: [] } });
+    expect(clean).toContain("no session driving");
+    // Assert the pill helper directly. It returns bilingual markup (bi()), so
+    // check both languages are present rather than matching a plain string.
+    const emptyPill = leftoverAndSessionCount([]);
+    expect(emptyPill).toContain("no session driving");
+    expect(emptyPill).toContain("无会话驱动");
+    expect(emptyPill).not.toContain("leftover");
+    const bothPill = leftoverAndSessionCount([
+      { name: "go session", source: "goal", running: true, mode: "go" },
+      { name: "l", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS },
+    ]);
+    expect(bothPill).toContain("1 session driving");
+    expect(bothPill).toContain("1 leftover");
+  });
+
+  it("US-LOOP-118: there is no next-fire countdown to anchor", () => {
+    // Was AC4: a `.hb-next` cell animated "in 12m" toward a launchd fire time.
+    // With no timer, that countdown could only reach "due" and stay there.
+    expect(html).not.toContain('class="hb-next"');
+    expect(html).not.toContain("tickCountdown");
   });
 });
 
@@ -1695,7 +1979,12 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
   ];
   const withLoop = (loop: TruthSnapshot["loop"]): TruthSnapshot => ({ ...SNAP, loop });
 
-  it("AC2: DORMANT header spells out since + reason + per-lane load state + wake hint", () => {
+
+
+  // US-LOOP-115: DORMANT is never written any more, but an OLD dossier snapshot can
+  // carry it, so it must still render — labelled as history, and without promising
+  // wake sources (new Todo / PR merge / dream scan / resume) that no longer exist.
+  it("a historical DORMANT snapshot still renders, labelled as history", () => {
     const html = render(
       withLoop({
         runState: "DORMANT",
@@ -1705,23 +1994,13 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
       }),
     );
     expect(html).toContain('data-loop-state="DORMANT"');
-    expect(html).toContain("2026-06-25T03:00:00Z"); // since
-    expect(html).toContain("idle 6h, no Todo"); // reason
-    // AC2 exact lane phrasing: loop lane unloaded, Dream active (PR loop retired).
-    expect(html).toContain("loop lane unloaded · zero idle");
-    expect(html).toContain("Dream lane active");
-    // next-wake hint
-    expect(html).toContain("Wakes on: new Todo · PR merge · dream scan · roll loop resume");
-  });
-
-  it("AC4: DORMANT header is bilingual EN + ZH (separate lines, no inline mix)", () => {
-    const html = render(
-      withLoop({ runState: "DORMANT", stateSince: "2026-06-25T03:00:00Z", stateReason: "idle 6h", lanes: LANES_DORMANT }),
-    );
-    expect(html).toContain("DORMANT"); // EN
-    expect(html).toContain("休眠"); // ZH
-    expect(html).toContain("唤醒于"); // ZH wake hint
-    expect(html).toContain("loop lane 已卸载 · 零闲置"); // ZH lane line
+    expect(html).toContain("2026-06-25T03:00:00Z");
+    expect(html).toContain("idle 6h, no Todo");
+    expect(html).toContain("historical state");
+    expect(html).toContain("常驻调度已退役");
+    // No retired wake promises.
+    expect(html).not.toContain("Wakes on:");
+    expect(html).not.toContain("唤醒于");
   });
 
   it("AC3: render honours the resolver verdict — PAUSED snapshot renders PAUSED, not dormant/active", () => {
@@ -1736,11 +2015,31 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
     expect(html).toContain("已暂停");
   });
 
-  it("ACTIVE: all lanes armed → active banner with the armed count", () => {
-    const html = render(withLoop({ runState: "ACTIVE", lanes: LANES_ALL_ON }));
-    expect(html).toContain('data-loop-state="ACTIVE"');
-    expect(html).toContain("loop running · 3/3 lanes armed");
-    expect(html).toContain("活跃"); // ZH
+  it("US-LOOP-118: ACTIVE says whether a session is driving, not how many lanes are armed", () => {
+    // The old banner read "loop running · 3/3 lanes armed" — a count of installed
+    // timers, which is no longer a thing that can be armed.
+    const open = render(withLoop({
+      runState: "ACTIVE",
+      lanes: [{ name: "go session", source: "goal", running: true, mode: "go", status: "active" }],
+    }));
+    expect(open).toContain('data-loop-state="ACTIVE"');
+    expect(open).toContain("go session open");
+    expect(open).not.toContain("lanes armed");
+    expect(open).toContain("活跃"); // ZH
+
+    // No session driving: say so, and never imply something needs installing.
+    const idle = render(withLoop({ runState: "ACTIVE", lanes: [] }));
+    expect(idle).toContain("no open go session");
+    expect(idle).toContain("Delivery advances only while an agent session drives it");
+
+    // A leftover plist is named as debris to disarm.
+    const leftover = render(withLoop({
+      runState: "ACTIVE",
+      // The marker is what makes it a leftover; source alone is not enough,
+      // because old snapshots list retired lanes unconditionally.
+      lanes: [{ name: "backlog loop (leftover lane)", source: "launchd", running: false, mode: "backlog", status: LEFTOVER_LANE_STATUS }],
+    }));
+    expect(leftover).toContain("1 leftover lane(s) to disarm");
   });
 
   it("fallback: a snapshot without runState (older snapshots) renders ACTIVE, never crashes", () => {
@@ -1748,9 +2047,4 @@ describe("US-LOOP-079l — #loop 3-state dossier header (ACTIVE / DORMANT / PAUS
     expect(html).toContain('data-loop-state="ACTIVE"');
   });
 
-  it("DORMANT with loop lane somehow still armed shows 'loop lane active' (state is lane-derived, not hardcoded)", () => {
-    const html = render(withLoop({ runState: "DORMANT", stateSince: "2026-06-25T03:00:00Z", stateReason: "x", lanes: LANES_ALL_ON }));
-    expect(html).toContain("loop lane active");
-    expect(html).not.toContain("loop lane unloaded · zero idle");
-  });
 });

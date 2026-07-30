@@ -11,8 +11,8 @@ cd my-project
 roll setup && roll init
 
 roll next           # continue with design/apply/repair/migrate/loop/status
-roll loop on        # AI starts executing BACKLOG on a configurable schedule
-roll loop status    # check scheduler state and recent cycles
+roll loop go        # AI works the BACKLOG in this session, cycle after cycle
+roll loop status    # check run state and recent cycles
 roll loop watch     # optional: CLI-first live view of the current cycle
 ```
 
@@ -23,21 +23,27 @@ Roll runs as a V4 Supervisor execution system:
 - **Supervisor** — project-level observe/advise role. It reads backlog, merge truth, open PRs, scoped role bindings, repeated failures, release readiness, and owner questions. It coordinates across Stories; it never implements a Story or overrides evidence gates.
 - **Delta Unit** — one Story delivered through `design` when needed, then `execute`, and, when configured, `evaluate`.
 - **Roles and bindings** — `supervise`, `design`, `execute`, and `evaluate` are stable roles. The concrete agent and optional model are resolved from `Scope -> Role -> Binding -> Agent -> Model`. If a requested binding is unavailable, Roll records that and fails loud instead of pretending another agent was used.
-- **Loop** — on a configurable schedule, picks the top story from BACKLOG and executes it in an isolated worktree. CI must pass before anything lands on `main`.
-- **Dream** — at 3am, scans the codebase for dead code, doc gaps, and architectural drift. Queues `REFACTOR-NNN` entries for loop to pick up.
+- **Loop** — while a session drives it, picks the top story from BACKLOG and executes it in an isolated worktree, then moves to the next. CI must pass before anything lands on `main`. Nothing advances between sessions.
+- **Dream** — `roll dream run-once` scans the codebase for dead code, doc gaps, and architectural drift, queueing `REFACTOR-NNN` entries for the loop to pick up.
 - **Skills** — remain the capability layer. Roles invoke `$roll-design`, `$roll-build`, `$roll-fix`, `$roll-peer`, `$roll-.qa`, and other skills.
 
 You set goals, review PRs, and run releases. Everything in between is Roll.
 
-## Operating Modes
+## How Delivery Is Driven
 
-Roll has two modes over the same backlog, route profile, evidence, Evaluator,
-and release gates. `guided` means the owner asks `roll supervisor status/next/why`
-and explicitly starts work, usually with `roll loop go --cards <id>`.
-`autonomous` means `roll loop on` has installed the scheduler, so eligible Todo
-work may run within the existing gates. `roll loop pause` / `roll loop off`
-return control to guided operation; `roll loop resume` / `roll loop on` switch
-back explicitly.
+One way: you open an agent session and run `roll loop go`. That session is the
+Supervisor, and it keeps taking the next eligible card — within the same backlog,
+route profile, evidence, Evaluator, and release gates — until the scope is done, the
+the run hits `--max-cycles` / `--for`, the dead-loop breaker trips, or you pause it. **Nothing advances between runs, and no run starts that you did not start.**
+
+Scope it as tightly as you like: `roll loop go --epic <name>`, `--cards <id,...>`,
+`--max-cycles N`, `--for <duration>`. Ask `roll supervisor status/next/why` first if
+you want the reasoning before committing to a scope.
+
+`roll loop pause` stops autonomous card selection; `roll loop resume` releases it. A
+tripped correction breaker pauses too. An explicitly-scoped one-shot
+(`roll loop go --cards <id>`) still runs while paused — that is your decision on the
+spot, not autonomous progress.
 
 ### Onboarding Samples
 
@@ -48,7 +54,7 @@ mkdir my-product && cd my-product
 roll init
 roll next
 roll design --from-file .roll/brief.md
-roll loop on
+roll loop go
 ```
 
 Start with a short requirement, PRD, or notes. Roll explains the next design step instead of silently creating fake work; Designer creates the backlog, Supervisor picks `standard`, `verified`, or `designed` execution per Story, and the owner reviews story-scoped attest evidence.
@@ -60,7 +66,7 @@ cd existing-codebase
 roll init
 roll next
 roll init --apply
-roll loop on
+roll loop go
 ```
 
 Roll diagnoses current code without destructive migration, creates or updates Roll metadata after review, and then reasons over the existing backlog/docs/context. Inspect state through CLI-first observability: `roll status`, `roll loop watch`, `roll loop runs`, `roll loop cycle <id>`, alerts, and story reports.
@@ -82,10 +88,10 @@ Runtime availability is explicit. Unavailable agents are recorded as unavailable
 
 ## Features
 
-### Autonomous Execution
+### Session-Driven Execution
 
-- `roll loop on` — AI picks stories from BACKLOG and executes on a configurable schedule in an isolated worktree `[core]`
-- `roll loop status` — scheduler snapshot, recent cycles, queue, alerts, and cost `[core]`
+- `roll loop go` — AI picks stories from BACKLOG and executes them in an isolated worktree, cycle after cycle, for as long as this session drives it `[core]`
+- `roll loop status` — run state, recent cycles, queue, alerts, and cost `[core]`
 - `roll loop watch` — default read-only live status; use `--events` for compact events and `--raw-events` only for audit/debug `[highlight]`
 - `roll loop pause / resume` — hand-code yourself; let AI resume when you're done
 
@@ -97,11 +103,11 @@ Runtime availability is explicit. Unavailable agents are recorded as unavailable
 - CI Gate — loop waits for green CI; red CI halts the loop and writes an alert `[core]`
 - TCR Discipline — no commit without passing tests; zero-diff commits revert automatically `[core]`
 
-### Nightly Dream
+### Dream Code Health Scan
 
-- Code Health Scan — detects dead code, architectural drift, over-engineering candidates `[highlight]`
+- Code Health Scan — `roll dream run-once` detects dead code, architectural drift, over-engineering candidates `[highlight]`
 - Doc Coverage — flags missing guides, stale docs, undocumented ENV vars
-- REFACTOR Queue — writes REFACTOR-NNN entries to BACKLOG for loop to pick up next morning
+- REFACTOR Queue — writes REFACTOR-NNN entries to BACKLOG for loop to pick up
 
 ### Story Lifecycle
 
@@ -180,7 +186,7 @@ point — see [patterns/](patterns/README.md) for the decision tree:
 | First working project | [getting-started.md](getting-started.md) |
 | Scheduling, subcommands, tmux visibility | [loop.md](loop.md) |
 | Governed tool registry and policy | [tools.md](tools.md) |
-| Nightly code health and REFACTOR generation | [dream.md](dream.md) |
+| Code health scan and REFACTOR generation | [dream.md](dream.md) |
 | Cross-agent review protocol | [peer.md](peer.md) |
 | Complete skill catalog | [skills.md](skills.md) |
 | Adoption patterns (seed / graft / replant) | [patterns/](patterns/README.md) |
