@@ -6,9 +6,10 @@ import {
   authCooldownExclusions,
   canonicalAgentName,
   excludedPeers,
-  peerReviewCost,
+  peerRunIdentity,
   type CycleContext,
 } from "@roll/core";
+import { configuredPeerModel } from "./node-ports.js";
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { classifyBlockSignature } from "./agent-liveness.js";
 import { blockIfAgentCredentialsMissing } from "./agent-routing.js";
@@ -164,6 +165,11 @@ export function createCapturePeerHelpers(params: {
         ts: eventTs(ports),
       });
     let res;
+    // US-PAIR-011: the CONFIGURED model for this peer — rig-declared if agents.yaml
+    // pins one, else the agent's registered default. Resolved BEFORE the spawn so
+    // selection never depends on post-hoc observation (several agents have stub
+    // usage extractors and would be permanently undeterminable).
+    const reviewModel = configuredPeerModel(ports.repoCwd, peer);
     const credentialBlock = blockIfAgentCredentialsMissing(peer, "review", ports, ctx);
     if (credentialBlock !== null) {
       emitConsult("error", "auth", credentialBlock);
@@ -192,6 +198,10 @@ export function createCapturePeerHelpers(params: {
               skillBody: prompt,
               timeoutMs,
               bare: true, // FIX-319: review-only framing, no worker autorun directive
+              // US-PAIR-011: pin the CONFIGURED model. Without this the reviewer ran
+              // whatever its CLI defaulted to (cursor defaults to `auto`), so any
+              // isolation claim about "which model reviewed this" was unfounded.
+              ...(reviewModel !== "" ? { model: reviewModel } : {}),
               ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
             }),
         }).then((r) => r.result),
@@ -232,9 +242,13 @@ export function createCapturePeerHelpers(params: {
     // the pair:verdict cost is now the peer's REAL list cost, parsed from its
     // own stdout (claude stream-json or the per-agent stdout-scrape extractors).
     // Best-effort by contract — an unparseable peer records 0, never throws.
-    const cost = peerReviewCost(peer, res.stdout);
+    // US-PAIR-014: carry the BASIS, not just the number — an unparseable peer is
+    // "unobservable", which must never be rendered as "$0.00 / free".
     emitConsult("reviewed");
-    return { verdict, findings, cost };
+    // US-PAIR-011: `model` is what config pinned (selection identity);
+    // `observedModel` is what the peer's own usage footer claimed, when it claimed
+    // anything — reconciliation only (US-PAIR-018), never an input to selection.
+    return { verdict, findings, ...peerRunIdentity(peer, res.stdout, reviewModel) };
   };
   // Full cycle diff (origin/main...HEAD), shared by the gate retry + pairing.
   const cycleDiff = async (cwd: string): Promise<string> => {

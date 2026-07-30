@@ -11,13 +11,14 @@ import {
   heteroAvailable,
   initialRepairState,
   pairingHistory,
-  peerReviewCost,
+  peerRunIdentity,
   type CapturedFacts,
   type CycleCommand,
   type CycleContext,
 } from "@roll/core";
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { realAgentEnv } from "../commands/agent-list.js";
+import { configuredPeerModel } from "./node-ports.js";
 import { cardArchiveDir } from "../lib/archive.js";
 import { formatEvaluationContractForScorer, parseEvaluationContract } from "../lib/evaluation-contract.js";
 import { applyEvaluationTierGate, recordEvaluatorPanelRound } from "./evaluation-tier-stage.js";
@@ -407,6 +408,7 @@ export async function executeCaptureFactsCommand(
         > => {
           const credentialBlock = blockIfAgentCredentialsMissing(peer, "score", ports, ctx);
           if (credentialBlock !== null) return { outcome: "auth-block", detail: credentialBlock };
+          const scoreModel = configuredPeerModel(ports.repoCwd, peer); // US-PAIR-011
           let res;
           try {
             // US-CYCLE-002: the scorer sub-spawn is watchdog-wrapped (evaluator
@@ -425,7 +427,7 @@ export async function executeCaptureFactsCommand(
                     // execution worktree (submodule cycle worktree for a submodule story).
                     cwd: execCwd,
                     skillBody: prompt,
-                    timeoutMs,
+                    timeoutMs, ...(scoreModel !== "" ? { model: scoreModel } : {}), // US-PAIR-011
                     ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
                   }),
               }).then((r) => r.result),
@@ -474,7 +476,7 @@ export async function executeCaptureFactsCommand(
                 : `returned score-like text but not accepted: ${diag.reason}`;
             return { outcome: "unparseable", detail, artifactPath };
           }
-          return { outcome: "parsed", parsed: { ...diag.score, cost: peerReviewCost(peer, res.stdout) } };
+          return { outcome: "parsed", parsed: { ...diag.score, ...peerRunIdentity(peer, res.stdout, scoreModel) } };
         };
         const scorePeer = async (peer: string, summary: string, timeoutMs: number): Promise<PairScore | null> => {
           const prompt = buildPairScorePrompt(summary, evalContractFormatted);

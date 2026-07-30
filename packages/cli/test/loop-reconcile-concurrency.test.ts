@@ -86,6 +86,8 @@ function openGreenProvider(): PrStatusProvider {
     pollPrStatus: async () => ({
       kind: "open",
       ci: "green",
+      // FIX-1489: merge permission is a NAMED verdict now, not the aggregate.
+      checks: [{ name: "test-ts", conclusion: "success" }],
       draft: false,
       mergeable: "MERGEABLE",
       checkedAt: TS_MS,

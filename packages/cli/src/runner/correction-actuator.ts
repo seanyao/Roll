@@ -5,6 +5,7 @@ import {
   decideCorrectionAction,
   nextIdeaId,
   parsePolicy,
+  serializeEvent,
   type CorrectionActuatorMode,
   type CorrectionDecision,
 } from "@roll/core";
@@ -88,7 +89,9 @@ function reviewConsensus(events: readonly RollEvent[], cycleId: string | undefin
 function appendEvent(eventsPath: string, event: RollEvent): void {
   try {
     mkdirSync(dirname(eventsPath), { recursive: true });
-    appendFileSync(eventsPath, `${JSON.stringify(event)}\n`, "utf8");
+    // FIX-1490: serializeEvent normalizes `ts` to epoch ms — this writer used a
+    // seconds clock and bypassed the bus.
+    appendFileSync(eventsPath, serializeEvent(event), "utf8");
   } catch {
     /* best-effort trace; the cycle terminal result still owns fail-loud state */
   }

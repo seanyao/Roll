@@ -35,7 +35,7 @@
  * inside the events the caller builds, and all I/O flows through the injected
  * {@link EventStore} so the append + dedupe semantics are unit-testable.
  */
-import { type RollEvent, parseEventLine } from "@roll/spec";
+import { type RollEvent, eventTsMs, parseEventLine } from "@roll/spec";
 import { type EventStore, nodeEventStore } from "./infra-default.js";
 
 /** Rotation threshold — 10 MiB, mirroring `_loop_event_rotate` (>10485760). */
@@ -53,11 +53,18 @@ export function serializeEvent(event: RollEvent): string {
   return `${JSON.stringify(normalizeEventTs(event))}\n`;
 }
 
-function epochMs(ts: number): number {
-  return ts >= 1_000_000_000_000 ? ts : ts * 1000;
-}
+// FIX-1490: one definition of the ms contract, shared with the read side
+// (`parseEventLine`). The private copy that used to live here is gone — two
+// copies is how the two sides drifted in the first place.
+const epochMs = eventTsMs;
 
-function normalizeEventTs(event: RollEvent): RollEvent {
+/**
+ * Normalize an event's timestamps onto the epoch-ms contract. Exported (FIX-1490)
+ * so writers that cannot go through {@link EventBus} still share ONE
+ * implementation instead of hand-rolling `appendFileSync` with a raw seconds
+ * clock — which is exactly how 5,483 historical events ended up in seconds.
+ */
+export function normalizeEventTs(event: RollEvent): RollEvent {
   if (event.type === "cycle:terminal") {
     return {
       ...event,

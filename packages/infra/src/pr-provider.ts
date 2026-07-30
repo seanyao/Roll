@@ -44,6 +44,22 @@ const GREEN_CONCLUSIONS = new Set(["SUCCESS", "SKIPPED", "NEUTRAL"]);
  * completed non-success conclusion and any FAILURE/ERROR context is red;
  * anything not finished yet is pending.
  */
+/**
+ * FIX-1489 — one entry's conclusion in `requiredCheckVerdict` terms:
+ * `null` = not finished yet (the caller waits), otherwise the lowercased
+ * conclusion so `skipped`/`neutral` stay DISTINGUISHABLE from `success`.
+ * Deliberately NOT the tri-state reducer below, which folds them all to "green".
+ */
+export function rollupEntryConclusion(e: StatusCheckRollupEntry): string | null {
+  if (e.__typename === "StatusContext") {
+    const state = (e.state ?? "").toLowerCase();
+    return state === "" || state === "pending" ? null : state;
+  }
+  if (e.status !== "COMPLETED") return null;
+  const conclusion = e.conclusion;
+  return conclusion == null ? null : String(conclusion).toLowerCase();
+}
+
 function reduceRollupEntry(e: StatusCheckRollupEntry): "red" | "pending" | "green" {
   if (e.__typename === "StatusContext") {
     const state = e.state ?? "";
@@ -145,7 +161,14 @@ export class GitHubPrStatusProvider implements PrStatusProvider {
       );
       // FIX-1487: surface the sha the CI verdict was computed FROM, so the
       // merge can pin it and never land something pushed after the check.
-      return { kind: "open", ci, draft: info.isDraft, mergeable: info.mergeable, checkedAt, headSha: info.headRefOid };
+      // FIX-1489: names stop being informational. The story-card merge path needs a
+      // NAMED verdict (requiredCheckVerdict) on this sha, because the `ci` aggregate
+      // above counts SKIPPED/NEUTRAL as green and ci.yml can legitimately skip test-ts.
+      const checks = rollup.map((e) => ({
+        name: (e.name ?? e.context ?? "").trim(),
+        conclusion: rollupEntryConclusion(e),
+      }));
+      return { kind: "open", ci, draft: info.isDraft, mergeable: info.mergeable, checkedAt, headSha: info.headRefOid, checks };
     }
 
     // UNKNOWN or any unexpected string → treat as unreachable provider_error so

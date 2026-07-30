@@ -27,7 +27,7 @@ import {
   type AuditSnapshot,
 } from "@roll/core";
 import { type PrMergeInfo, ghRepoSlug, prViewMergeInfo, remoteUrl } from "@roll/infra";
-import { parseEventLine } from "@roll/spec";
+import { eventTsMs, parseEventLine } from "@roll/spec";
 import { cardArchiveDir, readIndex, reportFileName } from "./archive.js";
 import { hasVisualEvidenceAc } from "./design-visual-evidence.js";
 
@@ -161,7 +161,15 @@ export async function gatherAuditSnapshot(
       const e = parseEventLine(line);
       if (e === null) continue;
       if (e.type === "cycle:terminal") terminal.push(e.cycleId);
-      if (e.type === "cycle:end" && e.outcome === "failed" && nowSec - e.ts <= COUNT_WINDOW_SEC) eventFailed += 1;
+      // FIX-1490: `nowSec` is seconds but the stream carries a mixed-unit tail, so
+      // compare both sides in epoch ms rather than subtracting across units.
+      if (
+        e.type === "cycle:end" &&
+        e.outcome === "failed" &&
+        eventTsMs(nowSec) - eventTsMs(e.ts) <= COUNT_WINDOW_SEC * 1000
+      ) {
+        eventFailed += 1;
+      }
     }
   }
   snapshot.terminalCycleIds = terminal;

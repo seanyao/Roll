@@ -1,6 +1,7 @@
 import {
   correctionCircuitVerdict,
   parsePolicy,
+  serializeEvent,
   type CorrectionCircuitVerdict,
   type LoopSafetyConfig,
 } from "@roll/core";
@@ -47,7 +48,10 @@ function alreadyTripped(events: readonly RollEvent[], verdict: Exclude<Correctio
 
 function appendEvent(eventsPath: string, event: RollEvent): void {
   mkdirSync(dirname(eventsPath), { recursive: true });
-  appendFileSync(eventsPath, `${JSON.stringify(event)}\n`, "utf8");
+  // FIX-1490: go through serializeEvent so `ts` lands on the epoch-ms contract.
+  // This writer used to JSON.stringify directly with a SECONDS clock, which is
+  // one of the three paths that bypassed the bus and produced seconds on disk.
+  appendFileSync(eventsPath, serializeEvent(event), "utf8");
 }
 
 export function applyCorrectionCircuitBreaker(

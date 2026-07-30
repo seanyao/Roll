@@ -1,4 +1,4 @@
-import type { RollEvent } from "@roll/spec";
+import { eventTsMs, type RollEvent } from "@roll/spec";
 
 export interface MorningRunRow {
   [key: string]: unknown;
@@ -74,7 +74,17 @@ export function buildLoopDigestModel(
   runs: readonly MorningRunRow[],
   opts: LoopDigestOptions,
 ): LoopDigestModel {
-  const inWindow = events.filter((ev) => ev.ts >= opts.windowStart && ev.ts <= opts.windowEnd);
+  // FIX-1490: this module's window is in SECONDS, but the event stream carries a
+  // mixed-unit tail (5,483 of 22,293 historical events are seconds, the rest ms —
+  // three writers bypassed the bus's normalization). Comparing raw `ev.ts` against
+  // a seconds window silently drops whichever half doesn't match, so bring both
+  // sides onto epoch ms for the comparison.
+  const windowStartMs = eventTsMs(opts.windowStart);
+  const windowEndMs = eventTsMs(opts.windowEnd);
+  const inWindow = events.filter((ev) => {
+    const ts = eventTsMs(ev.ts);
+    return ts >= windowStartMs && ts <= windowEndMs;
+  });
   const hasCycleEnd = inWindow.some((ev) => ev.type === "cycle:end");
   const stories = cycleStoryMap(events);
   const cycleIds = new Set<string>();
@@ -110,7 +120,8 @@ export function buildLoopDigestModel(
 
   for (const row of runs) {
     const ts = parseRunTs(row);
-    if (ts === undefined || ts < opts.windowStart || ts > opts.windowEnd) continue;
+    // FIX-1490: same mixed-unit hazard as the event window above.
+    if (ts === undefined || eventTsMs(ts) < windowStartMs || eventTsMs(ts) > windowEndMs) continue;
     const story = storyFromRun(row);
     if (story !== undefined && opts.runDelivered?.(row, opts.windowEnd) === true) {
       delivered.add(story);

@@ -328,20 +328,90 @@ export function renderPairingConfig(cfg: PairingConfig): string {
  * the cycle. The returned figure is the kept-work list cost (revertCount 0 — a
  * one-way peer review never reverts).
  */
-export function peerReviewCost(peer: string, stdout: string): number {
+/**
+ * US-PAIR-014 — why a cost figure is what it is.
+ *
+ * `0` used to mean BOTH "this review was free" and "we could not parse the peer's
+ * usage" — and 5 of 7 agents hit the second case, so cost was unusable in
+ * aggregate. `basis` makes the difference explicit; `estimated` is also honest
+ * that the number comes from the price table, not from a provider invoice.
+ */
+export type PeerReviewCostFact =
+  | { readonly basis: "estimated"; readonly usd: number }
+  | {
+      readonly basis: "unobservable";
+      readonly usd: 0;
+      readonly reason: "no_usage_parsed" | "zero_tokens_reported" | "extractor_threw";
+    };
+
+/**
+ * US-PAIR-011 — the model the peer's own output CLAIMS it ran, or "" when the
+ * agent reported nothing parseable (pi/agy extractors are deliberate stubs).
+ *
+ * Reconciliation only. This must NEVER feed selection: an agent whose extractor
+ * is a stub would otherwise be permanently unable to satisfy a model/vendor
+ * isolation tier. Compare it against the configured model and warn on mismatch
+ * (US-PAIR-018) — never overrule the decision already made.
+ */
+export function observedModelFrom(peer: string, stdout: string): string {
+  try {
+    const usage = extractUsage(canonicalAgentName(peer), stdout.split("\n"));
+    const model = usage?.model;
+    return typeof model === "string" ? model.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * US-PAIR-011/014 — everything a finished peer run reports about ITSELF:
+ * what it cost (and on what basis), which model config pinned it to, and which
+ * model its own output claimed. One helper so the review and score paths cannot
+ * drift apart on how they record identity and spend.
+ */
+export function peerRunIdentity(
+  peer: string,
+  stdout: string,
+  configuredModel: string,
+): { cost: number; costBasis: "estimated" | "unobservable"; model?: string; observedModel?: string } {
+  const fact = peerReviewCostFact(peer, stdout);
+  const observed = observedModelFrom(peer, stdout);
+  return {
+    cost: fact.usd,
+    costBasis: fact.basis,
+    ...(configuredModel !== "" ? { model: configuredModel } : {}),
+    ...(observed !== "" ? { observedModel: observed } : {}),
+  };
+}
+
+/** US-PAIR-014: the cost WITH its basis. Prefer this over {@link peerReviewCost}. */
+export function peerReviewCostFact(peer: string, stdout: string): PeerReviewCostFact {
   try {
     const canon = canonicalAgentName(peer);
-    const lines = stdout.split("\n");
-    const usage = extractUsage(canon, lines);
-    if (usage === null) return 0;
-    // pi pair-review: a parsed-but-empty usage (0 in / 0 out) has no cost to
-    // compute — short-circuit so the price table never sees a zero-token split.
-    if ((usage.input_tokens ?? 0) === 0 && (usage.output_tokens ?? 0) === 0) return 0;
+    const usage = extractUsage(canon, stdout.split("\n"));
+    // Includes the deliberate always-null stubs (pi, agy): "we cannot see it" is
+    // not "it cost nothing".
+    if (usage === null) return { basis: "unobservable", usd: 0, reason: "no_usage_parsed" };
+    if ((usage.input_tokens ?? 0) === 0 && (usage.output_tokens ?? 0) === 0) {
+      return { basis: "unobservable", usd: 0, reason: "zero_tokens_reported" };
+    }
     const { estimatedCost } = toCycleCost(usage, { cycleId: "pair", agent: canon, revertCount: 0 });
-    return Number.isFinite(estimatedCost) && estimatedCost > 0 ? estimatedCost : 0;
+    if (!Number.isFinite(estimatedCost) || estimatedCost <= 0) {
+      return { basis: "unobservable", usd: 0, reason: "zero_tokens_reported" };
+    }
+    return { basis: "estimated", usd: estimatedCost };
   } catch {
-    return 0; // cost accounting is best-effort — never throw
+    return { basis: "unobservable", usd: 0, reason: "extractor_threw" };
   }
+}
+
+/**
+ * Back-compatible numeric form. Callers that only need a number keep working;
+ * anything that reports or aggregates spend should use {@link peerReviewCostFact}
+ * so "unobservable" is never rendered as "$0.00".
+ */
+export function peerReviewCost(peer: string, stdout: string): number {
+  return peerReviewCostFact(peer, stdout).usd;
 }
 
 /** Aggregate pairing activity + spend, rebuilt from the pair:* event stream. */
@@ -352,6 +422,15 @@ export interface PairingCostSummary {
   byPeer: Record<string, number>;
   /** sum of pair:verdict `cost` across all pairings (USD list cost). */
   totalCost: number;
+  /** US-PAIR-014: rows whose cost really was measured (`costBasis: "estimated"`). */
+  observedCostRows: number;
+  /**
+   * US-PAIR-014: rows whose cost could NOT be observed. Kept separate from
+   * `totalCost` so a reader never divides by the full row count and reports
+   * "unobservable" as "free". Legacy rows (written before costBasis existed)
+   * count as unobservable when they carry a bare 0.
+   */
+  unobservableCostRows: number;
   /** sum of `findings` across all pairings (the real-problem signal). */
   totalFindings: number;
   /** pair:none-available events (fail-loud absences — a pairing that did not happen). */
@@ -373,13 +452,31 @@ export interface PairingCostSummary {
  * backfilled — the spend becomes visible from the first PAIR-006 cycle on.
  */
 export function aggregatePairingCost(events: readonly RollEvent[]): PairingCostSummary {
-  const summary: PairingCostSummary = { pairings: 0, byPeer: {}, totalCost: 0, totalFindings: 0, noneAvailable: 0, excludedPeers: {} };
+  const summary: PairingCostSummary = {
+    pairings: 0,
+    byPeer: {},
+    totalCost: 0,
+    observedCostRows: 0,
+    unobservableCostRows: 0,
+    totalFindings: 0,
+    noneAvailable: 0,
+    excludedPeers: {},
+  };
+  // US-PAIR-014: classify each spend row. An explicit basis wins; a legacy row
+  // with no basis is "observed" only if it carries a non-zero cost — a bare 0 is
+  // exactly the ambiguity this field exists to remove, so it counts unobservable.
+  const tally = (basis: "estimated" | "unobservable" | undefined, cost: number): void => {
+    const observed = basis === "estimated" || (basis === undefined && Number.isFinite(cost) && cost > 0);
+    if (observed) summary.observedCostRows += 1;
+    else summary.unobservableCostRows += 1;
+  };
   for (const e of events) {
     if (e.type === "pair:verdict") {
       summary.pairings += 1;
       const peer = canonicalAgentName(e.peer);
       summary.byPeer[peer] = (summary.byPeer[peer] ?? 0) + 1;
       summary.totalCost += Number.isFinite(e.cost) ? e.cost : 0;
+      tally(e.costBasis, e.cost);
       summary.totalFindings += Number.isFinite(e.findings) ? e.findings : 0;
     } else if (e.type === "pair:score") {
       // US-PAIR-009: a score pairing is pairing activity + spend (no findings axis).
@@ -387,6 +484,7 @@ export function aggregatePairingCost(events: readonly RollEvent[]): PairingCostS
       const peer = canonicalAgentName(e.peer);
       summary.byPeer[peer] = (summary.byPeer[peer] ?? 0) + 1;
       summary.totalCost += Number.isFinite(e.cost) ? e.cost : 0;
+      tally(e.costBasis, e.cost);
     } else if (e.type === "pair:none-available") {
       summary.noneAvailable += 1;
     } else if (e.type === "pair:excluded") {

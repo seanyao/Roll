@@ -156,6 +156,9 @@ function applyPrCloudState(facts: ReconcileFacts, st: PrCloudState): void {
       facts.ciGreen = st.ci === "green" ? true : st.ci === "red" ? false : undefined;
       // FIX-1487: remember WHICH sha that verdict came from.
       facts.headSha = st.headSha;
+      // FIX-1489: and the NAMED per-check conclusions on that sha — merge permission
+      // is a named judgment, not the SKIPPED-tolerant aggregate above.
+      if (st.checks !== undefined) facts.checks = st.checks;
       facts.prDraft = st.draft;
       facts.prMergeable = st.mergeable;
       return;

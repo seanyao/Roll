@@ -23,6 +23,7 @@
  * the existing `done` record and short-circuit.
  */
 import type { DeliveryRecord, LifecycleState } from "@roll/spec";
+import type { CheckConclusion } from "./required-check.js";
 import { present, absent } from "@roll/spec";
 
 // ── Cloud PR state (data contract from FIX-1052 spec) ─────────────────────────
@@ -45,6 +46,12 @@ export type PrCloudState =
       mergeable?: PrMergeableState;
       /** FIX-1487: the head sha the CI verdict was computed from — pinned at merge. */
       headSha?: string;
+      /**
+       * FIX-1489: per-check name+conclusion on that same sha. Merge permission is a
+       * NAMED judgment over this list, not the `ci` aggregate — the aggregate counts
+       * SKIPPED as green, so a skipped `test-ts` used to merge untested.
+       */
+      checks?: readonly CheckConclusion[];
       checkedAt: string;
     }
   | { kind: "merged"; mergeCommit: string; mergedAt: string; checkedAt: string }

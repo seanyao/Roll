@@ -12,6 +12,7 @@ import {
   nodeExecPort,
   normalizeAgentConfig,
   parseBacklog,
+  peerModelFor,
   queryStoryDelivery,
   resolveRoute,
   resolveRouteExcluding,
@@ -84,6 +85,15 @@ export function configuredModelBackstop(repoCwd: string, agent: string): string 
   } catch {
     return ""; // agents.yaml missing/unreadable — no backstop (caller stays config-driven).
   }
+}
+
+/**
+ * US-PAIR-011 — the model a peer reviewer/scorer will actually be pinned to:
+ * the rig-declared model from agents.yaml, else the agent's registered default.
+ * Composed here so the review and score call sites share ONE resolution path.
+ */
+export function configuredPeerModel(repoCwd: string, agent: string): string {
+  return peerModelFor(agent, configuredModelBackstop(repoCwd, agent));
 }
 
 function scopedStoryExecuteRoute(

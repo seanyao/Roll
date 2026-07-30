@@ -25,6 +25,13 @@ import type { BlockCause, FailureClass, TerminalEvent, TerminalOutcome } from ".
 import type { TaskLevel } from "./story.js";
 import type { BuilderFinalizationFacts, BuilderFinalizationVerdict } from "./builder.js";
 
+/**
+ * US-PAIR-014 — why a recorded cost figure is what it is.
+ * `estimated` = derived from the price table (never an invoice).
+ * `unobservable` = the peer's usage could not be parsed, so 0 is NOT "free".
+ */
+export type CostBasis = "estimated" | "unobservable";
+
 export type RollEvent =
   // Loop lifecycle (BC2)
   | { type: "loop:fire"; loop: LoopType; ts: number }
@@ -412,16 +419,21 @@ export type RollEvent =
   // repeated prior failures, owner quorum). This records the reason + the fan-out
   // limit + the concurrently-dispatched peers so fan-out is never a silent default.
   | { type: "pair:fanout"; cycleId: string; stage: string; reason: string; limit: number; peers: string[]; ts: number }
+  // US-PAIR-014: `costBasis` says WHY the cost figure is what it is. Optional for
+  // back-compat: a legacy row has no basis, and a bare `cost: 0` on such a row is
+  // exactly the "free or unknown?" ambiguity this field removes. 5 of 7 agents hit
+  // the unparseable path, so treating 0 as "free" made aggregate cost meaningless.
+  // "estimated" is also honest that the figure comes from the price table, not an invoice.
   // US-PAIR-004: `stage` is optional for back-compat with PAIR-003 (code-only)
   // logs; multi-stage pairing stamps it so verdicts are distinguishable per stage.
-  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: "agree" | "refine" | "object"; findings: number; cost: number; stage?: string; ts: number }
+  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: "agree" | "refine" | "object"; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage?: string; ts: number }
   // US-PAIR-009: the score stage's outcome — a heterogeneous peer scored the cycle.
   // FIX-344: `stage` widens to `"design"` for the roll-design peer Review Score
   // path. roll-design has NO loop cycle (no commitsAhead/worktree), so its
   // independent peer score is triggered at skill wrap-up via `roll pair score
   // --design` and stamped `stage: "design"` so the design score is distinguishable
   // from a build/fix cycle's `stage: "score"` in the same event stream.
-  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: "good" | "ok" | "regression"; cost: number; stage: "score" | "design"; ts: number }
+  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: "good" | "ok" | "regression"; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage: "score" | "design"; ts: number }
   | { type: "pair:none-available"; cycleId: string; stage: string; reason: string; ts: number }
   // FIX-910 — per-attempt score-stage failure attribution (unparseable / timeout /
   // auth-block / exit-error), emitted from the executor's scorePeer closure so
@@ -733,6 +745,40 @@ export type RollEventType = RollEvent["type"];
  * malformed JSON, or objects without a string `type` and numeric `ts` —
  * readers must skip bad lines, never crash (I8: rebuild always succeeds).
  */
+/**
+ * Bounds of the "this is epoch SECONDS, not milliseconds" window.
+ *
+ * A real roll timestamp in seconds is at least 1e9 (2001-09-09) and always below
+ * 1e12 (the year 33658 in seconds — but only 2001 in ms). Only values inside
+ * `[1e9, 1e12)` are promoted.
+ *
+ * The range matters, not just the ceiling: small synthetic values used as test
+ * fixtures (`ts: 120_000`, i.e. 1970) CANNOT be a real epoch-seconds stamp, so
+ * they are left exactly as they are. A bare `< 1e12` floor check would silently
+ * rescale them and corrupt every relative-duration computation built on them.
+ */
+export const EVENT_TS_SECONDS_MIN = 1_000_000_000;
+export const EVENT_TS_MS_FLOOR = 1_000_000_000_000;
+
+/**
+ * FIX-1490 — an event `ts` is epoch MILLISECONDS. Normalize a value that is
+ * demonstrably epoch seconds onto that contract; leave everything else alone.
+ *
+ * Why this is needed on BOTH sides: the write-side normalization (2026-06-18,
+ * c881f0ab) only covers `serializeEvent`, but three writers hand-rolled their own
+ * `appendFileSync` and bypassed it — so 5,483 of 22,293 historical events carry
+ * seconds, mixed WITHIN the same event types. Reading them as ms renders 2026
+ * dates as 1970 and silently poisons every time-bucketed aggregation.
+ *
+ * Explicit and idempotent by construction — never a silent `* 1000` sprinkled at
+ * call sites (a value already in ms is returned unchanged).
+ */
+export function eventTsMs(ts: number): number {
+  if (!Number.isFinite(ts)) return ts;
+  if (ts < EVENT_TS_SECONDS_MIN || ts >= EVENT_TS_MS_FLOOR) return ts;
+  return ts * 1000;
+}
+
 export function parseEventLine(line: string): RollEvent | null {
   const trimmed = line.trim();
   if (trimmed === "") return null;
@@ -744,6 +790,12 @@ export function parseEventLine(line: string): RollEvent | null {
   }
   if (typeof obj !== "object" || obj === null) return null;
   const rec = obj as Record<string, unknown>;
+  // FIX-1490 deliberately does NOT normalize `ts` here. `parseEventLine` is the
+  // universal read primitive, and most of its callers compare event ts against
+  // ANOTHER event's ts (self-consistent, unit-agnostic). Rewriting the value for
+  // everyone silently broke relative-duration renderers and the loop-digest
+  // window. Only the handful of consumers that compare ts against an external
+  // clock need the ms contract — they call `eventTsMs` at that comparison.
   if (typeof rec["type"] !== "string" || typeof rec["ts"] !== "number") return null;
   return obj as RollEvent;
 }

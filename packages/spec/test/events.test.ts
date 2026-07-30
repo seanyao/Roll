@@ -1,5 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { parseEventLine, type RollEvent } from "../src/types/events.js";
+import { eventTsMs, parseEventLine, type RollEvent } from "../src/types/events.js";
+
+describe("FIX-1490 — event ts is epoch MILLISECONDS, on both sides", () => {
+  // 24.6% of the historical stream (5,483 / 22,293) carries seconds, mixed
+  // WITHIN the same event types — because three writers hand-rolled their own
+  // appendFileSync and bypassed the bus's normalization (which landed 2026-06-18
+  // in c881f0ab but only covers `serializeEvent`).
+  it("promotes a seconds value to milliseconds", () => {
+    // 2026-06-05 as seconds — a real value from the stream.
+    expect(eventTsMs(1_780_682_826)).toBe(1_780_682_826_000);
+  });
+
+  it("leaves a millisecond value untouched", () => {
+    expect(eventTsMs(1_780_682_826_000)).toBe(1_780_682_826_000);
+  });
+
+  it("is idempotent — normalizing twice never double-scales", () => {
+    const once = eventTsMs(1_780_682_826);
+    expect(eventTsMs(once)).toBe(once);
+  });
+
+  it("leaves small synthetic values alone — they cannot be epoch seconds", () => {
+    // Regression guard: a bare `< 1e12` floor check rescaled these and broke
+    // every relative-duration renderer built on synthetic fixtures.
+    expect(eventTsMs(1000)).toBe(1000);
+    expect(eventTsMs(120_000)).toBe(120_000);
+    expect(eventTsMs(0)).toBe(0);
+  });
+
+  it("promoting a seconds stamp lands in 2026, not 1970", () => {
+    // Read as ms, 1780682826 is 1970-01-21 — that is how a 2026 event rendered as
+    // 1970 and poisoned every time-bucketed aggregation.
+    expect(new Date(1_780_682_826).getUTCFullYear()).toBe(1970);
+    expect(new Date(eventTsMs(1_780_682_826)).getUTCFullYear()).toBe(2026);
+  });
+
+  it("parseEventLine does NOT rewrite ts — normalization belongs at the comparison", () => {
+    // Deliberate: parseEventLine is the universal read primitive and most callers
+    // compare one event's ts to another's (unit-agnostic). Rewriting it for
+    // everyone broke the relative-duration renderers and the loop-digest window.
+    const line = '{"type":"cycle:start","cycleId":"c1","storyId":"US-1","agent":"","model":"","ts":1780682826}';
+    expect(parseEventLine(line)?.ts).toBe(1_780_682_826);
+  });
+});
 
 describe("parseEventLine (I8: readers skip bad lines, never crash)", () => {
   it("parses a valid cycle:start line", () => {

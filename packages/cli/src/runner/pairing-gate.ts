@@ -33,7 +33,7 @@ import {
   type PairingStage,
   type ResizeSignal,
 } from "@roll/core";
-import type { AgentScopeConfig } from "@roll/spec";
+import type { AgentScopeConfig, CostBasis } from "@roll/spec";
 import { writeReviewScoreNote } from "../lib/review-score.js";
 import { assessComplexity } from "./peer-gate.js";
 
@@ -129,6 +129,12 @@ export interface PairReview {
   verdict: "agree" | "refine" | "object";
   findings: string[];
   cost: number;
+  /** US-PAIR-014: why `cost` is what it is — 0 must not read as "free". */
+  costBasis?: CostBasis;
+  /** US-PAIR-011: the CONFIGURED model this peer was pinned to (selection identity). */
+  model?: string;
+  /** US-PAIR-011: what the peer's own usage output claimed it ran (reconciliation only). */
+  observedModel?: string;
 }
 
 export type PairEvent =
@@ -136,8 +142,8 @@ export type PairEvent =
   // FIX-1054 — the serial-dispatch policy events (see the events.ts contract).
   | { type: "pair:skipped"; cycleId: string; peers: string[]; reason: string; stage: string; ts: number }
   | { type: "pair:fanout"; cycleId: string; stage: string; reason: string; limit: number; peers: string[]; ts: number }
-  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: PairReview["verdict"]; findings: number; cost: number; stage: string; ts: number }
-  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: PairScore["verdict"]; cost: number; stage: "score" | "design"; ts: number }
+  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: PairReview["verdict"]; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage: string; ts: number }
+  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: PairScore["verdict"]; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage: "score" | "design"; ts: number }
   | { type: "pair:none-available"; cycleId: string; stage: string; reason: string; ts: number }
   /** FIX-910 — per-attempt score-stage failure attribution. Every null return
    *  from a scorer is now diagnosed (unparseable / timeout / auth-block /
@@ -549,7 +555,7 @@ export async function runPairing(
       JSON.stringify({ cycleId, workingAgent, peer, stage, ...review }, null, 2),
       "utf8",
     );
-    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, stage, ts: deps.now() });
+    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, ...(review.costBasis !== undefined ? { costBasis: review.costBasis } : {}), ...(review.model !== undefined ? { model: review.model } : {}), ...(review.observedModel !== undefined ? { observedModel: review.observedModel } : {}), stage, ts: deps.now() });
     return { status: "reviewed", peer, verdict: review.verdict };
   } catch {
     return { status: "error" }; // never throw — pairing must not fail the cycle
@@ -564,6 +570,12 @@ export interface PairScore {
   verdict: "good" | "ok" | "regression";
   rationale: string;
   cost: number;
+  /** US-PAIR-014: why `cost` is what it is — 0 must not read as "free". */
+  costBasis?: CostBasis;
+  /** US-PAIR-011: the CONFIGURED model this scorer was pinned to. */
+  model?: string;
+  /** US-PAIR-011: what the scorer's own usage output claimed it ran. */
+  observedModel?: string;
   /** US-AGENT-041: the reviewer's optional "scope too large" signal — present
    *  only when the delivery is incomplete because the SCOPE exceeds one cycle
    *  (uncovered AC/coverage gaps), not a pure quality problem. Drives the
@@ -903,7 +915,7 @@ export async function runScorePairing(
         JSON.stringify({ cycleId, workingAgent, peer, stage: scoreStage, score: scored.score, verdict: scored.verdict, rationale: scored.rationale, cost: scored.cost, sessionId }, null, 2),
         "utf8",
       );
-      deps.event({ type: "pair:score", cycleId, peer, score: scored.score, verdict: scored.verdict, cost: scored.cost, stage: scoreStage, ts: deps.now() });
+      deps.event({ type: "pair:score", cycleId, peer, score: scored.score, verdict: scored.verdict, cost: scored.cost, ...(scored.costBasis !== undefined ? { costBasis: scored.costBasis } : {}), ...(scored.model !== undefined ? { model: scored.model } : {}), ...(scored.observedModel !== undefined ? { observedModel: scored.observedModel } : {}), stage: scoreStage, ts: deps.now() });
     } catch {
       /* evidence/event are auxiliaries — the note is the product */
     }
@@ -1263,7 +1275,7 @@ export async function retryPeerConsult(
     const path = evidencePath(runtimeDir, cycleId, "code");
     mkdirSync(join(runtimeDir, "peer"), { recursive: true });
     writeFileSync(path, JSON.stringify({ cycleId, workingAgent: working, peer, stage: "code", sameTypeFallback, ...review }, null, 2), "utf8");
-    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, stage: "code", ts: deps.now() });
+    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, ...(review.costBasis !== undefined ? { costBasis: review.costBasis } : {}), ...(review.model !== undefined ? { model: review.model } : {}), ...(review.observedModel !== undefined ? { observedModel: review.observedModel } : {}), stage: "code", ts: deps.now() });
     return { status: "reviewed", peer, sameTypeFallback };
   } catch {
     return { status: "error" }; // never throw — the retry is a rescue, not a cycle killer

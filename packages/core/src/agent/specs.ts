@@ -3,7 +3,15 @@
 // the orchestrated agent POOL (see registry.ts). So "claude"/"claude-stream"
 // remain in these unions as harness kinds.
 export type AgentNormalizerKind = "claude" | "codex" | "kimi" | "pi" | "generic";
-export type UsageExtractorKind = "claude-stream" | "openai" | "gemini" | "kimi" | "qwen" | "pi" | "reasonix" | "agy" | "cursor" | "generic";
+/**
+ * US-PAIR-014: every kind here MUST have an entry in the cost tracker's
+ * `REGISTRY` (typed `Record<UsageExtractorKind, Extractor>`, so a gap is a
+ * compile error). `"gemini"` and `"qwen"` were removed: no agent declared either
+ * — `gemini` is only a name alias for `agy` (which uses the `"agy"` extractor)
+ * and `qwen` is in `REMOVED_AGENTS`. Keeping unimplemented kinds in this union is
+ * what let codex's declared `"openai"` extractor go missing unnoticed.
+ */
+export type UsageExtractorKind = "claude-stream" | "openai" | "kimi" | "pi" | "reasonix" | "agy" | "cursor" | "generic";
 export type SessionRecoveryKind = "pi" | "kimi" | "codex";
 export type SessionBackfillKind = "claude-projects";
 /** lever-4: how (if at all) an agent's prior session is REUSED across the next
@@ -210,6 +218,30 @@ export function getAgentIdentitySpec(name: string): AgentSpec | undefined {
 
 export function agentDefaultModel(name: string, registry: AgentSpecRegistry = AGENT_SPECS): string {
   return getAgentSpec(name, registry)?.defaultModel ?? name;
+}
+
+/**
+ * US-PAIR-011 — which model a peer reviewer/scorer will actually run.
+ *
+ * The isolation ladder compares MODELS, not agent names (two agent entries can be
+ * pinned to the same model — `pi` and `reasonix` both resolve to `deepseek-v4-pro`
+ * in this repo's rigs — and one agent entry can span vendors: cursor runs
+ * `claude-opus-5-*` OR `gpt-5.3-codex`, and defaults to `auto`).
+ *
+ * Selection therefore reads the CONFIGURED identity, which is knowable before the
+ * spawn: the rig-declared model wins, else the agent's registered default. Never
+ * the post-hoc observed model — several agents have stub usage extractors, so
+ * depending on observation would leave them permanently undeterminable.
+ *
+ * Pure: the caller supplies `rigModel` (read from agents.yaml at the boundary).
+ */
+export function peerModelFor(agent: string, rigModel: string, registry: AgentSpecRegistry = AGENT_SPECS): string {
+  const pinned = rigModel.trim();
+  if (pinned !== "") return pinned;
+  const spec = getAgentSpec(agent, registry);
+  // No spec → no claim. Returning the agent name here (as agentDefaultModel does)
+  // would let an unknown agent masquerade as its own model identity.
+  return spec?.defaultModel ?? "";
 }
 
 /**

@@ -205,6 +205,10 @@ describe("reconcileDelivery — CI-driven (merge_now / ci_failed)", () => {
     const result = reconcileDelivery(CYCLE, facts({
       prState: "OPEN",
       ciGreen: true,
+      // FIX-1489: "CI green" now means the NAMED required check passed on this sha.
+      // The bare aggregate no longer licenses a merge — a skipped `test-ts` reduced
+      // to "green" and merged untested, which is what this fix closes.
+      checks: [{ name: "test-ts", conclusion: "success" }],
     }));
     expect(result).toEqual({ kind: "merge_now", method: "squash" });
   });
@@ -652,5 +656,76 @@ describe("US-DELIV-010 — degraded/terminal 判定矩阵", () => {
       expect(r.kind).not.toBe("delivered");
       expect(r.kind).not.toBe("merge_now");
     }
+  });
+});
+
+// ── FIX-1489: the story-card merge path must use a NAMED check verdict ────────
+
+describe("FIX-1489 — merge_now requires the named required check, not a rollup aggregate", () => {
+  // FIX-1487 closed "a skipped check counts as green" for the RELEASE path only
+  // (release.ts calls requiredCheckVerdict). The story-card path still decided on
+  // facts.ciGreen, which comes from reduceStatusCheckRollup — and its
+  // GREEN_CONCLUSIONS still contains SKIPPED/NEUTRAL. ci.yml has a real `if:` that
+  // makes test-ts skipped, so "tests never ran" merged silently.
+  const green = [{ name: "test-ts", conclusion: "success" }];
+
+  it("named check success → merge_now", () => {
+    const result = reconcileDelivery(CYCLE, facts({ prState: "OPEN", ciGreen: true, checks: green }));
+    expect(result).toEqual({ kind: "merge_now", method: "squash" });
+  });
+
+  it("named check SKIPPED → never merges, even though the rollup says green", () => {
+    const result = reconcileDelivery(
+      CYCLE,
+      facts({ prState: "OPEN", ciGreen: true, checks: [{ name: "test-ts", conclusion: "skipped" }] }),
+    );
+    expect(result.kind).not.toBe("merge_now");
+  });
+
+  it("named check ABSENT on this commit → never merges (a gate that never ran is not a gate that passed)", () => {
+    const result = reconcileDelivery(
+      CYCLE,
+      facts({ prState: "OPEN", ciGreen: true, checks: [{ name: "some-other-job", conclusion: "success" }] }),
+    );
+    expect(result.kind).not.toBe("merge_now");
+  });
+
+  it("named check still running → waits rather than merging or failing", () => {
+    const result = reconcileDelivery(
+      CYCLE,
+      facts({ prState: "OPEN", ciGreen: true, checks: [{ name: "test-ts", conclusion: null }] }),
+    );
+    expect(result.kind).toBe("wait");
+  });
+
+  it("no named checks available at all → fail-closed, does NOT fall back to the aggregate", () => {
+    // This is the whole point: an absent named verdict must not be rescued by ciGreen.
+    const result = reconcileDelivery(CYCLE, facts({ prState: "OPEN", ciGreen: true }));
+    expect(result.kind).not.toBe("merge_now");
+  });
+
+  it("honours a multi-check required SET (the drift gate joins test-ts once hard)", () => {
+    const both = facts({
+      prState: "OPEN",
+      ciGreen: true,
+      requiredChecks: ["test-ts", "doc-drift"],
+      checks: [{ name: "test-ts", conclusion: "success" }],
+    });
+    expect(reconcileDelivery(CYCLE, both).kind, "doc-drift never ran").not.toBe("merge_now");
+  });
+
+  it("a non-required check being skipped does not block the merge", () => {
+    const result = reconcileDelivery(
+      CYCLE,
+      facts({
+        prState: "OPEN",
+        ciGreen: true,
+        checks: [
+          { name: "test-ts", conclusion: "success" },
+          { name: "optional-lint", conclusion: "skipped" },
+        ],
+      }),
+    );
+    expect(result).toEqual({ kind: "merge_now", method: "squash" });
   });
 });

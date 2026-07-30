@@ -5,14 +5,41 @@
  * zero" rule).
  */
 import { describe, expect, it } from "vitest";
+import { AGENT_SPECS, type UsageExtractorKind } from "../src/agent/specs.js";
 import {
+  REGISTRY,
   type AgentUsage,
   type SessionAgg,
   aggregateSessions,
   cycleCurrency,
+  extractUsage,
   sumClaudeStream,
   toCycleCost,
 } from "../src/index.js";
+
+describe("US-PAIR-014 — every declared extractor kind must actually exist", () => {
+  // codex declares `stdoutExtractor: "openai"` in AGENT_SPECS, but REGISTRY had
+  // no "openai" entry — so extractUsage("codex", …) hit `undefined` and returned
+  // null on every call, making codex's cost STRUCTURALLY always 0. The loose
+  // `Record<string, Extractor>` type meant the compiler could not see the hole.
+  it("registers an extractor for every kind an agent declares", () => {
+    const declared = new Set<UsageExtractorKind>();
+    for (const spec of Object.values(AGENT_SPECS)) {
+      const kind = spec.usage.stdoutExtractor;
+      if (kind !== undefined) declared.add(kind);
+    }
+    const missing = [...declared].filter((kind) => REGISTRY[kind] === undefined);
+    expect(missing, `declared but unimplemented extractor kinds: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("extracts codex usage instead of silently returning null", () => {
+    // TOTAL_RE_OPENAI matches codex's "tokens used:" line.
+    const usage = extractUsage("codex", ["model: gpt-5.3-codex", "input tokens: 1,200", "output tokens: 340"]);
+    expect(usage, "codex usage must parse — a null here is how cost became 0").not.toBeNull();
+    expect(usage?.input_tokens).toBe(1200);
+    expect(usage?.output_tokens).toBe(340);
+  });
+});
 
 describe("toCycleCost", () => {
   const usage: AgentUsage = {
