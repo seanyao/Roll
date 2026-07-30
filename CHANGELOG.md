@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 安装与交付
+- **代码仓搬家了**:产品仓从 `seanyao/roll` 迁到 `BIPOSVC/ape-roll`(过程数据与技能仓一并迁到同一组织)。对用装好的 roll 的人没有影响 —— 命令、配置、数据都不变;只有文档里的仓库链接换了新地址(US-INSTALL-008)[install]
+- **`roll update` 只走 npm 了**:以前还有一条从 GitHub Release 下载源码包来升级的路径,新仓是私有的、匿名下载不到,那条路只会失败,所以直接退役。装过旧版的机器跑 `roll update` 会明确告诉你改用 `npm i -g @bipo-ape/roll`,不会让你卡在一个必然失败的下载上(US-INSTALL-008)[install]
+- **发版时的合并不再依赖 GitHub 的"自动合并"开关**:新仓所在的套餐给不了分支保护,GitHub 原生自动合并也就打不开。现在 roll 自己盯着 CI,**全绿才合、并且钉住那一刻的提交**;有任何一项没通过就明确停下并说明是哪一项,绝不硬合。仓库若支持原生自动合并则照旧使用,行为不变(US-DELIV-014)[delivery]
+- 新增本机护栏:直接推 `main` 会被拒绝并提示改走 PR。这是**本机**护栏(`--no-verify` 可绕过、没跑过 `roll setup` 的机器不装),不等同于服务端的分支保护 —— 帮助信息里也是这么写的(US-DELIV-014)[delivery]
+
 ### 安装
 - **Roll 现在有两个等效的安装名**:`npm i -g @bipo-ape/roll`(推荐)和 `npm i -g @seanyao/roll`(原来那个,继续可用)。两边是同一份产物、同一个版本,从哪边装、从哪边升级都一样,老用户什么都不用做。`roll update` 会认准你当初装的那个名字,不会把你悄悄换到另一边(US-INSTALL-007)[install]
 
