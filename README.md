@@ -21,10 +21,6 @@ Roll — a Supervisor-led CLI harness that routes AI agents through story-scoped
 npm install -g @bipo-ape/roll
 ```
 
-```bash
-npm install -g @bipo-ape/roll
-```
-
 Roll is published under two equivalent names: `@bipo-ape/roll` (use this) and
 `@seanyao/roll` (the original scope, kept working for existing installs). Both
 ship the identical artifact at the same version — installing or updating from
