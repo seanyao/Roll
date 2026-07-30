@@ -23,7 +23,12 @@ import {
   agentIsKnown,
   AGENT_REGISTRY_NAMES,
   canonicalAgentName,
-  isHeterogeneous,
+  agentVendor,
+  heterogeneousByModel,
+  isolationBetween,
+  tierAtLeast,
+  type IsolationTier,
+  type ModelResolver,
   normalizeAgentScopeConfig,
   pairingConfigFromAgentScopeConfig,
   parseResizeSignal,
@@ -34,6 +39,7 @@ import {
   type ResizeSignal,
 } from "@roll/core";
 import type { AgentScopeConfig, CostBasis } from "@roll/spec";
+import { configuredPeerModel } from "./node-ports.js";
 import { writeReviewScoreNote } from "../lib/review-score.js";
 import { assessComplexity } from "./peer-gate.js";
 
@@ -135,15 +141,17 @@ export interface PairReview {
   model?: string;
   /** US-PAIR-011: what the peer's own usage output claimed it ran (reconciliation only). */
   observedModel?: string;
+  /** US-PAIR-018: configured-vs-observed disagreement, warning only. */
+  modelMismatch?: string;
 }
 
 export type PairEvent =
-  | { type: "pair:selected"; cycleId: string; workingAgent: string; peer: string; stage: string; timeoutMs?: number; attempt?: number; reason?: string; ts: number }
+  | { type: "pair:selected"; cycleId: string; workingAgent: string; peer: string; stage: string; timeoutMs?: number; attempt?: number; reason?: string; declaredTier?: string; achievedTier?: string; degradedFrom?: string; tierReason?: string; ts: number }
   // FIX-1054 — the serial-dispatch policy events (see the events.ts contract).
   | { type: "pair:skipped"; cycleId: string; peers: string[]; reason: string; stage: string; ts: number }
   | { type: "pair:fanout"; cycleId: string; stage: string; reason: string; limit: number; peers: string[]; ts: number }
-  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: PairReview["verdict"]; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage: string; ts: number }
-  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: PairScore["verdict"]; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage: "score" | "design"; ts: number }
+  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: PairReview["verdict"]; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; modelMismatch?: string; stage: string; ts: number }
+  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: PairScore["verdict"]; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; modelMismatch?: string; stage: "score" | "design"; ts: number }
   | { type: "pair:none-available"; cycleId: string; stage: string; reason: string; ts: number }
   /** FIX-910 — per-attempt score-stage failure attribution. Every null return
    *  from a scorer is now diagnosed (unparseable / timeout / auth-block /
@@ -315,6 +323,40 @@ export interface PairingDispatchDeps {
   now: () => number;
   fanoutReason?: PairFanoutReason;
   fanoutLimit?: number;
+  /**
+   * US-PAIR-020: what isolation was ASKED for (from the effort table), plus how to
+   * resolve an agent to its model so the ACHIEVED tier can be computed per peer.
+   * Omitted → no tier fields are recorded (the dispatcher stays usable by callers
+   * that have no effort context) — but then the effort curve cannot be measured,
+   * so any real dispatch path should supply it.
+   */
+  tierPlan?: { declared: IsolationTier; resolveModel: ModelResolver };
+}
+
+/**
+ * US-PAIR-020 — the tier fields for one dispatch decision.
+ *
+ * `degradedFrom` is set only when the achieved tier is genuinely weaker than what
+ * was declared, so a reader can tell "we asked for vendor and got vendor" from
+ * "we asked for vendor and settled for session".
+ */
+function tierFields(
+  plan: PairingDispatchDeps["tierPlan"],
+  builder: string,
+  peer: string,
+): { declaredTier?: string; achievedTier?: string; degradedFrom?: string; tierReason?: string } {
+  if (plan === undefined) return {};
+  const verdict = isolationBetween(
+    { agentEntry: builder, modelId: plan.resolveModel(builder), sessionId: "builder" },
+    { agentEntry: peer, modelId: plan.resolveModel(peer), sessionId: "peer" },
+  );
+  const degraded = !tierAtLeast(verdict.tier, plan.declared);
+  return {
+    declaredTier: plan.declared,
+    achievedTier: verdict.tier,
+    ...(degraded ? { degradedFrom: plan.declared } : {}),
+    tierReason: verdict.reason,
+  };
 }
 
 export type PairingDispatchResult =
@@ -415,6 +457,7 @@ export async function pairingDispatch(deps: PairingDispatchDeps): Promise<Pairin
         stage: deps.stage,
         timeoutMs: deps.timeoutMs,
         ...(reason !== undefined ? { reason: "fanout" } : {}),
+        ...tierFields(deps.tierPlan, deps.workingAgent, peer),
         ts: deps.now(),
       });
       const review = await deps.reviewPeer(peer, deps.diff, deps.timeoutMs);
@@ -443,7 +486,11 @@ export async function pairingDispatch(deps: PairingDispatchDeps): Promise<Pairin
       stage: deps.stage,
       timeoutMs: deps.timeoutMs,
       attempt: index + 1,
+      // US-PAIR-020: `fallback_after_failure` on attempt ≥2 is the record that the
+      // previous peer would not open — that is the "farther candidate could not be
+      // opened" case, distinct from "no farther candidate exists".
       reason: index === 0 ? "ranked_candidate" : "fallback_after_failure",
+      ...tierFields(deps.tierPlan, deps.workingAgent, peer),
       ts: deps.now(),
     });
     const review = await deps.reviewPeer(peer, deps.diff, deps.timeoutMs);
@@ -555,7 +602,7 @@ export async function runPairing(
       JSON.stringify({ cycleId, workingAgent, peer, stage, ...review }, null, 2),
       "utf8",
     );
-    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, ...(review.costBasis !== undefined ? { costBasis: review.costBasis } : {}), ...(review.model !== undefined ? { model: review.model } : {}), ...(review.observedModel !== undefined ? { observedModel: review.observedModel } : {}), stage, ts: deps.now() });
+    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, ...(review.costBasis !== undefined ? { costBasis: review.costBasis } : {}), ...(review.model !== undefined ? { model: review.model } : {}), ...(review.observedModel !== undefined ? { observedModel: review.observedModel } : {}), ...(review.modelMismatch !== undefined ? { modelMismatch: review.modelMismatch } : {}), stage, ts: deps.now() });
     return { status: "reviewed", peer, verdict: review.verdict };
   } catch {
     return { status: "error" }; // never throw — pairing must not fail the cycle
@@ -576,6 +623,8 @@ export interface PairScore {
   model?: string;
   /** US-PAIR-011: what the scorer's own usage output claimed it ran. */
   observedModel?: string;
+  /** US-PAIR-018: configured-vs-observed disagreement, warning only. */
+  modelMismatch?: string;
   /** US-AGENT-041: the reviewer's optional "scope too large" signal — present
    *  only when the delivery is incomplete because the SCOPE exceeds one cycle
    *  (uncovered AC/coverage gaps), not a pure quality problem. Drives the
@@ -663,6 +712,38 @@ export interface RunScorePairingResult {
  *  diff, so it needs headroom for cold-spawn + reasoning, not for diff length. */
 const SCORE_TIMEOUT_MS = 180_000;
 const SCORE_MAX_ATTEMPTS = 2; // 1 initial + 1 bounded retry
+
+/**
+ * FIX-1492 — per-agent score budget, because one flat number does not fit the
+ * measured spread.
+ *
+ * Measured over 741 `pair:consult` durations in this repo's stream:
+ *
+ *   peer       n    p50     p90     max   over-180s  score-timeouts
+ *   kimi     248  123.5s  197.2s  320.0s     64          50
+ *   codex     81  120.0s  200.0s  320.0s     23           0
+ *   pi       129   70.0s  120.0s  185.2s      1           8
+ *   reasonix 104   55.8s   92.3s  235.2s      1          15
+ *   claude    86   50.0s  120.0s  248.2s      1           1
+ *
+ * kimi's p90 sits ABOVE the flat 180s budget, so ~26% of its consults were being
+ * clipped by the deadline rather than by any fault — which is most of its 50 score
+ * timeouts. That is a budget bug, not a flaky agent, and a retry cannot fix it
+ * (the retry gets the same too-small budget).
+ *
+ * Only agents whose measured p90 exceeds the flat budget get an override; everyone
+ * else keeps 180s. Deliberately NOT "raise it for everybody": a generous global
+ * deadline turns a genuinely hung agent into a long stall.
+ */
+const SCORE_TIMEOUT_OVERRIDE_MS: Readonly<Record<string, number>> = {
+  // p90 197.2s, max 320s → 300s clears the p90 with headroom, still bounded.
+  kimi: 300_000,
+};
+
+/** The score budget for `agent`: its measured override, else the flat default. */
+export function scoreTimeoutMsFor(agent: string): number {
+  return SCORE_TIMEOUT_OVERRIDE_MS[canonicalAgentName(agent)] ?? SCORE_TIMEOUT_MS;
+}
 
 /**
  * FIX-343 (step ④) — the score stage is the SOLE, MANDATORY producer of the
@@ -764,8 +845,16 @@ export async function runScorePairing(
     // otherwise mark every real-vendor candidate "hetero", mislabeling the
     // telemetry round. Empty builder ⇒ everything is the same-vendor round.
     const builder = workingAgent.trim();
-    const heteroPool = builder === "" ? [] : candidates.filter((c) => isHeterogeneous(c as string, builder));
-    const sameVendorPool = builder === "" ? candidates : candidates.filter((c) => !isHeterogeneous(c as string, builder));
+    // US-PAIR-015: the bucketing key is the RESOLVED MODEL's vendor, not the agent
+    // name. `pi` and `reasonix` are two entries pinned to ONE model
+    // (deepseek-v4-pro) in this repo's rigs — name-based bucketing put them in the
+    // hetero pool, so the same model "independently" scored its own family's work.
+    // Only this KEY changes: the rotation, the ε-greedy exploit/explore split, the
+    // never-trim-the-set rule and the downstream session check are all untouched.
+    const resolveModel = (agent: string): string => configuredPeerModel(projectDir, agent);
+    const isHetero = (c: string): boolean => heterogeneousByModel(builder, c, resolveModel);
+    const heteroPool = builder === "" ? [] : candidates.filter((c) => isHetero(c as string));
+    const sameVendorPool = builder === "" ? candidates : candidates.filter((c) => !isHetero(c as string));
 
     // 1 bounded retry PER ROUND. Each attempt fires the round's pool in PARALLEL
     // (FIX-335 take-first) and uses the FIRST non-null score; the rest are
@@ -804,7 +893,11 @@ export async function runScorePairing(
         reason: fanout !== undefined ? "fanout" : attempt > 1 ? "same_agent_or_fallback" : "ranked_candidate",
         ts: deps.now(),
       });
-      const scored = await deps.scorePeer(peer, summary, timeoutMs);
+      // FIX-1492: per-agent budget. kimi's measured p90 (197s) exceeds the flat
+      // 180s, so ~26% of its consults were clipped by the deadline rather than by
+      // any fault — most of its 50 score timeouts. A retry cannot fix that: it
+      // inherits the same too-small budget. Never lowers a caller-supplied value.
+      const scored = await deps.scorePeer(peer, summary, Math.max(timeoutMs, scoreTimeoutMsFor(peer)));
       return scored === null ? null : { peer, scored, sessionId };
     };
     const runRound = async (pool: string[], coerceThrowToNull: boolean): Promise<ScoreWinner | null> => {
@@ -915,7 +1008,7 @@ export async function runScorePairing(
         JSON.stringify({ cycleId, workingAgent, peer, stage: scoreStage, score: scored.score, verdict: scored.verdict, rationale: scored.rationale, cost: scored.cost, sessionId }, null, 2),
         "utf8",
       );
-      deps.event({ type: "pair:score", cycleId, peer, score: scored.score, verdict: scored.verdict, cost: scored.cost, ...(scored.costBasis !== undefined ? { costBasis: scored.costBasis } : {}), ...(scored.model !== undefined ? { model: scored.model } : {}), ...(scored.observedModel !== undefined ? { observedModel: scored.observedModel } : {}), stage: scoreStage, ts: deps.now() });
+      deps.event({ type: "pair:score", cycleId, peer, score: scored.score, verdict: scored.verdict, cost: scored.cost, ...(scored.costBasis !== undefined ? { costBasis: scored.costBasis } : {}), ...(scored.model !== undefined ? { model: scored.model } : {}), ...(scored.observedModel !== undefined ? { observedModel: scored.observedModel } : {}), ...(scored.modelMismatch !== undefined ? { modelMismatch: scored.modelMismatch } : {}), stage: scoreStage, ts: deps.now() });
     } catch {
       /* evidence/event are auxiliaries — the note is the product */
     }
@@ -1134,6 +1227,9 @@ export function parsePairScoreOutput(stdout: string): Omit<PairScore, "cost"> | 
 // ── FIX-293: the peer-gate retry consult ─────────────────────────────────────
 
 export interface RetryPeerConsultDeps {
+  /** US-PAIR-015: agent → resolved model, so heterogeneity is judged on the model
+   *  rather than the entry name. Omit only where no repo path is reachable. */
+  resolveModel?: (agent: string) => string;
   /** Installed agents (canonical), e.g. agentsInstalled(realAgentEnv()). */
   installed: string[];
   /** The agent that did the work — its heterogeneous peer is the reviewer. */
@@ -1224,7 +1320,17 @@ export async function retryPeerConsult(
     //   • the same-type SEPARATE-SESSION fallback fires ONLY when zero hetero peers
     //     are installed (single-vendor env — FIX-293's "not permanently blocked"):
     //     still a fresh distinct subprocess, never the builder's own session.
-    const heteroPeers = distinct.filter((a) => a !== working && isHeterogeneous(a, working));
+    // US-PAIR-015: prefer the model-aware key. `deps.resolveModel` is supplied by
+    // callers that can read agents.yaml; without it we fall back to the agent-name
+    // comparison and say so — a fallback that can OVER-count (two entries on one
+    // model look heterogeneous), so it must never be the silent default anywhere a
+    // repo path is reachable.
+    const heteroPeers = distinct.filter((a) => {
+      if (a === working) return false;
+      return deps.resolveModel !== undefined
+        ? heterogeneousByModel(working, a, deps.resolveModel)
+        : agentVendor(a) !== agentVendor(working);
+    });
     const canSpawnSameType = working !== "" && distinct.includes(working);
     // The only true "no peer to consult" case: we don't even know the working
     // agent's type (no installed agent AND no working-agent name) — there is
@@ -1275,7 +1381,7 @@ export async function retryPeerConsult(
     const path = evidencePath(runtimeDir, cycleId, "code");
     mkdirSync(join(runtimeDir, "peer"), { recursive: true });
     writeFileSync(path, JSON.stringify({ cycleId, workingAgent: working, peer, stage: "code", sameTypeFallback, ...review }, null, 2), "utf8");
-    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, ...(review.costBasis !== undefined ? { costBasis: review.costBasis } : {}), ...(review.model !== undefined ? { model: review.model } : {}), ...(review.observedModel !== undefined ? { observedModel: review.observedModel } : {}), stage: "code", ts: deps.now() });
+    deps.event({ type: "pair:verdict", cycleId, peer, verdict: review.verdict, findings: review.findings.length, cost: review.cost, ...(review.costBasis !== undefined ? { costBasis: review.costBasis } : {}), ...(review.model !== undefined ? { model: review.model } : {}), ...(review.observedModel !== undefined ? { observedModel: review.observedModel } : {}), ...(review.modelMismatch !== undefined ? { modelMismatch: review.modelMismatch } : {}), stage: "code", ts: deps.now() });
     return { status: "reviewed", peer, sameTypeFallback };
   } catch {
     return { status: "error" }; // never throw — the retry is a rescue, not a cycle killer

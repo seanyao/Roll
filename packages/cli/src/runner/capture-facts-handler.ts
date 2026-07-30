@@ -8,7 +8,6 @@ import {
   agentsInstalled,
   cycleActivityFromEvents,
   decideRepair,
-  heteroAvailable,
   initialRepairState,
   pairingHistory,
   peerRunIdentity,
@@ -18,7 +17,7 @@ import {
 } from "@roll/core";
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { realAgentEnv } from "../commands/agent-list.js";
-import { configuredPeerModel } from "./node-ports.js";
+import { configuredPeerModel, peerHeteroAvailability } from "./node-ports.js";
 import { cardArchiveDir } from "../lib/archive.js";
 import { formatEvaluationContractForScorer, parseEvaluationContract } from "../lib/evaluation-contract.js";
 import { applyEvaluationTierGate, recordEvaluatorPanelRound } from "./evaluation-tier-stage.js";
@@ -187,7 +186,8 @@ export async function executeCaptureFactsCommand(
       // false ⇒ self-review is an allowed recorded fallback (single-agent setups).
       const peerGateInstalled = ports.installedAgents?.() ?? agentsInstalled(realAgentEnv());
       const peerGateWorker = ctx.agent ?? "claude";
-      const peerHeteroAvailable = heteroAvailable(peerGateInstalled, peerGateWorker, peerGateAllowedAgents);
+      // US-PAIR-015: model-aware — see peerHeteroAvailability.
+      const peerHeteroAvailable = peerHeteroAvailability(ports.repoCwd, peerGateInstalled, peerGateWorker, peerGateAllowedAgents);
       const peerGateSinks = {
         alert: (m: string) => ports.events.appendAlert(ports.paths.alertsPath, m),
         event: (p: { cycleId: string; verdict: string; reasons: string[] }) =>

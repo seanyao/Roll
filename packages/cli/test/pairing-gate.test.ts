@@ -1916,3 +1916,104 @@ describe("US-CYCLE-008 — risk-tier-driven evaluation panel", () => {
     expect(tried.length).toBeLessThanOrEqual(3); // bounded
   });
 });
+
+describe("US-PAIR-020 — the isolation decision is recorded per dispatch", () => {
+  // This repo's real rigs: pi and reasonix are BOTH pinned to deepseek-v4-pro.
+  const models: Record<string, string> = {
+    kimi: "kimi-k2",
+    codex: "gpt-5.3-codex",
+    pi: "deepseek-v4-pro",
+    reasonix: "deepseek-v4-pro",
+  };
+  const resolveModel = (a: string): string => models[a] ?? "";
+  const baseDeps = (events: PairEvent[], candidates: string[], workingAgent: string) => ({
+    cycleId: "c-tier",
+    workingAgent,
+    stage: "code" as const,
+    candidates,
+    sameTypeFallback: { allowed: false },
+    fallbackPolicy: "none" as const,
+    mode: "serial-take-first" as const,
+    blockOnNoWinner: false,
+    diff: "diff",
+    timeoutMs: 10,
+    event: (e: PairEvent) => events.push(e),
+    now: () => 1,
+    reviewPeer: async () => ({ verdict: "agree" as const, findings: [], cost: 0 }),
+  });
+  const selected = (events: PairEvent[]): Extract<PairEvent, { type: "pair:selected" }>[] =>
+    events.filter((e): e is Extract<PairEvent, { type: "pair:selected" }> => e.type === "pair:selected");
+
+  it("records declared + achieved when the ask is met", async () => {
+    const events: PairEvent[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["codex"], "kimi"),
+      tierPlan: { declared: "vendor", resolveModel },
+    });
+    const ev = selected(events)[0];
+    expect(ev?.declaredTier).toBe("vendor");
+    expect(ev?.achievedTier).toBe("vendor");
+    expect(ev?.degradedFrom, "not degraded — the ask was met").toBeUndefined();
+    expect(ev?.tierReason).toContain("openai");
+  });
+
+  it("records the degradation when no farther candidate exists", async () => {
+    // reviewer reasonix vs builder pi — two entries, ONE model.
+    const events: PairEvent[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["reasonix"], "pi"),
+      tierPlan: { declared: "vendor", resolveModel },
+    });
+    const ev = selected(events)[0];
+    expect(ev?.declaredTier).toBe("vendor");
+    expect(ev?.achievedTier, "same model → only a fresh session separates them").toBe("session");
+    expect(ev?.degradedFrom).toBe("vendor");
+    expect(ev?.tierReason).toContain("deepseek-v4-pro");
+  });
+
+  it("distinguishes 'could not open the farther candidate' via the attempt reason", async () => {
+    // codex (vendor-far) fails to open; reasonix (same model as builder pi) answers.
+    const events: PairEvent[] = [];
+    const tried: string[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["codex", "reasonix"], "pi"),
+      tierPlan: { declared: "vendor", resolveModel },
+      reviewPeer: async (peer: string) => {
+        tried.push(peer);
+        return peer === "codex" ? null : { verdict: "agree" as const, findings: [], cost: 0 };
+      },
+    });
+    expect(tried).toEqual(["codex", "reasonix"]);
+    const evs = selected(events);
+    // First attempt aimed at the vendor-far peer and was recorded as such.
+    expect(evs[0]?.achievedTier).toBe("vendor");
+    expect(evs[0]?.reason).toBe("ranked_candidate");
+    // The fallback records BOTH that it degraded and that it followed a failure —
+    // which is what separates "nothing farther existed" from "it would not open".
+    expect(evs[1]?.reason).toBe("fallback_after_failure");
+    expect(evs[1]?.degradedFrom).toBe("vendor");
+    expect(evs[1]?.achievedTier).toBe("session");
+  });
+
+  it("a failed peer is not retried within the round", async () => {
+    const events: PairEvent[] = [];
+    const tried: string[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["codex", "reasonix"], "pi"),
+      tierPlan: { declared: "vendor", resolveModel },
+      reviewPeer: async (peer: string) => {
+        tried.push(peer);
+        return peer === "codex" ? null : { verdict: "agree" as const, findings: [], cost: 0 };
+      },
+    });
+    expect(tried.filter((p) => p === "codex"), "the failing peer is tried once, then dropped").toHaveLength(1);
+  });
+
+  it("omitting tierPlan records no tier fields (back-compat)", async () => {
+    const events: PairEvent[] = [];
+    await pairingDispatch(baseDeps(events, ["codex"], "kimi"));
+    const ev = selected(events)[0];
+    expect(ev?.declaredTier).toBeUndefined();
+    expect(ev?.achievedTier).toBeUndefined();
+  });
+});

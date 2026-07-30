@@ -1,3 +1,4 @@
+import { heterogeneousByModel, type ModelResolver } from "./isolation.js";
 import { agentVendor, isHeterogeneous } from "./pairing.js";
 import { agentIsKnown, canonicalAgentName } from "./registry.js";
 
@@ -16,6 +17,14 @@ export interface PeerReviewerInput {
   candidates: readonly string[];
   workerAgents: readonly string[];
   requestedReviewer?: string;
+  /**
+   * US-PAIR-015: agent → resolved model. When supplied, heterogeneity is judged on
+   * the MODEL's vendor instead of the agent-entry name — so two entries pinned to
+   * one model (this repo: `pi` and `reasonix` → `deepseek-v4-pro`) stop counting as
+   * a heterogeneous pair. Omitted → the legacy name comparison, which can
+   * OVER-count; callers with repo access should always pass it.
+   */
+  resolveModel?: ModelResolver;
 }
 
 export type PeerReviewerUnavailableReason =
@@ -108,8 +117,14 @@ function selfReviewers(candidates: readonly string[], workers: readonly string[]
   return out;
 }
 
-function isHeterogeneousFromWorkers(agent: string, workers: readonly string[]): boolean {
-  return workers.length === 0 || workers.every((worker) => isHeterogeneous(worker, agent));
+function isHeterogeneousFromWorkers(
+  agent: string,
+  workers: readonly string[],
+  resolveModel?: ModelResolver,
+): boolean {
+  const differs = (worker: string): boolean =>
+    resolveModel !== undefined ? heterogeneousByModel(worker, agent, resolveModel) : isHeterogeneous(worker, agent);
+  return workers.length === 0 || workers.every(differs);
 }
 
 function candidateRecord(agent: string, mode: "hetero" | "self", degraded: boolean, reason?: string): PeerReviewerCandidate {
@@ -130,7 +145,12 @@ export function selectPeerReviewers(input: PeerReviewerInput): PeerReviewersSele
     const requested = canonicalAgentName(input.requestedReviewer.trim());
     if (reviewerKind(requested) === "auxiliary") return { status: "unavailable", reason: "requested_reviewer_is_auxiliary" };
     if (!candidates.includes(requested)) return { status: "unavailable", reason: "requested_reviewer_unavailable" };
-    const effectiveMode = workers.some((worker) => !isHeterogeneous(worker, requested)) ? "self" : "hetero";
+    const sameAsSomeWorker = workers.some((worker) =>
+      input.resolveModel !== undefined
+        ? !heterogeneousByModel(worker, requested, input.resolveModel)
+        : !isHeterogeneous(worker, requested),
+    );
+    const effectiveMode = sameAsSomeWorker ? "self" : "hetero";
     return { status: "selected", reviewers: [candidateRecord(requested, effectiveMode, false)] };
   }
 
@@ -145,7 +165,7 @@ export function selectPeerReviewers(input: PeerReviewerInput): PeerReviewersSele
 
   // FIX-312 — `auto` is hetero-FIRST. Rank all heterogeneous candidates before any
   // self path, and include a same-vendor fallback only when auto mode permits it.
-  const hetero = candidates.filter((agent) => isHeterogeneousFromWorkers(agent, workers));
+  const hetero = candidates.filter((agent) => isHeterogeneousFromWorkers(agent, workers, input.resolveModel));
 
   if (input.mode === "hetero") {
     if (hetero.length === 0) return { status: "unavailable", reason: "no_heterogeneous_reviewer" };
@@ -153,7 +173,7 @@ export function selectPeerReviewers(input: PeerReviewerInput): PeerReviewersSele
   }
 
   const selfPool = selfReviewers(
-    candidates.filter((agent) => !isHeterogeneousFromWorkers(agent, workers)),
+    candidates.filter((agent) => !isHeterogeneousFromWorkers(agent, workers, input.resolveModel)),
     workers,
   );
 
@@ -251,4 +271,32 @@ export function reviewReason(stdout: string, fallback: string): string {
   const explicit = /^\s*REASON:\s*(.+)$/im.exec(stdout)?.[1]?.trim();
   if (explicit !== undefined && explicit !== "") return explicit.slice(0, 500);
   return reviewFindings(stdout)[0]?.slice(0, 500) ?? fallback;
+}
+
+// ── FIX-1491: the "is this output an acceptable review?" decision, made pure ───
+
+export type PeerReviewParse =
+  | { readonly ok: true; readonly verdict: "agree" | "refine" | "object"; readonly findings: readonly string[] }
+  | { readonly ok: false; readonly reason: "no_verdict_line" };
+
+/**
+ * FIX-1491 — decide whether a peer's raw stdout constitutes a real review.
+ *
+ * The invariant this makes testable: **a peer that did not clearly state a verdict
+ * produces NO review at all.** It must never fall back to `agree` — an empty or
+ * truncated response (a broken credential, a killed process, a model that ignored
+ * the protocol) would then be recorded as "reviewed, nothing wrong found", which is
+ * a fabricated green light on someone else's code.
+ *
+ * The investigation behind FIX-1491 expected to FIND that bug. It is not there —
+ * the review path already refuses on all three failure modes (timeout, non-zero
+ * exit, missing VERDICT). Extracting the decision here is what stops it from being
+ * introduced later by someone "helpfully" defaulting the verdict.
+ */
+export function parsePeerReviewOutput(stdout: string): PeerReviewParse {
+  const vm = /VERDICT:\s*(agree|refine|object)/i.exec(stdout);
+  if (vm === null) return { ok: false, reason: "no_verdict_line" };
+  const verdict = (vm[1] ?? "").toLowerCase() as "agree" | "refine" | "object";
+  const findings = [...stdout.matchAll(/^\s*FINDING:\s*(.+)$/gim)].map((m) => (m[1] ?? "").trim());
+  return { ok: true, verdict, findings };
 }

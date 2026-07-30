@@ -259,6 +259,13 @@ export interface NormalizedAgentConfig {
   readonly executionProfiles: Readonly<Record<ExecutionProfile, ExecutionProfileSpec>>;
   readonly executionPolicy: ExecutionPolicy;
   readonly supervisor: SupervisorConfig;
+  /**
+   * US-PAIR-013: gate → required rig distance. Absent in the file means the
+   * `standard` preset (both gates, heterogeneous peer) — never "off", so review
+   * cannot be disabled by omission. Shape is `Record<"code"|"score", tier>`;
+   * kept structural here so @roll/spec stays free of core's effort module.
+   */
+  readonly effort: Readonly<Record<string, string>>;
 }
 
 /** Normalizer result: the config plus any fail-loud signals (unknown rig refs,

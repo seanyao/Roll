@@ -7045,6 +7045,33 @@ describe("US-DELTA-007 — Full Delta Evaluator authors its own report (no assem
     expect(spawns).toHaveLength(0); // rejected before spawn — no self-grade
   });
 
+  it("US-PAIR-017: an ABSENT builder identity fails closed — it must not skip the check", async () => {
+    // The hole: the guard was `builderSessionId !== "" && collides`, so an EMPTY
+    // builder identity skipped the whole self-grade check silently. "We cannot tell
+    // who built this" was read as "this is independently evaluated".
+    const repo = newRepo();
+    const ctx = { ...evalCtx(repo, "US-E5b", "verified"), builderSessionId: "" };
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    const r = await runEvaluatorStage(ports, ctx, EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("identity_collision");
+    expect(r.reasons.join(" ")).toContain("builder identity");
+    expect(spawns).toHaveLength(0); // stop, never a silent pass
+  });
+
+  it("US-PAIR-017: a MISSING builderSessionId field also fails closed", async () => {
+    const repo = newRepo();
+    // evalCtx() hardcodes a builder session, so genuinely REMOVE the field here.
+    const { builderSessionId: _omitted, ...ctx } = evalCtx(repo, "US-E5c", "verified");
+    const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];
+    const { ports } = fakePorts({ repoCwd: repo, agentSpawn: spawnWriting(spawns, AUTHORED_REPORT) });
+    const r = await runEvaluatorStage(ports, ctx, EVAL_DEPS);
+    expect(r.ok).toBe(false);
+    expect(r.blockReason).toBe("identity_collision");
+    expect(spawns).toHaveLength(0);
+  });
+
   it("AC3: role facts are REQUIRED — a failure to record them FAILS CLOSED (no spawn)", async () => {
     const repo = newRepo();
     const spawns: { agent: string; opts: AgentSpawnOptions }[] = [];

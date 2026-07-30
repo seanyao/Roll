@@ -11,6 +11,7 @@ import {
   nodeDeliveryStore,
   nodeExecPort,
   normalizeAgentConfig,
+  heteroAvailableByModel,
   parseBacklog,
   peerModelFor,
   queryStoryDelivery,
@@ -94,6 +95,23 @@ export function configuredModelBackstop(repoCwd: string, agent: string): string 
  */
 export function configuredPeerModel(repoCwd: string, agent: string): string {
   return peerModelFor(agent, configuredModelBackstop(repoCwd, agent));
+}
+
+/**
+ * US-PAIR-015 — is a genuinely heterogeneous reviewer reachable for `builder`?
+ *
+ * Model-aware: several agent entries that all resolve to ONE model are NOT
+ * heterogeneous availability. FIX-312 turns this boolean into a hard block, so
+ * over-counting here silently converted a same-model self-review into
+ * "independently reviewed".
+ */
+export function peerHeteroAvailability(
+  repoCwd: string,
+  installed: readonly string[],
+  builder: string,
+  allowed?: Set<string> | readonly string[],
+): boolean {
+  return heteroAvailableByModel(installed, builder, (agent) => configuredPeerModel(repoCwd, agent), allowed);
 }
 
 function scopedStoryExecuteRoute(

@@ -6,6 +6,7 @@ import {
   authCooldownExclusions,
   canonicalAgentName,
   excludedPeers,
+  parsePeerReviewOutput,
   peerRunIdentity,
   type CycleContext,
 } from "@roll/core";
@@ -230,14 +231,17 @@ export function createCapturePeerHelpers(params: {
       emitConsult("error", cause ?? undefined, `exit code ${res.exitCode}; raw output saved`, artifactPath);
       return null;
     }
-    const vm = /VERDICT:\s*(agree|refine|object)/i.exec(res.stdout);
-    if (vm === null) {
+    // FIX-1491: the accept/refuse decision is a pure function so the invariant
+    // "no clear verdict ⇒ NO review" is pinned by a test and cannot be softened
+    // into a default `agree` later.
+    const parsed = parsePeerReviewOutput(res.stdout);
+    if (!parsed.ok) {
       const artifactPath = savePeerRawOutput(peer, "review", res.stdout, res.stderr);
       emitConsult("error", undefined, "unparseable: missing or invalid VERDICT line", artifactPath);
       return null;
     }
-    const verdict = (vm?.[1]?.toLowerCase() ?? "agree") as PairReview["verdict"];
-    const findings = [...res.stdout.matchAll(/^\s*FINDING:\s*(.+)$/gim)].map((m) => (m[1] ?? "").trim());
+    const { verdict } = parsed;
+    const findings = [...parsed.findings];
     // US-PAIR-006 cost observability (owner's top priority "至少知道花了多少钱"):
     // the pair:verdict cost is now the peer's REAL list cost, parsed from its
     // own stdout (claude stream-json or the per-agent stdout-scrape extractors).

@@ -1,6 +1,7 @@
 /** Ported-command registry — one line per migrated subcommand. */
 import { resolveLang } from "@roll/spec";
 import { registerPorted, usage } from "../bridge.js";
+import { EFFORT_USAGE, effortCommand } from "./effort.js";
 import { renderState } from "../render.js";
 import { renderLoopHelp } from "../lib/loop-help.js";
 import { agentCommand } from "./agent.js";
@@ -354,6 +355,7 @@ export function registerAll(): void {
   // No sub-paths on bash.
   registerPorted("init", initCommand, { help: "Usage: roll init [--auto|--repair|--apply] [--yes|--then design]\n  Diagnose this project and route to scaffold, PRD design, existing-codebase onboard, repair, migration, or roll status.\n  --auto: apply deterministic fresh-project scaffolding in non-interactive runs.\n  --repair: repair partial Roll markers only.\n  --apply: validate and apply a reviewed existing-codebase onboard plan.\n  --yes / --then design: after scaffolding a PRD project, continue straight into `roll design` (skips the confirm prompt).\n诊断项目并路由到骨架、PRD 设计、已有代码库接入、修复、迁移或 roll status。\n  --apply：校验并应用已审阅的已有代码库接入计划。\n  --yes / --then design：脚手架搭好后直接续跑 `roll design`（跳过确认）。" });
   registerPorted("next", nextCommand, { help: NEXT_USAGE });
+  registerPorted("effort", (args) => effortCommand(args), { help: () => EFFORT_USAGE });
   registerPorted("north", northCommand, {
     help: () =>
       currentHelpLang() === "zh"

@@ -632,3 +632,39 @@ describe("aggregatePairingCost — pair:excluded (FIX-346)", () => {
     expect(aggregatePairingCost([]).excludedPeers).toEqual({});
   });
 });
+
+describe("FIX-1491 — a peer that stated no verdict produces NO review", () => {
+  // The investigation expected to find "auth failure parsed as agree/0 findings".
+  // It is NOT there: the review path refuses on timeout, non-zero exit, AND a
+  // missing VERDICT line. These tests pin that refusal so a later "helpful"
+  // default cannot turn an empty response into a fabricated green light.
+  it("empty output is refused, never defaulted to agree", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    expect(parsePeerReviewOutput("")).toEqual({ ok: false, reason: "no_verdict_line" });
+  });
+
+  it("a broken-credential style error dump is refused", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    const authNoise = "Error: authentication required\nPlease run `login` first.\n";
+    expect(parsePeerReviewOutput(authNoise).ok).toBe(false);
+  });
+
+  it("prose that merely discusses agreeing is refused", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    // No VERDICT: line — a model that ignored the protocol must not be read as a pass.
+    expect(parsePeerReviewOutput("I agree this looks fine overall.").ok).toBe(false);
+  });
+
+  it("accepts a real verdict and collects its findings", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    const r = parsePeerReviewOutput("VERDICT: refine\nFINDING: off-by-one in the loop\nFINDING: missing null check\n");
+    expect(r).toEqual({ ok: true, verdict: "refine", findings: ["off-by-one in the loop", "missing null check"] });
+  });
+
+  it("an explicit agree with zero findings is a REAL review, not an artifact", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    // This matters for reading history: claude's 27 zero-finding verdicts are
+    // genuine 'agree' responses, not auth artifacts — the auth path never reaches here.
+    expect(parsePeerReviewOutput("VERDICT: agree\n")).toEqual({ ok: true, verdict: "agree", findings: [] });
+  });
+});

@@ -15,6 +15,7 @@
  */
 import type { AgentName, AgentScopeConfig, AgentScopeRoleBinding, RollEvent } from "@roll/spec";
 import { extractUsage, toCycleCost } from "../cost/tracker.js";
+import { reconcileObservedModel } from "./isolation.js";
 import { AGENT_REGISTRY_NAMES, agentIsKnown, canonicalAgentName } from "./registry.js";
 
 // US-PAIR-009 / FIX-343: `score` — the finished cycle's Review Score is produced
@@ -373,14 +374,27 @@ export function peerRunIdentity(
   peer: string,
   stdout: string,
   configuredModel: string,
-): { cost: number; costBasis: "estimated" | "unobservable"; model?: string; observedModel?: string } {
+): {
+  cost: number;
+  costBasis: "estimated" | "unobservable";
+  model?: string;
+  observedModel?: string;
+  /** US-PAIR-018: set ONLY on a real configured-vs-observed disagreement. */
+  modelMismatch?: string;
+} {
   const fact = peerReviewCostFact(peer, stdout);
   const observed = observedModelFrom(peer, stdout);
+  // US-PAIR-018: reconcile, never re-decide. The tier was fixed from the
+  // configured identity before the spawn; a mismatch is a WARNING recorded
+  // alongside it, and "nothing observed" stays silent (stub extractors are honest
+  // silence, not a fault).
+  const recon = reconcileObservedModel(configuredModel, observed);
   return {
     cost: fact.usd,
     costBasis: fact.basis,
     ...(configuredModel !== "" ? { model: configuredModel } : {}),
     ...(observed !== "" ? { observedModel: observed } : {}),
+    ...(recon.kind === "mismatch" ? { modelMismatch: recon.message } : {}),
   };
 }
 

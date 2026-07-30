@@ -35,6 +35,7 @@ import {
   type RouteSlot,
   type SupervisorConfig,
 } from "@roll/spec";
+import { parseEffort } from "./effort.js";
 import { canonicalAgentName, agentIsKnown, readSlotFromText, type AgentSlot, type SlotConfig } from "./registry.js";
 
 // ── minimal block-YAML parser (bounded subset) ───────────────────────────────
@@ -234,6 +235,11 @@ export function normalizeAgentConfig(text: string): AgentConfigParse {
   const root = parseBlockYaml(text ?? "");
   const schema: "v3" | "v4" = root["schema"] === "v4" ? "v4" : "v3";
 
+  // US-PAIR-013: effort — gate → required rig distance. Absent means `standard`;
+  // parse errors surface as fail-loud signals rather than degrading to `off`.
+  const effortParse = parseEffort(root["effort"]);
+  errors.push(...effortParse.errors);
+
   // rigs: named agent×model map (v4 only).
   const rigs: Record<string, Rig> = {};
   if (isMap(root["rigs"])) {
@@ -338,7 +344,7 @@ export function normalizeAgentConfig(text: string): AgentConfigParse {
   }
 
   return {
-    config: { schema, rigs, routing, executionProfiles, executionPolicy, supervisor },
+    config: { schema, rigs, routing, executionProfiles, executionPolicy, supervisor, effort: effortParse.effort },
     errors,
   };
 }

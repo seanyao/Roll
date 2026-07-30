@@ -1,4 +1,7 @@
 export * from "./agent/registry.js";
+export * from "./agent/effort.js";
+export * from "./observe/effort-view.js";
+export * from "./agent/isolation.js";
 export * from "./agent/specs.js";
 export * from "./agent/config-v4.js";
 export * from "./agent/model-config.js";

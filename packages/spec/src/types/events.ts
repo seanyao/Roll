@@ -409,7 +409,13 @@ export type RollEvent =
   // (ranked_candidate / fallback_after_* / same_agent_retry / fanout) make the
   // serial cost-aware dispatch auditable — the supervisor sees WHY a peer was
   // chosen. Both optional for back-compat with the pre-FIX-1054 (parallel) logs.
-  | { type: "pair:selected"; cycleId: string; workingAgent: string; peer: string; stage: string; attempt?: number; reason?: string; ts: number }
+  // US-PAIR-020: the isolation decision, recorded per dispatch. Without
+  // `achievedTier` the question "does raising isolation actually help?" is
+  // unanswerable no matter how long the stream runs — nothing recorded how far
+  // apart the reviewer actually was. `degradedFrom` + `tierReason` say WHY it is
+  // not stronger, distinguishing "no farther candidate exists" from "the farther
+  // candidate would not open".
+  | { type: "pair:selected"; cycleId: string; workingAgent: string; peer: string; stage: string; attempt?: number; reason?: string; declaredTier?: string; achievedTier?: string; degradedFrom?: string; tierReason?: string; ts: number }
   // FIX-1054 — SERIAL dispatch is the default: once a peer's result is accepted,
   // the remaining ranked candidates are SKIPPED (never spawned). This event makes
   // the un-spent candidates visible AS a policy decision (not zero-cost attempts).
@@ -426,14 +432,14 @@ export type RollEvent =
   // "estimated" is also honest that the figure comes from the price table, not an invoice.
   // US-PAIR-004: `stage` is optional for back-compat with PAIR-003 (code-only)
   // logs; multi-stage pairing stamps it so verdicts are distinguishable per stage.
-  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: "agree" | "refine" | "object"; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage?: string; ts: number }
+  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: "agree" | "refine" | "object"; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; modelMismatch?: string; stage?: string; ts: number }
   // US-PAIR-009: the score stage's outcome — a heterogeneous peer scored the cycle.
   // FIX-344: `stage` widens to `"design"` for the roll-design peer Review Score
   // path. roll-design has NO loop cycle (no commitsAhead/worktree), so its
   // independent peer score is triggered at skill wrap-up via `roll pair score
   // --design` and stamped `stage: "design"` so the design score is distinguishable
   // from a build/fix cycle's `stage: "score"` in the same event stream.
-  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: "good" | "ok" | "regression"; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; stage: "score" | "design"; ts: number }
+  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: "good" | "ok" | "regression"; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; modelMismatch?: string; stage: "score" | "design"; ts: number }
   | { type: "pair:none-available"; cycleId: string; stage: string; reason: string; ts: number }
   // FIX-910 — per-attempt score-stage failure attribution (unparseable / timeout /
   // auth-block / exit-error), emitted from the executor's scorePeer closure so

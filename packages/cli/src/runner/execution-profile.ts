@@ -526,7 +526,26 @@ export async function runEvaluatorStage(
   // real independence signal (a builder/evaluator roleInstanceId literal compare
   // could never fire — dropped rather than kept as dead code).
   const builderSessionId = ctx.builderSessionId ?? "";
-  if (builderSessionId !== "" && evaluatorSessionId === builderSessionId) {
+  // US-PAIR-017: an ABSENT builder identity fails closed.
+  //
+  // This used to read `builderSessionId !== "" && collides`, so a missing builder
+  // token skipped the self-grade check entirely — and skipped it SILENTLY. "We
+  // cannot tell who built this" was therefore reported as "this was independently
+  // evaluated", which is the same empty-satisfaction shape as a gate that never
+  // ran counting as a gate that passed. Session separation is the floor of the
+  // isolation ladder (US-PAIR-012); when even that cannot be proven, stop.
+  if (builderSessionId === "") {
+    return {
+      ran: false,
+      ok: false,
+      reasons: [
+        "evaluator stage: builder identity is absent — cannot prove the evaluation is not a self-grade, so the stage fails closed rather than assuming independence",
+      ],
+      blockReason: "identity_collision",
+      evaluatorAgent,
+    };
+  }
+  if (evaluatorSessionId === builderSessionId) {
     return {
       ran: false,
       ok: false,
