@@ -43,6 +43,8 @@ export type PrCloudState =
       draft?: boolean;
       /** US-DELIV-010: gh mergeable rollup (CONFLICTING = merge conflict). */
       mergeable?: PrMergeableState;
+      /** FIX-1487: the head sha the CI verdict was computed from — pinned at merge. */
+      headSha?: string;
       checkedAt: string;
     }
   | { kind: "merged"; mergeCommit: string; mergedAt: string; checkedAt: string }

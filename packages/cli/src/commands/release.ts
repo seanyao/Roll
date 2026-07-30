@@ -33,7 +33,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, isRollPackageName, planRelease, releaseTagForVersion, resolveVersionScheme, ROLL_PACKAGE_NAMES, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
+import { DEFAULT_REQUIRED_CHECK, requiredCheckVerdict, type CheckConclusion, EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, isRollPackageName, planRelease, releaseTagForVersion, resolveVersionScheme, ROLL_PACKAGE_NAMES, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
 import { isTransientGhError } from "@roll/infra";
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { c, renderState } from "../render.js";
@@ -452,18 +452,29 @@ export function selfDrivenMerge(opts: {
   branch: string;
   /** `git ls-remote origin refs/heads/<branch>` → "<sha>\trefs/heads/<branch>". */
   lsRemote: (branch: string) => string;
+  /** FIX-1487: the check that must have RUN and passed (default `test-ts`). */
+  requiredCheck?: string;
   gh: (args: string[]) => { code: number; stdout: string; stderr: string };
 }): SelfMergeResult {
   const tip = opts.lsRemote(opts.branch).trim().split(/\s+/)[0] ?? "";
   if (!/^[0-9a-f]{40}$/.test(tip)) return { merged: false, reason: "no-tip", detail: tip };
 
-  const checks = opts.gh(["api", `repos/${opts.slug}/commits/${tip}/check-runs`, "--jq", ".check_runs[] | .conclusion"]);
+  // FIX-1487: ask by NAME. "No failure among the conclusions" counted a check
+  // that never ran as a check that passed — and `ci.yml` carries an `if:` that
+  // can skip the whole required job, so that bypass was reachable.
+  const checks = opts.gh(["api", `repos/${opts.slug}/commits/${tip}/check-runs`, "--jq", ".check_runs[] | .name + \"\\t\" + (.conclusion // \"null\")"]);
   if (checks.code !== 0) return { merged: false, reason: "pending", detail: checks.stderr.trim() };
-  const conclusions = checks.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  if (conclusions.length === 0) return { merged: false, reason: "no-checks" };
-  if (conclusions.some((c) => c === "null")) return { merged: false, reason: "pending" };
-  const bad = conclusions.filter((c) => !["success", "neutral", "skipped"].includes(c));
-  if (bad.length > 0) return { merged: false, reason: "checks-failed", detail: bad.join(", ") };
+  const rows = checks.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  if (rows.length === 0) return { merged: false, reason: "no-checks" };
+  const parsed: CheckConclusion[] = rows.map((l) => {
+    const [name, conclusion] = l.split("\t");
+    return { name: name ?? "", conclusion: conclusion === "null" ? null : conclusion };
+  });
+  const verdict = requiredCheckVerdict(parsed, opts.requiredCheck ?? DEFAULT_REQUIRED_CHECK);
+  if (!verdict.ok) {
+    if (verdict.reason === "pending") return { merged: false, reason: "pending" };
+    return { merged: false, reason: "checks-failed", detail: verdict.detail ?? verdict.reason };
+  }
 
   const merge = opts.gh([
     "api", "--method", "PUT", `repos/${opts.slug}/pulls/${opts.prNum}/merge`,

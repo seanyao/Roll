@@ -17,13 +17,18 @@ import { autoMergeUnavailable, selfDrivenMerge } from "../src/commands/release.j
 
 const TIP = "a".repeat(40);
 
-/** gh seam: canned check-run conclusions, and a recorder for the merge call. */
+/**
+ * gh seam: canned check-run conclusions for the REQUIRED check, plus a recorder
+ * for the merge call. FIX-1487 made the judgement name-aware, so the fake emits
+ * `name\tconclusion` rows; the first conclusion belongs to the required check.
+ */
 function ghWith(conclusions: string[], merged = "true", calls: string[][] = []) {
+  const rows = conclusions.map((c, i) => `${i === 0 ? "test-ts" : `extra-${i}`}\t${c}`);
   return {
     calls,
     gh: (args: string[]) => {
       calls.push(args);
-      if (args.some((a) => a.includes("check-runs"))) return { code: 0, stdout: `${conclusions.join("\n")}\n`, stderr: "" };
+      if (args.some((a) => a.includes("check-runs"))) return { code: 0, stdout: `${rows.join("\n")}\n`, stderr: "" };
       return { code: 0, stdout: `${merged}\n`, stderr: "" };
     },
   };
@@ -44,13 +49,13 @@ describe("US-DELIV-014 — self-driven merge refuses anything but green", () => 
   });
 
   it("does NOT merge while a check is still running", () => {
-    const { gh, calls } = ghWith(["success", "null"]);
+    const { gh, calls } = ghWith(["null"]);
     expect(selfDrivenMerge({ ...base, lsRemote, gh })).toEqual({ merged: false, reason: "pending" });
     expect(calls.some((c) => c.includes("--method")), "merged while a check was pending").toBe(false);
   });
 
   it("does NOT merge when a check failed — and says which", () => {
-    const { gh, calls } = ghWith(["success", "failure"]);
+    const { gh, calls } = ghWith(["failure"]);
     const res = selfDrivenMerge({ ...base, lsRemote, gh });
     expect(res.merged).toBe(false);
     expect(res.reason).toBe("checks-failed");
@@ -74,7 +79,7 @@ describe("US-DELIV-014 — self-driven merge refuses anything but green", () => 
   it("reports a rejected merge instead of claiming success", () => {
     const gh = (args: string[]) =>
       args.some((a) => a.includes("check-runs"))
-        ? { code: 0, stdout: "success\n", stderr: "" }
+        ? { code: 0, stdout: "test-ts\tsuccess\n", stderr: "" }
         : { code: 1, stdout: "", stderr: "422 Base branch was modified\n" };
     const res = selfDrivenMerge({ ...base, lsRemote, gh });
     expect(res.merged).toBe(false);
@@ -100,5 +105,38 @@ describe("US-DELIV-014 — capability detection picks the mode", () => {
     for (const msg of ["could not arm auto-merge on PR 42: EOF", "GraphQL: something went wrong"]) {
       expect(autoMergeUnavailable(msg), msg).toBe(false);
     }
+  });
+});
+
+describe("FIX-1487 — the required check must have run, on both merge paths", () => {
+  /** gh seam returning named check rows the way selfDrivenMerge now asks for them. */
+  function ghNamed(rows: string[], calls: string[][] = []) {
+    return {
+      calls,
+      gh: (args: string[]) => {
+        calls.push(args);
+        if (args.some((a) => a.includes("check-runs"))) return { code: 0, stdout: `${rows.join("\n")}\n`, stderr: "" };
+        return { code: 0, stdout: "true\n", stderr: "" };
+      },
+    };
+  }
+
+  it("refuses when the required check was SKIPPED — the reachable ci.yml bypass", () => {
+    const { gh, calls } = ghNamed(["test-ts\tskipped"]);
+    const res = selfDrivenMerge({ ...base, lsRemote, gh });
+    expect(res.merged).toBe(false);
+    expect(calls.some((c) => c.includes("--method")), "merged although the gate never ran").toBe(false);
+  });
+
+  it("refuses when the required check is absent entirely", () => {
+    const { gh, calls } = ghNamed(["lint\tsuccess"]);
+    expect(selfDrivenMerge({ ...base, lsRemote, gh }).merged).toBe(false);
+    expect(calls.some((c) => c.includes("--method"))).toBe(false);
+  });
+
+  it("merges when the required check passed, tolerating skipped extras", () => {
+    const { gh, calls } = ghNamed(["test-ts\tsuccess", "browser-live\tskipped"]);
+    expect(selfDrivenMerge({ ...base, lsRemote, gh }).merged).toBe(true);
+    expect(calls.find((c) => c.includes("--method"))).toContain(`sha=${TIP}`);
   });
 });

@@ -143,7 +143,9 @@ export class GitHubPrStatusProvider implements PrStatusProvider {
         reduceRunConclusions(runs.map((r) => r.conclusion)),
         reduceStatusCheckRollup(rollup),
       );
-      return { kind: "open", ci, draft: info.isDraft, mergeable: info.mergeable, checkedAt };
+      // FIX-1487: surface the sha the CI verdict was computed FROM, so the
+      // merge can pin it and never land something pushed after the check.
+      return { kind: "open", ci, draft: info.isDraft, mergeable: info.mergeable, checkedAt, headSha: info.headRefOid };
     }
 
     // UNKNOWN or any unexpected string → treat as unreachable provider_error so

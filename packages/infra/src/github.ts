@@ -558,13 +558,17 @@ export type PrMergeMode = "auto" | "admin" | "plain";
  *   - plain (11587/11963/12015): failure NON-fatal (next tick retries).
  * The wrapper does not decide fatality — it surfaces the code; callers branch.
  */
-export async function prMerge(slug: string, ref: string, mode: PrMergeMode): Promise<GhResult> {
+export async function prMerge(slug: string, ref: string, mode: PrMergeMode, headSha?: string): Promise<GhResult> {
   const flags = mode === "auto" ? ["--auto"] : mode === "admin" ? ["--admin"] : [];
+  // FIX-1487: pin the sha that was actually verified. Without it, anything
+  // pushed between "checks are green" and this call gets merged unverified —
+  // and with no branch protection there is no server-side gate behind us.
+  const pin = headSha !== undefined && headSha !== "" ? ["--match-head-commit", headSha] : [];
   const result = await invokeInfraTool<GitHubPrMergeToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "merge", slug, ref, mode },
     run: async (invocation) => ok(invocation, await rawGh([
-      "-R", invocation.input.slug, "pr", "merge", invocation.input.ref, ...flags, "--squash", "--delete-branch",
+      "-R", invocation.input.slug, "pr", "merge", invocation.input.ref, ...flags, ...pin, "--squash", "--delete-branch",
     ])),
   });
   if (result.ok) return result.output;

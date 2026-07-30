@@ -154,6 +154,8 @@ function applyPrCloudState(facts: ReconcileFacts, st: PrCloudState): void {
       // "keep waiting", NOT failure — collapsing them to false made the
       // reconciler condemn still-running (or unpolled) checks as failed.
       facts.ciGreen = st.ci === "green" ? true : st.ci === "red" ? false : undefined;
+      // FIX-1487: remember WHICH sha that verdict came from.
+      facts.headSha = st.headSha;
       facts.prDraft = st.draft;
       facts.prMergeable = st.mergeable;
       return;
@@ -752,7 +754,8 @@ export async function runReconcileTick(
         if (slug !== undefined && cyc.prNumber !== undefined) {
           let outcome: "merged" | "blocked" | "gh_down" = "gh_down";
           try {
-            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain");
+            // FIX-1487: pin the verified head — see prMerge.
+            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain", facts.headSha);
             outcome = mergeResult.code === 0 ? "merged" : "blocked";
           } catch {
             outcome = "gh_down";
@@ -992,7 +995,8 @@ export async function loopReconcileCommand(
         if (slug !== undefined && cyc.prNumber !== undefined) {
           let outcome: "merged" | "blocked" | "gh_down" = "gh_down";
           try {
-            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain");
+            // FIX-1487: pin the verified head — see prMerge.
+            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain", facts.headSha);
             outcome = mergeResult.code === 0 ? "merged" : "blocked";
           } catch {
             // gh binary not found / unspawnable → gh_down

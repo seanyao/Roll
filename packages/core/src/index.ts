@@ -23,6 +23,7 @@ export * from "./backlog/lease.js";
 export * from "./cost/prices.js";
 export * from "./cost/tracker.js";
 export * from "./delivery/infra-default.js";
+export * from "./delivery/required-check.js";
 export * from "./delivery/delivery-ci.js";
 export * from "./delivery/gate.js";
 export * from "./delivery/pr.js";

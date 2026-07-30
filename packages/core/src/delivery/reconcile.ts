@@ -39,6 +39,8 @@ export interface ReconcileCycle {
 export interface ReconcileFacts {
   /** L1: PR state from gh (undefined = gh unavailable / PR not found). */
   prState?: "OPEN" | "MERGED" | "CLOSED";
+  /** FIX-1487: head sha the CI verdict came from; pinned into the merge request. */
+  headSha?: string;
   /** L1: merge commit SHA from the PR (only when prState is MERGED). */
   prMergeCommit?: string;
   /**
