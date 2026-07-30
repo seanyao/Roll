@@ -288,9 +288,26 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     }
   });
 
+  /**
+   * The breaking-change note is PERMANENT history, not current news: once
+   * shipped it lives in its released section forever, while `Unreleased` fills
+   * up with whatever comes next. So locate it by CONTENT — the section that
+   * carries the 破坏性变更 heading — rather than by position. Anchoring it to
+   * `Unreleased` broke at the release fold; anchoring it to "the current
+   * section" broke again the moment a later entry landed in Unreleased.
+   */
+  function breakingChangeSection(log: string): string {
+    const headings = [...log.matchAll(/^## .*$/gm)];
+    for (let i = 0; i < headings.length; i++) {
+      const body = log.slice(headings[i].index, i + 1 < headings.length ? headings[i + 1].index : log.length);
+      if (body.includes("破坏性变更") && body.includes("roll loop on")) return body;
+    }
+    throw new Error("CHANGELOG has no 破坏性变更 section naming roll loop on");
+  }
+
   it("the CHANGELOG records this as a breaking change with the replacement", () => {
     const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-    const unreleased = currentSection(log);
+    const unreleased = breakingChangeSection(log);
     expect(unreleased).toContain("破坏性变更");
     // Names what disappeared AND what to do instead — a breaking note without a
     // replacement just strands the reader.
