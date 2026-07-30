@@ -22,10 +22,10 @@
     "skills",
     "agent-first"
   ],
-  "homepage": "https://github.com/seanyao/roll",
+  "homepage": "https://github.com/BIPOSVC/ape-roll",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/seanyao/roll.git"
+    "url": "git+https://github.com/BIPOSVC/ape-roll.git"
   },
   "bin": {
     "roll": "dist/roll.mjs"

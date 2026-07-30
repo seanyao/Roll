@@ -156,7 +156,7 @@ bash, curl, and tar — all preinstalled on macOS and Linux.
 **Details:**
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 No Node.js, no npm, no package manager needed. The script downloads a tarball,
@@ -168,7 +168,7 @@ everything.
 To pin a specific version (recommended for production):
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
+npm install -g @bipo-ape/roll
 ```
 
 ---

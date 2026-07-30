@@ -62,7 +62,7 @@ roll sync
 ## 典型首次使用流程
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash   # 安装 roll
+npm install -g @bipo-ape/roll
 roll setup                 # 全机器配置 AI 工具（仅需一次）
 cd my-project
 roll init                  # 诊断并路由该项目

@@ -15,7 +15,7 @@
 | **Graft**（嫁接，本页） | 活跃的已有代码库，还在演化 | 零侵入原代码，Roll 在上层叠加 |
 | **Replant**（翻种） | 想清债、重写一次 | 工作量大，需要先反推规格 |
 
-本页讲 **graft**。关于 seed / replant，见 [接入模式文档](https://github.com/seanyao/roll-meta)（维护者私有仓，README 有公开摘要）。
+本页讲 **graft**。关于 seed / replant，见 [接入模式文档](https://github.com/BIPOSVC/ape-roll-meta)（维护者私有仓，README 有公开摘要）。
 
 ## Graft 做了什么
 
@@ -34,7 +34,7 @@ Graft 是**完全可逆**的：跑 `roll setup offboard` 让 Roll 自己撤销�
 ### 1. 安装 Roll
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 或通过 npm：

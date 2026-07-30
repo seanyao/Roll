@@ -139,7 +139,7 @@ npm uninstall -g @bipo-ape/roll
 **细节：**
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 不需要 Node.js、不需要 npm、不需要任何包管理器。脚本下载 tarball、解压到
@@ -150,7 +150,7 @@ curl -fsSL https://seanyao.github.io/roll/install | bash
 钉版本（生产环境推荐）：
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
+npm install -g @bipo-ape/roll
 ```
 
 ---

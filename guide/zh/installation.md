@@ -5,7 +5,7 @@
 ### curl（推荐）
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 仅需 bash 3.2+、curl、tar —— macOS 和 Linux 预装即可，无需 Node.js。
@@ -13,7 +13,7 @@ curl -fsSL https://seanyao.github.io/roll/install | bash
 钉版本：
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
+npm install -g @bipo-ape/roll
 ```
 
 ### npm

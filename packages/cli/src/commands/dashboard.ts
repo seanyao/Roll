@@ -38,7 +38,7 @@ import {
   systemPidAlive,
   type PidAlive,
 } from "@roll/infra";
-import { getAgentSpec } from "@roll/core";
+import { getAgentSpec, ROLL_REPO_URL } from "@roll/core";
 import { computeListCost, currencyFor } from "./prices-cost.js";
 import { exemptionStats, renderExemptionSignal } from "../runner/exemption-stats.js";
 import { screenLockWaitReason } from "../runner/screen-lock-events.js";
@@ -860,7 +860,7 @@ function repairOrphanCyclesFromGit(
     const m = gitMerges[cy.label];
     if (!m) continue;
     if (cy.outcome === "running" || cy.outcome === "unknown") cy.outcome = "done";
-    if (m.pr && !cy.pr) cy.pr = `https://github.com/seanyao/roll/pull/${m.pr}`;
+    if (m.pr && !cy.pr) cy.pr = `${ROLL_REPO_URL}/pull/${m.pr}`;
     if (m.pr) {
       cy.pr_num = parseInt(m.pr, 10);
       cy.pr_outcome = "merged";

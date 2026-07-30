@@ -1,4 +1,5 @@
 import { dreamRunOnceCommand } from "./dream-run-once.js";
+import { ROLL_REPO_SLUG } from "@roll/core";
 import { rollVersion } from "./version.js";
 
 export type DreamRunOnce = (args: string[]) => number | Promise<number>;
@@ -122,7 +123,7 @@ export function renderMainHelp(version: string = legacyHelpVersion()): string {
     "",
     ...EXAMPLES.map(([cmd, zh]) => `  ${cmd}  ${zh}`),
     "",
-    "  docs: github.com/seanyao/roll  ·  issues: github.com/seanyao/roll/issues",
+    `  docs: github.com/${ROLL_REPO_SLUG}  ·  issues: github.com/${ROLL_REPO_SLUG}/issues`,
     "  version: roll --version  ·  gc auto-runs per cycle (manual: roll loop gc)",
     "",
   ].join("\n");

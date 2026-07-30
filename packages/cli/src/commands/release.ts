@@ -422,6 +422,63 @@ export function openPrResilient(opts: {
  * auto-merge. A real "auto-merge not allowed" error surfaces the actionable
  * hint exactly as before.
  */
+/** What a self-driven merge attempt concluded. */
+export interface SelfMergeResult {
+  merged: boolean;
+  /** `pending` while checks are still running; anything else is terminal. */
+  reason: "merged" | "pending" | "no-checks" | "checks-failed" | "no-tip" | "merge-rejected";
+  detail?: string;
+}
+
+/**
+ * US-DELIV-014 — merge the release PR ourselves, for repos where GitHub's own
+ * auto-merge is unavailable (it requires branch protection, which a private
+ * repo on the Free plan cannot have).
+ *
+ * This deliberately reproduces the guarantee branch protection was providing,
+ * because nothing else will:
+ *
+ *   - it merges ONLY when every check has concluded successfully. A pending
+ *     check is `pending` (poll again), a failed one is terminal — never a merge.
+ *   - it pins the sha. `git ls-remote` is the real branch tip; the PR API's
+ *     `head` lags, and an unpinned squash merge has silently landed a stale
+ *     head in this repo before.
+ *
+ * Pure over its seams so both refusals and the pin are unit-testable.
+ */
+export function selfDrivenMerge(opts: {
+  slug: string;
+  prNum: string;
+  branch: string;
+  /** `git ls-remote origin refs/heads/<branch>` → "<sha>\trefs/heads/<branch>". */
+  lsRemote: (branch: string) => string;
+  gh: (args: string[]) => { code: number; stdout: string; stderr: string };
+}): SelfMergeResult {
+  const tip = opts.lsRemote(opts.branch).trim().split(/\s+/)[0] ?? "";
+  if (!/^[0-9a-f]{40}$/.test(tip)) return { merged: false, reason: "no-tip", detail: tip };
+
+  const checks = opts.gh(["api", `repos/${opts.slug}/commits/${tip}/check-runs`, "--jq", ".check_runs[] | .conclusion"]);
+  if (checks.code !== 0) return { merged: false, reason: "pending", detail: checks.stderr.trim() };
+  const conclusions = checks.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  if (conclusions.length === 0) return { merged: false, reason: "no-checks" };
+  if (conclusions.some((c) => c === "null")) return { merged: false, reason: "pending" };
+  const bad = conclusions.filter((c) => !["success", "neutral", "skipped"].includes(c));
+  if (bad.length > 0) return { merged: false, reason: "checks-failed", detail: bad.join(", ") };
+
+  const merge = opts.gh([
+    "api", "--method", "PUT", `repos/${opts.slug}/pulls/${opts.prNum}/merge`,
+    "-f", "merge_method=squash", "-f", `sha=${tip}`, "--jq", ".merged",
+  ]);
+  if (merge.code === 0 && merge.stdout.trim() === "true") return { merged: true, reason: "merged" };
+  if (/already merged/i.test(merge.stderr)) return { merged: true, reason: "merged" };
+  return { merged: false, reason: "merge-rejected", detail: (merge.stderr || merge.stdout).split("\n")[0]?.trim() };
+}
+
+/** True when the error text says this repo cannot arm GitHub's auto-merge. */
+export function autoMergeUnavailable(errText: string): boolean {
+  return /auto.?merge.*(not allowed|disabled|not enabled)|allow auto-?merge|protected branch|upgrade to github pro/i.test(errText);
+}
+
 export function enableAutoMergeResilient(opts: {
   cwd: string;
   prRef: string;
@@ -640,6 +697,11 @@ export function commitPushWithGate(opts: {
 }
 
 export function realReleaseDeps(): ReleaseFlowDeps {
+  // US-DELIV-014: set when this repo cannot arm GitHub's own auto-merge (it
+  // needs branch protection, which a private repo on the Free plan cannot
+  // have). The wait loop then drives the merge itself instead of watching for
+  // something that will never happen.
+  const selfDrive = { on: false };
   return {
     version: (cwd) => {
       try {
@@ -728,8 +790,16 @@ export function realReleaseDeps(): ReleaseFlowDeps {
     // instead of silently waiting forever. FIX-353: now resilient to the
     // transient GraphQL EOF — retry, then REST PUT …/pulls/N/merge fallback
     // (branch protection still gates it; a non-green PR is never force-merged).
-    enableAutoMerge: (cwd, prRef) =>
-      enableAutoMergeResilient({ cwd, prRef, gh: (args) => ghSync(cwd, args) }),
+    enableAutoMerge: (cwd, prRef) => {
+      try {
+        enableAutoMergeResilient({ cwd, prRef, gh: (args) => ghSync(cwd, args) });
+      } catch (e) {
+        // Only a "this repo can't do auto-merge" refusal switches modes — any
+        // other failure is a real error and must still abort the release.
+        if (!autoMergeUnavailable((e as Error).message)) throw e;
+        selfDrive.on = true;
+      }
+    },
     // FIX-288 AC3: an empty commit pushed to the release branch fires a
     // `synchronize` event so a fresh PR's pull_request CI gets scheduled. The
     // empty commit is harmless: it squash-merges away into the single release
@@ -744,18 +814,50 @@ export function realReleaseDeps(): ReleaseFlowDeps {
     // Each poll prints one feedback line (AC2). After NUDGE_AFTER quiet polls
     // with no scheduled checks, fire a `synchronize` (AC3) — a fresh PR's CI
     // sometimes never schedules. Returns false on close/timeout.
-    waitMerged: (cwd, prRef, _branch, hooks) => {
+    waitMerged: (cwd, prRef, branch, hooks) => {
       const start = Date.now();
       const deadline = start + 20 * 60_000;
       const NUDGE_AFTER = 4; // ~80s of no checks before we kick the PR once
       let quietPolls = 0;
       let nudged = false;
+      const prNum = /\/pull\/(\d+)/.exec(prRef)?.[1] ?? (/^\d+$/.test(prRef.trim()) ? prRef.trim() : "");
       while (Date.now() < deadline) {
         const waitedMin = Math.max(1, Math.round((Date.now() - start) / 60_000));
         try {
           const state = execFileSync("gh", ["pr", "view", prRef, "--json", "state", "--jq", ".state"], { cwd, encoding: "utf8" }).trim();
           if (state === "MERGED") return true;
           if (state === "CLOSED") return false;
+
+          // US-DELIV-014: no native auto-merge on this repo — merge it here,
+          // but only once every check has concluded successfully.
+          if (selfDrive.on && prNum !== "") {
+            const slug = repoSlugSync(cwd);
+            if (slug !== undefined) {
+              const res = selfDrivenMerge({
+                slug,
+                prNum,
+                branch,
+                lsRemote: (b) => {
+                  try {
+                    return execFileSync("git", ["ls-remote", "origin", `refs/heads/${b}`], { cwd, encoding: "utf8" });
+                  } catch {
+                    return "";
+                  }
+                },
+                gh: (args) => ghSync(cwd, args),
+              });
+              if (res.merged) return true;
+              if (res.reason === "checks-failed") {
+                hooks.onWait(`#${prRef} — checks failed (${res.detail ?? "see CI"}); not merging`);
+                return false;
+              }
+              if (res.reason === "merge-rejected") {
+                hooks.onWait(`#${prRef} — merge rejected: ${res.detail ?? "unknown"}`);
+                return false;
+              }
+            }
+          }
+
           // AC3: no checks scheduled? count quiet polls; nudge once.
           let checks = "";
           try {
@@ -776,7 +878,11 @@ export function realReleaseDeps(): ReleaseFlowDeps {
         } catch {
           /* transient gh error — keep polling */
         }
-        hooks.onWait(`#${prRef} — waited ${waitedMin}m, waiting for auto-merge / CI`);
+        hooks.onWait(
+          selfDrive.on
+            ? `#${prRef} — waited ${waitedMin}m, waiting for CI (roll drives the merge)`
+            : `#${prRef} — waited ${waitedMin}m, waiting for auto-merge / CI`,
+        );
         execFileSync("sleep", ["20"]);
       }
       return false;

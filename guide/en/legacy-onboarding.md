@@ -15,7 +15,7 @@ If you have a real project that's been alive for a while — code, tests, histor
 | **Graft** (this page) | You have a live existing codebase that keeps evolving | Zero intrusion on existing code; Roll layered on top |
 | **Replant** | You want a clean rewrite, debt cleared | Higher effort; you reverse-engineer specs first |
 
-This page covers **graft**. For seed vs. replant, see [adoption patterns](https://github.com/seanyao/roll-meta) (maintainer-only repo, public summary in the README).
+This page covers **graft**. For seed vs. replant, see [adoption patterns](https://github.com/BIPOSVC/ape-roll-meta) (maintainer-only repo, public summary in the README).
 
 ## What graft does
 
@@ -34,7 +34,7 @@ The graft is **fully reversible**: run `roll setup offboard` and Roll undoes exa
 ### 1. Install Roll
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 Or via npm:

@@ -9,17 +9,16 @@
 
 **[中文版 README](README_CN.md)**
 
-[![Website](https://img.shields.io/badge/Website-seanyao.github.io%2Froll-blue)](https://seanyao.github.io/roll/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@bipo-ape/roll.svg)](https://www.npmjs.com/package/@bipo-ape/roll)
-[![CI](https://github.com/seanyao/roll/actions/workflows/ci.yml/badge.svg)](https://github.com/seanyao/roll/actions/workflows/ci.yml)
+[![CI](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml/badge.svg)](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml)
 
 Roll — a Supervisor-led CLI harness that routes AI agents through story-scoped planning, building, evaluation, git, CI, and acceptance evidence. Works with Claude, Cursor, Codex, Kimi, Pi, Reasonix, and other local rigs when they are available.
 
 ## Install
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 ```bash

@@ -1,32 +1,18 @@
 /**
- * `roll update` — TS port of bin/roll cmd_update (1967-2017) plus its helpers
- * _resolve_remote_version (1888-1907), _download_and_install_curl (1910-1945),
- * _check_installed_version_or_retry (1947-1965), _invalidate_update_cache
- * (15276-15278) and _show_changelog (15250-15268).
- *
- * Upgrade the install (npm -g, or a curl tarball swap), invalidate the stale
+ * `roll update` — upgrade the global roll install, invalidate the stale
  * update-check cache, re-sync via `roll setup`, then print the recent changelog.
  *
- * IO SEAMS (so the real, irreversible install never runs in tests):
- *   - `npm` / `curl` / `tar` are invoked through spawnSync against PATH, so a
- *     difftest can shim them (record argv, return canned output). Both bash and
- *     TS run the SAME shim, so the passed-through child stdout/stderr (npm
- *     install is NOT wrapped/suppressed by the oracle) stays byte-identical.
- *   - install-method comes from `$ROLL_PKG_DIR/.install-method`; default npm.
+ * US-INSTALL-008: npm is the ONLY upgrade path. The former `curl` branch pulled
+ * a source tarball from the product repo's GitHub Releases; that repo is now
+ * private, so anonymous fetches 404 and the branch could only ever fail. A
+ * machine still carrying a `curl` .install-method marker is told plainly what
+ * to run instead of being walked into that 404.
  *
- * WHITELISTED GAP — the curl path's atomic tarball SWAP (mv pkg → backup, mv
- * extract → pkg) is a destructive, irreversible mutation of the live install
- * tree. The TS port reproduces the DECISION + IO seam (download + extract via
- * shimmed curl/tar, with argv recorded) and the pre-swap/post-read stdout, but
- * does NOT perform the directory swap — difftests assert the recorded curl/tar
- * argv + the surrounding stdout, and the version is read from the post-extract
- * tree the same way the oracle reads it from the post-swap tree. This is the
- * "port the DECISION/IO seam, difftest the pre-swap stdout + argv" option the
- * card allows; the swap itself is not exercised in CI for safety.
+ * IO SEAM: `npm` is invoked through spawnSync against PATH, so a test can shim
+ * it (record argv, return canned output).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isRollPackageName, ROLL_PACKAGE_NAME } from "@roll/core";
 import { resolveLang, t, v2Catalog, type Lang } from "@roll/spec";
@@ -85,65 +71,6 @@ function runForward(cmd: string, argv: string[]): number {
   if (typeof r.stdout === "string" && r.stdout !== "") process.stdout.write(r.stdout);
   if (typeof r.stderr === "string" && r.stderr !== "") process.stderr.write(r.stderr);
   return r.status ?? 1;
-}
-
-// ─── _resolve_remote_version (1888) ───────────────────────────────────────────
-function resolveRemoteVersion(): string | null {
-  const pinned = process.env["ROLL_VERSION"];
-  if (pinned !== undefined && pinned !== "") return pinned;
-
-  const r = spawnSync(
-    "curl",
-    ["-fsSL", "-H", "Accept: application/vnd.github+json", "https://api.github.com/repos/seanyao/roll/releases/latest"],
-    { encoding: "utf8" },
-  );
-  let latest = "";
-  if (r.status === 0 && typeof r.stdout === "string") {
-    const mm = /"tag_name"\s*:\s*"([^"]*)"/.exec(r.stdout);
-    latest = mm?.[1] ?? "";
-  }
-  if (latest === "") {
-    err("Failed to resolve latest version from GitHub.");
-    process.stderr.write("You can pin a version with ROLL_VERSION=vX.Y.Z\n");
-    return null;
-  }
-  return latest;
-}
-
-// ─── _download_and_install_curl (1910) — IO seam, swap whitelisted ────────────
-/** Returns {ok, newVersion} — ok=false on download/extract failure. */
-function downloadAndInstallCurl(tag: string): { ok: boolean; newVersion?: string } {
-  const url = `https://github.com/seanyao/roll/archive/refs/tags/${tag}.tar.gz`;
-  const tmpDir = mkdtempSync(join(tmpdir(), "roll-update-"));
-  try {
-    info(`[roll] Downloading roll ${tag} ...`);
-    const dl = runForward("curl", ["-fsSL", url, "-o", join(tmpDir, "roll.tar.gz")]);
-    if (dl !== 0) {
-      err(m("update.curl_download_failed"));
-      return { ok: false };
-    }
-    info("[roll] Extracting ...");
-    const extractDir = join(tmpDir, "extract");
-    spawnSync("mkdir", ["-p", extractDir], { stdio: "ignore" });
-    const ex = runForward("tar", [
-      "-xzf",
-      join(tmpDir, "roll.tar.gz"),
-      "--strip-components=1",
-      "-C",
-      extractDir,
-    ]);
-    if (ex !== 0) {
-      err(m("update.curl_extract_failed"));
-      return { ok: false };
-    }
-    // Whitelisted gap: the oracle now mv-swaps extract → ROLL_PKG_DIR. The TS
-    // port reads the new version from the post-extract tree instead of the
-    // post-swap tree (identical bytes) and skips the irreversible swap.
-    // FIX-202: package.json is the single source of truth, bin/roll the fallback.
-    return { ok: true, newVersion: treeVersion(extractDir) };
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
 }
 
 /**
@@ -235,35 +162,26 @@ export async function updateCommand(args: string[]): Promise<number> {
   }
   info(m("update.current_version", rollVersion()));
 
-  let installMethod = "npm";
+  // US-INSTALL-008: npm is the ONLY upgrade path. The former `curl` branch
+  // downloaded a source tarball from the product repo's GitHub Releases — that
+  // repo is now private, so anonymous fetches 404 and the branch could only
+  // ever fail. A machine still carrying a `curl` .install-method marker is
+  // told plainly what to run instead rather than being walked into that 404.
   const methodFile = join(rollPkgDir(), ".install-method");
-  if (existsSync(methodFile)) {
-    installMethod = (readFileSync(methodFile, "utf8").trim() || "npm");
+  const legacyCurl = existsSync(methodFile) && readFileSync(methodFile, "utf8").trim() === "curl";
+  if (legacyCurl) {
+    warn(m("update.curl_retired_use_npm", ROLL_PACKAGE_NAME));
   }
 
-  if (installMethod === "curl") {
-    info(m("update.upgrading_via_curl"));
-    process.stdout.write("\n");
+  info(m("update.upgrading_via_npm"));
+  process.stdout.write("\n");
 
-    const tag = resolveRemoteVersion();
-    if (tag === null || tag === "") return 1;
-
-    const res = downloadAndInstallCurl(tag);
-    if (!res.ok) return 1;
-
-    const newVersion = res.newVersion ?? "";
-    if (newVersion !== "") info(m("update.new_version", newVersion));
-  } else {
-    info(m("update.upgrading_via_npm"));
-    process.stdout.write("\n");
-
-    const npmStatus = runForward("npm", ["install", "-g", `${installedPackageName()}@latest`]);
-    if (npmStatus !== 0) {
-      err(m("update.npm_install_failed_check_network_proxy"));
-      return 1;
-    }
-    checkInstalledVersionOrRetry();
+  const npmStatus = runForward("npm", ["install", "-g", `${installedPackageName()}@latest`]);
+  if (npmStatus !== 0) {
+    err(m("update.npm_install_failed_check_network_proxy"));
+    return 1;
   }
+  checkInstalledVersionOrRetry();
 
   invalidateUpdateCache();
 

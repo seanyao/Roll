@@ -74,7 +74,7 @@ _resolve_version() {
 # Download release tarball and atomically install to data dir
 _download_and_install() {
   local tag="$1"
-  local url="https://github.com/seanyao/roll/archive/refs/tags/${tag}.tar.gz"
+  local url="https://github.com/BIPOSVC/ape-roll/archive/refs/tags/${tag}.tar.gz"
   local tmp_dir
   tmp_dir="$(mktemp -d)"
 

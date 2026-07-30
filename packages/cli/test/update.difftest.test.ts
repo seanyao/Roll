@@ -253,22 +253,11 @@ describe("diff-test: roll update == bash oracle", () => {
       expect(scrub(await tsUp(tf, { ROLL_LANG: lang }))).toMatchSnapshot();
     });
 
-    it(`curl version-resolve failure → exit 1 (${lang})`, async () => {
-      const tf = buildFixture("curl");
-      expect(scrub(await tsUp(tf, { ROLL_LANG: lang, ROLL_FAIL_CURL: "1" }))).toMatchSnapshot();
-    });
+    // US-INSTALL-008: the curl upgrade cases are retired with the curl path
+    // itself. They froze the behaviour of downloading a source tarball from the
+    // product repo's GitHub Releases — now private, so that fetch can only
+    // 404. A frozen snapshot of a path the product no longer has is not
+    // coverage; `roll update` is npm-only and the npm case above is the whole
+    // surface. The retired-marker warning is covered by unit test, not here.
   }
-
-  it("curl happy path → download/extract + setup + changelog, curl argv frozen", async () => {
-    const tf = buildFixture("curl");
-    const t = await tsUp(tf, { ROLL_VERSION: "v9.9.9" });
-    const tLog = readCurlLog();
-    expect(scrub(t)).toMatchSnapshot();
-    // The recorded `-o <tmp>/roll.tar.gz` target uses a per-run mkdtemp dir;
-    // normalize the random temp path so the snapshot asserts the SHAPE
-    // (flags + URL + -o … roll.tar.gz).
-    const normLog = (s: string): string => s.replace(/^.*\/roll\.tar\.gz$/m, "<TMP>/roll.tar.gz");
-    expect(normLog(tLog)).toMatchSnapshot();
-    expect(tLog).toContain("v9.9.9.tar.gz");
-  });
 });

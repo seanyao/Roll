@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { confirmInitProjectForTest, initCommand } from "../src/commands/init.js";
 import { collectInitFacts } from "../src/lib/init-diagnosis.js";
@@ -1113,7 +1113,10 @@ describe("frozen: roll init", () => {
     const rows = collectProjectsRegistry(fx.home);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.path).toBe(fx.proj);
-    expect(rows[0]?.name).toBe("roll");
+    // US-INSTALL-008: the fixture is a temp dir inside this repo, so the
+    // registered name is the enclosing checkout's — assert THAT, not the
+    // literal the checkout used to be called.
+    expect(rows[0]?.name).toBe(basename(REPO));
     expect(typeof rows[0]?.lastIndexedAt).toBe("string");
   });
 

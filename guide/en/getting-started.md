@@ -6,8 +6,7 @@ about five minutes. Run it in a git repository.
 ## 1. Install
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
-# or
+npm install -g @bipo-ape/roll
 npm install -g @bipo-ape/roll
 ```
 

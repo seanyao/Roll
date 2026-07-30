@@ -9,17 +9,16 @@
 
 **[English README](README.md)**
 
-[![官网](https://img.shields.io/badge/官网-seanyao.github.io%2Froll-blue)](https://seanyao.github.io/roll/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@bipo-ape/roll.svg)](https://www.npmjs.com/package/@bipo-ape/roll)
-[![CI](https://github.com/seanyao/roll/actions/workflows/ci.yml/badge.svg)](https://github.com/seanyao/roll/actions/workflows/ci.yml)
+[![CI](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml/badge.svg)](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml)
 
 Roll 是 Supervisor-led 的 CLI harness：把 AI agent 解析为按 Story 收口的规划、构建、评估、git、CI 与验收证据流程。支持 Claude、Codex、Kimi、Pi、Antigravity、Reasonix 等本机可用 agent。
 
 ## 安装
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 ```bash

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# US-DELIV-014 — refuse a direct push to main.
+#
+# The product repo is private on a plan that cannot have GitHub branch
+# protection, so the server accepts a direct push to main. This hook is what
+# stops a slip of the hand from landing unreviewed, untested code on the
+# integration branch.
+#
+# HONEST LIMIT: this is a CLIENT-SIDE hook. It lives in `hooks/` and is active
+# only where `core.hooksPath=hooks` is configured (`roll setup` does that), and
+# `--no-verify` bypasses it. It is NOT branch protection and must never be
+# described as equivalent — it catches accidents, not intent, and it catches
+# nothing at all on a machine that never ran `roll setup`.
+#
+# The release flow is unaffected: it pushes a `release/v*` branch and opens a
+# PR; only `main` itself is refused here.
+set -euo pipefail
+
+PROTECTED="main"
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [ -n "${remote_ref:-}" ] || continue
+  case "$remote_ref" in
+    "refs/heads/$PROTECTED")
+      echo "✗ Push blocked: direct push to $PROTECTED" >&2
+      echo "✗ 推送被拒绝：不能直推 $PROTECTED" >&2
+      echo "" >&2
+      echo "  Open a PR instead:" >&2
+      echo "    git switch -c <type>/<slug> && git push -u origin HEAD" >&2
+      echo "    gh pr create --base $PROTECTED" >&2
+      echo "" >&2
+      echo "  改走 PR：先切分支再推，然后开 PR。" >&2
+      echo "  This is a local guardrail, not branch protection — it is bypassable" >&2
+      echo "  with --no-verify, which is exactly when you should be sure." >&2
+      echo "  这是本机护栏而非服务端分支保护，--no-verify 可绕过。" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

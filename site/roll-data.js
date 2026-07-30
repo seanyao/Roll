@@ -63,7 +63,7 @@ window.RollData = (function () {
       ctas: [
         { label: "How roll-build works", href: "diagrams/roll-build-skill.html", primary: true, external: true },
         { label: "Read the guide", href: "#guides", primary: false },
-        { label: "View on GitHub", href: "https://github.com/seanyao/roll", primary: false, external: true },
+        { label: "View on GitHub", href: "https://github.com/BIPOSVC/ape-roll", primary: false, external: true },
       ],
       meta: ["MIT licensed", "Node 22+", "Works with Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix when available"],
     },
@@ -271,7 +271,7 @@ window.RollData = (function () {
       ctas: [
         { label: "roll-build 详解", href: "diagrams/roll-build-skill.html", primary: true, external: true },
         { label: "查看文档", href: "#guides", primary: false },
-        { label: "GitHub",  href: "https://github.com/seanyao/roll", primary: false, external: true },
+        { label: "GitHub",  href: "https://github.com/BIPOSVC/ape-roll", primary: false, external: true },
       ],
       meta: ["MIT 协议", "Node 22+", "支持 Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix（可用时）"],
     },

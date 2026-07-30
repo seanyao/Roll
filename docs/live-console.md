@@ -101,7 +101,7 @@ outcome running
 cycle 结束（或 `--once` 回放完）时输出证据指针：
 
 ```
-evidence  PR https://github.com/seanyao/roll/pull/999 · diff https://github.com/seanyao/roll/pull/999/files · story .roll/features/*/US-OBS-025/index.html
+evidence  PR https://github.com/BIPOSVC/ape-roll/pull/999 · diff https://github.com/BIPOSVC/ape-roll/pull/999/files · story .roll/features/*/US-OBS-025/index.html
 ```
 
 ## 三流权威边界

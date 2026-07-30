@@ -66,6 +66,19 @@ export const ROLL_PACKAGE_ALIASES = ["@seanyao/roll"] as const;
 /** Every name roll is published under, primary first. */
 export const ROLL_PACKAGE_NAMES: readonly string[] = [ROLL_PACKAGE_NAME, ...ROLL_PACKAGE_ALIASES];
 
+/**
+ * US-INSTALL-008 — the product repo, in ONE place.
+ *
+ * roll moved from a personal account to the org (`BIPOSVC/ape-roll`); the old
+ * repo stays readable but frozen. Every user-facing link and every remote
+ * lookup reads these, so the next move is one edit rather than a hunt through
+ * four files that each learned the address by heart.
+ */
+export const ROLL_REPO_SLUG = "BIPOSVC/ape-roll";
+
+/** Browser URL for {@link ROLL_REPO_SLUG}. */
+export const ROLL_REPO_URL = `https://github.com/${ROLL_REPO_SLUG}`;
+
 /** True when `name` is one of roll's own published package names. */
 export function isRollPackageName(name: string): boolean {
   return ROLL_PACKAGE_NAMES.includes(name);
