@@ -257,12 +257,29 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
   /**
    * The CHANGELOG is deliberately NOT swept as a whole: released sections are
    * history, and a v3 entry that says a scan ran nightly is a true statement about
-   * v3. Only the Unreleased section describes the product as it is now, so that is
-   * the part held to the same rules as the guides (codex r8).
+   * v3. Only the section describing the product as it is now is held to the same
+   * rules as the guides (codex r8).
+   *
+   * That section is `Unreleased` while the entries are pending — but `roll release`
+   * FOLDS Unreleased into a `## vX.Y.Z` heading, which used to make these gates go
+   * red mid-release (and the negative one pass vacuously). So resolve the current
+   * section by SHAPE: Unreleased if it still carries bullets, else the newest
+   * released section.
    */
-  it("the Unreleased CHANGELOG section itself makes no retired claim", () => {
+  function currentSection(log: string): string {
+    const headings = [...log.matchAll(/^## .*$/gm)];
+    const at = (i: number): string =>
+      log.slice(headings[i].index, i + 1 < headings.length ? headings[i + 1].index : log.length);
+    const unreleasedIdx = headings.findIndex((h) => h[0].startsWith("## Unreleased"));
+    if (unreleasedIdx >= 0 && /^- /m.test(at(unreleasedIdx))) return at(unreleasedIdx);
+    const releasedIdx = headings.findIndex((h) => /^## v\d/.test(h[0]));
+    if (releasedIdx < 0) throw new Error("CHANGELOG has no released section");
+    return at(releasedIdx);
+  }
+
+  it("the current CHANGELOG section itself makes no retired claim", () => {
     const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-    const unreleased = log.slice(log.indexOf("## Unreleased"), log.indexOf("## v4."));
+    const unreleased = currentSection(log);
     for (const claim of UNATTENDED_CLAIM) {
       // A changelog MUST name what it is removing, so the retired command names are
       // expected here — only the behavioural overclaims are forbidden.
@@ -273,7 +290,7 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
 
   it("the CHANGELOG records this as a breaking change with the replacement", () => {
     const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-    const unreleased = log.slice(log.indexOf("## Unreleased"), log.indexOf("## v4."));
+    const unreleased = currentSection(log);
     expect(unreleased).toContain("破坏性变更");
     // Names what disappeared AND what to do instead — a breaking note without a
     // replacement just strands the reader.
