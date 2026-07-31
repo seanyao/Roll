@@ -260,10 +260,18 @@ export function runMirrorPack(
 export function publishInstructions(lang: Lang, version: string): string {
   const [primary, ...mirrors] = ROLL_PACKAGE_NAMES;
   const lines: string[] = [];
+  // FIX-1493: the wording follows the ACTUAL name count. This repo publishes one
+  // name; the multi-name phrasing only makes sense when a mirror exists, and
+  // telling the owner to "publish every name" when there is one is noise.
+  const multi = mirrors.length > 0;
   lines.push(
     lang === "zh"
-      ? `\n下一步：发布到 npm（每个名字都要发，缺一个就会漂移）：`
-      : `\nNext: publish to npm — once per name, a missed one drifts the scopes apart:`,
+      ? multi
+        ? `\n下一步：发布到 npm（每个名字都要发，缺一个就会漂移）：`
+        : `\n下一步：发布到 npm：`
+      : multi
+        ? `\nNext: publish to npm — once per name, a missed one drifts the scopes apart:`
+        : `\nNext: publish to npm:`,
   );
   lines.push(`  npm publish --access public                 # ${primary}@${version}`);
   for (const mirror of mirrors) {
@@ -275,7 +283,9 @@ export function publishInstructions(lang: Lang, version: string): string {
   }
   lines.push(
     lang === "zh"
-      ? `  roll release verify ${version}                 # 两个名字都核过才把草稿提为正式版\n`
+      // FIX-1493: was hardcoded "两个名字" (two names) — wrong the moment the
+      // alias list emptied. The gate checks every published name, however many.
+      ? `  roll release verify ${version}                 # 每个发布名都核过才把草稿提为正式版\n`
       : `  roll release verify ${version}                 # promotes the draft only when EVERY name checks out\n`,
   );
   return lines.join("\n");
