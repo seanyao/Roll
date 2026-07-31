@@ -43,6 +43,7 @@ import {
   findFeatureFile,
   readBacklogRow,
   resolveStoryAcItems,
+  runShell,
 } from "../src/commands/attest.js";
 import { collectBrowserTimeline } from "../src/lib/browser-timeline-collect.js";
 import { collectBrowserTruth } from "../src/lib/browser-truth-collect.js";
@@ -1093,6 +1094,70 @@ describe("US-ATTEST-011 — Gate terminal self-capture lane", () => {
     expect(evidence.captures?.[0]?.skipped).toContain("capture command exited 2");
     expect(evidence.captures?.[0]?.failed).toBe(true);
     expect(evidence.captures?.[0]?.error).toContain("ERR_MODULE_NOT_FOUND");
+  });
+
+  // ── FIX-1484: the capture shell must report the command's REAL exit code ──
+  describe("FIX-1484 — capture subprocess exit-code fidelity", () => {
+    it("an always-exit-0 command through the real capture shell yields exit 0", async () => {
+      const r = await runShell("true", undefined);
+      expect(r.code).toBe(0);
+      expect(r.killedBy).toBeUndefined();
+    });
+
+    it("a non-zero exit is reported faithfully, not flattened to 1", async () => {
+      const r = await runShell("exit 7", undefined);
+      expect(r.code).toBe(7);
+      expect(r.killedBy).toBeUndefined();
+    });
+
+    it("a harness timeout kill is reported as a kill (143/SIGTERM), never as the command's exit 1", async () => {
+      const r = await runShell("sleep 5", undefined, { timeoutMs: 250 });
+      expect(r.code).toBe(143);
+      expect(r.killedBy).toContain("SIGTERM");
+    }, 15_000);
+
+    it("on capture failure the FULL redacted output lands in evidence/ files; the fact tail stays capped", async () => {
+      const proj = project();
+      const bigStdout = `HEAD-MARKER${"x".repeat(5000)}TAIL-MARKER ghp_ABCDEFGHIJKLMNOPQRST12345`;
+      const shotRun: ShotRun = (cmd) => {
+        if (cmd === "sh") return Promise.resolve({ code: 2, stdout: bigStdout, stderr: "boom" });
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      };
+
+      const code = await silenced(() =>
+        inDir(proj, () =>
+          attestCommand(["FIX-300", "--capture-command", "node scripts/proof.js"], {
+            now: () => T0,
+            run: quietRun,
+            ghProbe: () => Promise.resolve(false),
+            capture: { run: shotRun, platform: "darwin", env: {} },
+          }),
+        ),
+      );
+
+      expect(code).toBe(3);
+      const runDir = join(proj, ".roll", "features", "demo", "FIX-300", "2026-06-06T01-02-03");
+      const dumpPath = join(runDir, "evidence", "capture-command.stdout.log");
+      expect(existsSync(dumpPath)).toBe(true);
+      const dump = readFileSync(dumpPath, "utf8");
+      expect(dump).toContain("HEAD-MARKER"); // full output persisted, not just the tail
+      expect(dump).toContain("TAIL-MARKER");
+      expect(dump).not.toContain("ghp_ABCDEFGHIJKLMNOPQRST12345"); // redacted BEFORE persist
+      const stderrDump = readFileSync(join(runDir, "evidence", "capture-command.stderr.log"), "utf8");
+      expect(stderrDump).toContain("boom");
+      const evidence = JSON.parse(readFileSync(join(runDir, "evidence.json"), "utf8")) as {
+        capture_command?: {
+          exitCode?: number;
+          stdoutTail?: string;
+          outputDump?: { stdout?: string; stderr?: string };
+        };
+      };
+      expect(evidence.capture_command?.exitCode).toBe(2);
+      expect(evidence.capture_command?.stdoutTail).not.toContain("HEAD-MARKER"); // report tail stays capped
+      expect(evidence.capture_command?.stdoutTail).toContain("TAIL-MARKER");
+      expect(evidence.capture_command?.outputDump?.stdout).toBe("evidence/capture-command.stdout.log");
+      expect(evidence.capture_command?.outputDump?.stderr).toBe("evidence/capture-command.stderr.log");
+    });
   });
 
   it("US-EVID-023: attempted web capture errors are marked failed, not honest skips", async () => {

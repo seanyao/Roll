@@ -118,6 +118,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { cardArchiveDir, epicFromFeaturePath, findFeatureFile, findFeatureFiles, reportFileName, reviewFileName } from "../lib/archive.js";
@@ -393,7 +394,20 @@ function tail(text: string, max = 4000): string {
   return text.length <= max ? text : text.slice(text.length - max);
 }
 
-async function runShell(line: string, deps: ScreenshotDeps | undefined): Promise<RunOut> {
+// FIX-1484: a capture command may be a FULL test suite (`roll test --full`
+// runs thousands of tests over many minutes). The old 120s / 4MB limits killed
+// such commands mid-run — and the kill was then misreported as "exit 1".
+const CAPTURE_COMMAND_TIMEOUT_MS = 30 * 60_000;
+const CAPTURE_COMMAND_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** FIX-1484: RunOut plus an explicit harness-kill cause (timeout / maxBuffer). */
+export type CaptureShellOut = RunOut & { killedBy?: string };
+
+export async function runShell(
+  line: string,
+  deps: ScreenshotDeps | undefined,
+  opts?: { timeoutMs?: number },
+): Promise<CaptureShellOut> {
   // RED LINE (US-ATTEST-012 / FIX-339 复核 #2): the GUI screen-capture lane already
   // refuses a command whose body carries a secret (screenshot.ts) — a token baked
   // into pixels can't be un-baked. The non-GUI command sink runs the command and
@@ -405,20 +419,61 @@ async function runShell(line: string, deps: ScreenshotDeps | undefined): Promise
   }
   const injected = deps?.run;
   if (injected !== undefined) return injected("sh", ["-lc", line]);
+  const timeoutMs = opts?.timeoutMs ?? CAPTURE_COMMAND_TIMEOUT_MS;
   try {
     const { stdout, stderr } = await execFileAsync("sh", ["-lc", line], {
       encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 120_000,
+      maxBuffer: CAPTURE_COMMAND_MAX_BUFFER,
+      timeout: timeoutMs,
     });
     return { code: 0, stdout, stderr };
   } catch (e) {
-    const err = e as { code?: number; stdout?: string; stderr?: string };
-    return { code: typeof err.code === "number" ? err.code : 1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+    // FIX-1484: a REAL exit code arrives as a number and passes through
+    // untouched. A harness kill is NOT the command's exit code — timeout gives
+    // code:null + signal SIGTERM, maxBuffer gives string code
+    // ERR_CHILD_PROCESS_STDIO_MAXBUFFER. Both used to be flattened to "exit 1",
+    // which condemned green suites and hid the cause. Report the kill as a kill.
+    const err = e as {
+      code?: number | string;
+      stdout?: string;
+      stderr?: string;
+      signal?: string;
+      message?: string;
+    };
+    if (typeof err.code === "number") {
+      return { code: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+    }
+    if (err.signal !== undefined) {
+      const sigNo = osConstants.signals[err.signal as keyof typeof osConstants.signals] ?? 0;
+      return {
+        code: 128 + sigNo,
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? "",
+        killedBy: `killed by the capture harness: signal ${err.signal} (timeout ${timeoutMs}ms or external kill) — NOT the command's exit code`,
+      };
+    }
+    return {
+      code: 1,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? "",
+      killedBy: `killed by the capture harness: ${String(err.code ?? err.message ?? "spawn error")} — NOT the command's exit code`,
+    };
   }
 }
 
-async function captureCommandFact(projectPath: string, command: string, deps: ScreenshotDeps | undefined): Promise<CaptureCommandFact> {
+interface CaptureDumpTarget {
+  /** This attest run's dir; the failure dump lands under its `evidence/`. */
+  runDir: string;
+  /** File stem per capture lane (capture-command, capture-command-1, …). */
+  stem: string;
+}
+
+async function captureCommandFact(
+  projectPath: string,
+  command: string,
+  deps: ScreenshotDeps | undefined,
+  dump?: CaptureDumpTarget,
+): Promise<CaptureCommandFact> {
   const wrappedCommand = commandInProject(projectPath, command);
   // FIX-339 (复核 #2): a secret in the command body ⇒ refuse, never run (runShell
   // guards). Surface a non-zero exit so the caller records a taken:false skip.
@@ -432,21 +487,42 @@ async function captureCommandFact(projectPath: string, command: string, deps: Sc
     };
   }
   const r = await runShell(wrappedCommand, deps);
-  // FIX-339 (复核 #2): scrub the PERSISTED stdout/stderr tails with the same
-  // redaction pipeline used for inlined evidence — a token printed BY the command
+  // FIX-339 (复核 #2): scrub the PERSISTED stdout/stderr with the same redaction
+  // pipeline used for inlined evidence — a token printed BY the command
   // (env dump, debug log) must never land in the archived evidence fact. A hit is
-  // WARNed (留痕), never silent.
-  const outR = redactSecrets(tail(r.stdout));
-  const errR = redactSecrets(tail(r.stderr));
+  // WARNed (留痕), never silent. FIX-1484: redact the FULL stream first, then cap
+  // the report tail — the cap governs display only, never what gets preserved.
+  const outR = redactSecrets(r.stdout);
+  const errR = redactSecrets(r.stderr);
   if (outR.hits.length > 0 || errR.hits.length > 0) {
     warn(`redacted secret(s) in capture command output (${command}): ${[...outR.hits, ...errR.hits].join(", ")}`);
+  }
+  // FIX-1484: a capped tail alone cannot explain WHY a capture failed — on
+  // failure persist the full redacted streams under the run's evidence/ so the
+  // report is self-diagnosable (paths recorded relative to the run dir).
+  let outputDump: { stdout?: string; stderr?: string } | undefined;
+  if (r.code !== 0 && dump !== undefined) {
+    const dir = join(dump.runDir, "evidence");
+    const dumpFiles: { stdout?: string; stderr?: string } = {};
+    if (outR.redacted !== "") {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${dump.stem}.stdout.log`), outR.redacted, "utf8");
+      dumpFiles.stdout = `evidence/${dump.stem}.stdout.log`;
+    }
+    if (errR.redacted !== "") {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${dump.stem}.stderr.log`), errR.redacted, "utf8");
+      dumpFiles.stderr = `evidence/${dump.stem}.stderr.log`;
+    }
+    if (dumpFiles.stdout !== undefined || dumpFiles.stderr !== undefined) outputDump = dumpFiles;
   }
   return {
     command,
     wrappedCommand,
     exitCode: r.code,
-    stdoutTail: outR.redacted,
-    stderrTail: errR.redacted,
+    stdoutTail: tail(outR.redacted),
+    stderrTail: (r.killedBy !== undefined ? `[${r.killedBy}]\n` : "") + tail(errR.redacted),
+    ...(outputDump !== undefined ? { outputDump } : {}),
   };
 }
 
@@ -1486,7 +1562,10 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
       const out = join(runDir, "screenshots", stem);
       let fact: CaptureCommandFact | null = null;
       if (lane.command !== undefined) {
-        fact = await captureCommandFact(projectPath, lane.command, deps.capture);
+        fact = await captureCommandFact(projectPath, lane.command, deps.capture, {
+          runDir,
+          stem: li === 0 ? "capture-command" : `capture-command-${li}`,
+        });
         if (commandFact === null) commandFact = fact; // first command is the representative capture_command (back-compat)
       }
       let shot: ScreenshotResult =
@@ -1497,7 +1576,7 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
               taken: false,
               skipped: `capture command exited ${fact.exitCode}`,
               failed: true,
-              error: `capture command exited ${fact.exitCode}${fact.stderrTail !== "" ? `: ${fact.stderrTail}` : ""}`,
+              error: `capture command exited ${fact.exitCode}${fact.stderrTail !== "" ? `: ${fact.stderrTail}` : ""}${fact.outputDump !== undefined ? ` (full output: ${fact.outputDump.stdout ?? fact.outputDump.stderr ?? ""})` : ""}`,
             }
           : await captureScreenshot(
               {

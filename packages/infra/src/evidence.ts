@@ -140,6 +140,9 @@ export interface CaptureCommandFact {
   exitCode: number;
   stdoutTail: string;
   stderrTail: string;
+  /** FIX-1484: on failure, full redacted streams persisted under the run dir
+   *  (paths relative to it); the capped tails above stay display-only. */
+  outputDump?: { stdout?: string; stderr?: string };
 }
 
 export interface CollectOptions {
