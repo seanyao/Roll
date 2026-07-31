@@ -79,7 +79,8 @@ function fakeDeps(over: Partial<ReleaseFlowDeps> = {}): { deps: ReleaseFlowDeps;
     version: () => "3.612.2",
     // Default to roll's own package so the base fixture stays on the calver path
     // (FIX-1247); target-project cases override packageName to exercise semver.
-    packageName: () => "@seanyao/roll",
+    // FIX-1493: roll's own package name (the alias is the other repo's now).
+    packageName: () => "@bipo-ape/roll",
     branch: () => "main",
     clean: () => true,
     synced: () => true,

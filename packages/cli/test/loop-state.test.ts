@@ -128,7 +128,7 @@ describe("loop pause/resume (marker file)", () => {
 
   it("FIX-1239: resume refuses autonomous scheduling when the repo-local roll package is newer than the runner", async () => {
     const proj = tmp("proj-resume-stale");
-    writeFileSync(join(proj, "package.json"), JSON.stringify({ name: "@seanyao/roll", version: "99.0.0" }) + "\n");
+    writeFileSync(join(proj, "package.json"), JSON.stringify({ name: "@bipo-ape/roll", version: "99.0.0" }) + "\n");
     const { deps } = fakeDeps(proj, tmp("sh-resume-stale"), tmp("ld-resume-stale"));
     const marker = join(proj, ".roll", "loop", "PAUSE-proj-abc123");
     mkdirSync(join(proj, ".roll", "loop"), { recursive: true });

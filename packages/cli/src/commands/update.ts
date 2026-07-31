@@ -14,7 +14,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { isRollPackageName, ROLL_PACKAGE_NAME } from "@roll/core";
+import { ROLL_KNOWN_INSTALL_NAMES, ROLL_PACKAGE_NAME } from "@roll/core";
 import { resolveLang, t, v2Catalog, type Lang } from "@roll/spec";
 import { repoRoot } from "../bridge.js";
 import { rollHome, rollPkgDir } from "./setup-shared.js";
@@ -86,7 +86,13 @@ function runForward(cmd: string, argv: string[]): number {
  * or is not a roll name (dev checkout, renamed fork), fall back to the primary.
  */
 export function installedPackageName(runningTreeName: string | null | undefined = selfPackageName()): string {
-  return typeof runningTreeName === "string" && isRollPackageName(runningTreeName) ? runningTreeName : ROLL_PACKAGE_NAME;
+  // FIX-1493: recognise RETIRED install names too, not just current publish
+  // targets. A machine that installed the old name keeps updating that name —
+  // rewriting it to the primary would move the owner onto a different package
+  // behind their back.
+  return typeof runningTreeName === "string" && ROLL_KNOWN_INSTALL_NAMES.includes(runningTreeName)
+    ? runningTreeName
+    : ROLL_PACKAGE_NAME;
 }
 
 /** `name` from the running install's package.json, or null when unreadable. */
