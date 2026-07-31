@@ -31,6 +31,60 @@ rules:
       test: packages/core/test/report.test.ts
       marker: "RL-EVID-003"
     trigger_report: block
+  - id: RL-FAIL-007
+    kind: redline
+    statement: Consecutive failures reaching the pause threshold must auto-PAUSE the loop (PAUSE marker + ALERT + policy:safety_pause event) — no silent self-heal
+    enforcement:
+      - point: packages/cli/src/commands/loop-run-once.ts
+        marker: "RL-FAIL-007"
+    verification:
+      test: packages/cli/test/loop-run-once.test.ts
+      marker: "RL-FAIL-007"
+    trigger_report: ALERT
+  - id: RL-EVID-004
+    kind: redline
+    statement: A card may only be marked Done when the merge is confirmed on main AND acceptance evidence is complete — markDoneGuarded() rejects the transition otherwise, never trusting the caller's claim
+    enforcement:
+      - point: packages/cli/src/runner/done-guard.ts
+        marker: "RL-EVID-004"
+    verification:
+      test: packages/cli/test/done-guard.test.ts
+      marker: "RL-EVID-004"
+    trigger_report: block
+  - id: RL-EVID-005
+    kind: redline
+    statement: The acceptance contract is frozen from design truth at cycle start; mid-cycle drift of the worktree contract is detected and surfaced alert-only, never silently honored
+    enforcement:
+      - point: packages/cli/src/runner/contract-snapshot.ts
+        marker: "RL-EVID-005"
+    verification:
+      test: packages/cli/test/contract-snapshot.test.ts
+      marker: "RL-EVID-005"
+    trigger_report: ALERT
+  - id: RL-ISO-002
+    kind: redline
+    statement: The shared main checkout is write-protected during a cycle and dirt/HEAD leaks are quarantined without ever resetting the shared ref; hooks/pre-push refuses direct pushes to main as a CLIENT-SIDE guardrail only — bypassable with --no-verify, never server-side branch protection
+    enforcement:
+      - point: packages/cli/src/runner/main-checkout-guard.ts
+        marker: "RL-ISO-002"
+      - point: hooks/pre-push
+        marker: "RL-ISO-002"
+    verification:
+      test: packages/cli/test/main-checkout-guard.test.ts
+      marker: "RL-ISO-002"
+    trigger_report: block
+  - id: RL-TRUTH-001
+    kind: redline
+    statement: Only real merge evidence on main (L1 PR MERGED or L2 patch-id) credits a delivery — backlog Done + attest alone is never sufficient, and with no strong signal the verdict is wait, never a fabricated delivered; the pure core decision and its CLI/infra fact-gathering adapter enforce this jointly
+    enforcement:
+      - point: packages/core/src/delivery/reconcile.ts
+        marker: "RL-TRUTH-001"
+      - point: packages/cli/src/lib/delivery-facts.ts
+        marker: "RL-TRUTH-001"
+    verification:
+      test: packages/core/test/delivery-reconcile.test.ts
+      marker: "RL-TRUTH-001"
+    trigger_report: block
 
 doc_surfaces:
   - id: DS-ATTEST

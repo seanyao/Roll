@@ -11,6 +11,11 @@
  *   2. Retroactive heal: existing unpublished branch with patch-id match
  *      → delivered_external
  *   3. CLI `roll loop reconcile --json` evidence (see CLI test file).
+ *
+ * RL-TRUTH-001: verification anchor for the registered redline
+ * (policy/rules.yaml) — the layered matrix below (L3 alone never sufficient,
+ * no signal → wait, never fabricate) proves the merged-truth decision is still
+ * alive.
  */
 import { describe, expect, it } from "vitest";
 import { CI_STUCK_DWELL_MS, reconcileDelivery, reconciledEventPayload } from "../src/index.js";

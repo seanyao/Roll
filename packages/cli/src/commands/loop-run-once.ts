@@ -294,6 +294,10 @@ function runtimeDir(projectPath: string): string {
 }
 
 // ── FIX-216b: consecutive-failure auto-PAUSE ──────────────────────────────────
+// RL-FAIL-007: registered redline in policy/rules.yaml — reaching the failure
+// threshold MUST pause the loop (PAUSE marker + ALERT + policy:safety_pause
+// event), never silently self-heal. incrementConsecutiveFails below is the
+// enforcement point.
 
 const PAUSE_THRESHOLD = 3;
 const GO_LOCK_STALE_SEC = 21_600;

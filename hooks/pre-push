@@ -12,6 +12,11 @@
 # described as equivalent — it catches accidents, not intent, and it catches
 # nothing at all on a machine that never ran `roll setup`.
 #
+# RL-ISO-002: registered redline in policy/rules.yaml — the client-side
+# companion to the runner-side write protection in
+# packages/cli/src/runner/main-checkout-guard.ts. The HONEST LIMIT above is
+# part of the registration: this hook is not server-side protection.
+#
 # The release flow is unaffected: it pushes a `release/v*` branch and opens a
 # PR; only `main` itself is refused here.
 set -euo pipefail

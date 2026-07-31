@@ -1,3 +1,9 @@
+/**
+ * RL-EVID-004: verification anchor for the registered redline
+ * (policy/rules.yaml) — the markDoneGuarded describes below prove the
+ * done/evidence guard (merge confirmed on main + complete acceptance evidence,
+ * else the Done transition is rejected) is still alive.
+ */
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

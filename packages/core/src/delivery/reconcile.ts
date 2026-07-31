@@ -9,6 +9,11 @@
  * - When no signal hits, return `wait` — never fabricate a delivery.
  * - main is the single anchor; cycle ledger is a pure projection.
  *
+ * RL-TRUTH-001: registered redline in policy/rules.yaml — only real merge
+ * evidence on main credits a delivery; backlog Done + attest alone is never
+ * sufficient, and no signal means `wait`, never a fabricated delivered. The
+ * CLI/infra adapter side lives in packages/cli/src/lib/delivery-facts.ts.
+ *
  * Pure: no filesystem, no network, no clock, no side effects.
  * Idempotent: same inputs → same output.
  * Exhaustively unit-testable.

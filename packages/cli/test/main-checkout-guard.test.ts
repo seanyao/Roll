@@ -1,3 +1,9 @@
+/**
+ * RL-ISO-002: verification anchor for the registered redline
+ * (policy/rules.yaml) — the write-protection/quarantine describes below prove
+ * the main-checkout guard is still alive. (The hooks/pre-push client-side
+ * companion is covered separately by pre-push-hook.test.ts.)
+ */
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

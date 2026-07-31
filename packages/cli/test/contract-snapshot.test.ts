@@ -2,6 +2,10 @@
  * US-EVID-021 — cycle-start contract freeze + drift detection.
  * A drifted worktree spec (builder injected screenshot_exempt / weakened an AC
  * after freeze) is detected; a checkbox-flip (stale-claim reset) is NOT drift.
+ *
+ * RL-EVID-005: verification anchor for the registered redline
+ * (policy/rules.yaml) — the freeze/drift describes below prove the contract
+ * snapshot guard is still alive.
  */
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

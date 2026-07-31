@@ -1,3 +1,11 @@
+/**
+ * RL-ISO-002: registered redline in policy/rules.yaml — the shared main
+ * checkout is write-protected for the duration of a cycle, dirt/HEAD leaks are
+ * quarantined, and the shared ref is NEVER reset (FIX-1475). Companion
+ * client-side guardrail: hooks/pre-push refuses direct pushes to main (honest
+ * limit: `--no-verify` bypasses it and machines without `roll setup` never
+ * install it — it is NOT server-side branch protection).
+ */
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

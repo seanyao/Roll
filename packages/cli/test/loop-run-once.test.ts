@@ -1,6 +1,10 @@
 /**
  * Tests for the `loop run-once` CLI wiring + the real agentSpawn child-process
  * path (driven against a PATH shim 'claude', never a real agent).
+ *
+ * RL-FAIL-007: verification anchor for the registered redline
+ * (policy/rules.yaml) — the "FIX-216 — auto-PAUSE on consecutive failures"
+ * describes below prove the consecutive-failure PAUSE is still alive.
  */
 import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
