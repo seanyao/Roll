@@ -37,6 +37,9 @@ if _docs_only; then
   exit 0
 fi
 
+# RL-TCR-001: registered redline (policy/rules.yaml) — non-docs-only commits
+# must carry a fresh test-pass proof for this cycle. This block plus the
+# freshness/tree checks below are the enforcement point.
 if [ ! -f "$PROOF" ]; then
   _fail "tests not verified on current code." "当前代码未经测试验证。"
 fi

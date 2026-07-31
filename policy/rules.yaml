@@ -1,0 +1,33 @@
+# Roll rules registry (US-RULE-001) — the single machine-readable definition
+# layer for redlines. Parsed strictly by packages/spec/src/rules.ts and
+# audited by scripts/audit-rules.mjs (CI gate). Enforcement code is NOT moved
+# here — this file only registers where each redline lives and which test
+# proves it is still alive. `gates.doc_drift` is the sole authority for the
+# doc-drift gate's soft/hard mode; flipping it is a one-line PR here.
+version: 1
+
+gates:
+  doc_drift: soft
+
+rules:
+  - id: RL-TCR-001
+    kind: redline
+    statement: Non-docs-only commits must carry a fresh test-pass proof for this cycle
+    enforcement:
+      - point: hooks/pre-commit
+        marker: "RL-TCR-001"
+    verification:
+      test: packages/core/test/tcr.test.ts
+      marker: "RL-TCR-001"
+    trigger_report: block
+    since: v3.0
+
+doc_surfaces:
+  - id: DS-ATTEST
+    paths:
+      - "packages/core/src/attest/**"
+      - "packages/cli/src/runner/attest-gate.ts"
+    docs:
+      - "docs/verification.md"
+      - "guide/en/acceptance-evidence.md"
+      - "guide/zh/acceptance-evidence.md"

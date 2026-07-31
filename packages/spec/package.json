@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
   }
 }

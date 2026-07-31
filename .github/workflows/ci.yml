@@ -45,6 +45,13 @@ jobs:
       # 0), but it runs in any checkout that DOES carry the data and reds on a
       # duplicate id; the logic itself is proven by the workspace unit tests.
       - run: node scripts/lint-story-ids.mjs
+      # US-RULE-001 — rules registry audit: every registered redline's
+      # enforcement point + verification test must exist, contain its marker,
+      # and (for the test) sit somewhere vitest actually discovers; every
+      # `RL-` marker outside policy/rules.yaml and test paths must be
+      # registered. Runs after build (needs @roll/spec's compiled parser) and
+      # before the workspace test command, per the story's AC.
+      - run: node scripts/audit-rules.mjs
       # The root gate builds the workspace, runs the role-taxonomy audit and
       # orphan-snapshot guard, then executes every package's Vitest suite.
       - run: ROLL_TEST_SKIP_BUILD=1 pnpm test
