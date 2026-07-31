@@ -304,7 +304,16 @@ describe("manifest write/read — atomic, idempotent, isolated", () => {
 
 describe("worked pending-PR behavior (git-status shaped)", () => {
   it("verified evidence for an open PR does not block an unrelated card; a manual file pauses it", () => {
-    execFileSync("git", ["init", "-q"], { cwd: root });
+    // Clear GIT_* env vars so git init targets the fixture tmpdir, not the
+    // enclosing worktree's git metadata (REFACTOR-077: cycle worktrees set
+    // GIT_DIR, which redirects git init to the main repo config).
+    const env = { ...process.env } as Record<string, string | undefined>;
+    delete env.GIT_DIR;
+    delete env.GIT_WORK_TREE;
+    delete env.GIT_CEILING_DIRECTORIES;
+    delete env.GIT_COMMON_DIR;
+    delete env.GIT_INDEX_FILE;
+    execFileSync("git", ["init", "-q"], { cwd: root, env: env as Record<string, string> });
     write(".roll/features/organization/US-ORG-004/run/US-ORG-004-review.html", "<html/>");
     write(".roll/features/organization/US-ORG-004/run/proof.png", "PNG");
     const m = manifest([

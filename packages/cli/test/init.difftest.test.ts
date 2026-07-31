@@ -24,6 +24,15 @@ import { collectInitFacts } from "../src/lib/init-diagnosis.js";
 import { computeInitFactsHash } from "../src/lib/onboard-plan.js";
 import { collectProjectsRegistry } from "../src/lib/projects-registry.js";
 
+// REFACTOR-077: in a cycle worktree, GIT_DIR / GIT_WORK_TREE / etc. point at
+// the main repo's worktree metadata, which redirects every git subprocess away
+// from the test fixture's tmpdir. Clear them for this test file so all git
+// commands — both inside tsInit (through ENV_KEYS) and direct execFileSync
+// calls — operate on the isolated fixture repos.
+for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) {
+  delete (process.env as Record<string, string | undefined>)[k];
+}
+
 const REPO = resolve(__dirname, "../../..");
 const dirs: string[] = [];
 
@@ -421,6 +430,10 @@ const ENV_KEYS = [
   "PATH", "HOME", "ROLL_HOME", "ROLL_PKG_DIR", "NO_COLOR", "ROLL_LANG", "LC_ALL", "LANG", "PWD",
   "ROLL_AGENT_ROUTES_TEMPLATE", "ROLL_ONBOARD_AGENT", "ROLL_ASSUME_TTY", "ROLL_BRAND_NAME",
   "ROLL_ATTEST_NO_BROWSER", "ROLL_INIT_APPLY_FAIL_AFTER",
+  // REFACTOR-077: clear git-worktree env vars so resolveProjectName and any
+  // in-init git subprocesses run against the fixture's git repo, not the
+  // enclosing worktree's git metadata (GIT_DIR would redirect git -C <path>).
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
 ];
 
 function envBase(fx: Fixture, extra: Record<string, string>): Record<string, string> {
@@ -1108,15 +1121,17 @@ describe("frozen: roll init", () => {
   // would otherwise skip the write.
   it("AC4: fresh init registers the project into ~/.roll/projects.json (one row, path = project)", () => {
     const fx = realFixture();
+    // REFACTOR-077: set up an explicit git remote so the registered name is
+    // deterministic — the test no longer depends on basename(REPO) matching
+    // the origin repo name (which always fails in cycle worktrees).
+    execFileSync("git", ["init", "-q"], { cwd: fx.proj });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:test-org/test-project.git"], { cwd: fx.proj });
     const run = tsInit(fx, ["--auto"]);
     expect(run.status).toBe(0);
     const rows = collectProjectsRegistry(fx.home);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.path).toBe(fx.proj);
-    // US-INSTALL-008: the fixture is a temp dir inside this repo, so the
-    // registered name is the enclosing checkout's — assert THAT, not the
-    // literal the checkout used to be called.
-    expect(rows[0]?.name).toBe(basename(REPO));
+    expect(rows[0]?.name).toBe("test-project");
     expect(typeof rows[0]?.lastIndexedAt).toBe("string");
   });
 
