@@ -113,7 +113,11 @@ const UNATTENDED_CLAIM = [
   /会话(一)?(关|结束)[,，]?\s*(推进|交付|工作)就停/,
   // codex r7: session-FIRST orderings, which the closing-first shapes above miss.
   /(session|window|terminal) (ends?|closes?)[^.]{0,60}(stops?|halts?|no (further )?progress)/i,
-  /(会话|窗口|终端)(一旦|一)?(结束|关闭|关掉)[^。]{0,30}(就停|停下|不再|没有(进展|推进))/,
+  // The `不再` alternative was too greedy: it fired on a CORRECT sentence
+  // ("窗口关掉之后它仍在跑,你只是不再看着它"). Drop it — the stop/halt words below
+  // carry the meaning, and a false positive on accurate text pushes the author
+  // toward worse wording, which is the opposite of the point.
+  /(会话|窗口|终端)(一旦|一)?(结束|关闭|关掉)[^。]{0,30}(就停|停下|没有(进展|推进))/,
   /no agent session means no progress/i,
   /没有 ?agent ?会话就没有(进展|推进)/,
   // codex r7 round two: four more phrasings the shapes above still missed —
@@ -253,12 +257,29 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
   /**
    * The CHANGELOG is deliberately NOT swept as a whole: released sections are
    * history, and a v3 entry that says a scan ran nightly is a true statement about
-   * v3. Only the Unreleased section describes the product as it is now, so that is
-   * the part held to the same rules as the guides (codex r8).
+   * v3. Only the section describing the product as it is now is held to the same
+   * rules as the guides (codex r8).
+   *
+   * That section is `Unreleased` while the entries are pending — but `roll release`
+   * FOLDS Unreleased into a `## vX.Y.Z` heading, which used to make these gates go
+   * red mid-release (and the negative one pass vacuously). So resolve the current
+   * section by SHAPE: Unreleased if it still carries bullets, else the newest
+   * released section.
    */
-  it("the Unreleased CHANGELOG section itself makes no retired claim", () => {
+  function currentSection(log: string): string {
+    const headings = [...log.matchAll(/^## .*$/gm)];
+    const at = (i: number): string =>
+      log.slice(headings[i].index, i + 1 < headings.length ? headings[i + 1].index : log.length);
+    const unreleasedIdx = headings.findIndex((h) => h[0].startsWith("## Unreleased"));
+    if (unreleasedIdx >= 0 && /^- /m.test(at(unreleasedIdx))) return at(unreleasedIdx);
+    const releasedIdx = headings.findIndex((h) => /^## v\d/.test(h[0]));
+    if (releasedIdx < 0) throw new Error("CHANGELOG has no released section");
+    return at(releasedIdx);
+  }
+
+  it("the current CHANGELOG section itself makes no retired claim", () => {
     const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-    const unreleased = log.slice(log.indexOf("## Unreleased"), log.indexOf("## v4."));
+    const unreleased = currentSection(log);
     for (const claim of UNATTENDED_CLAIM) {
       // A changelog MUST name what it is removing, so the retired command names are
       // expected here — only the behavioural overclaims are forbidden.
@@ -267,15 +288,38 @@ describe("US-LOOP-120 — docs teach only the session-driven loop", () => {
     }
   });
 
+  /**
+   * The breaking-change note is PERMANENT history, not current news: once
+   * shipped it lives in its released section forever, while `Unreleased` fills
+   * up with whatever comes next. So locate it by CONTENT — the section that
+   * carries the 破坏性变更 heading — rather than by position. Anchoring it to
+   * `Unreleased` broke at the release fold; anchoring it to "the current
+   * section" broke again the moment a later entry landed in Unreleased.
+   */
+  function breakingChangeSection(log: string): string {
+    const headings = [...log.matchAll(/^## .*$/gm)];
+    for (let i = 0; i < headings.length; i++) {
+      const body = log.slice(headings[i].index, i + 1 < headings.length ? headings[i + 1].index : log.length);
+      if (body.includes("破坏性变更") && body.includes("roll loop on")) return body;
+    }
+    throw new Error("CHANGELOG has no 破坏性变更 section naming roll loop on");
+  }
+
   it("the CHANGELOG records this as a breaking change with the replacement", () => {
     const log = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-    const unreleased = log.slice(log.indexOf("## Unreleased"), log.indexOf("## v4."));
+    const unreleased = breakingChangeSection(log);
     expect(unreleased).toContain("破坏性变更");
     // Names what disappeared AND what to do instead — a breaking note without a
     // replacement just strands the reader.
     expect(unreleased).toContain("roll loop on");
     expect(unreleased).toContain("roll loop go");
-    // And states the boundary plainly.
-    expect(unreleased).toContain("不开会话,就什么都不会发生");
+    // And states the boundary plainly — checked by SUBSTANCE, not by one sentence,
+    // so rewording the entry (e.g. into the repo's bullet convention) does not have
+    // to chase this assertion.
+    expect(unreleased).toMatch(/不会有你没启动过的运行/);
+    expect(unreleased).toMatch(/两次运行之间/);
+    // The detached-tmux reality must be stated too — omitting it is how the earlier
+    // draft ended up overclaiming the boundary.
+    expect(unreleased).toMatch(/detached tmux/);
   });
 });

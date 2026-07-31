@@ -19,10 +19,15 @@ curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
 ### npm
 
 ```bash
-npm install -g @seanyao/roll
+npm install -g @bipo-ape/roll
 ```
 
 Requires Node.js 22+.
+
+Roll is published under two equivalent names: `@bipo-ape/roll` (use this) and
+`@seanyao/roll` (the original scope, kept working for existing installs). Both
+ship the identical artifact at the same version — installing or updating from
+either gets you the same `roll`.
 
 On macOS, the npm package runs a best-effort postinstall that downloads
 `Roll-Capture.app.zip` from the latest `seanyao/roll-capture` GitHub Release,
@@ -63,7 +68,7 @@ Roll detects how it was installed and acts accordingly:
 | Install mode | What `roll update` does |
 |---|---|
 | curl (default) | Re-downloads the latest tarball, extracts atomically, then `roll sync` |
-| npm | `npm update -g @seanyao/roll`, then `roll sync` |
+| npm | `npm update -g @bipo-ape/roll`, then `roll sync` |
 | git clone (contributors) | `git pull` in the package directory, then `roll sync` |
 
 ## Automatic Version Nudge
@@ -84,7 +89,7 @@ rm -rf ~/.local/share/roll ~/.local/bin/roll
 ### npm
 
 ```bash
-npm uninstall -g @seanyao/roll
+npm uninstall -g @bipo-ape/roll
 ```
 
 Remove state files afterward if you no longer need them:

@@ -8,7 +8,7 @@ about five minutes. Run it in a git repository.
 ```bash
 curl -fsSL https://seanyao.github.io/roll/install | bash
 # or
-npm install -g @seanyao/roll
+npm install -g @bipo-ape/roll
 ```
 
 Roll needs Node.js 22 or newer and at least one supported local AI agent.

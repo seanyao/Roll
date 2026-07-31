@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isRollPackageName } from "@roll/core";
 import { isOlderThan } from "../runner/binary-staleness.js";
 import { rollVersion } from "./version.js";
 
@@ -35,7 +36,8 @@ export function staleLoopRunnerMessage(command: string, readout: LoopControlRunn
 function projectRollPackageVersion(projectPath: string): string {
   try {
     const pkg = JSON.parse(readFileSync(join(projectPath, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
-    if (pkg.name !== "@seanyao/roll") return "";
+    // US-INSTALL-007: either published name is roll.
+    if (typeof pkg.name !== "string" || !isRollPackageName(pkg.name)) return "";
     return typeof pkg.version === "string" ? pkg.version : "";
   } catch {
     return "";

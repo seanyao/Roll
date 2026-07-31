@@ -147,6 +147,59 @@ const padEnd = (s: string, w: number): string => {
   return bytes >= w ? s : s + " ".repeat(w - bytes);
 };
 
+/** One detection row: an agent, not a config key. */
+export interface AgentDetectionRow {
+  name: string;
+  dir: string;
+  installed: boolean;
+  dirExists: boolean;
+}
+
+/**
+ * Resolve `ai_*` config lines into one row per CANONICAL agent.
+ *
+ * FIX-1486: the section used to emit a row per config key, so alias pairs
+ * printed twice — `ai_gemini`/`ai_agy` both resolve to agy, and `ai_pi`/
+ * `ai_deepseek` both resolve to pi (deepseek is a pi providerAlias). Deduping
+ * by canonical name is the general form of that fix. (`ai_kimi_code` never
+ * reached the output anyway — `agentIsKnown` already filters it.)
+ *
+ * When several keys collapse onto one agent, the row describing a directory
+ * that actually exists wins — a present config dir is the more informative of
+ * two rows about the same agent. Otherwise the first key in file order stands.
+ */
+export function agentDetectionRows(
+  configText: string,
+  home: string,
+  installedBy: (name: string, dir: string) => boolean,
+  dirExistsBy: (dir: string) => boolean,
+): AgentDetectionRow[] {
+  const byName = new Map<string, AgentDetectionRow>();
+  for (const line of configText.split("\n")) {
+    // IFS=: read -r _key _value → split on FIRST colon, value = remainder.
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx);
+    const value = line.slice(idx + 1);
+    if (!/^ai_/.test(key)) continue;
+    const rawName = key.slice("ai_".length);
+    if (!agentIsKnown(rawName)) continue; // skip removed/unknown agents (US-AGENT-045)
+    const name = canonicalAgentName(rawName);
+    let dir = value.split("|")[0] ?? ""; // ${_value%%|*}
+    dir = dir.replace(/^ /, ""); // ${_dir# } strip ONE leading space
+    if (dir.startsWith("~")) dir = home + dir.slice(1); // ${_dir/#\~/$HOME}
+    const row: AgentDetectionRow = {
+      name,
+      dir,
+      installed: installedBy(name, dir),
+      dirExists: dirExistsBy(dir),
+    };
+    const seen = byName.get(name);
+    if (seen === undefined || (!seen.dirExists && row.dirExists)) byName.set(name, row);
+  }
+  return [...byName.values()];
+}
+
 // ── 1. agent section ─────────────────────────────────────────────────────────
 function agentSection(p: Palette): void {
   const cfg = rollConfigPath();
@@ -161,30 +214,17 @@ function agentSection(p: Palette): void {
     if (m !== null) primary = (m[1] ?? "").trim();
   }
   const primaryCanonical = canonicalAgentName(primary);
-  const home = homedir();
-  for (const line of text.split("\n")) {
-    // IFS=: read -r _key _value → split on FIRST colon, value = remainder.
-    const idx = line.indexOf(":");
-    if (idx === -1) continue;
-    const key = line.slice(0, idx);
-    const value = line.slice(idx + 1);
-    if (!/^ai_/.test(key)) continue;
-    const rawName = key.slice("ai_".length);
-    if (rawName === "kimi_code") continue; // dedupe
-    if (!agentIsKnown(rawName)) continue; // skip removed/unknown agents (US-AGENT-045)
-    const name = canonicalAgentName(rawName);
-    let dir = value.split("|")[0] ?? ""; // ${_value%%|*}
-    dir = dir.replace(/^ /, ""); // ${_dir# } strip ONE leading space
-    if (dir.startsWith("~")) dir = home + dir.slice(1); // ${_dir/#\~/$HOME}
-    const installed = agentInstalledByName(name, dir)
+  const rows = agentDetectionRows(text, homedir(), agentInstalledByName, safeIsDir);
+  for (const row of rows) {
+    const installed = row.installed
       ? t(v2Catalog, msgLang(), "doctor.agent_installed")
       : t(v2Catalog, msgLang(), "doctor.agent_missing");
-    const dirExists = safeIsDir(dir)
+    const dirExists = row.dirExists
       ? t(v2Catalog, msgLang(), "doctor.agent_dir_exists")
       : t(v2Catalog, msgLang(), "doctor.agent_dir_missing");
-    const tag = name === primaryCanonical ? `  (${t(v2Catalog, msgLang(), "doctor.agent_primary_label")})` : "";
+    const tag = row.name === primaryCanonical ? `  (${t(v2Catalog, msgLang(), "doctor.agent_primary_label")})` : "";
     // printf "  %-10s  %-14s  %s%s\n"
-    emit(`  ${padEnd(name, 10)}  ${padEnd(installed, 14)}  ${dirExists}${tag}`);
+    emit(`  ${padEnd(row.name, 10)}  ${padEnd(installed, 14)}  ${dirExists}${tag}`);
   }
 }
 
@@ -614,23 +654,27 @@ function launchctlGetenv(name: string): string | undefined {
   }
 }
 
-/** Probe whether a TCP port on a given host is reachable. Uses a non-
- *  blocking connect with a 2s timeout via a sub-shell to keep the doctor
- *  snappy. Returns true if the connect succeeds, false otherwise. */
-function tcpProbe(host: string, port: number, timeoutMs = 2000): boolean {
+/** Probe whether a TCP port on a given host is reachable. Returns true if the
+ *  connect succeeds, false otherwise.
+ *
+ *  FIX-1486: this used to wrap the probe in `timeout <sec> bash -c …`, but
+ *  macOS ships no `timeout` binary — the shell exited 127 and EVERY probe read
+ *  as unreachable, which is how the proxy section came to tell owners to
+ *  `launchctl unsetenv` a proxy that was serving traffic. The bound now comes
+ *  from the spawn itself (`timeout` option below), which needs no external
+ *  binary and kills the child just the same. */
+export function tcpProbe(host: string, port: number, timeoutMs = 2000): boolean {
   try {
-    // Use a bash + /dev/tcp probe — the simplest portable way on macOS
-    // without pulling in net.createConnection asynchronous complexity.
+    // bash + /dev/tcp is the simplest portable connect on macOS without
+    // pulling in net.createConnection asynchronous complexity.
     const result = execFileSync(
       "bash",
-      [
-        "-c",
-        `timeout ${Math.ceil(timeoutMs / 1000)} bash -c 'echo >/dev/tcp/${host}/${port}' 2>/dev/null && echo ok || echo fail`,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs + 500 },
+      ["-c", `exec 3<>/dev/tcp/${host}/${port} 2>/dev/null && echo ok || echo fail`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs },
     ).trim();
     return result === "ok";
   } catch {
+    // Spawn timeout (SIGTERM) or an unusable shell — neither proves reachable.
     return false;
   }
 }

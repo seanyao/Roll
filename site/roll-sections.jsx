@@ -380,7 +380,7 @@ function Footer() {
           <a href="https://github.com/seanyao/roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="GitHub">
             <Icon name="github" size={16} />
           </a>
-          <a href="https://www.npmjs.com/package/@seanyao/roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="npm">
+          <a href="https://www.npmjs.com/package/@bipo-ape/roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="npm">
             <span className="r-mono r-mute" style={{ fontSize: 13 }}>npm</span>
           </a>
         </div>

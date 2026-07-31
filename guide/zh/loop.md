@@ -243,7 +243,7 @@ goal 以 `timebox` 原因暂停;`--max-cycles <n>` 按轮数停。
 记录且当前哈希不匹配的，一律 fail closed。
 
 在 Roll 仓自身里，`roll loop go` 与 `roll loop resume`
-开工前都会打印当前 runner 的 binary 与版本。repo-local `@seanyao/roll`
+开工前都会打印当前 runner 的 binary 与版本。repo-local `@bipo-ape/roll`
 包版本高于正在运行的 runner 时，它们会以 `runner_stale_for_repo`
 fail-loud；先安装或发布本地构建，再恢复自治施工。
 

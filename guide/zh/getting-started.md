@@ -8,7 +8,7 @@ Roll 管理的故事。
 ```bash
 curl -fsSL https://seanyao.github.io/roll/install | bash
 # 或
-npm install -g @seanyao/roll
+npm install -g @bipo-ape/roll
 ```
 
 Roll 需要 Node.js 22 或更新版本，并且本机至少装好一个支持的 AI agent。

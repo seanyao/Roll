@@ -30,9 +30,10 @@
  *   --json         print the computed plan as JSON
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, planRelease, releaseTagForVersion, resolveVersionScheme, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
+import { EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, isRollPackageName, planRelease, releaseTagForVersion, resolveVersionScheme, ROLL_PACKAGE_NAMES, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
 import { isTransientGhError } from "@roll/infra";
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { c, renderState } from "../render.js";
@@ -197,6 +198,90 @@ function realVerifySeams(cwd: string): ReleaseVerifySeams {
 }
 
 /**
+ * US-INSTALL-007 — `roll release mirror-pack <alias>`: stage the tarball this
+ * repo would publish under an ALIAS name, ready for `npm publish` in the
+ * printed directory.
+ *
+ * The artifact is byte-for-byte what the primary publish ships: it packs the
+ * repo once (`npm pack`, which runs the normal prepack build), unpacks it, and
+ * rewrites only `name`. `prepack` is stripped from the staged copy — the
+ * sources are not in the tarball, so leaving it would make `npm publish` try to
+ * rebuild and fail. Never publishes; 2FA stays the owner's.
+ */
+export function runMirrorPack(
+  args: string[],
+  lang: Lang,
+  io: { out: (s: string) => void; err: (s: string) => void } = {
+    out: (s) => process.stdout.write(s),
+    err: (s) => process.stderr.write(s),
+  },
+  cwd: string = process.cwd(),
+): number {
+  const alias = args.find((a) => !a.startsWith("-"));
+  if (alias === undefined || alias === "") {
+    io.err(`[roll] release mirror-pack: which name? (${ROLL_PACKAGE_NAMES.join(" | ")})\n`);
+    return 1;
+  }
+  if (!isRollPackageName(alias)) {
+    io.err(`[roll] release mirror-pack: ${alias} is not one of roll's published names (${ROLL_PACKAGE_NAMES.join(", ")})\n`);
+    return 1;
+  }
+  let staged: string;
+  try {
+    staged = mkdtempSync(join(tmpdir(), "roll-mirror-"));
+    const packed = execFileSync("npm", ["pack", "--pack-destination", staged], { cwd, encoding: "utf8" }).trim().split("\n").pop() ?? "";
+    if (packed === "") throw new Error("npm pack produced no tarball");
+    execFileSync("tar", ["xzf", join(staged, packed), "-C", staged], { encoding: "utf8" });
+    const pkgDir = join(staged, "package");
+    execFileSync("npm", ["pkg", "set", `name=${alias}`], { cwd: pkgDir, encoding: "utf8" });
+    execFileSync("npm", ["pkg", "set", "publishConfig.access=public"], { cwd: pkgDir, encoding: "utf8" });
+    execFileSync("npm", ["pkg", "delete", "scripts.prepack"], { cwd: pkgDir, encoding: "utf8" });
+    io.out(
+      lang === "zh"
+        ? `✓ ${alias} 镜像包已就绪：\n  cd ${pkgDir} && npm publish --access public\n`
+        : `✓ ${alias} staged:\n  cd ${pkgDir} && npm publish --access public\n`,
+    );
+    return 0;
+  } catch (e) {
+    io.err(`[roll] release mirror-pack failed: ${(e as Error).message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * US-INSTALL-007 — the publish half of the release, spelled out for both names.
+ *
+ * roll ships ONE artifact under several npm names, and npm has no notion that
+ * they are the same thing: whoever publishes must do it once per name or the
+ * scopes silently drift apart. `roll release` never publishes (2FA is the
+ * owner's), so the least it can do is hand over the exact commands — including
+ * the mirror step, which is the one that gets forgotten.
+ */
+export function publishInstructions(lang: Lang, version: string): string {
+  const [primary, ...mirrors] = ROLL_PACKAGE_NAMES;
+  const lines: string[] = [];
+  lines.push(
+    lang === "zh"
+      ? `\n下一步：发布到 npm（每个名字都要发，缺一个就会漂移）：`
+      : `\nNext: publish to npm — once per name, a missed one drifts the scopes apart:`,
+  );
+  lines.push(`  npm publish --access public                 # ${primary}@${version}`);
+  for (const mirror of mirrors) {
+    lines.push(
+      lang === "zh"
+        ? `  roll release mirror-pack ${mirror}   # 打出镜像包,再在该目录 npm publish --access public`
+        : `  roll release mirror-pack ${mirror}   # then npm publish --access public in that dir`,
+    );
+  }
+  lines.push(
+    lang === "zh"
+      ? `  roll release verify ${version}                 # 两个名字都核过才把草稿提为正式版\n`
+      : `  roll release verify ${version}                 # promotes the draft only when EVERY name checks out\n`,
+  );
+  return lines.join("\n");
+}
+
+/**
  * `roll release verify [version]` (FIX-1480) — the second phase of the two-phase
  * release. After the maintainer's manual 2FA `npm publish`, confirm npm has the
  * version (npm is the truth source), the git tag and draft GitHub Release exist,
@@ -239,17 +324,22 @@ export function runReleaseVerify(
   const requireLatest = !args.includes("--no-latest");
   const tag = releaseTagForVersion(version);
   const seams = seamsOverride ?? realVerifySeams(cwd);
-  const result = verifyRelease(pkg, version, tag, seams, { requireLatest });
+  // US-INSTALL-007: when the project being verified IS roll, every name it
+  // publishes under must carry this version — a mirror that was never published
+  // would otherwise leave half the users behind while the release reads shipped.
+  const pkgs = isRollPackageName(pkg) ? ROLL_PACKAGE_NAMES : [pkg];
+  const label = pkgs.join(" + ");
+  const result = verifyRelease(pkgs, version, tag, seams, { requireLatest });
   if (!result.ok) {
-    io.err(`[roll] release verify FAILED for ${pkg}@${version} — GitHub Release NOT promoted:\n`);
+    io.err(`[roll] release verify FAILED for ${label}@${version} — GitHub Release NOT promoted:\n`);
     for (const gap of result.gaps) io.err(`  ✗ ${gap}\n`);
     io.err("  fix the gap (publish npm first if needed) and re-run — draft left untouched.\n");
     return 1;
   }
   io.out(
     result.promoted
-      ? `✓ ${pkg}@${version} verified on npm — GitHub Release ${tag} promoted to latest\n`
-      : `✓ ${pkg}@${version} already verified and promoted (${tag}) — no change\n`,
+      ? `✓ ${label}@${version} verified on npm — GitHub Release ${tag} promoted to latest\n`
+      : `✓ ${label}@${version} already verified and promoted (${tag}) — no change\n`,
   );
   return 0;
 }
@@ -905,6 +995,12 @@ export async function releaseCommand(args: string[], depsOverride?: ReleaseFlowD
     const idx = args.indexOf("verify");
     return runReleaseVerify(args.slice(idx + 1));
   }
+  if (sub === "mirror-pack") {
+    // US-INSTALL-007: stage the SAME artifact under an alias name so the owner
+    // can publish it. Never publishes (2FA stays theirs).
+    const idx = args.indexOf("mirror-pack");
+    return runMirrorPack(args.slice(idx + 1), lang);
+  }
 
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(`${label(lang, "releasev3.usage")}\n`);
@@ -981,6 +1077,7 @@ export async function releaseCommand(args: string[], depsOverride?: ReleaseFlowD
         ? `\n${c("green", `✓ ${res.tag} 已打 tag 并推送`)} — release.yml 跑远端闸与 GitHub Release；npm publish 仍由你手动执行\n`
         : `\n${c("green", `✓ ${res.tag} tagged and pushed`)} — release.yml runs the remote gate + GitHub Release; npm publish stays yours\n`,
     );
+    process.stdout.write(publishInstructions(lang, (res.tag ?? "").replace(/^v/, "")));
     await offerShowcase(lang, showcase);
     return 0;
   }
