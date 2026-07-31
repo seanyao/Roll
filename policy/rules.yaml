@@ -21,6 +21,16 @@ rules:
       marker: "RL-TCR-001"
     trigger_report: block
     since: v3.0
+  - id: RL-EVID-003
+    kind: redline
+    statement: An AC item with zero evidence refs cannot claim pass/readonly/partial — enforceRedLine() forces it down to claimed and surfaces it in the Discrepancies appendix
+    enforcement:
+      - point: packages/core/src/attest/report.ts
+        marker: "RL-EVID-003"
+    verification:
+      test: packages/core/test/report.test.ts
+      marker: "RL-EVID-003"
+    trigger_report: block
 
 doc_surfaces:
   - id: DS-ATTEST
