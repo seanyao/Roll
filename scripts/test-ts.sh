@@ -28,7 +28,11 @@ for _arg in "$@"; do
   if [ "$_arg" = "--affected" ]; then SCOPE="affected"; fi
 done
 
-pnpm -r build
+# CI builds before the story-ID guard. Reuse that build when the caller has
+# already completed it; all other invocations retain the self-contained gate.
+if [ "${ROLL_TEST_SKIP_BUILD:-0}" != "1" ]; then
+  pnpm -r build
+fi
 node scripts/audit-role-taxonomy.mjs
 if [ "$SCOPE" = "affected" ]; then
   # `--changed` (no ref) = tests covering the working-tree / uncommitted change

@@ -47,4 +47,4 @@ jobs:
       - run: node scripts/lint-story-ids.mjs
       # The root gate builds the workspace, runs the role-taxonomy audit and
       # orphan-snapshot guard, then executes every package's Vitest suite.
-      - run: pnpm test
+      - run: ROLL_TEST_SKIP_BUILD=1 pnpm test
