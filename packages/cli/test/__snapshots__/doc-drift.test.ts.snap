@@ -1,0 +1,13 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runDocDriftSoftCheck — soft gate observable, exit 0 (snapshot) > soft hit: exit 0 + bilingual diagnostic + recorded hit (en) 1`] = `
+"doc-drift soft hit 9f6fbff233cd4c02c047c59cc76465918c54842114a4c70db914e20c184b53c3: 1 surface(s) changed without their declared docs (gate=soft, exit unchanged)
+surface DS-ATTEST: packages/core/src/attest/report.ts, packages/cli/src/runner/attest-gate.ts
+"
+`;
+
+exports[`runDocDriftSoftCheck — soft gate observable, exit 0 (snapshot) > soft hit: same diagnostic in zh (locale single-language, both catalogued) 1`] = `
+"doc-drift soft hit 9f6fbff233cd4c02c047c59cc76465918c54842114a4c70db914e20c184b53c3:1 个文档面的源码已改动但声明文档未同步(gate=soft,退出码不变)
+文档面 DS-ATTEST:packages/core/src/attest/report.ts, packages/cli/src/runner/attest-gate.ts
+"
+`;

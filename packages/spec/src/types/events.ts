@@ -505,6 +505,21 @@ export type RollEvent =
   // Attest gate (FIX-207) — every actual delivery records whether a fresh
   // acceptance report was produced ("produced") or silently skipped ("skipped").
   | { type: "attest:gate"; cycleId: string; verdict: "produced" | "skipped"; reasons: string[]; ts: number }
+  // US-RULE-004a — doc-drift gate in SOFT mode: a declared doc surface's
+  // sources changed without its declared docs (verdict from the shared pure
+  // checkDocDrift). This is an auditable FACT, never an adjudication: there is
+  // deliberately NO actor field (nothing here accepts actor=owner), no verdict
+  // claim, and a soft hit never blocks (exit 0). hitId is a stable hash of
+  // cycle/story/baseline/matched-surface set, so a retry appends no duplicate.
+  | {
+      type: "doc_drift_soft_hit";
+      hitId: string;
+      cycleId: string;
+      storyId: string;
+      baseline: string;
+      surfaces: string[];
+      ts: number;
+    }
   // Visual-evidence build-preflight gate (FIX-311b) — the shift-left of the
   // attest gate. BEFORE the agent spawns, the picked card's spec is checked
   // against the design-phase visual-evidence contract. `ok` ⇒ the spec can

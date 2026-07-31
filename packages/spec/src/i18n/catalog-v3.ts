@@ -1019,4 +1019,14 @@ export const v3Catalog: Catalog = {
     en: "No delegation found.",
     zh: "未找到委派。",
   },
+  // `doc_drift.*` — US-RULE-004a soft doc-drift gate diagnostic. Soft mode
+  // NEVER blocks: the annotation makes the hit observable while exit stays 0.
+  "doc_drift.soft_hit.summary": {
+    en: "doc-drift soft hit %s: %d surface(s) changed without their declared docs (gate=soft, exit unchanged)",
+    zh: "doc-drift soft hit %s:%d 个文档面的源码已改动但声明文档未同步(gate=soft,退出码不变)",
+  },
+  "doc_drift.soft_hit.surface": {
+    en: "surface %s: %s",
+    zh: "文档面 %s:%s",
+  },
 };

@@ -538,51 +538,15 @@ export function captureFactFromShot(shot: ScreenshotResult, forcedError?: string
   };
 }
 
-const DOC_ALIGNMENT_PATTERNS: readonly RegExp[] = [
-  /^README(?:_[A-Z]+)?\.md$/,
-  /^AGENTS\.md$/,
-  /^CHANGELOG\.md$/,
-  /^docs\//,
-  /^guide\//,
-  /^site\//,
-];
-
-const USER_VISIBLE_SURFACE_PATTERNS: readonly RegExp[] = [
-  /^packages\/cli\/src\/commands\/[^/]+\.ts$/,
-  /^packages\/cli\/src\/commands\/index\.ts$/,
-  /^packages\/cli\/src\/index\.ts$/,
-  /^packages\/cli\/src\/render\.ts$/,
-  /^packages\/spec\/src\/i18n\//,
-];
-
-function normalizeDiffPath(file: string): string {
-  return file.replace(/\\/g, "/").replace(/^\.\//, "").trim();
-}
-
-export function isDocAlignmentFile(file: string): boolean {
-  const normalized = normalizeDiffPath(file);
-  return DOC_ALIGNMENT_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-export function isUserVisibleSurfaceFile(file: string): boolean {
-  const normalized = normalizeDiffPath(file);
-  return USER_VISIBLE_SURFACE_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-export function assessDocGapFromFiles(files: readonly string[]): DocGapWarning | undefined {
-  const seen = new Set<string>();
-  const changedFiles: string[] = [];
-  for (const file of files) {
-    const normalized = normalizeDiffPath(file);
-    if (normalized === "" || seen.has(normalized)) continue;
-    seen.add(normalized);
-    changedFiles.push(normalized);
-  }
-  const visibleFiles = changedFiles.filter(isUserVisibleSurfaceFile);
-  if (visibleFiles.length === 0) return undefined;
-  if (changedFiles.some(isDocAlignmentFile)) return undefined;
-  return { changedFiles, visibleFiles };
-}
+import { assessDocGapFromFiles, normalizeDiffPath } from "../lib/doc-drift.js";
+// US-RULE-004a — the doc-gap rules live in ONE shared home (lib/doc-drift.ts);
+// attest re-exports them so its public surface and behavior contract are
+// unchanged. Never fork a second copy of these rules into a caller.
+export {
+  assessDocGapFromFiles,
+  isDocAlignmentFile,
+  isUserVisibleSurfaceFile,
+} from "../lib/doc-drift.js";
 
 function gitNameOnly(projectPath: string, args: readonly string[]): string[] {
   try {
