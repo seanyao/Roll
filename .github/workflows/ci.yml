@@ -23,7 +23,7 @@ jobs:
   # The required gate: the TypeScript workspace suites. `main` is the v3 engine.
   test-ts:
     if: "!startsWith(github.event.head_commit.message, '[release]')"
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ape]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
