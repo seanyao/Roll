@@ -4,6 +4,8 @@
  * attest.ts keeps its behavior by calling the SAME implementation (no second
  * copy of the rules).
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assessDocGapFromFiles,
@@ -14,7 +16,7 @@ import {
   recordDocDriftSoftHit,
   runDocDriftSoftCheck,
 } from "../src/lib/doc-drift.js";
-import { parseEventLine, type DocSurface } from "@roll/spec";
+import { parseEventLine, parseRulesRegistry, type DocSurface } from "@roll/spec";
 import type { EventStore } from "@roll/core";
 
 /** In-memory EventStore fake — observe append discipline without touching disk. */
@@ -99,6 +101,19 @@ describe("checkDocDrift — DS-ATTEST semantics", () => {
       surfaces: [DS_ATTEST],
     });
     expect(verdict.hits).toEqual([]);
+  });
+
+  it("treats the generated attest responsibility map as the paired documentation", () => {
+    const repoRoot = resolve(__dirname, "../../..");
+    const parsed = parseRulesRegistry(readFileSync(resolve(repoRoot, "policy/rules.yaml"), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const mapsSurface = parsed.value.docSurfaces.find((surface) => surface.id === "DS-ATTEST");
+    expect(mapsSurface?.docs).toContain("docs/maps/attest.md");
+    expect(checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts", "docs/maps/attest.md"],
+      surfaces: mapsSurface === undefined ? [] : [mapsSurface],
+    }).hits).toEqual([]);
   });
 
   it("does not hit on unrelated paths", () => {

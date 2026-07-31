@@ -1,4 +1,5 @@
 /**
+ * @responsibility Drafts conservative acceptance-evidence maps from recorded delivery signals.
  * US-OBS-031 — Evidence Drafter: auto-draft ac-map from activity signals + git diff.
  *
  * Turns "事后判罚" into "按构造产出": builder confirms/supplements a draft instead

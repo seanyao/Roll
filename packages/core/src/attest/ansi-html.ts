@@ -1,4 +1,5 @@
 /**
+ * @responsibility Converts supported ANSI terminal formatting into safe HTML fragments.
  * US-ATTEST-002 — ANSI→HTML: turn colored CLI output into a SEARCHABLE
  * `<pre class="ansi">` fragment for the acceptance report.
  *

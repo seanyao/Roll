@@ -1,4 +1,5 @@
 /**
+ * @responsibility Parses story acceptance-criterion blocks into stable derived entries.
  * US-ATTEST-001 — AC parser.
  *
  * Parses `**AC:**` blocks out of `.roll/features/<epic>/<slug>.md` story files

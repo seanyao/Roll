@@ -1,4 +1,5 @@
 /**
+ * @responsibility Renders acceptance evidence and delivery truth into standalone reports.
  * US-ATTEST-005 — Acceptance Review Page renderer: ONE self-contained HTML file
  * (all CSS inline, no external assets; screenshots referenced RELATIVELY as
  * `./screenshots/*.png`), offline-openable and print-to-PDF friendly.

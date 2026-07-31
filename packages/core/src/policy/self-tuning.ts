@@ -1,4 +1,5 @@
 /**
+ * @responsibility Proposes human-confirmed policy tuning candidates from feedback.
  * US-EVID-015 — second-order control loop.
  *
  * This module is pure: trend facts in, conservative tuning suggestions out.

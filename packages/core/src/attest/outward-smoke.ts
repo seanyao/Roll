@@ -1,4 +1,5 @@
 /**
+ * @responsibility Defines pure external smoke-run policy, redaction, and report logic.
  * US-ATTEST-016 — Isolated external smoke runner: pure logic.
  *
  * This module contains the type definitions, environment gate, output

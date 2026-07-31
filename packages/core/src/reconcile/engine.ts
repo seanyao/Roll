@@ -1,4 +1,5 @@
 /**
+ * @responsibility Reconciles delivery and backlog truth from durable evidence.
  * ReconcileEngine — TS port of the v2 cycle-end reconcile path (US-CORE-008).
  *
  * Invariant I4 (FIX-140/141): "backlog 是愿望，main 是真相." A cycle exiting

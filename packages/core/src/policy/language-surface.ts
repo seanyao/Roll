@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects policy decisions into locale-aware language surfaces.
  * US-LANG-002 — language surface policy and mechanical audit.
  *
  * Pure rules: given a file path and its text, decide which

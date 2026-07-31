@@ -1,4 +1,5 @@
 /**
+ * @responsibility Migrates capture policy text safely between supported policy modes.
  * US-EVID-032 — CapturePolicyMigration (AC1).
  *
  * An EXPLICIT, idempotent, capability-aware, reversible migration that enables

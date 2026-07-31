@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects and hashes frozen acceptance contracts from story specifications.
  * US-EVID-020 — the acceptance-contract PROJECTION + frozen hash.
  *
  * The attest gate today reads the acceptance contract (AC text + evidence

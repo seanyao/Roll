@@ -1,4 +1,5 @@
 /**
+ * @responsibility Validates generated acceptance reports with deterministic smoke assertions.
  * US-ATTEST-012 — acceptance-report render smoke test.
  *
  * "存在性"过闸不等于"有内容/能打开": a report file can exist yet be broken — an

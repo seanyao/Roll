@@ -1,4 +1,5 @@
 /**
+ * @responsibility Evaluates outward verification declarations and their execution outcomes.
  * US-ATTEST-015 — Outward verification validator and status resolver.
  *
  * Pure functions: no filesystem, no clock, no side effects.

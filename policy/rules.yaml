@@ -93,5 +93,6 @@ doc_surfaces:
       - "packages/cli/src/runner/attest-gate.ts"
     docs:
       - "docs/verification.md"
+      - "docs/maps/attest.md"
       - "guide/en/acceptance-evidence.md"
       - "guide/zh/acceptance-evidence.md"

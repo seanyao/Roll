@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves visual-evidence health independently from delivery correctness.
  * US-EVID-031 — EvidenceHealth resolver + gate separation.
  *
  * Delivery correctness and visual-evidence health are SEPARATE facts. A broken

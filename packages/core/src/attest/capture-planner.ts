@@ -1,4 +1,5 @@
 /**
+ * @responsibility Plans and dispatches independent eligible acceptance-evidence capture lanes.
  * US-EVID-030 — CapturePlanner + CaptureSet execution (slice 3).
  *
  * For a declared web surface, PLAN every policy-eligible capture lane (Roll
