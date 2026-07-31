@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v4.731.3 — 2026-07-31
+
 ### 规则层
 - **新增规则注册表与存活审计闸。** `policy/rules.yaml` 成为红线的受控登记处:`@roll/spec` 的严格解析器拒绝未知字段、重复 ID、非法枚举、空注册表和 `policy/**` 自审逃逸;`scripts/audit-rules.mjs` 接入 CI,双向核对每条登记红线的执行点与验证测试是否还活着(零登记直接 fail,空表不放行)。首条登记:RL-TCR-001 红线 + DS-ATTEST 文档面(US-RULE-001)[rules]
 
