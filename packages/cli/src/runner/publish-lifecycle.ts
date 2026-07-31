@@ -6,16 +6,20 @@ import {
   parseBacklog,
   writePendingDeliveryEvidenceManifest,
   type CycleContext,
+  type EventStore,
   type ManifestFileKind,
 } from "@roll/core";
-import { checkImageEvidenceAllowed, imageEvidencePathsInWorkingTree } from "@roll/infra";
+import { checkImageEvidenceAllowed, imageEvidencePathsInWorkingTree, resolveIntegrationBranch } from "@roll/infra";
+import { parseRulesRegistry, type Lang, type Result, type RulesParseError, type RulesRegistry } from "@roll/spec";
 import { cardArchiveDir } from "../lib/archive.js";
+import { runDocDriftSoftCheck } from "../lib/doc-drift.js";
 import { validateStoryVisualEvidence } from "../lib/design-visual-evidence.js";
 import { acMapPath } from "./attest-remediation.js";
 import { declaresAnySurface, screenshotExemption } from "./attest-gate.js";
 import { ingestGateMode, ingestSurfaceReadiness, recordIngestHold } from "./ingest-gate.js";
 import type { Ports } from "./ports.js";
 import { eventTs } from "./runner-time.js";
+import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktree.js";
 
 /**
  * FIX-311b — the BUILD-PREFLIGHT visual-evidence gate, run inside `pick_story`
@@ -374,4 +378,197 @@ export function storyRequiresManualMerge(repoCwd: string, storyId: string | unde
   } catch {
     return false;
   }
+}
+
+// ── US-RULE-004b — publish-gate doc-drift check ──────────────────────────────
+
+/** Result of acquiring the cycle's changed-path set against its integration base. */
+export type ChangedPathsResult =
+  | { ok: true; paths: readonly string[] }
+  | { ok: false; reason: "base-unresolved" | "diff-failed" };
+
+/** Injectable seams for the publish-gate check (tests; production uses defaults). */
+export interface PublishDocDriftGateSeam {
+  /** Diagnostic locale (default en — the catalog carries both en and zh). */
+  lang?: Lang;
+  /** Where the soft-hit fact is appended (default `ports.paths.eventsPath`). */
+  eventsPath?: string;
+  /** Event store override (tests inject an in-memory store). */
+  store?: EventStore;
+  /** Wall-clock override for the recorded event. */
+  ts?: number;
+  /** Diagnostic sink (default: guarded process.stdout write). */
+  stdout?: (s: string) => void;
+  /** Changed-path acquisition override (default: real git vs integration base). */
+  changedPaths?: () => ChangedPathsResult;
+  /** Registry load + strict parse override (default: read tracked policy/rules.yaml). */
+  registry?: () => Result<RulesRegistry, RulesParseError> | undefined;
+}
+
+/** The publish-gate doc-drift outcome. */
+export interface PublishDocDriftGateResult {
+  /** clean = no surface hit; hit = ≥1 surface changed without its docs; unresolved = unknown (fail-loud). */
+  readonly mode: "clean" | "hit" | "unresolved";
+  /** The registry's `gates.doc_drift` at publish time (absent when unresolved). */
+  readonly gateMode?: "soft" | "hard";
+  /** The integration base the changed-path set was computed against. */
+  readonly baseline: string;
+  readonly changedPaths: readonly string[];
+  /** Stable hit identity ("" when clean/unresolved). */
+  readonly hitId: string;
+  /** true only when THIS attempt appended a new soft-hit fact (retries report false). */
+  readonly appended: boolean;
+  /** The locale-rendered bilingual diagnostic ("" when clean/unresolved). */
+  readonly output: string;
+  /** Fail-loud reason when mode === "unresolved". */
+  readonly reason?: "registry-unresolved" | "base-unresolved" | "diff-failed";
+  /** US-RULE-004b contract: soft NEVER blocks delivery — always false. */
+  readonly blocked: false;
+}
+
+/**
+ * Default changed-path acquisition: the cycle's delivery diff RELATIVE TO ITS
+ * INTEGRATION BASE (`git diff --name-only -z <base>...HEAD` in the execution
+ * worktree), never `HEAD~1` — a multi-commit cycle against HEAD~1 would see
+ * only its last commit, and a base-only advance would be mis-blamed on the
+ * cycle. The three-dot merge-base form is the PR's own diff, so the judge
+ * sees exactly what the delivery will ship. Fail-loud: a missing base ref is
+ * `base-unresolved`, any other git failure is `diff-failed` — callers must
+ * never collapse either into an empty diff.
+ */
+export function defaultChangedPathsAgainstBase(worktreeCwd: string, baseRef: string): ChangedPathsResult {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], {
+      cwd: worktreeCwd,
+      stdio: "pipe",
+    });
+  } catch {
+    return { ok: false, reason: "base-unresolved" };
+  }
+  try {
+    const out = execFileSync("git", ["diff", "--name-only", "-z", `${baseRef}...HEAD`], {
+      cwd: worktreeCwd,
+      encoding: "utf8",
+    });
+    const paths = (typeof out === "string" ? out : "")
+      .split("\0")
+      .map((p) => p.trim())
+      .filter((p) => p !== "");
+    return { ok: true, paths };
+  } catch {
+    return { ok: false, reason: "diff-failed" };
+  }
+}
+
+/**
+ * Default registry load: the TRACKED `policy/rules.yaml` in the cycle worktree,
+ * strictly parsed by the shared US-RULE-001 parser. `undefined` on an unreadable
+ * file; `{ok:false}` on a strict-parse rejection — both are fail-loud for the
+ * caller, never a silently-empty registry.
+ */
+export function loadTrackedRulesRegistry(worktreeCwd: string): Result<RulesRegistry, RulesParseError> | undefined {
+  try {
+    return parseRulesRegistry(readFileSync(join(worktreeCwd, "policy", "rules.yaml"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * US-RULE-004b — the publish-gate doc-drift check, run ONCE per publish attempt
+ * from the `publish_pr` terminal handler. It:
+ *   1. acquires the cycle worktree's delivery diff RELATIVE TO ITS INTEGRATION
+ *      BASE (never `HEAD~1`), submodule-aware (E4: the execution worktree/repo);
+ *   2. loads + strictly parses the tracked registry `policy/rules.yaml`;
+ *   3. calls the SHARED 004a verdict (`runDocDriftSoftCheck`) exactly once.
+ *
+ * SOFT NEVER BLOCKS: a hit records the stable `doc_drift_soft_hit` fact and
+ * prints the bilingual-catalogued diagnostic, but `blocked` is always false —
+ * publish continues with exit 0 (hard blocking semantics arrive with
+ * US-RULE-006). UNKNOWN IS FAIL-LOUD: registry parse failure, a missing
+ * integration base, or diff acquisition failure returns mode "unresolved" and
+ * appends an ALERT — the unknown is never silently treated as "no drift", and
+ * the shared verdict is never called on fabricated inputs.
+ */
+export function runPublishDocDriftGate(
+  ports: Ports,
+  ctx: CycleContext,
+  seam?: PublishDocDriftGateSeam,
+): PublishDocDriftGateResult {
+  const worktreeCwd = resolveExecutionCwd(ports, ctx);
+  const repoCwd = resolveExecutionRepoCwd(ports, ctx);
+  const baseline = resolveIntegrationBranch(repoCwd);
+  const lang = seam?.lang ?? "en";
+  const emit = seam?.stdout ?? ((s: string): void => {
+    try {
+      process.stdout.write(s);
+    } catch {
+      /* a broken stdout must never block publish */
+    }
+  });
+
+  const unresolved = (reason: "registry-unresolved" | "base-unresolved" | "diff-failed", detail: string): PublishDocDriftGateResult => {
+    try {
+      ports.events.appendAlert(
+        ports.paths.alertsPath,
+        `doc-drift gate (US-RULE-004b): ${reason} — ${detail} — publish NOT blocked, but the drift state is UNKNOWN and must not be read as "no drift" ` +
+          `(cycle ${ctx.cycleId ?? "?"}${ctx.storyId !== undefined ? `, story ${ctx.storyId}` : ""})`,
+      );
+    } catch {
+      /* alert write blip is observability loss, never a publish block */
+    }
+    return { mode: "unresolved", baseline, changedPaths: [], hitId: "", appended: false, output: "", reason, blocked: false };
+  };
+
+  // 1) delivery diff vs integration base — NOT HEAD~1.
+  let changed: ChangedPathsResult;
+  try {
+    changed = (seam?.changedPaths ?? (() => defaultChangedPathsAgainstBase(worktreeCwd, baseline)))();
+  } catch {
+    changed = { ok: false, reason: "diff-failed" };
+  }
+  if (!changed.ok) {
+    return unresolved(changed.reason, `could not determine the cycle's delivery diff against integration base "${baseline}" (worktree ${worktreeCwd})`);
+  }
+
+  // 2) the tracked registry (strictly parsed; unknown registry is fail-loud).
+  let registry: Result<RulesRegistry, RulesParseError> | undefined;
+  try {
+    registry = (seam?.registry ?? (() => loadTrackedRulesRegistry(worktreeCwd)))();
+  } catch {
+    registry = undefined;
+  }
+  if (registry === undefined || !registry.ok) {
+    return unresolved(
+      "registry-unresolved",
+      registry === undefined
+        ? `policy/rules.yaml unreadable in ${worktreeCwd}`
+        : `policy/rules.yaml rejected: ${registry.error.message}`,
+    );
+  }
+  const { docSurfaces, gates } = registry.value;
+
+  // 3) the SHARED 004a verdict — exactly once per publish attempt.
+  const check = runDocDriftSoftCheck({
+    changedPaths: changed.paths,
+    surfaces: docSurfaces,
+    cycleId: ctx.cycleId,
+    storyId: ctx.storyId ?? "",
+    baseline,
+    lang,
+    ts: seam?.ts ?? eventTs(ports),
+    eventsPath: seam?.eventsPath ?? ports.paths.eventsPath,
+    ...(seam?.store !== undefined ? { store: seam.store } : {}),
+  });
+  if (check.output !== "") emit(check.output);
+  return {
+    mode: check.verdict.hits.length > 0 ? "hit" : "clean",
+    gateMode: gates.docDrift,
+    baseline,
+    changedPaths: check.verdict.changedPaths,
+    hitId: check.hitId,
+    appended: check.appended,
+    output: check.output,
+    blocked: false,
+  };
 }

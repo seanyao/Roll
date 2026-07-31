@@ -21,7 +21,7 @@ import { addPendingPrCreate } from "./pending-pr-create.js";
 import { applyCleanupManifest, CLEANUP_TIMEOUT_MS, resolveCleanupManifest } from "./environment-cleanup.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { repairCoreWorktreeContamination } from "./main-checkout-guard.js";
-import { publishBodyWithEvidenceTrailer, storyRequiresManualMerge } from "./publish-lifecycle.js";
+import { publishBodyWithEvidenceTrailer, runPublishDocDriftGate, storyRequiresManualMerge } from "./publish-lifecycle.js";
 import { buildRunRow, buildTerminalRecord, commitRollMetadata, stampTs, withRealCost } from "./run-records.js";
 import { eventTs } from "./runner-time.js";
 import { cleanStaleEvidence, isParkedAtHold, resetStaleSpecTruth, revertPrematureDone } from "./resume-truth.js";
@@ -51,6 +51,27 @@ export async function executeTerminalCommand(
     // delivery/pr planPublishPr → github.runPublishPlan → published result.
     case "publish_pr": {
       const manualMerge = cmd.manualMerge === true || storyRequiresManualMerge(ports.repoCwd, ctx.storyId);
+      // US-RULE-004b — the publish-gate doc-drift check, ONCE per publish
+      // attempt, for BOTH delivery modes: the cycle's delivery diff vs its
+      // INTEGRATION BASE (not HEAD~1) judged against the tracked
+      // policy/rules.yaml registry via the SHARED 004a verdict. A LOCAL cycle
+      // delivery is still a publish attempt, so the gate runs HERE — before the
+      // local/remote branch — exactly once, and the E3 local landing path never
+      // bypasses it. In gates.doc_drift:soft a hit records the stable
+      // doc_drift_soft_hit fact + prints the bilingual diagnostic, and SOFT
+      // NEVER BLOCKS — publish continues with exit 0 (hard blocking semantics
+      // arrive with US-RULE-006). Registry/base/diff unknowns are fail-loud
+      // (ALERT + unresolved mode), never silently treated as "no drift". A
+      // gate throw (e.g. an events-append failure) must never topple publish
+      // either — alert and continue.
+      try {
+        runPublishDocDriftGate(ports, ctx);
+      } catch (e) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `doc-drift gate (US-RULE-004b): unexpected failure — ${String(e)} — publish continues (soft never blocks) (cycle ${ctx.cycleId ?? "?"})`,
+        );
+      }
       // E3: local-only delivery mode. A `publish_mode: local` project lands the
       // cycle on its LOCAL integration branch and skips push→PR→CI→merge — but
       // the evidence gate STILL runs (a gate-block is a fault, publish or not).

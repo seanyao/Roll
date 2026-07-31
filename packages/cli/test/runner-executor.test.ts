@@ -4492,7 +4492,12 @@ describe("executeCommand — command → executor mapping", () => {
       },
     });
     await executeCommand({ kind: "publish_pr", branch: "b", docOnly: false }, ports, CTX);
-    expect((calls["alert"] ?? []).map((a) => String((a as unknown[])[1])).join("\n")).toBe("");
+    // US-RULE-004b: the publish-gate doc-drift check fails loud (the fake
+    // worktree has no integration base) but must NOT add any other alert or
+    // block the publish — soft never blocks.
+    const evidAlerts = (calls["alert"] ?? []).map((a) => String((a as unknown[])[1]));
+    expect(evidAlerts.filter((a) => !a.includes("doc-drift gate"))).toEqual([]);
+    expect(evidAlerts.filter((a) => a.includes("doc-drift gate") && a.includes("UNKNOWN"))).toHaveLength(1);
     expect(body).toContain("Roll-Evidence: US-RUN-001 roll-meta@");
     expect(body).toContain("features/uncategorized/US-RUN-001/ac-map.json");
   });
@@ -4546,7 +4551,11 @@ describe("executeCommand — command → executor mapping", () => {
       ".roll/features/uncategorized/US-RUN-001/ac-map.json",
     );
     expect(execFileSync("git", ["status", "--porcelain", "--", ":!.roll/loop"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
-    expect((calls["alert"] ?? []).map((a) => String((a as unknown[])[1])).join("\n")).toBe("");
+    // US-RULE-004b: the publish-gate doc-drift check fails loud (the fake
+    // worktree has no integration base) but must NOT add any other alert.
+    const inrepoAlerts = (calls["alert"] ?? []).map((a) => String((a as unknown[])[1]));
+    expect(inrepoAlerts.filter((a) => !a.includes("doc-drift gate"))).toEqual([]);
+    expect(inrepoAlerts.filter((a) => a.includes("doc-drift gate") && a.includes("UNKNOWN"))).toHaveLength(1);
   });
 
   it("FIX-1203: in-repo publish blocks instead of creating a PR with missing ac-map evidence", async () => {
