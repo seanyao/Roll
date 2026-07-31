@@ -10,26 +10,41 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer commit supersedes the same PR or branch verification run. Keep runs
+# for separate PRs independent so their required checks remain observable.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The required gate: the TypeScript workspace suites. `main` is the v3 engine.
   test-ts:
     if: "!startsWith(github.event.head_commit.message, '[release]')"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       # No `version:` — pnpm/action-setup reads `packageManager` from package.json.
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # The story-id guard resolves the built CLI entry point, so build before
+      # invoking it in a fresh checkout.
       - run: pnpm -r build
       # FIX-340 — story-id uniqueness guard. A no-op in the public repo (the
       # `.roll/features` corpus lives in the roll-meta repo, absent here → exit
       # 0), but it runs in any checkout that DOES carry the data and reds on a
       # duplicate id; the logic itself is proven by the workspace unit tests.
       - run: node scripts/lint-story-ids.mjs
-      - run: pnpm -r test
+      # The root gate builds the workspace, runs the role-taxonomy audit and
+      # orphan-snapshot guard, then executes every package's Vitest suite.
+      - run: pnpm test
