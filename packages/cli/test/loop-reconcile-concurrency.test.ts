@@ -145,6 +145,36 @@ describe("US-DELIV-011 — reconcile concurrency", () => {
     expect(credits).toHaveLength(0);
   });
 
+  it("US-RULE-004c: a hard registry makes the story path require doc-drift on the same sha", async () => {
+    prMergeMock.mockClear();
+    const p = project();
+    mkdirSync(join(p, "policy"), { recursive: true });
+    writeFileSync(join(p, "policy", "rules.yaml"), `version: 1
+gates:
+  doc_drift: hard
+rules:
+  - id: RL-TEST-001
+    kind: redline
+    statement: test
+    enforcement:
+      - point: packages/cli/src/commands/loop-reconcile.ts
+        marker: RL-TEST-001
+    verification:
+      test: packages/cli/test/loop-reconcile-concurrency.test.ts
+      marker: RL-TEST-001
+    trigger_report: ALERT
+doc_surfaces: []
+`);
+    writeEvents(p, [
+      { type: "cycle:start", cycleId: CYCLE, storyId: STORY, ts: TS_MS },
+      { type: "delivery:published", cycleId: CYCLE, storyId: STORY, branch: `loop/${CYCLE}`, prNumber: 99, ts: TS_MS + 1 },
+    ]);
+
+    await runReconcileTick(p, { silent: true, provider: openGreenProvider() });
+    expect(prMergeMock).not.toHaveBeenCalled();
+    expect(readEvents(p).some((e) => e.type === "delivery:merge_attempt")).toBe(false);
+  });
+
   it("re-entry after merge_attempt merged converges to one delivered credit", async () => {
     prMergeMock.mockClear();
     const p = project();

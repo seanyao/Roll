@@ -55,3 +55,27 @@ jobs:
       # The root gate builds the workspace, runs the role-taxonomy audit and
       # orphan-snapshot guard, then executes every package's Vitest suite.
       - run: ROLL_TEST_SKIP_BUILD=1 pnpm test
+
+  # US-RULE-004c — a separately named, registry-backed observation. In soft
+  # mode a hit annotates the PR and exits 0; switching policy/rules.yaml to
+  # hard makes this same named check fail and joins Roll-driven merge gating.
+  doc-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      # Make the PR integration base explicit. The command fails closed if this
+      # fetch or the merge-base cannot yield the one real baseline.
+      - run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: node --input-type=module -e 'import { runCiDocDriftCheck } from "./packages/cli/dist/lib/ci-doc-drift.js"; process.exitCode = runCiDocDriftCheck(process.cwd()).exitCode'

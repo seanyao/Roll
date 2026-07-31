@@ -139,4 +139,10 @@ describe("FIX-1487 — the required check must have run, on both merge paths", (
     expect(selfDrivenMerge({ ...base, lsRemote, gh }).merged).toBe(true);
     expect(calls.find((c) => c.includes("--method"))).toContain(`sha=${TIP}`);
   });
+
+  it("uses the configured hard set and refuses when doc-drift did not run", () => {
+    const { gh, calls } = ghNamed(["test-ts\tsuccess"]);
+    expect(selfDrivenMerge({ ...base, lsRemote, gh, requiredCheck: ["test-ts", "doc-drift"] }).reason).toBe("checks-failed");
+    expect(calls.some((c) => c.includes("--method"))).toBe(false);
+  });
 });

@@ -38,6 +38,14 @@ To satisfy the hook, run your tests immediately before committing. If you use TC
 
 ## CI E2E Gate
 
+PR CI also publishes a named `doc-drift` check. It fetches `origin/main`,
+compares the PR with `merge-base HEAD origin/main`, and evaluates the shared
+rules-registry doc-drift verdict. With `gates.doc_drift: soft`, a hit is an
+annotation and the check succeeds; a missing base or invalid registry fails
+closed. CI never writes `.roll` events. When the registry is changed to `hard`,
+the same named check becomes required by Roll-driven exact-SHA merges alongside
+`test-ts`; GitHub Free/private UI merge protection remains advisory.
+
 The template CI workflow (`.github/workflows/ci.yml`) runs E2E tests as a
 separate job that must pass before merge. If E2E fails:
 

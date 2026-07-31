@@ -62,6 +62,19 @@ import {
 import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRepoSlug } from "../lib/delivery-facts.js";
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
 import { settleDeliveredCycle, gitPlaneVerifier, hasMergeConfirmedEvent } from "./loop-reconcile-merge.js";
+import { configuredRequiredChecks } from "../lib/ci-doc-drift.js";
+
+/** Keep story merges on the same registry-selected exact-SHA check set as releases. */
+function applyConfiguredRequiredChecks(cwd: string, facts: ReconcileFacts): void {
+  try {
+    const required = configuredRequiredChecks(cwd);
+    if (required !== undefined) facts.requiredChecks = required;
+  } catch {
+    // A malformed policy must not silently downgrade to test-ts. This sentinel
+    // cannot be supplied by the CI workflow, so the named verdict fails closed.
+    facts.requiredChecks = ["rules-registry-invalid"];
+  }
+}
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -451,6 +464,7 @@ export async function runReconcileTick(
       attestPresent: false,
       nowMs: now,
     };
+    applyConfiguredRequiredChecks(cwd, facts);
 
     // L1: PR state via gh.
     if (provider !== undefined && cyc.prNumber !== undefined && slug !== undefined) {
@@ -895,6 +909,7 @@ export async function loopReconcileCommand(
       attestPresent: false,
       nowMs: now,
     };
+    applyConfiguredRequiredChecks(cwd, facts);
 
     // L1: PR state via gh.
     if (provider !== undefined && cyc.prNumber !== undefined && slug !== undefined) {

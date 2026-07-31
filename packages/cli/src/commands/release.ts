@@ -39,6 +39,7 @@ import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { c, renderState } from "../render.js";
 import { runConsistencyCheck } from "../lib/release-consistency.js";
 import { readConfirmLine } from "../lib/tty-confirm.js";
+import { configuredRequiredChecks } from "../lib/ci-doc-drift.js";
 
 function label(lang: Lang, key: string, ...args: ReadonlyArray<string | number>): string {
   if (v3Catalog[key] !== undefined) return t(v3Catalog, lang, key, ...args);
@@ -462,8 +463,8 @@ export function selfDrivenMerge(opts: {
   branch: string;
   /** `git ls-remote origin refs/heads/<branch>` → "<sha>\trefs/heads/<branch>". */
   lsRemote: (branch: string) => string;
-  /** FIX-1487: the check that must have RUN and passed (default `test-ts`). */
-  requiredCheck?: string;
+  /** The configured exact-SHA required set (default `test-ts`). */
+  requiredCheck?: string | readonly string[];
   gh: (args: string[]) => { code: number; stdout: string; stderr: string };
 }): SelfMergeResult {
   const tip = opts.lsRemote(opts.branch).trim().split(/\s+/)[0] ?? "";
@@ -854,6 +855,7 @@ export function realReleaseDeps(): ReleaseFlowDeps {
           if (selfDrive.on && prNum !== "") {
             const slug = repoSlugSync(cwd);
             if (slug !== undefined) {
+              const requiredCheck = configuredRequiredChecks(cwd);
               const res = selfDrivenMerge({
                 slug,
                 prNum,
@@ -865,6 +867,11 @@ export function realReleaseDeps(): ReleaseFlowDeps {
                     return "";
                   }
                 },
+                // US-RULE-004c: read the tracked registry at merge time. Soft
+                // requires test-ts only; a future hard flip adds doc-drift.
+                ...(requiredCheck !== undefined
+                  ? { requiredCheck }
+                  : {}),
                 gh: (args) => ghSync(cwd, args),
               });
               if (res.merged) return true;
