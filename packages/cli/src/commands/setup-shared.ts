@@ -111,7 +111,7 @@ export function getAiTools(): string[] {
   if (!existsSync(cfg)) return [];
   const out: string[] = [];
   for (const line of readFileSync(cfg, "utf8").split("\n")) {
-    if (/^ai_[a-z]+:/.test(line)) {
+    if (/^ai_[a-z_]+:/.test(line)) {
       let entry = line.replace(/^[^:]*:[ \t]*/, "");
       entry = entry.replace(/^~/, homedir());
       out.push(entry);
@@ -456,7 +456,7 @@ export function installLocal(force: boolean): boolean {
 
   const cfg = rollConfig();
   // Recreate config if it has no ai_* entries.
-  if (existsSync(cfg) && !/^ai_[a-z]+:/m.test(readFileSync(cfg, "utf8"))) {
+  if (existsSync(cfg) && !/^ai_[a-z_]+:/m.test(readFileSync(cfg, "utf8"))) {
     copyFileSync(cfg, `${cfg}.bak`);
     rmSync(cfg, { force: true });
   }

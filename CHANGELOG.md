@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### 修复
+- **`roll setup` / `roll status` 不再漏掉带下划线的 agent 配置项。** 读取 `~/.roll/config.yaml` 的正则只认 `ai_<纯小写字母>`,`ai_kimi_code:` 这类带下划线的条目被静默丢弃 —— 后果是 `~/.kimi-code` 从不参与 conventions/skills 同步(新技能如 `roll-prime` 永远不会落进去,已删除技能的死链接也从不被清理),`roll status` 同样漏报。现在三处读取点全部接受下划线(FIX-1494)[setup]
+
 ## v4.731.3 — 2026-07-31
 
 ### 规则层
@@ -56,7 +59,7 @@
 - **Roll 现在有两个等效的安装名**:`npm i -g @bipo-ape/roll`(推荐)和 `npm i -g @seanyao/roll`(原来那个,继续可用)。两边是同一份产物、同一个版本,从哪边装、从哪边升级都一样,老用户什么都不用做。`roll update` 会认准你当初装的那个名字,不会把你悄悄换到另一边(US-INSTALL-007)[install]
 
 ### 诊断
-- `roll doctor` 不再报它证明不了的事。此前它会说你的代理"连不上"并建议 `launchctl unsetenv` 清掉 —— 而代理其实是通的:那条探测依赖 macOS 根本不带的 `timeout` 命令,于是**任何**代理设置都被判成失效,照它做反而会把能用的网络环境弄坏。同时 agent 检测按配置项而不是按 agent 输出,`pi`、`agy` 这类有别名的会重复出现两行,现在每个 agent 只出现一次(FIX-1486)[diagnostics]
+- `roll doctor` 不再报它证明不了的事。此前它会说你的代理"连不上"并建议 `launchctl unsetenv` 清掉 —— 而代理其实是通的:那条探测依赖 macOS 根本不带的 `timeout` 命令,于是**任何**代理设置都被判成失效,照它做反而会把能用的网络环境弄坏。同时 agent 检测按配置项而不是按 agent 输出,`pi`、`agy` 这类有别名的会重复出现两行,现在每个 agent 只出现一次(FIX-1494)[diagnostics]
 
 ## v4.730.1 — 2026-07-30
 

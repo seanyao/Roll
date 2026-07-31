@@ -58,11 +58,11 @@ CLI 全 TypeScript：`packages/cli/bin/roll.js` → `dispatch()`，未知命令�
 
 ## 6. skills（不重写）
 
-skills 是 markdown + shell，在独立仓 `seanyao/roll-skills`（submodule 挂 `skills/` 原路径），经桥接 `spawn` 调用。**它们是灵魂/契约，不翻成 TS。** clone 后 `skills/` 为空时跑一次 `roll setup` 或 `git submodule update --init --recursive`。
+skills 是 markdown + shell，在独立仓 `BIPOSVC/ape-roll-skills`（submodule 挂 `skills/` 原路径），经桥接 `spawn` 调用。**它们是灵魂/契约，不翻成 TS。** clone 后 `skills/` 为空时跑一次 `roll setup` 或 `git submodule update --init --recursive`。
 
 ## 7. 与 `.roll/`（嵌套私有仓 roll-meta）
 
-`.roll/` 是独立私有 git 仓（`seanyao/roll-meta`），**非 submodule**。roll-meta 与本仓同步翻车：它的 `main` 现在是实时 backlog——backlog/features/notes 改动 `cd .roll` 后 commit+push 到 **main**。
+`.roll/` 是独立私有 git 仓（`BIPOSVC/ape-roll-meta`），**非 submodule**。roll-meta 与本仓同步翻车：它的 `main` 现在是实时 backlog——backlog/features/notes 改动 `cd .roll` 后 commit+push 到 **main**。
 
 ## 8. 完成 = 上线
 
