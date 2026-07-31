@@ -502,6 +502,63 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(r.stderr).toBeTruthy();
   });
 
+  // FIX-1495: a card whose ID is MENTIONED by other specs (dependency blocks)
+  // must not be declared ambiguous — findFeatureFiles already orders the
+  // ID-owned spec first ("ID-named owner wins"); only bare content mentions
+  // with no owner are ambiguous.
+  it("prepare resolves an ID-owned card even when other specs mention the ID", () => {
+    const dir = setupMinimalProject("US-DELTA-MENTION", "delta-team");
+    // Another epic's spec references the ID (dependency block) — a mention,
+    // not an owner.
+    mkdirSync(join(dir, ".roll", "features", "other-epic", "US-OTHER-1"), { recursive: true });
+    writeFileSync(
+      join(dir, ".roll", "features", "other-epic", "US-OTHER-1", "spec.md"),
+      "# US-OTHER-1\n\nDepends on: US-DELTA-MENTION\n",
+      "utf8",
+    );
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-MENTION", "local-preset");
+    const r = tsRunCwd([
+      "prepare", "US-DELTA-MENTION",
+      "--trigger", "host-guided",
+      "--topology", "delta-team",
+      "--profile", "standard",
+      "--preset", "local-preset",
+      "--resolution", resPath,
+      "--json",
+    ], dir);
+
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(parsed.ok).toBe(true);
+    expect(typeof parsed.delegationId).toBe("string");
+  });
+
+  it("prepare still fails as ambiguous when multiple specs merely MENTION the ID and none owns it", () => {
+    const dir = makeProject();
+    for (const epic of ["epic-a", "epic-b"]) {
+      mkdirSync(join(dir, ".roll", "features", epic, "US-OWNER-X"), { recursive: true });
+      writeFileSync(
+        join(dir, ".roll", "features", epic, "US-OWNER-X", "spec.md"),
+        `# US-OWNER-X\n\nSee also US-DELTA-NOOWNER.\n`,
+        "utf8",
+      );
+    }
+    mkdirSync(join(dir, ".roll", "loop"), { recursive: true });
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-NOOWNER", "local-preset");
+    const r = tsRunCwd([
+      "prepare", "US-DELTA-NOOWNER",
+      "--trigger", "host-guided",
+      "--topology", "delta-team",
+      "--profile", "standard",
+      "--preset", "local-preset",
+      "--resolution", resPath,
+      "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    const err = JSON.parse(r.stderr) as Record<string, unknown>;
+    expect(err.error).toBe("card_not_found");
+  });
+
   // ─── BLOCK-B: malformed resolution zero side effect ────────────────────
 
   it("BLOCK-B: malformed resolution JSON → resolution_parse_error, zero lease/frame/events", () => {

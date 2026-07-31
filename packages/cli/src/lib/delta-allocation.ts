@@ -24,7 +24,7 @@ import {
   closeSync,
   fdatasyncSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { findFeatureFiles, liveEpicOf } from "./archive.js";
 import { claimStoryLease, releaseStoryLease, readLeases } from "@roll/core";
 import type {
@@ -68,15 +68,25 @@ export function resolveExistingUniqueCardArchiveDir(
   projectPath: string,
   storyId: string,
 ): string | null {
-  // Strategy 1: Find feature files for this story
+  // Strategy 1: Find feature files for this story. FIX-1495: findFeatureFiles
+  // counts every markdown that MENTIONS the id (dependency blocks in other
+  // cards' specs) — those are not owners. Apply the same "ID-named owner wins"
+  // rule findFeatureFile documents before declaring ambiguity: an id-owned
+  // file (`<id>.md`, or `<id>/spec.md`) owns the card; bare mentions without
+  // any owner are the only ambiguous case.
   const files = findFeatureFiles(projectPath, storyId);
-  if (files.length === 1) {
+  const owned = files.filter((f) => {
+    const base = basename(f);
+    return base === `${storyId}.md` || (base === "spec.md" && basename(dirname(f)) === storyId);
+  });
+  if (owned.length > 1) return null; // genuinely ambiguous: multiple id-owned specs
+  if (owned.length === 1 || files.length === 1) {
     const epic = liveEpicOf(projectPath, storyId);
     if (epic) {
       return join(projectPath, ".roll", "features", epic, storyId);
     }
   } else if (files.length > 1) {
-    return null; // ambiguous
+    return null; // ambiguous: bare mentions, no owner
   }
 
   // Strategy 2: Try direct epic resolution from existing card dirs
