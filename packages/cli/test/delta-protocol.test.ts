@@ -1451,6 +1451,54 @@ describe("US-DELTA-003 — conclude", () => {
 // ── Snapshot tests ──────────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — CLI snapshots", () => {
+  it("US-DELTA-009: prepare prints the persisted team banner on stderr without changing JSON stdout", () => {
+    const dir = setupMinimalProject("US-DELTA-BANNER", "delta-team");
+    const resPath = join(dir, "resolution-banner.json");
+    writeFileSync(resPath, JSON.stringify({
+      schema: "roll-delta-resolution/v1",
+      storyId: "US-DELTA-BANNER",
+      trigger: "host-guided",
+      topology: "delta-team",
+      qualityProfile: "standard",
+      presetId: "local-preset",
+      presetSha256: "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+      inventoryObservedAt: "2026-08-01T00:00:00.000Z",
+      inventorySha256: "bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+      roles: [
+        { role: "builder", roleInstanceId: "ri-builder", hostId: "deepseek", modelId: "deepseek-v4-flash", source: "availability-fallback", reasons: ["test"] },
+        { role: "evaluator", roleInstanceId: "ri-evaluator", hostId: "openai", modelId: "gpt-5.6-terra", source: "preset-preference", reasons: ["test"] },
+      ],
+    }, null, 2), "utf8");
+
+    const r = tsRunCwd([
+      "prepare", "US-DELTA-BANNER",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+
+    expect(r.code).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      delegationId: string;
+      runId: string;
+      artifacts: { frameDir: string; resolutionPath: string; markerPath: string; preparationPath: string };
+    };
+    expect(r.stdout).toBe(`${JSON.stringify({
+      ok: true,
+      delegationId: payload.delegationId,
+      runId: payload.runId,
+      artifacts: payload.artifacts,
+    })}\n`);
+    expect(r.stderr).toContain("US-DELTA-BANNER");
+    expect(r.stderr).toContain("builder");
+    expect(r.stderr).toContain("deepseek");
+    expect(r.stderr).toContain("deepseek-v4-flash");
+    expect(r.stderr).toContain("⚠ availability-fallback");
+    expect(r.stderr).toContain("deepseek ≠ openai");
+    expect(scrubAll(r.stderr, dir, payload.delegationId)).toMatchSnapshot();
+  });
+
   it("prepare --json output is scrubbed and snapshotted", () => {
     const dir = setupMinimalProject("US-DELTA-SNAP-1", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-SNAP-1", "local-preset");

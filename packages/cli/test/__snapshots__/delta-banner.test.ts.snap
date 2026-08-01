@@ -1,0 +1,10 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-009 — Delta Team assembly banner > renders persisted roles and never claims diversity for a shared host and model 1`] = `
+"Delta Team assembling
+  story     US-DELTA-BANNER
+  ├ builder    codex · gpt-5.6-terra  ⚠ availability-fallback
+  └ evaluator  codex · gpt-5.6-terra  preset-preference
+  diversity  undeclared heterogeneity
+  frame     delta-123  lease held"
+`;

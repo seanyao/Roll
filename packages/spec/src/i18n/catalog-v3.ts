@@ -9,6 +9,36 @@
 import type { Catalog } from "./index.js";
 
 export const v3Catalog: Catalog = {
+  // `delta.banner.*` — persisted Delta Team assembly summary (US-DELTA-009).
+  "delta.banner.title": {
+    en: "▁▁▁ Delta Team assembling ▁▁▁",
+    zh: "▁▁▁ Delta Team 正在组队 ▁▁▁",
+  },
+  "delta.banner.story": {
+    en: "story",
+    zh: "卡片",
+  },
+  "delta.banner.diversity": {
+    en: "diversity",
+    zh: "异构",
+  },
+  "delta.banner.diversity_distinct": {
+    en: "%s ≠ %s  ✓",
+    zh: "%s ≠ %s  ✓",
+  },
+  "delta.banner.diversity_undeclared": {
+    en: "undeclared heterogeneity",
+    zh: "未声明异构",
+  },
+  "delta.banner.frame": {
+    en: "frame",
+    zh: "帧",
+  },
+  "delta.banner.lease_held": {
+    en: "lease held",
+    zh: "租约已持有",
+  },
+
   // `north.*` — terminal north-star panel (US-OBS-047). The calculation stays
   // in @roll/core; these strings only label the shared roll.north.v1 report.
   "north.title": {

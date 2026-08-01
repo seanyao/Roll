@@ -29,8 +29,9 @@ import {
   type PrepareInput,
 } from "../lib/delta-allocation.js";
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
+import { renderDeltaBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
 import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest } from "@roll/core";
-import type { DeltaArtifactManifest } from "@roll/spec";
+import type { DelegationResolution, DeltaArtifactManifest } from "@roll/spec";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -47,6 +48,23 @@ function lang() {
 
 function T(key: string, ...args: Array<string | number>): string {
   return t(v3Catalog, lang(), key, ...args);
+}
+
+function deltaBannerCopy(): DeltaBannerCopy {
+  return {
+    title: T("delta.banner.title"),
+    story: T("delta.banner.story"),
+    diversity: T("delta.banner.diversity"),
+    diversityDistinct: T("delta.banner.diversity_distinct", "{builder}", "{evaluator}"),
+    diversityUndeclared: T("delta.banner.diversity_undeclared"),
+    frame: T("delta.banner.frame"),
+    leaseHeld: T("delta.banner.lease_held"),
+  };
+}
+
+/** Read only the persisted resolution artifact before rendering any banner facts. */
+function readPersistedResolution(resolutionPath: string): DelegationResolution {
+  return JSON.parse(readFileSync(resolutionPath, "utf8")) as DelegationResolution;
 }
 
 // ── Argument parser ──────────────────────────────────────────────────────────
@@ -375,6 +393,16 @@ function prepareCommand(args: string[]): number {
       }
       return 1;
     }
+
+    // The assembly banner is deliberately derived from the immutable resolution
+    // artifact, never from the host-supplied in-memory template. It goes to
+    // stderr in both modes so the JSON stdout protocol stays byte-for-byte stable.
+    const persistedResolution = readPersistedResolution(result.resolutionPath);
+    process.stderr.write(`${renderDeltaBanner({
+      storyId: persistedResolution.storyId,
+      roles: persistedResolution.roles,
+      frameDir: result.frameDir,
+    }, deltaBannerCopy())}\n`);
 
     if (json) {
       process.stdout.write(JSON.stringify({

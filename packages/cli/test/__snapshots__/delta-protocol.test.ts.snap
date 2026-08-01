@@ -1,5 +1,15 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`US-DELTA-003 — CLI snapshots > US-DELTA-009: prepare prints the persisted team banner on stderr without changing JSON stdout 1`] = `
+"▁▁▁ Delta Team assembling ▁▁▁
+  story     US-DELTA-BANNER
+  ├ builder    deepseek · deepseek-v4-flash  ⚠ availability-fallback
+  └ evaluator  openai · gpt-5.6-terra  preset-preference
+  diversity  deepseek ≠ openai  ✓
+  frame     <PROJECT>/.roll/features/delta-team/US-DELTA-BANNER/delta-<DELEGATION_ID>  lease held
+"
+`;
+
 exports[`US-DELTA-003 — CLI snapshots > conclude --json output is scrubbed and snapshotted 1`] = `
 "{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-SNAP-4","outcome":"handoff_ready","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue"}
 "
