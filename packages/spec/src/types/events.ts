@@ -637,8 +637,10 @@ export type RollEvent =
   // A canary count NEVER becomes a blanket deletion: action derives from audit.
   | {
       type: "branch_canary_tripped";
+      /** Leak-safety total; healthy retained capacity is reported separately. */
       total: number;
       threshold: number;
+      managedCapacity: number;
       ephemeralBranches: string[];
       worktrees: Array<{ path: string; disposition: string }>;
       ts: number;
@@ -646,7 +648,9 @@ export type RollEvent =
   | {
       type: "worktree_cleanup_planned";
       threshold: number;
-      canaryTotal: number;
+      cleanupCapacityTotal: number;
+      leakSafetyTotal: number;
+      managedCapacity: number;
       dryRun: boolean;
       candidates: Array<{ path: string; expectedHead: string; branch?: string; cycleId?: string }>;
       preserved: Array<{ path: string; disposition: string }>;

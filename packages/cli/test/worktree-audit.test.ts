@@ -7,6 +7,9 @@
  * the hard read-only constraint (no mutation).
  */
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   auditWorktrees,
   worktreeAuditCommand,
@@ -1007,5 +1010,207 @@ describe("FIX-1460 (#1468) orphan loop worktree dirs", () => {
     const out = auditWorktrees(orphanDeps({ readDir: () => [] }));
     expect(out.records.filter((r) => r.disposition === "orphan_reclaimable")).toHaveLength(0);
     expect(out.records.filter((r) => r.disposition === "preserved_orphan")).toHaveLength(0);
+  });
+});
+
+// ─── US-LOOP-123: shared ManagedWorkspaceSet projection ───────────────────
+
+describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
+  const workspace = {
+    schema: 1,
+    runId: "delta-d-1",
+    storyId: "US-LOOP-123",
+    kind: "host_delta",
+    topology: "delta-team",
+    delegationId: "d-1",
+    members: [{
+      repositoryId: "origin:repo",
+      workspaceKey: "delta-d-1",
+      relativeLocator: "delta-d-1",
+      checkoutRef: { kind: "detached", head: "head-1" },
+    }],
+  } as const;
+
+  it("does not promote an unregistered cycle-looking directory into managed ownership", () => {
+    const events = [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "delivery:merge_confirmed", cycleId: "delta-d-1", storyId: "US-LOOP-123", branch: "roll/delta-d-1", signal: "ancestor", ts: 2 },
+      { type: "attest:gate", cycleId: "delta-d-1", verdict: "produced", reasons: [], ts: 3 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([
+          { path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" },
+          { path: "/fake/repo/.roll/loop/worktrees/cycle-spoof", head: "spoof" },
+        ]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).toBe("preserve_active");
+    expect(out.records.find((record) => record.path.endsWith("cycle-spoof"))?.owner).toBe("external");
+    expect(out).toMatchSnapshot();
+  });
+
+  it("inspects a submodule through its own registration and never counts the container", () => {
+    const submoduleWorkspace = {
+      ...workspace,
+      members: [
+        workspace.members[0],
+        {
+          repositoryId: "origin:submodule",
+          workspaceKey: "delta-d-1",
+          relativeLocator: "delta-d-1.submodules/packages/sub",
+          checkoutRef: { kind: "detached", head: "sub-head" },
+        },
+      ],
+    } as const;
+    const calls: string[][] = [];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? JSON.stringify({ type: "worktree:allocated", workspace: submoduleWorkspace, ts: 1 }) : null,
+      git: (args) => {
+        calls.push(args);
+        if (args[0] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1.submodules/packages/sub", head: "sub-head" }]);
+        return "";
+      },
+    }));
+    expect(calls.some((args) => args[0] === "-C" && args[2] === "worktree")).toBe(true);
+    expect(out.records.some((record) => record.path.endsWith(".submodules"))).toBe(false);
+    expect(out.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("registered");
+  });
+
+  it("marks a failed submodule registration probe unknown and fails inspection loud", () => {
+    const submoduleWorkspace = {
+      ...workspace,
+      members: [
+        workspace.members[0],
+        {
+          repositoryId: "origin:submodule",
+          workspaceKey: "delta-d-1",
+          relativeLocator: "delta-d-1.submodules/packages/sub",
+          checkoutRef: { kind: "detached", head: "sub-head" },
+        },
+      ],
+    } as const;
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? JSON.stringify({ type: "worktree:allocated", workspace: submoduleWorkspace, ts: 1 }) : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C") throw new Error("submodule registration unavailable");
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("unknown");
+    expect(out.inspectionUnavailable).toBe(true);
+  });
+});
+
+describe("US-LOOP-123 unavailable inspection", () => {
+  it("does not reinterpret a failed branch enumeration as zero capacity", () => {
+    const out = auditWorktrees(makeDeps({
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([]);
+        if (args[0] === "branch") throw new Error("branch enumeration unavailable");
+        return "";
+      },
+    }));
+    expect(out.inspectionUnavailable).toBe(true);
+  });
+
+  it("does not reinterpret a real failed worktree discovery as an empty audit", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "roll-audit-nonrepo-"));
+    try {
+      const out = auditWorktrees({ repoRoot, home: "/home/user" });
+      expect(out.inspectionUnavailable).toBe(true);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("US-LOOP-123 CLI audit snapshots", () => {
+  function capture(locale: "en" | "zh", fn: () => number): string {
+    const originalWrite = process.stdout.write;
+    const originalLocale = process.env["ROLL_LANG"];
+    let output = "";
+    process.env["ROLL_LANG"] = locale;
+    process.stdout.write = (chunk: string | Uint8Array): boolean => {
+      output += String(chunk);
+      return true;
+    };
+    try {
+      fn();
+    } finally {
+      process.stdout.write = originalWrite;
+      if (originalLocale === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = originalLocale;
+    }
+    return output;
+  }
+
+  it("freezes EN and ZH output for a healthy handoff, an external lookalike, and an absent legacy cycle", () => {
+    const workspace = {
+      schema: 1,
+      runId: "delta-handoff",
+      storyId: "US-LOOP-123",
+      kind: "host_delta",
+      topology: "delta-team",
+      delegationId: "handoff",
+      members: [{
+        repositoryId: "origin:repo",
+        workspaceKey: "delta-handoff",
+        relativeLocator: "delta-handoff",
+        checkoutRef: { kind: "detached", head: "handoff-head" },
+      }],
+    } as const;
+    const events = [
+      { type: "cycle:start", cycleId: "cycle-20260718-000000-1", storyId: "US-LEGACY", ts: 1 },
+      { type: "worktree:allocated", workspace, ts: 2 },
+      { type: "delta:terminal", delegationId: "handoff", outcome: "handoff_ready", terminalBinding: "handoff_only", deliveryDisposition: "owner_continue", ts: 3 },
+    ];
+    const deps = makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([
+          { path: "/fake/repo/.roll/loop/worktrees/delta-handoff", head: "handoff-head" },
+          { path: "/fake/repo/.roll/loop/worktrees/cycle-lookalike", head: "external-head" },
+        ]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    });
+
+    const audit = auditWorktrees(deps);
+    expect(audit.records).toHaveLength(2);
+    expect(capture("en", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
+    expect(capture("zh", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
+  });
+
+  it("freezes EN and ZH output for an unregistered projected member", () => {
+    const workspace = {
+      schema: 1,
+      runId: "delta-unregistered",
+      storyId: "US-LOOP-123",
+      kind: "host_delta",
+      topology: "delta-team",
+      delegationId: "unregistered",
+      members: [{
+        repositoryId: "origin:repo",
+        workspaceKey: "delta-unregistered",
+        relativeLocator: "delta-unregistered",
+        checkoutRef: { kind: "detached", head: "missing-head" },
+      }],
+    } as const;
+    const deps = makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? JSON.stringify({ type: "worktree:allocated", workspace, ts: 1 }) : null,
+      git: (args) => args[0] === "worktree" ? porcelain([]) : "",
+    });
+
+    expect(capture("en", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
+    expect(capture("zh", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
   });
 });

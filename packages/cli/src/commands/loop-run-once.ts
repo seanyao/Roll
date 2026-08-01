@@ -12,10 +12,10 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, branchCanaryVerdict, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { EventBus, assessBacklog, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
 import { isOwnerHeld, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce } from "../runner/index.js";
@@ -39,7 +39,7 @@ import { readLatestResizeSignal } from "../lib/review-score.js";
 import { loopReviewResizeCommand } from "./loop-review-resize.js";
 import { isGuidedRunOnce, parseAllowedCardsEnv, scopeBacklogForAllowedCards } from "../lib/goal-progress.js";
 import { auditWorktrees } from "./worktree-audit.js";
-import { formatCanaryTripReport } from "./worktree-cleanup.js";
+import { formatCanaryTripReport, managedWorkspaceMeasures } from "./worktree-cleanup.js";
 import { writeLatestLoopDigest } from "../lib/morning-report.js";
 import { backfillMergedRuns } from "../lib/runs-backfill.js";
 import { runReconcileTick } from "./loop-reconcile.js";
@@ -1589,31 +1589,18 @@ function isLoopPaused(projectPath: string, slug: string): boolean {
  * after US-LOOP-094/095 is 0-1 worktrees + 0 ephemeral branches.
  */
 function branchCanaryTrips(projectPath: string, slug: string, rt: string, alertsPath: string): boolean {
-  let ephemeralBranchCount = 0;
-  try {
-    const out = execFileSync("git", ["-C", projectPath, "branch", "--format=%(refname:short)"], { encoding: "utf8" });
-    ephemeralBranchCount = out.split("\n").map((s) => s.trim()).filter((b) => b !== "" && isEphemeralBranch(b)).length;
-  } catch {
-    /* best-effort — a git hiccup must not block the cycle */
-  }
-  let worktreeCount = 0;
-  try {
-    // Count only cycle worktree DIRECTORIES — not stray lock/log/tmp files a
-    // readdir would otherwise inflate the count with (→ false canary trip).
-    worktreeCount = readdirSync(join(rt, "worktrees"), { withFileTypes: true })
-      .filter((e) => e.isDirectory()).length;
-  } catch {
-    /* no worktrees dir yet → 0 */
-  }
   const parsed = parseInt(process.env["ROLL_BRANCH_CANARY_MAX"] ?? "", 10);
   const threshold = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BRANCH_CANARY_MAX;
-  const verdict = branchCanaryVerdict({
-    ephemeralBranchCount,
-    worktreeCount,
-    threshold,
-    alreadyPaused: isLoopPaused(projectPath, slug),
-  });
-  if (verdict.shouldPause) {
+  let audit: ReturnType<typeof auditWorktrees> | undefined;
+  try {
+    audit = auditWorktrees({ repoRoot: projectPath, home: process.env["HOME"] ?? "" });
+  } catch {
+    // Inspection is a safety precondition.  Never reinterpret an inspection
+    // failure as an empty directory or a zero-count canary.
+  }
+  const leakSafetyTotal = audit === undefined ? Number.POSITIVE_INFINITY : managedWorkspaceMeasures(audit).leakSafetyTotal;
+  const shouldPause = audit === undefined || audit.inspectionUnavailable === true || leakSafetyTotal > threshold;
+  if (shouldPause) {
     const pauseMarker = join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
     // FIX-1273 AC1: enumerate the EXACT counted branches + loop worktrees with
     // their fresh audit disposition so the pause is auditable and points at the
@@ -1622,17 +1609,15 @@ function branchCanaryTrips(projectPath: string, slug: string, rt: string, alerts
     let msg: string;
     let event: ReturnType<typeof formatCanaryTripReport>["event"] | null = null;
     try {
-      const audit = auditWorktrees({ repoRoot: projectPath, home: process.env["HOME"] ?? "" });
+      if (audit === undefined) throw new Error("worktree inspection unavailable");
       const report = formatCanaryTripReport(audit, threshold, Date.now());
       msg = report.alert;
       event = report.event;
     } catch {
-      // Fall back to the light count if the audit itself hiccups — the pause must
-      // still be written; only the enumeration degrades.
       msg =
-        `# ALERT — loop auto-paused: branch/worktree leak canary tripped (US-LOOP-096 / FIX-1273)\n\n` +
-        `**Leak count**: ${verdict.total} (ephemeral branches ${ephemeralBranchCount} + worktrees ${worktreeCount}) > threshold ${threshold}\n` +
-        `**Safe recovery**: \`roll worktree cleanup --dry-run\` → \`--apply\` → \`roll loop resume\`\n`;
+        `# ALERT — loop auto-paused: managed workspace inspection unavailable (US-LOOP-123)\n\n` +
+        `**Safety state**: unknown; no zero-count fallback is permitted.\n` +
+        `**Recovery**: inspect \`roll worktree audit\` and resolve the registration/truth fault before \`roll loop resume\`.\n`;
     }
     try {
       mkdirSync(dirname(pauseMarker), { recursive: true });
@@ -1653,7 +1638,7 @@ function branchCanaryTrips(projectPath: string, slug: string, rt: string, alerts
       }
     }
   }
-  return verdict.tripped;
+  return shouldPause;
 }
 
 export interface RepoPushableResult {

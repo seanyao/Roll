@@ -2,9 +2,8 @@
  * FIX-1273 — `roll worktree cleanup`: safe recovery for branch-canary historical
  * worktree pressure.
  *
- * The branch/worktree canary counts every ephemeral branch + every dir under
- * `.roll/loop/worktrees` and pauses the loop over threshold — INCLUDING inactive
- * worktrees deliberately preserved for unpublished commits or dirty recovery.
+ * The leak-safety canary counts anomalous projection members and unattached
+ * ephemeral branches; managed capacity separately reports every retained member.
  * `roll worktree audit` already proves whether a worktree is a merged, clean
  * `disposable_candidate`, but offered no actionable safe cleanup, so operators
  * force-removed by hand.
@@ -17,8 +16,8 @@
  *     disposition, and the MINIMAL candidate set needed to return under the
  *     canary threshold. It never mutates git state.
  *   - `--apply`: re-run the audit immediately before EVERY removal and require
- *     the same path + head + inactive + no-tracked-dirt + merged-ancestry +
- *     `disposable_candidate` disposition. It removes only that verified worktree
+ *     the same projection run/member, registration, expected head, clean Git
+ *     state, and `safe_to_release` verdict. It removes only that verified worktree
  *     through git, prunes registration, and emits structured events. A changed
  *     head, new dirt, missing path, or concurrent activation fails closed
  *     (fail-loud refusal) without substituting a preserved worktree.
@@ -30,7 +29,7 @@ import { homedir } from "node:os";
 import { appendFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_BRANCH_CANARY_MAX } from "@roll/core";
-import type { RollEvent } from "@roll/spec";
+import { resolveLang, type RollEvent } from "@roll/spec";
 import {
   auditWorktrees,
   type WorktreeAuditDeps,
@@ -43,18 +42,14 @@ import {
 /** A single audit-proven removable worktree in a cleanup plan. */
 export interface CleanupCandidate {
   path: string;
+  /** Projection identity revalidated before a destructive release. */
+  runId: string;
+  memberLocator: string;
   cycleId?: string;
   branch?: string;
   /** HEAD the audit observed; `--apply` refuses if the fresh head differs. */
   expectedHead: string;
-  reason: "disposable_candidate" | "orphan_reclaimable";
-  /**
-   * FIX-1460 (#1468): how this path is reclaimed. `git_worktree` (default) uses
-   * `git worktree remove` for a registered worktree; `rm_dir` uses a bounded
-   * directory delete for an ORPHAN dir that git no longer registers (there is no
-   * worktree for git to remove). Absent ⇒ `git_worktree` (backwards compatible).
-   */
-  reclaim?: "git_worktree" | "rm_dir";
+  reason: "disposable_candidate";
 }
 
 /**
@@ -91,8 +86,12 @@ export interface WorktreeCleanupPlan {
   generatedAt: string;
   /** Canary threshold in force when the plan was built. */
   threshold: number;
-  /** Total the canary sees: ephemeral branches + loop worktree dirs. */
-  canaryTotal: number;
+  /** Cleanup capacity policy input: retained members plus ephemeral branches. */
+  cleanupCapacityTotal: number;
+  /** Structural anomalies only; this is the loop pause circuit-breaker input. */
+  leakSafetyTotal: number;
+  /** All projection-managed members retained by the runtime, healthy or anomalous. */
+  managedCapacity: number;
   /** Canary total once the plan's candidates are removed. */
   projectedTotal: number;
   /** The exact ephemeral branches the canary counts (enumerated, not summarised). */
@@ -113,8 +112,6 @@ export interface CleanupRemoval {
   expectedHead: string;
   branch?: string;
   cycleId?: string;
-  /** FIX-1460: how the path was reclaimed (git worktree remove vs bounded rm). */
-  reclaim?: "git_worktree" | "rm_dir";
 }
 
 export interface CleanupRefusal {
@@ -144,19 +141,66 @@ export interface WorktreeCleanupResult {
 
 // ─── planning (pure) ─────────────────────────────────────────────────────────
 
-const MERGED_KINDS = new Set(["ancestor", "patch_equivalent", "final_tree"]);
-
 /** True iff `rec` satisfies EVERY safe-removal invariant on a fresh audit. */
 export function isSafelyDisposable(rec: WorktreeAuditRecord): boolean {
   return (
     rec.owner === "loop" &&
     rec.active === false &&
     rec.dirtyTracked === false &&
+    rec.dirtyUntracked === false &&
     rec.disposition === "disposable_candidate" &&
-    MERGED_KINDS.has(rec.mergeEvidence.kind) &&
+    rec.runId !== undefined &&
+    rec.memberLocator !== undefined &&
+    rec.registration === "registered" &&
+    rec.releaseVerdict === "safe_to_release" &&
     typeof rec.head === "string" &&
     rec.head.length > 0
   );
+}
+
+export interface ManagedWorkspaceMeasures {
+  /** Every projection-owned member currently retained by the runtime. */
+  managedCapacity: number;
+  /** Only anomalous members/refs; this is the leak circuit-breaker input. */
+  leakSafetyTotal: number;
+  anomalousWorktrees: readonly WorktreeAuditRecord[];
+  anomalousBranches: readonly string[];
+  healthyWorktrees: readonly WorktreeAuditRecord[];
+}
+
+function isAnomalousManagedMember(record: WorktreeAuditRecord): boolean {
+  if (record.disposition === "orphan_reclaimable" || record.disposition === "preserved_orphan") return true;
+  if (record.registration === "missing" || record.registration === "unknown" || record.registration === "foreign") return true;
+  // Pre-cutover path-classified records have no projection run state. They stay
+  // readable, but cannot be mistaken for a healthy managed reservation.
+  if (record.runState === undefined) return true;
+  if (record.runState === "legacy_cycle" || record.runState === "stale" || record.runState === "recovery_required" || record.runState === "unknown" || record.runState === "released") return true;
+  return record.releaseVerdict === "preserve_truth_disagreement";
+}
+
+/**
+ * Derive the two deliberately separate control-plane measures from the same
+ * audit projection. A healthy active/handoff/release-requested member consumes
+ * capacity but is not a leak; stale, unregistered, orphaned, and disagreeing
+ * members remain visible to the leak-safety circuit breaker.
+ */
+export function managedWorkspaceMeasures(audit: WorktreeAuditOutput): ManagedWorkspaceMeasures {
+  const managed = audit.records.filter((record) => record.owner === "loop");
+  const anomalousWorktrees = managed.filter(isAnomalousManagedMember);
+  const healthyWorktrees = managed.filter((record) => !isAnomalousManagedMember(record));
+  const healthyBranches = new Set(
+    healthyWorktrees
+      .map((record) => record.branch?.replace(/^refs\/heads\//, ""))
+      .filter((branch): branch is string => branch !== undefined),
+  );
+  const anomalousBranches = audit.ephemeralBranches.filter((branch) => !healthyBranches.has(branch));
+  return {
+    managedCapacity: managed.length,
+    leakSafetyTotal: anomalousWorktrees.length + anomalousBranches.length,
+    anomalousWorktrees,
+    anomalousBranches,
+    healthyWorktrees,
+  };
 }
 
 /**
@@ -238,7 +282,7 @@ export function resolveStandaloneMergedBranches(
 
 /**
  * Build the minimal, deterministic cleanup plan from a FRESH audit. The plan
- * removes ONLY audit-proven `disposable_candidate` loop worktrees plus (FIX-1454)
+ * removes ONLY projection-proven `safe_to_release` loop worktrees plus (FIX-1454)
  * verifiably-merged standalone ephemeral branches, and only as many
  * (worktrees lowest-path-first, then branches by name) as are needed to bring the
  * canary total back under `threshold`. It never selects a path/ref for being old
@@ -250,14 +294,15 @@ export function planWorktreeCleanup(
   standaloneMergedBranches: readonly CleanupBranchCandidate[] = [],
 ): WorktreeCleanupPlan {
   const loopWorktrees = audit.records.filter((r) => r.owner === "loop");
-  const canaryTotal = audit.ephemeralBranches.length + loopWorktrees.length;
-  const excess = canaryTotal - threshold;
+  const measures = managedWorkspaceMeasures(audit);
+  const cleanupCapacityTotal = audit.ephemeralBranches.length + loopWorktrees.length;
+  const excess = cleanupCapacityTotal - threshold;
 
-  // The removable pool: audit-proven safe candidates, deterministically ordered.
-  // FIX-1460: includes reclaimable ORPHAN dirs (deregistered from git) alongside
-  // disposable registered worktrees — each removal drops the canary total by one.
+  // The removable pool: only the shared release selector may authorize a
+  // destructive candidate. Orphans remain visible anomalies and require the
+  // explicit owner-only reclaim command below; they never bypass safe_to_release.
   const pool = audit.records
-    .filter((r) => isSafelyDisposable(r) || isReclaimableOrphan(r))
+    .filter(isSafelyDisposable)
     .sort((a, b) => a.path.localeCompare(b.path));
 
   const branchPool = [...standaloneMergedBranches].sort((a, b) => a.branch.localeCompare(b.branch));
@@ -273,15 +318,14 @@ export function planWorktreeCleanup(
   const chosenPaths = new Set(chosen.map((r) => r.path));
 
   const candidates: CleanupCandidate[] = chosen.map((r) => {
-    const orphan = isReclaimableOrphan(r);
     return {
       path: r.path,
+      runId: r.runId as string,
+      memberLocator: r.memberLocator as string,
       ...(r.cycleId ? { cycleId: r.cycleId } : {}),
       ...(r.branch ? { branch: r.branch } : {}),
-      // An orphan has no registered HEAD; apply skips the head check for rm_dir.
-      expectedHead: orphan ? "" : (r.head as string),
-      reason: orphan ? ("orphan_reclaimable" as const) : ("disposable_candidate" as const),
-      reclaim: orphan ? ("rm_dir" as const) : ("git_worktree" as const),
+      expectedHead: r.head as string,
+      reason: "disposable_candidate",
     };
   });
 
@@ -300,8 +344,10 @@ export function planWorktreeCleanup(
     schema: 1,
     generatedAt: audit.generatedAt,
     threshold,
-    canaryTotal,
-    projectedTotal: canaryTotal - candidates.length - chosenBranches.length,
+    cleanupCapacityTotal,
+    leakSafetyTotal: measures.leakSafetyTotal,
+    managedCapacity: measures.managedCapacity,
+    projectedTotal: cleanupCapacityTotal - candidates.length - chosenBranches.length,
     countedBranches: [...audit.ephemeralBranches],
     countedWorktrees,
     candidates,
@@ -324,8 +370,6 @@ export interface ApplyCleanupOptions {
   audit?: () => WorktreeAuditOutput;
   /** Remove one worktree via git + prune registration. Injectable for tests. */
   removeWorktree?: (repositoryRoot: string, path: string) => { ok: boolean; detail: string };
-  /** FIX-1460: reclaim one orphan loop dir via a bounded rm. Injectable for tests. */
-  reclaimOrphanDir?: (repositoryRoot: string, path: string) => { ok: boolean; detail: string };
   /**
    * FIX-1454: fresh standalone-branch probes, called immediately before EVERY
    * branch deletion so a ref/merge/attach change between plan and apply is caught.
@@ -461,7 +505,6 @@ export async function applyWorktreeCleanup(
   const auditFn =
     options.audit ?? (() => auditWorktrees({ repoRoot: repositoryRoot, home: homedir() }));
   const removeFn = options.removeWorktree ?? defaultRemoveWorktree;
-  const reclaimOrphanFn = options.reclaimOrphanDir ?? defaultReclaimOrphanDir;
   const removeBranchFn = options.removeBranch ?? defaultRemoveBranch;
   const emit = options.emit ?? (() => {});
   const nowMs = options.nowMs ?? (() => Date.now());
@@ -481,11 +524,7 @@ export async function applyWorktreeCleanup(
     };
 
     if (!rec) {
-      refuse(
-        candidate.reclaim === "rm_dir"
-          ? "missing: orphan dir no longer present (already reclaimed)"
-          : "missing: worktree no longer registered (already removed or pruned)",
-      );
+      refuse("missing: worktree no longer registered (already removed or pruned)");
       continue; // fail closed for this candidate; never substitute another
     }
     if (rec.active) {
@@ -493,38 +532,8 @@ export async function applyWorktreeCleanup(
       continue;
     }
 
-    // FIX-1460 (#1468): ORPHAN reclaim path. A deregistered dir has no git
-    // metadata, so head/dirty checks do not apply — safety is the fresh audit
-    // STILL classifying it `orphan_reclaimable` (owning cycle provably delivered).
-    // Reclaim is a bounded directory delete, never `git worktree remove`.
-    if (candidate.reclaim === "rm_dir") {
-      if (!isReclaimableOrphan(rec)) {
-        refuse(`disposition: fresh audit reports '${rec.disposition}' (orphan no longer provably delivered)`);
-        continue;
-      }
-      const removal: CleanupRemoval = {
-        path: rec.path,
-        expectedHead: "",
-        reclaim: "rm_dir",
-        ...(rec.cycleId ? { cycleId: rec.cycleId } : {}),
-      };
-      if (options.dryRun) {
-        removed.push(removal);
-        continue;
-      }
-      const result = reclaimOrphanFn(repositoryRoot, rec.path);
-      if (!result.ok) {
-        refuse(`reclaim-failed: ${result.detail}`);
-        continue;
-      }
-      removed.push(removal);
-      emit({
-        type: "worktree_cleanup_applied",
-        path: rec.path,
-        expectedHead: "",
-        ...(rec.cycleId ? { cycleId: rec.cycleId } : {}),
-        ts: nowMs(),
-      });
+    if (rec.runId !== candidate.runId || rec.memberLocator !== candidate.memberLocator) {
+      refuse("projection-changed: run reservation or member locator no longer matches the planned release");
       continue;
     }
 
@@ -535,6 +544,10 @@ export async function applyWorktreeCleanup(
     }
     if (rec.dirtyTracked === true) {
       refuse("dirty: tracked changes appeared after planning");
+      continue;
+    }
+    if (rec.dirtyUntracked !== false) {
+      refuse(rec.dirtyUntracked === "unknown" ? "untracked-unknown: could not confirm no untracked files" : "dirty: untracked files appeared after planning");
       continue;
     }
     if (rec.dirtyTracked === "unknown") {
@@ -549,7 +562,6 @@ export async function applyWorktreeCleanup(
     const removal: CleanupRemoval = {
       path: rec.path,
       expectedHead: candidate.expectedHead,
-      reclaim: "git_worktree",
       ...(rec.branch ? { branch: rec.branch } : {}),
       ...(rec.cycleId ? { cycleId: rec.cycleId } : {}),
     };
@@ -633,36 +645,54 @@ export function formatCanaryTripReport(
   threshold: number,
   nowMs: number,
 ): { alert: string; event: RollEvent } {
-  const worktrees = audit.records
-    .filter((r) => r.owner === "loop")
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  const measures = managedWorkspaceMeasures(audit);
+  const worktrees = measures.anomalousWorktrees
     .map((r) => ({ path: r.path, disposition: r.disposition }));
-  const total = audit.ephemeralBranches.length + worktrees.length;
+  const total = measures.leakSafetyTotal;
 
   const disposable = worktrees.filter((w) => w.disposition === "disposable_candidate").length;
-  const branchLines = audit.ephemeralBranches.length
-    ? audit.ephemeralBranches.map((b) => `  - branch ${b}`).join("\n")
+  const branchLines = measures.anomalousBranches.length
+    ? measures.anomalousBranches.map((b) => `  - ${zh ? "分支" : "branch"} ${b}`).join("\n")
     : "  - (none)";
   const wtLines = worktrees.length
-    ? worktrees.map((w) => `  - worktree ${w.path} [${w.disposition}]`).join("\n")
+    ? worktrees.map((w) => `  - ${zh ? "工作树" : "worktree"} ${w.path} [${w.disposition}]`).join("\n")
+    : "  - (none)";
+  const capacityLines = measures.healthyWorktrees.length
+    ? measures.healthyWorktrees.map((w) => `  - ${w.path} [${w.runState ?? "legacy"}]`).join("\n")
     : "  - (none)";
 
-  const alert =
-    `# ALERT — loop auto-paused: branch/worktree leak canary tripped (US-LOOP-096 / FIX-1273)\n\n` +
-    `**Leak count**: ${total} (ephemeral branches ${audit.ephemeralBranches.length} + ` +
-    `worktrees ${worktrees.length}) > threshold ${threshold}\n\n` +
-    `**Counted ephemeral branches**:\n${branchLines}\n\n` +
-    `**Counted loop worktrees (with audit disposition)**:\n${wtLines}\n\n` +
-    `**Safe recovery**: ${disposable} worktree(s) audit as \`disposable_candidate\`.\n` +
-    `  1. Inspect + plan (no mutation): \`roll worktree cleanup --dry-run\`\n` +
-    `  2. Apply the audited minimal set:  \`roll worktree cleanup --apply\`\n` +
-    `  3. Resume the loop explicitly:     \`roll loop resume\`\n` +
-    `  Preserved (unpublished / dirty / active / external) worktrees are NEVER removed.\n`;
+  const alert = zh
+    ? `# ALERT — loop 自动暂停：泄漏安全 canary 已触发（US-LOOP-096 / FIX-1273）\n\n` +
+      `**泄漏安全计数**：${total}（异常临时分支 ${measures.anomalousBranches.length} + 异常受管工作树 ${worktrees.length}）> 阈值 ${threshold}\n` +
+      `**受管容量**：${measures.managedCapacity} 个保留成员（健康 ${measures.healthyWorktrees.length}，异常 ${worktrees.length}）。健康 handoff 只占容量，不算泄漏。\n\n` +
+      `**异常临时分支**：\n${branchLines}\n\n` +
+      `**异常受管工作树（含审计处置）**：\n${wtLines}\n\n` +
+      `**健康保留容量**：\n${capacityLines}\n\n` +
+      `**安全恢复**：${disposable} 个工作树审计为 \`disposable_candidate\`。\n` +
+      `  1. 检查并规划（不修改）：\`roll worktree cleanup --dry-run\`\n` +
+      `  2. 应用经审计的最小集合：\`roll worktree cleanup --apply\`\n` +
+      `  3. 显式恢复 loop：\`roll loop resume\`\n` +
+      `  保留的（未发布 / 脏 / 活跃 / 外部）工作树绝不会被删除。\n`
+    : `# ALERT — loop auto-paused: leak-safety canary tripped (US-LOOP-096 / FIX-1273)\n\n` +
+      `**Leak-safety count**: ${total} (anomalous ephemeral branches ${measures.anomalousBranches.length} + ` +
+      `anomalous managed worktrees ${worktrees.length}) > threshold ${threshold}\n` +
+      `**Managed capacity**: ${measures.managedCapacity} retained member(s) (${measures.healthyWorktrees.length} healthy, ${worktrees.length} anomalous). Healthy handoff is capacity, not a leak.\n\n` +
+      `**Anomalous ephemeral branches**:\n${branchLines}\n\n` +
+      `**Anomalous managed worktrees (with audit disposition)**:\n${wtLines}\n\n` +
+      `**Healthy retained capacity**:\n${capacityLines}\n\n` +
+      `**Safe recovery**: ${disposable} worktree(s) audit as \`disposable_candidate\`.\n` +
+      `  1. Inspect + plan (no mutation): \`roll worktree cleanup --dry-run\`\n` +
+      `  2. Apply the audited minimal set:  \`roll worktree cleanup --apply\`\n` +
+      `  3. Resume the loop explicitly:     \`roll loop resume\`\n` +
+      `  Preserved (unpublished / dirty / active / external) worktrees are NEVER removed.\n`;
 
   const event: RollEvent = {
     type: "branch_canary_tripped",
     total,
     threshold,
-    ephemeralBranches: [...audit.ephemeralBranches],
+    managedCapacity: measures.managedCapacity,
+    ephemeralBranches: [...measures.anomalousBranches],
     worktrees,
     ts: nowMs,
   };
@@ -682,50 +712,50 @@ function rel(p: string): string {
 }
 
 function renderPlanHuman(plan: WorktreeCleanupPlan, mode: "dry-run" | "apply"): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
   const lines: string[] = [];
-  lines.push(`Worktree cleanup (${mode})`);
+  lines.push(zh ? `工作树清理（${mode === "dry-run" ? "演练" : "执行"}）` : `Worktree cleanup (${mode})`);
   lines.push("");
-  lines.push(`  canary count: ${plan.canaryTotal} (threshold ${plan.threshold})`);
+  lines.push(`  ${zh ? "泄漏安全计数" : "leak-safety count"}: ${plan.leakSafetyTotal} (${zh ? "阈值" : "threshold"} ${plan.threshold})`);
+  lines.push(`  ${zh ? "受管容量" : "managed capacity"}: ${plan.managedCapacity} ${zh ? "个保留成员" : "retained member(s)"}`);
   lines.push(
-    `  counted: ${plan.countedBranches.length} ephemeral branch(es) + ` +
-      `${plan.countedWorktrees.length} loop worktree(s)`,
+    zh
+      ? `  清理容量：${plan.countedBranches.length} 个临时分支 + ${plan.countedWorktrees.length} 个 loop 工作树`
+      : `  cleanup capacity: ${plan.countedBranches.length} ephemeral branch(es) + ${plan.countedWorktrees.length} loop worktree(s)`,
   );
   lines.push("");
 
-  lines.push("counted ephemeral branches");
+  lines.push(zh ? "计入清理容量的临时分支" : "counted ephemeral branches");
   if (plan.countedBranches.length === 0) lines.push("  (none)");
   for (const b of plan.countedBranches) lines.push(`  ${b}`);
   lines.push("");
 
-  lines.push("counted loop worktrees");
+  lines.push(zh ? "计入清理容量的 loop 工作树" : "counted loop worktrees");
   if (plan.countedWorktrees.length === 0) lines.push("  (none)");
   for (const w of plan.countedWorktrees) lines.push(`  ${rel(w.path)}  [${w.disposition}]`);
   lines.push("");
 
   if (plan.candidates.length === 0 && plan.branchCandidates.length === 0) {
-    if (plan.canaryTotal <= plan.threshold) {
-      lines.push("No cleanup needed — canary count is already within threshold.");
+    if (plan.cleanupCapacityTotal <= plan.threshold) {
+      lines.push(zh ? "无需清理——清理容量已在阈值内。" : "No cleanup needed — cleanup capacity is already within threshold.");
     } else {
-      lines.push(
-        "No disposable candidates — every counted worktree is preserved " +
+      lines.push(zh
+        ? "没有可释放候选——所有计入的工作树均被保留（未发布 / 脏 / 活跃 / 外部），且没有可验证已交付的独立分支。请人工检查保留的工作树和分支。"
+        : "No disposable candidates — every counted worktree is preserved " +
           "(unpublished / dirty / active / external) and no counted standalone branch " +
-          "is verifiably merged. Canary pressure cannot be cleared by cleanup; " +
-          "inspect the preserved worktrees/branches manually.",
-      );
+          "is verifiably delivered. Inspect the preserved worktrees/branches manually.");
     }
     lines.push("");
     return lines.join("\n").trimEnd() + "\n";
   }
 
-  lines.push(`minimal candidate set (${plan.canaryTotal} → ${plan.projectedTotal})`);
+  lines.push(zh ? `最小候选集（${plan.cleanupCapacityTotal} → ${plan.projectedTotal}）` : `minimal candidate set (${plan.cleanupCapacityTotal} → ${plan.projectedTotal})`);
   for (const c of plan.candidates) {
     const tags = [c.branch, c.cycleId].filter(Boolean).join(" ");
-    const label = c.reclaim === "rm_dir" ? "orphan_reclaimable · bounded rm" : "disposable_candidate";
-    const kind = c.reclaim === "rm_dir" ? "orphan  " : "worktree";
-    lines.push(`  ${kind} ${rel(c.path)}${tags ? "  " + tags : ""}  [${label}]`);
+    lines.push(`  ${zh ? "工作树" : "worktree"} ${rel(c.path)}${tags ? "  " + tags : ""}  [disposable_candidate]`);
   }
   for (const b of plan.branchCandidates) {
-    lines.push(`  branch   ${b.branch}  ${b.expectedSha.slice(0, 9)}  [merged: ${b.mergeKind}]`);
+    lines.push(`  ${zh ? "分支" : "branch"}   ${b.branch}  ${b.expectedSha.slice(0, 9)}  [${zh ? "已交付" : "merged"}: ${b.mergeKind}]`);
   }
   lines.push("");
 
@@ -734,46 +764,47 @@ function renderPlanHuman(plan: WorktreeCleanupPlan, mode: "dry-run" | "apply"): 
   // reclaims one explicitly after review.
   const preservedOrphans = plan.preserved.filter((p) => p.disposition === "preserved_orphan");
   if (preservedOrphans.length > 0) {
-    lines.push(`preserved orphan dirs (${preservedOrphans.length}) — visible + counted, never auto-deleted`);
+    lines.push(zh ? `保留的孤儿目录（${preservedOrphans.length}）——可见且计数，绝不自动删除` : `preserved orphan dirs (${preservedOrphans.length}) — visible + counted, never auto-deleted`);
     for (const p of preservedOrphans) lines.push(`  ${rel(p.path)}  — ${p.reason}`);
-    lines.push("  Reclaim one after review with: roll worktree cleanup --reclaim-orphan <path>");
+    lines.push(zh ? "  审查后使用此命令回收一个：roll worktree cleanup --reclaim-orphan <path>" : "  Reclaim one after review with: roll worktree cleanup --reclaim-orphan <path>");
     lines.push("");
   }
 
   if (mode === "dry-run") {
-    lines.push("Dry run — no git state changed.");
-    lines.push("Apply the audited set with: roll worktree cleanup --apply");
+    lines.push(zh ? "演练——未修改 Git 状态。" : "Dry run — no git state changed.");
+    lines.push(zh ? "使用此命令应用经审计的集合：roll worktree cleanup --apply" : "Apply the audited set with: roll worktree cleanup --apply");
     lines.push("");
   }
   return lines.join("\n").trimEnd() + "\n";
 }
 
 function renderResultHuman(result: WorktreeCleanupResult): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
   const lines: string[] = [];
-  lines.push("Worktree cleanup (apply)");
+  lines.push(zh ? "工作树清理（执行）" : "Worktree cleanup (apply)");
   lines.push("");
   if (result.removed.length > 0) {
-    lines.push(`removed worktrees (${result.removed.length})`);
+    lines.push(zh ? `已移除工作树（${result.removed.length}）` : `removed worktrees (${result.removed.length})`);
     for (const r of result.removed) lines.push(`  ${rel(r.path)}  ${r.expectedHead}`);
     lines.push("");
   }
   if (result.branchesRemoved.length > 0) {
-    lines.push(`removed branches (${result.branchesRemoved.length})`);
+    lines.push(zh ? `已移除分支（${result.branchesRemoved.length}）` : `removed branches (${result.branchesRemoved.length})`);
     for (const b of result.branchesRemoved) lines.push(`  ${b.branch}  ${b.expectedSha.slice(0, 9)}  [${b.mergeKind}]`);
     lines.push("");
   }
   if (result.refused.length > 0) {
-    lines.push(`refused — fail closed, no substitution (${result.refused.length})`);
+    lines.push(zh ? `已拒绝——故障关闭，绝不替换（${result.refused.length}）` : `refused — fail closed, no substitution (${result.refused.length})`);
     for (const r of result.refused) lines.push(`  ${rel(r.path)}  ${r.reason}`);
     lines.push("");
   }
   const anyRemoved = result.removed.length > 0 || result.branchesRemoved.length > 0;
   if (!anyRemoved && result.refused.length === 0) {
-    lines.push("Nothing to remove — no revalidated candidates.");
+    lines.push(zh ? "无可移除项——没有重新验证通过的候选。" : "Nothing to remove — no revalidated candidates.");
     lines.push("");
   }
   if (anyRemoved) {
-    lines.push("Resume the loop explicitly when ready: roll loop resume");
+    lines.push(zh ? "准备好后显式恢复 loop：roll loop resume" : "Resume the loop explicitly when ready: roll loop resume");
     lines.push("");
   }
   return lines.join("\n").trimEnd() + "\n";
@@ -809,8 +840,7 @@ export const CLEANUP_USAGE =
   "  --reclaim-orphan <path>  (FIX-1460) bounded-rm ONE named orphan loop dir\n" +
   "             (deregistered from git; delivery not auto-provable) after you\n" +
   "             review it. Fails closed unless it is an inactive loop orphan\n" +
-  "             inside .roll/loop/worktrees. Auto-reclaim of provably-delivered\n" +
-  "             orphans happens under --apply.\n" +
+  "             inside .roll/loop/worktrees. Orphans never enter --apply.\n" +
   "\n" +
   "  安全清理:仅移除审计判定为已合并、干净、非活跃的 disposable_candidate;\n" +
   "  先跑 --dry-run,再 --apply,最后手动 roll loop resume。";

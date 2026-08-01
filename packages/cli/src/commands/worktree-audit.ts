@@ -13,8 +13,9 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { isEphemeralBranch } from "@roll/core";
+import { isEphemeralBranch, managedWorkspaceReleaseVerdict, projectManagedWorkspaceRuns, type ManagedWorkspaceRunView } from "@roll/core";
 import { resolveIntegrationBranch } from "@roll/infra";
+import { parseEventLine, resolveLang, type RollEvent } from "@roll/spec";
 
 // ─── types (shared with the spec) ───────────────────────────────────────────
 
@@ -66,6 +67,12 @@ export interface WorktreeAuditRecord {
   active: boolean;
   disposition: WorktreeDisposition;
   reason: string;
+  /** US-LOOP-123: projection identity, never inferred from a path name. */
+  runId?: string;
+  memberLocator?: string;
+  runState?: string;
+  registration?: "registered" | "missing" | "unknown" | "foreign";
+  releaseVerdict?: "safe_to_release" | "preserve_active" | "preserve_unmerged" | "preserve_pending_evidence" | "preserve_truth_disagreement" | "preserve_unknown";
 }
 
 export interface WorktreeAuditOutput {
@@ -80,6 +87,8 @@ export interface WorktreeAuditOutput {
    * SOLE authority over what the canary sees, never a separate ad-hoc count.
    */
   ephemeralBranches: string[];
+  /** A missing inspection is a safety fault, never an empty managed set. */
+  inspectionUnavailable?: boolean;
   summary: {
     total: number;
     loop: number;
@@ -91,6 +100,12 @@ export interface WorktreeAuditOutput {
     /** FIX-1273: ephemeral local branch count (canary's other addend). */
     ephemeralBranches: number;
   };
+}
+
+interface ProjectedMember {
+  readonly run: ManagedWorkspaceRunView;
+  readonly locator: string;
+  readonly expectedHead?: string;
 }
 
 // ─── dependency hooks (injectable for tests) ──────────────────────────────
@@ -125,16 +140,12 @@ export interface WorktreeAuditDeps {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function git(args: string[], cwd: string): string {
-  try {
-    return execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 16 * 1024 * 1024,
-    }).trimEnd();
-  } catch {
-    return "";
-  }
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 16 * 1024 * 1024,
+  }).trimEnd();
 }
 
 function readFileSafe(p: string): string | null {
@@ -199,6 +210,84 @@ function readCycleContext(eventsPath: string, deps: WorktreeAuditDeps): Map<stri
     }
   }
   return map;
+}
+
+function readEvents(eventsPath: string, deps: WorktreeAuditDeps): RollEvent[] {
+  const text = deps.readFile ? deps.readFile(eventsPath) : readFileSafe(eventsPath);
+  if (!text) return [];
+  return text.split("\n").map(parseEventLine).filter((event): event is RollEvent => event !== null);
+}
+
+/**
+ * Materialise the shared projection at the filesystem boundary.  Legacy cycles
+ * are adapted by the core projection's run id, not by scanning a prefix.
+ */
+function projectedMembers(events: readonly RollEvent[]): ProjectedMember[] {
+  const members: ProjectedMember[] = [];
+  for (const run of projectManagedWorkspaceRuns(events)) {
+    if (run.workspace !== undefined) {
+      for (const member of run.workspace.members) {
+        members.push({ run, locator: member.relativeLocator, expectedHead: member.checkoutRef.head });
+      }
+    } else if (run.state === "legacy_cycle") {
+      // The legacy adapter is deliberately bounded to the event identity.  It
+      // does not promote an arbitrary `cycle-*` directory into Roll ownership.
+      members.push({ run, locator: run.runId });
+    }
+  }
+  return members;
+}
+
+function withinManagedRoot(repoRoot: string, locator: string): string | undefined {
+  const root = resolve(repoRoot, ".roll", "loop", "worktrees");
+  const path = resolve(root, locator);
+  return path.startsWith(root + "/") ? path : undefined;
+}
+
+/**
+ * Submodules own separate Git registrations.  Looking only at the superproject
+ * list would turn every real submodule checkout into a false orphan, while the
+ * `<key>.submodules` directory itself is intentionally never a member.
+ */
+function memberRegistration(path: string, locator: string, deps: WorktreeAuditDeps): "registered" | "missing" | "unknown" {
+  if (!locator.includes(".submodules/")) return "missing";
+  try {
+    const g = deps.git ?? git;
+    const listed = g(["-C", path, "worktree", "list", "--porcelain"], path);
+    return listed
+      .split("\n")
+      .some((line) => line.startsWith("worktree ") && resolve(line.slice("worktree ".length).trim()) === resolve(path))
+      ? "registered"
+      : "missing";
+  } catch {
+    return "unknown";
+  }
+}
+
+function deliveryFacts(events: readonly RollEvent[], runId: string): {
+  delivery: "merged" | "unmerged" | "unknown";
+  attest: "accepted" | "missing" | "unknown";
+  factsAgree: boolean;
+} {
+  let merged = false;
+  let unmerged = false;
+  let accepted = false;
+  let missing = false;
+  for (const event of events) {
+    if ("cycleId" in event && event.cycleId === runId) {
+      if (event.type === "delivery:merge_confirmed") merged = true;
+      if (event.type === "delivery:abandoned") unmerged = true;
+      if (event.type === "attest:gate") {
+        if (event.verdict === "produced") accepted = true;
+        else missing = true;
+      }
+    }
+  }
+  return {
+    delivery: merged ? "merged" : unmerged ? "unmerged" : "unknown",
+    attest: accepted ? "accepted" : missing ? "missing" : "unknown",
+    factsAgree: !(merged && unmerged) && !(accepted && missing),
+  };
 }
 
 function extractCycleId(dirName: string): string | undefined {
@@ -489,13 +578,24 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
   const integrationBranch = deps.integrationBranch ?? resolveIntegrationBranch(repoRoot);
 
   // 1. Parse `git worktree list --porcelain`
-  const wtOutput = deps.git
-    ? deps.git(["worktree", "list", "--porcelain"], repoRoot)
-    : git(["worktree", "list", "--porcelain"], repoRoot);
+  let inspectionUnavailable = false;
+  let wtOutput = "";
+  try {
+    wtOutput = deps.git
+      ? deps.git(["worktree", "list", "--porcelain"], repoRoot)
+      : git(["worktree", "list", "--porcelain"], repoRoot);
+  } catch {
+    inspectionUnavailable = true;
+  }
 
   // 2. Read events.ndjson for cycle context
   const eventsPath = join(repoRoot, ".roll", "loop", "events.ndjson");
   const cycles = readCycleContext(eventsPath, deps);
+  const events = readEvents(eventsPath, deps);
+  const projectionMembers = projectedMembers(events);
+  // Once the lifecycle vocabulary exists, it is the sole ownership authority.
+  // Empty historical ledgers retain the pre-cutover read-compatible surface.
+  const projectionEnabled = events.some((event) => event.type.startsWith("worktree:"));
 
   // 3. Parse worktree entries
   interface RawWorktree { path: string; head: string; branch: string; }
@@ -523,16 +623,22 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
 
   // 4. Build records
   const records: WorktreeAuditRecord[] = [];
+  const seenProjectedLocators = new Set<string>();
 
   for (const entry of entries) {
     const absPath = resolve(entry.path);
-    const owner = classifyOwner(absPath, repoRoot);
+    const projected = projectionMembers.find((member) => withinManagedRoot(repoRoot, member.locator) === absPath);
+    const owner = projected !== undefined ? "loop" : projectionEnabled ? "external" : classifyOwner(absPath, repoRoot);
 
     let cycleId: string | undefined;
     let storyId: string | undefined;
     let outcome: string | undefined;
 
-    if (owner === "loop") {
+    if (projected !== undefined) {
+      seenProjectedLocators.add(projected.locator);
+      cycleId = projected.run.kind === "cycle" ? projected.run.runId : undefined;
+      storyId = projected.run.storyId;
+    } else if (owner === "loop") {
       cycleId = extractCycleId(basename(absPath));
       if (cycleId) {
         const ce = cycles.get(cycleId);
@@ -546,7 +652,9 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     const dirty = detectDirty(absPath, deps);
     const ahead = countAhead(absPath, deps, integrationBranch);
     const mergeEvidence = detectMergeEvidence(absPath, entry.branch || undefined, deps, integrationBranch);
-    const active = isActiveCycle(cycleId, repoRoot, deps);
+    const active = projected !== undefined
+      ? projected.run.state === "active" || projected.run.state === "active_unstarted"
+      : isActiveCycle(cycleId, repoRoot, deps);
 
     const baseRec: WorktreeAuditRecord = {
       path: absPath,
@@ -563,16 +671,52 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
       active,
       disposition: "preserved_needs_review",
       reason: "",
+      ...(projected === undefined
+        ? {}
+        : {
+            runId: projected.run.runId,
+            memberLocator: projected.locator,
+            runState: projected.run.state,
+            registration: "registered" as const,
+          }),
     };
 
-    const disp = classifyDisposition(baseRec);
-    baseRec.disposition = disp.disposition;
-    baseRec.reason = disp.reason;
+    if (projected !== undefined) {
+      const facts = deliveryFacts(events, projected.run.runId);
+      const release = managedWorkspaceReleaseVerdict({
+        runState: projected.run.state,
+        ...facts,
+        members: [{
+          relativeLocator: projected.locator,
+          registration: "registered",
+          activity: active ? "active" : "inactive",
+          head: projected.expectedHead === undefined || entry.head === projected.expectedHead ? "expected" : "mismatch",
+          cleanliness: dirty.dirtyTracked === false && dirty.dirtyUntracked === false ? "clean" : dirty.dirtyTracked === "unknown" || dirty.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+        }],
+      });
+      baseRec.releaseVerdict = release.verdict;
+      if (release.verdict === "safe_to_release") {
+        baseRec.disposition = "disposable_candidate";
+        baseRec.reason = "projection confirms merged delivery, accepted attest, and a clean registered member";
+      } else if (release.verdict === "preserve_active") {
+        baseRec.disposition = "active";
+        baseRec.reason = "projection retains an active delivery reservation";
+      } else {
+        baseRec.disposition = "preserved_needs_review";
+        baseRec.reason = `projection release verdict: ${release.verdict}`;
+      }
+    } else {
+      const disp = classifyDisposition(baseRec);
+      baseRec.disposition = disp.disposition;
+      baseRec.reason = disp.reason;
+    }
 
     records.push(baseRec);
   }
 
-  // 4a. FIX-1460 (#1468): scan `.roll/loop/worktrees` on disk for ORPHAN dirs —
+  // 4a. Legacy-only orphan scan. New lifecycle projections never inspect raw
+  // directories as ownership evidence: an unregistered projected member below
+  // remains a first-class preserved record instead.
   // present on disk but absent from `git worktree list` above. These are what the
   // runtime canary counts, so surfacing them here keeps the two counters in sync
   // and stops the leak (a deregistered dir that pauses the loop but is invisible
@@ -581,9 +725,91 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
   // Dedup by realpath — `git worktree list` returns realpath'd paths while the
   // scan joins onto repoRoot; a symlinked prefix (e.g. macOS /tmp→/private/tmp)
   // must not make a registered worktree look like an orphan (double-count).
-  const registeredLoopPaths = new Set(records.map((r) => realpathSafe(resolve(r.path))));
-  for (const orphan of scanOrphanLoopWorktrees(repoRoot, registeredLoopPaths, cycles, deps)) {
-    records.push(orphan);
+  if (!projectionEnabled) {
+    const registeredLoopPaths = new Set(records.map((r) => realpathSafe(resolve(r.path))));
+    for (const orphan of scanOrphanLoopWorktrees(repoRoot, registeredLoopPaths, cycles, deps)) {
+      records.push(orphan);
+    }
+  } else {
+    for (const member of projectionMembers) {
+      // A legacy cycle is an event-only compatibility view, not a promised
+      // on-disk workspace.  It can identify a registered legacy checkout above,
+      // but an absent historical path must not become a phantom member, consume
+      // capacity, or turn inspection into an unavailable safety fault.
+      if (member.run.workspace === undefined) continue;
+      if (seenProjectedLocators.has(member.locator)) continue;
+      const path = withinManagedRoot(repoRoot, member.locator);
+      if (path === undefined) continue;
+      const registration = memberRegistration(path, member.locator, deps);
+      const facts = deliveryFacts(events, member.run.runId);
+      const release = managedWorkspaceReleaseVerdict({
+        runState: member.run.state,
+        ...facts,
+        members: [{ relativeLocator: member.locator, registration, activity: "unknown", head: "unknown", cleanliness: "unknown" }],
+      });
+      records.push({
+        path,
+        owner: "loop",
+        runId: member.run.runId,
+        memberLocator: member.locator,
+        runState: member.run.state,
+        registration,
+        storyId: member.run.storyId,
+        dirtyTracked: "unknown",
+        dirtyUntracked: "unknown",
+        ahead: null,
+        mergeEvidence: { kind: "unknown" },
+        active: member.run.state === "active" || member.run.state === "active_unstarted",
+        disposition: member.run.state === "active" || member.run.state === "active_unstarted" ? "active" : "preserved_needs_review",
+        releaseVerdict: release.verdict,
+        reason: registration === "registered"
+          ? "submodule member registration was found but its live inspection is unavailable; preserved"
+          : "projection member is not registered in its repository; preserved for recovery",
+      });
+    }
+  }
+
+  // A workspace set is all-or-nothing.  Re-run the pure selector with every
+  // member of each run so a clean primary can never make a dirty submodule an
+  // independent cleanup candidate.
+  const recordsByRun = new Map<string, WorktreeAuditRecord[]>();
+  for (const record of records) {
+    if (record.runId === undefined) continue;
+    const group = recordsByRun.get(record.runId) ?? [];
+    group.push(record);
+    recordsByRun.set(record.runId, group);
+  }
+  for (const [runId, runRecords] of recordsByRun) {
+    const run = projectionMembers.find((member) => member.run.runId === runId)?.run;
+    if (run === undefined) continue;
+    const facts = deliveryFacts(events, runId);
+    const decision = managedWorkspaceReleaseVerdict({
+      runState: run.state,
+      ...facts,
+      members: runRecords.map((record) => {
+        const expected = projectionMembers.find((member) => member.run.runId === runId && member.locator === record.memberLocator)?.expectedHead;
+        return {
+          relativeLocator: record.memberLocator ?? "unknown",
+          registration: record.registration ?? "unknown",
+          activity: record.active ? "active" : "inactive",
+          head: expected === undefined || record.head === expected ? "expected" : record.head === undefined ? "unknown" : "mismatch",
+          cleanliness: record.dirtyTracked === false && record.dirtyUntracked === false ? "clean" : record.dirtyTracked === "unknown" || record.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+        };
+      }),
+    });
+    for (const record of runRecords) {
+      record.releaseVerdict = decision.verdict;
+      if (decision.verdict === "safe_to_release") {
+        record.disposition = "disposable_candidate";
+        record.reason = "projection confirms every workspace member is release-safe";
+      } else if (decision.verdict === "preserve_active") {
+        record.disposition = "active";
+        record.reason = "projection retains an active delivery reservation";
+      } else {
+        record.disposition = "preserved_needs_review";
+        record.reason = `projection release verdict: ${decision.verdict}`;
+      }
+    }
   }
 
   // 4b. Enumerate the EXACT ephemeral local branches the canary counts. The
@@ -600,9 +826,10 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
       .filter((b) => b !== "" && isEphemeralBranch(b))
       .sort();
   } catch {
-    // A git hiccup while listing branches must not topple the audit — the
-    // canary/cleanup surface simply sees zero enumerated branches.
+    // A branch list failure leaves the canary's total unknown. Preserve the
+    // readable audit but flag it so callers pause rather than treating it as 0.
     ephemeralBranches = [];
+    inspectionUnavailable = true;
   }
 
   // 5. Summary
@@ -629,26 +856,31 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     records,
     ephemeralBranches,
     summary,
+    ...(inspectionUnavailable || (projectionEnabled && records.some((record) => record.registration === "missing" || record.registration === "unknown"))
+      ? { inspectionUnavailable: true }
+      : {}),
   };
 }
 
 // ─── human output ───────────────────────────────────────────────────────────
 
 function renderHuman(output: WorktreeAuditOutput): string {
-  const lines: string[] = ["Worktree audit", ""];
+  const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+  const zh = lang === "zh";
+  const lines: string[] = [zh ? "工作树审计" : "Worktree audit", ""];
 
-  lines.push(`  total: ${output.summary.total}`);
-  lines.push(`  loop: ${output.summary.loop}`);
-  lines.push(`  manual: ${output.summary.manual}`);
-  if (output.summary.external > 0) lines.push(`  external: ${output.summary.external}`);
-  lines.push(`  active: ${output.summary.active}`);
-  lines.push(`  disposable candidates: ${output.summary.disposableCandidates}`);
-  lines.push(`  preserved: ${output.summary.preserved}`);
-  lines.push(`  ephemeral branches: ${output.summary.ephemeralBranches}`);
+  lines.push(`  ${zh ? "总计" : "total"}: ${output.summary.total}`);
+  lines.push(`  ${zh ? "受管" : "loop"}: ${output.summary.loop}`);
+  lines.push(`  ${zh ? "手动" : "manual"}: ${output.summary.manual}`);
+  if (output.summary.external > 0) lines.push(`  ${zh ? "外部" : "external"}: ${output.summary.external}`);
+  lines.push(`  ${zh ? "活跃" : "active"}: ${output.summary.active}`);
+  lines.push(`  ${zh ? "可释放候选" : "disposable candidates"}: ${output.summary.disposableCandidates}`);
+  lines.push(`  ${zh ? "保留" : "preserved"}: ${output.summary.preserved}`);
+  lines.push(`  ${zh ? "临时分支" : "ephemeral branches"}: ${output.summary.ephemeralBranches}`);
   lines.push("");
 
   if (output.ephemeralBranches.length > 0) {
-    lines.push("ephemeral branches (canary-counted)");
+    lines.push(zh ? "临时分支（canary 计数）" : "ephemeral branches (canary-counted)");
     for (const b of output.ephemeralBranches) lines.push(`  ${b}`);
     lines.push("");
   }
