@@ -930,16 +930,26 @@ API key secret — 你配置的 agent 对应的那个。
 
 两种模式共存：GHA 工作流提供即时反馈，`roll loop pr-inbox` 作为安全网兜底。
 
-## Session 清理
+## 受管交付工作区与安全释放
 
-每轮 loop 结束时，会自动清理本地残留的 worktree：
+每一次 Roll 自有交付都是一个 **DeliveryRun**，在
+`<project>/.roll/loop/worktrees/` 下拥有一个受管 WorkspaceSet。普通 cycle 使用
+`cycle-<id>`；host-guided Delta 使用 `delta-<delegation-id>`；Skill dispatch 使用
+由父运行持有的 `dispatch-<run-id>` 集合。submodule checkout 是同一集合的成员，
+不是可以单独清理的容器目录。运行会在 Builder 开始前持有 Story reservation；只有
+分配命令返回的 detached checkout 与 publish ref 可以作为 Builder 目标。
 
-- `.claude/worktrees/` 下，分支已完全合入 `main` 的目录会被删除
-  （`git worktree remove --force` + `git branch -D`）。
-- 随后执行 `git worktree prune` 清理元数据。
+`handoff_ready` 只是 Delta 协议交接，不是 Delivered 或 Done。它会保留 reservation
+和工作区，直到 owner 完成正常的 PR/CI/attest 流程。只有 fresh 的全成员审计同时确认
+注册、expected HEAD、非活动、tracked/untracked 都干净、已确认合并且 attest 已接受，
+才能释放。`roll worktree cleanup --dry-run` 只展示审计得出的候选集合；`--apply` 在
+每一次移除前重查所有事实，任一变化即拒绝，绝不替换为别的路径。
 
-这样可以保持 `git worktree list` 干净，防止 `.claude/worktrees/` 随时间积累。
-分支仍领先于 `main` 的活跃 worktree 不受影响。
+旧的 `.worktrees/*`、`../wt-*` 与其他外部/手动 checkout 只会以 unmanaged 或 unknown
+可见。Roll 不会自动认领或删除它们。遇到 stale reservation、未注册成员或被拒绝的
+workspace key，先检查 `roll worktree audit` 与 `roll supervisor live`，再按输出给出的
+owner recovery action 处理。在身份与交付事实明确前保留 checkout；不要因为旧目录存在
+就重建目标。
 
 ## 主 checkout 保护
 
@@ -1002,11 +1012,11 @@ PR 等合并）每 30–60s 还会 emit 一次 `phase_tick` 心跳，tmux 不再
 | # | 阶段 | 触发时机 | 典型耗时 |
 |---|------|---------|---------|
 | 1 | `startup` | env / lock / 心跳启动 | < 1 秒 |
-| 2 | `preflight` | 同步 `.roll/` 元数据 + 清理已合并的临时分支 + 找回上轮孤儿 worktree | 0 – 30 秒 |
+| 2 | `preflight` | 同步 `.roll/` 元数据 + 只读受管工作区审计 / 恢复检测 | 0 – 30 秒 |
 | 3 | `worktree_setup` | fetch origin + 建 worktree + 同步 meta | 2 – 10 秒 |
 | 4 | `agent_invoke` | 调起 agent（最多三次重试） | 5 – 45 分钟 |
 | 5 | `publish_push` | push 分支 + 建 PR（doc-only 直接合） | 5 – 30 秒 |
-| 6 | `cleanup` | 环境清理 + 落 PR 终态 + 拆 worktree | < 1 秒 |
+| 6 | `cleanup` | 环境清理 + 落 PR 终态；受管释放仍受审计闸保护 | < 1 秒 |
 
 > 一个 cycle 在 PR 开出来时结束，**不等合并**。事件型 Delivery Reconciler 在 cycle 边界、读路径或显式 `roll loop reconcile` 时推进交付；没有合并 daemon。有 open PR 的 story 由资格闸跳过，不会重复开，也不会假 Done。
 

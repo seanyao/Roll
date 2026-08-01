@@ -1067,9 +1067,16 @@ const USAGE =
   "  --json    print schema-1 JSON output\n" +
   "  --repo    override the project root (default: current directory)\n";
 
+export function worktreeAuditUsage(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh
+    ? "用法：roll worktree audit [--json] [--repo <path>]\n  只读审计本仓库已注册的 Git 工作树。\n  输出归属、脏改动、合并证据和处置；外部或旧记录只呈现，不自动认领。\n  --json    输出 schema-1 JSON\n  --repo    覆盖项目根目录（默认：当前目录）\n"
+    : USAGE;
+}
+
 export function worktreeAuditCommand(args: string[], deps?: Partial<WorktreeAuditDeps>): number {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write(USAGE);
+    process.stdout.write(worktreeAuditUsage());
     return 0;
   }
 

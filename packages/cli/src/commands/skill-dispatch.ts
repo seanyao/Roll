@@ -1,4 +1,5 @@
 /** US-LOOP-127 — explicit parent-owned Skill dispatch command. */
+import { resolveLang } from "@roll/spec";
 import { allocateSkillDispatchRun, integrateSkillDispatchChild, releaseSkillDispatchReservation, type SkillDispatchRunInput } from "../runner/skill-dispatch-workspace.js";
 
 const USAGE =
@@ -8,6 +9,13 @@ const USAGE =
   "  Allocate one parent Skill DeliveryRun and detached child workspaces below .roll/loop/worktrees.\n" +
   "  <json> is an array of { actionId, declaredFileScope }. Only the parent run may publish, attest, close, or release.\n";
 
+export function skillDispatchUsage(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh
+    ? "用法：roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>\n       roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>\n       roll worktree dispatch release <story-id> <dispatch-run-id>\n  分配一个由父 Skill DeliveryRun 持有、位于 .roll/loop/worktrees 下的受管 WorkspaceSet。\n  <json> 为 { actionId, declaredFileScope } 数组；只有父运行可发布、验收、关闭或释放。\n"
+    : USAGE;
+}
+
 function actionsArg(args: readonly string[]): string | undefined {
   const index = args.indexOf("--actions");
   return index < 0 ? undefined : args[index + 1];
@@ -16,7 +24,7 @@ function actionsArg(args: readonly string[]): string | undefined {
 /** The executable allocator API referenced by the active Build/Fix Skills. */
 export async function skillDispatchCommand(args: string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write(USAGE);
+    process.stdout.write(skillDispatchUsage());
     return 0;
   }
   if (args[0] === "integrate") {

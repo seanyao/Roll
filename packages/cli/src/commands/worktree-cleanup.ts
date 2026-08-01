@@ -912,36 +912,32 @@ function renderResultHuman(result: WorktreeCleanupResult): string {
 
 export const CLEANUP_USAGE =
   "Usage: roll worktree cleanup [--dry-run | --apply] [--json] [--repo <path>]\n" +
-  "  Safely recover from branch/worktree canary pressure using the worktree\n" +
-  "  audit as the SOLE authority. Removes ONLY inactive, merged, clean\n" +
-  "  `disposable_candidate` loop worktrees, plus (FIX-1454) standalone ephemeral\n" +
-  "  branches that are verifiably delivered and attached to no worktree. Delivery\n" +
-  "  is PROVEN by one of: every commit is an ancestor of the integration branch;\n" +
-  "  `git cherry` shows every commit already has an equivalent patch upstream; or\n" +
-  "  (FIX-1471, squash merges) the branch tip tree is byte-identical to the merge\n" +
-  "  commit of the branch's OWN merged GitHub PR (matched by exact head ref) AND\n" +
-  "  that merge commit is an ancestor of the integration branch. A merged PR alone\n" +
-  "  is NEVER sufficient, and no arbitrary same-tree commit on the integration\n" +
-  "  branch is ever used. Never a path/ref that is merely old or counted, and never\n" +
-  "  a preserved (unpublished / dirty / active / external / current / protected /\n" +
-  "  unmerged) one.\n" +
+  "  Safely release a managed WorkspaceSet; the worktree audit is the SOLE authority.\n" +
+  "  A release requires confirmed merge, accepted attest, and a fresh\n" +
+  "  `safe_to_release` result for EVERY registered member. `handoff_ready` is not\n" +
+  "  delivery: any handoff, unknown, stale, dirty, active, external, or unregistered\n" +
+  "  member means the entire Story reservation is preserved. Nothing is selected merely because\n" +
+  "  it is old, and recovery is non-destructive until the owner resolves the blocker.\n" +
   "\n" +
   "  Always dry-run first. Default (no flag) is --dry-run.\n" +
-  "  --dry-run  print counted refs/dirs, audit dispositions, and the minimal\n" +
-  "             candidate set to clear pressure. Never mutates git state.\n" +
-  "  --apply    re-run the audit before EVERY removal; remove only revalidated\n" +
-  "             candidates via git, prune registration, emit events. A changed\n" +
-  "             head / new dirt / missing path / concurrent activation fails\n" +
-  "             closed (no substitution). Then resume explicitly: roll loop resume\n" +
-  "  --json     emit the schema-1 plan (dry-run) or result (apply) as JSON\n" +
+  "  --dry-run  print the audit-derived release/refusal plan. Never mutates Git\n" +
+  "             state or clears a reservation.\n" +
+  "  --apply    re-run the audit before release; any changed head, new dirt, missing\n" +
+  "             path, or concurrent activation fails closed without substitution.\n" +
+  "             Resolve the blocker, then resume explicitly: roll loop resume\n" +
+  "  --json     emit the same schema-1 plan (dry-run) or result (apply) as JSON\n" +
   "  --repo     override the project root (default: current directory)\n" +
   "  --reclaim-orphan <path>  (FIX-1460) bounded-rm ONE named orphan loop dir\n" +
   "             (deregistered from git; delivery not auto-provable) after you\n" +
   "             review it. Fails closed unless it is an inactive loop orphan\n" +
-  "             inside .roll/loop/worktrees. Orphans never enter --apply.\n" +
-  "\n" +
-  "  安全清理:仅移除审计判定为已合并、干净、非活跃的 disposable_candidate;\n" +
-  "  先跑 --dry-run,再 --apply,最后手动 roll loop resume。";
+  "             inside .roll/loop/worktrees. Orphans never enter --apply.\n";
+
+export function worktreeCleanupUsage(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh
+    ? "用法：roll worktree cleanup [--dry-run | --apply] [--json] [--repo <path>]\n  只以工作树审计为唯一权威安全释放受管 WorkspaceSet。释放必须同时满足已确认合并、已接受\n  attest，以及每个已注册成员重新审计为 `safe_to_release`。handoff_ready 不等于已交付；任一\n  成员处于交接、未知、过期、脏、活动、外部或未注册状态，整个 Story 预留都会保留。不会只因\n  路径陈旧而选择它；在所有者解决阻塞前，恢复始终非破坏性。\n\n  默认（无标志）为 --dry-run，绝不修改 Git 状态或清除预留。\n  --dry-run  输出由审计导出的释放/拒绝计划。\n  --apply    释放前重新审计；HEAD、脏改动、路径或并发活动变化即失败关闭，绝不替换对象。\n             解决阻塞后手动恢复：roll loop resume\n  --json     输出同一 schema-1 计划（演练）或结果（执行）JSON\n  --repo     覆盖项目根目录（默认：当前目录）\n  --reclaim-orphan <path>  审查后回收一个点名的、已解除 Git 注册的受管孤儿目录；绝不自动回收。\n"
+    : CLEANUP_USAGE;
+}
 
 function resolveThreshold(): number {
   const parsed = parseInt(process.env["ROLL_BRANCH_CANARY_MAX"] ?? "", 10);
@@ -1211,7 +1207,7 @@ export async function worktreeCleanupCommand(
   },
 ): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write(CLEANUP_USAGE + "\n");
+    process.stdout.write(worktreeCleanupUsage());
     return 0;
   }
 

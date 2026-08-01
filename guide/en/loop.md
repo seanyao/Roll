@@ -1051,17 +1051,31 @@ requires only one API key secret — the one matching your configured agent.
 The two modes coexist: the GHA workflow provides instant feedback, and
 `roll loop pr-inbox` acts as a safety net if the workflow is not installed.
 
-## Session Cleanup
+## Managed delivery workspaces and safe release
 
-At the end of every cycle, loop automatically prunes stale local worktrees:
+Every Roll-owned delivery is one **DeliveryRun** with one managed WorkspaceSet
+under `<project>/.roll/loop/worktrees/`. Ordinary cycles use `cycle-<id>`;
+host-guided Delta uses `delta-<delegation-id>`; Skill dispatch uses a
+parent-owned `dispatch-<run-id>` set. Submodule checkouts are members of that
+same set, not disposable container directories. A run holds its Story
+reservation before its Builder starts, and only the returned detached checkout
+and publish ref are valid Builder targets.
 
-- Any directory under `.claude/worktrees/` whose branch has been fully merged
-  into `main` is removed (`git worktree remove --force` + `git branch -D`).
-- `git worktree prune` runs afterward to clear stale metadata.
+`handoff_ready` is a Delta protocol handoff, not Delivered or Done. It keeps
+both the reservation and workspace intact while the owner completes the normal
+PR/CI/attest path. A release is possible only after a fresh all-member audit
+confirms registration, expected HEAD, inactivity, clean tracked and untracked
+state, confirmed merge, and accepted attest. `roll worktree cleanup --dry-run`
+only shows an audit-derived candidate set; `--apply` rechecks every fact before
+each removal and refuses on any change. It never substitutes another path.
 
-This keeps `git worktree list` clean and prevents `.claude/worktrees/` from
-accumulating old entries over time. Active worktrees (branches ahead of `main`)
-are left untouched.
+Legacy `.worktrees/*`, `../wt-*`, and other external/manual checkouts remain
+visible as unmanaged or unknown. Roll neither adopts nor deletes them
+automatically. For a stale reservation, an unregistered member, or a refused
+workspace key, inspect `roll worktree audit` and `roll supervisor live`, then
+use the printed owner recovery action. Preserve the checkout until its identity
+and delivery facts are explicit; do not recreate a target merely because an old
+directory exists.
 
 ## Main Checkout Guard
 
@@ -1132,11 +1146,11 @@ so the tmux viewer never looks frozen.
 | # | Phase | When it runs | Typical duration |
 |---|-------|--------------|------------------|
 | 1 | `startup` | env / lock / heartbeat setup | < 1 s |
-| 2 | `preflight` | meta sync + stale-branch GC + orphan-worktree recovery | 0 s — 30 s |
+| 2 | `preflight` | meta sync + read-only managed-workspace audit / recovery detection | 0 s — 30 s |
 | 3 | `worktree_setup` | fetch origin + worktree create + meta sync | 2 – 10 s |
 | 4 | `agent_invoke` | Agent executes with up to 3 retries | 5 – 45 min |
 | 5 | `publish_push` | push branch + open PR (or doc-only merge) | 5 – 30 s |
-| 6 | `cleanup` | env cleanup + emit PR final state + worktree teardown | < 1 s |
+| 6 | `cleanup` | env cleanup + emit PR final state; managed release remains audit-gated | < 1 s |
 
 > A cycle ends when the PR is open — it does **not** wait for merge. The event-backed Delivery Reconciler advances delivery at cycle boundaries, on read paths, or via `roll loop reconcile`; there is no merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
 

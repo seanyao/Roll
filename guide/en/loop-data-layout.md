@@ -40,6 +40,21 @@ The control plane (what the outer runner touches before spawning tmux) and the
 data plane (what the inner cycle script writes) ship independently, but both now
 resolve to the same project-local directory.
 
+## Managed DeliveryRun workspaces
+
+`<project>/.roll/loop/worktrees/` is the only Roll-owned creation root for
+delivery code. A run records its WorkspaceSet in the event stream and uses a
+direct child key such as `cycle-<id>`, `delta-<delegation-id>`, or
+`dispatch-<run-id>`; submodule worktrees are registered members of the same
+set. The path is not ownership proof by itself: audit joins the event-backed run
+identity with each repository's Git registration and live inspection.
+
+Historical `.worktrees/*` and `../wt-*` locations are external/manual during
+migration. They remain inspectable but are not silently adopted, moved, reused,
+or cleaned. A stale reservation, missing registration, or existing key is a
+recovery-required fact: preserve it, inspect `roll worktree audit`, and follow
+the explicit owner action shown by `roll supervisor live`.
+
 控制平面（outer runner 在 spawn tmux 之前接触的）和数据平面（inner cycle 脚本写
 入的）各自独立演进，但现在都解析到同一个项目本地目录。
 

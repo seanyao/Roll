@@ -38,6 +38,18 @@ project-local directory.
 控制平面（outer runner 在 spawn tmux 之前接触的）和数据平面（inner cycle 脚本写
 入的）各自独立演进，但现在都解析到同一个项目本地目录。
 
+## 受管 DeliveryRun 工作区
+
+`<project>/.roll/loop/worktrees/` 是 Roll 创建交付代码工作区的唯一根目录。运行通过
+事件流记录 WorkspaceSet，使用 `cycle-<id>`、`delta-<delegation-id>` 或
+`dispatch-<run-id>` 这样的直接子项 key；submodule worktree 是同一集合内已注册的成员。
+路径本身不能证明归属：audit 会把事件驱动的 run identity、各仓库 Git 注册和实时检查合并判断。
+
+迁移期的 `.worktrees/*` 与 `../wt-*` 是 external/manual。它们可被检查，但不会被静默
+认领、移动、复用或清理。stale reservation、缺失注册或已存在 key 都是
+recovery_required 事实：保留现场，检查 `roll worktree audit`，再按
+`roll supervisor live` 展示的明确 owner action 处理。
+
 ---
 
 ## Dream 的 cron 日志

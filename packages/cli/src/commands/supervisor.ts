@@ -84,6 +84,26 @@ export const SUPERVISOR_USAGE = [
   "  repair-evidence  repair missing acceptance evidence for a green PR and restore merge-ready status",
 ].join("\n");
 
+export function supervisorUsage(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh
+    ? [
+      "用法：roll supervisor [status|observe|advise|next|why|live|journal|health|route|repair-evidence] [--json]",
+      "  status           observe + advise 摘要（无子命令的别名）",
+      "  observe          项目结构化事实（backlog、真相覆盖、PR、发布就绪度）",
+      "  advise           Supervisor 建议（持久化更改需 owner 确认）",
+      "  next / why       下一步与阻塞原因",
+      "  live             只读实时面板：Designer/Builder/Evaluator 和共同 DeliveryRun 真相",
+      "  live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>",
+      "  live --collab    跟随多周期协作流；加 --once 读取快照",
+      "  journal          Supervisor 叙事流：列出/记录决策、验证、救援",
+      "  health           agent 工具链健康：auth/network/setup/worktree 分类与路由",
+      "  route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]",
+      "  repair-evidence  修复绿色 PR 缺失的验收证据并恢复 merge-ready 状态",
+    ].join("\n")
+    : SUPERVISOR_USAGE;
+}
+
 function depsOf(desc: string): string[] {
   const m = /depends-on:\s*([A-Za-z0-9_,-]+)/i.exec(desc);
   return m === null ? [] : (m[1] ?? "").split(",").map((s) => s.trim()).filter((s) => s !== "");
@@ -1166,7 +1186,7 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   // `status` is an alias for the default observe + advise summary.
   if (sub === "status") sub = undefined;
   if (sub !== undefined && !["observe", "advise", "next", "why", "live", "journal", "health", "route", "repair-evidence"].includes(sub)) {
-    process.stderr.write(SUPERVISOR_USAGE + "\n");
+    process.stderr.write(supervisorUsage() + "\n");
     return 1;
   }
   const projectPath = process.cwd();
@@ -1495,7 +1515,7 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   if (sub === "live") {
     const unknownFlag = unknownSupervisorLiveFlag(args);
     if (unknownFlag !== undefined) {
-      process.stderr.write(`roll supervisor live: unknown flag for roll supervisor live: ${unknownFlag}\n${SUPERVISOR_USAGE}\n`);
+      process.stderr.write(`roll supervisor live: unknown flag for roll supervisor live: ${unknownFlag}\n${supervisorUsage()}\n`);
       return 1;
     }
     if (watch && json) {

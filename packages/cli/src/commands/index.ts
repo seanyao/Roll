@@ -31,7 +31,7 @@ import { ciCommand, ciWaitCommand } from "./ci.js";
 import { configCommand } from "./config.js";
 import { cycleCommand } from "./cycle.js";
 import { cyclesCommand } from "./cycles.js";
-import { SUPERVISOR_USAGE, supervisorCommand } from "./supervisor.js";
+import { supervisorCommand, supervisorUsage } from "./supervisor.js";
 import { dashboardCommand, loopEvalCommand, loopStoryCommand } from "./dashboard.js";
 import { loopRunsCommand } from "./loop-runs.js";
 import { loopSignalsCommand } from "./loop-signals.js";
@@ -104,6 +104,13 @@ function currentHelpLang() {
     lcAll: process.env["LC_ALL"],
     lang: process.env["LANG"],
   });
+}
+
+/** One locale per rendered help surface; the runtime resolves the same locale as docs. */
+export function worktreeUsage(): string {
+  return currentHelpLang() === "zh"
+    ? "用法：roll worktree <audit|cleanup|dispatch> [options]\n  audit    只读审计所有已注册 Git 工作树：归属、脏改动、合并证据与处置。\n  cleanup  按审计结果释放受管 WorkspaceSet，或以非破坏性方式拒绝：仅在已确认合并、已接受 attest 且所有成员均为 safe_to_release 后释放（先 --dry-run，再 --apply）。\n  dispatch 分配由父 DeliveryRun 持有的受管 WorkspaceSet；只有父运行可发布、验收、关闭或释放。\n"
+    : "Usage: roll worktree <audit|cleanup|dispatch> [options]\n  audit    Read-only audit of registered Git worktrees: ownership, dirt, merge evidence, and disposition.\n  cleanup  Audit-derived managed WorkspaceSet release or non-destructive refusal: release only after confirmed merge, accepted attest, and every member is safe_to_release (--dry-run first, then --apply).\n  dispatch Allocate a parent-owned managed WorkspaceSet; only the parent run may publish, attest, close, or release.\n";
 }
 
 const DOCTOR_TOOLS_USAGE =
@@ -216,7 +223,7 @@ export function registerAll(): void {
   registerPorted("cycle", removedTopLevel("cycle"));
   // US-V4-008: `supervisor` — the project-level Supervisor (observe/advise).
   // Cross-Story coordination, never Story implementation.
-  registerPorted("supervisor", supervisorCommand, { help: SUPERVISOR_USAGE });
+  registerPorted("supervisor", supervisorCommand, { help: supervisorUsage });
   // FIX-343 (AC1): the agent-facing self-grade command is REMOVED. The working
   // agent never grades its own delivery; the cycle's Review Score is produced
   // solely by a fresh-session peer Reviewer (runScorePairing). The only writer of
@@ -427,12 +434,18 @@ export function registerAll(): void {
   // FIX-1273: `worktree cleanup` — safe, audit-derived recovery for canary pressure
   registerPorted("delta", deltaCommand, { hidden: true });
   registerPorted("worktree", (args): number | Promise<number> => {
+    if (args.length === 0 || isHelp(args[0])) {
+      process.stdout.write(worktreeUsage());
+      return 0;
+    }
     if (args[0] === "audit") return worktreeAuditCommand(args.slice(1));
     if (args[0] === "cleanup") return worktreeCleanupCommand(args.slice(1));
     if (args[0] === "dispatch") return skillDispatchCommand(args.slice(1));
-    process.stderr.write("roll worktree: unknown subcommand. Try 'roll worktree audit', 'roll worktree cleanup', or 'roll worktree dispatch'.\n");
+    process.stderr.write(currentHelpLang() === "zh"
+      ? "roll worktree：未知子命令。请使用 ‘roll worktree audit’、‘roll worktree cleanup’ 或 ‘roll worktree dispatch’。\n"
+      : "roll worktree: unknown subcommand. Try 'roll worktree audit', 'roll worktree cleanup', or 'roll worktree dispatch'.\n");
     return 1;
-  }, { help: "Usage: roll worktree <audit|cleanup|dispatch> [options]\n  audit    Read-only audit of all git worktrees: ownership, dirt, merge evidence, disposition.\n  cleanup  Safe, audit-derived recovery for branch/worktree canary pressure (--dry-run first, then --apply, then roll loop resume).\n  dispatch Allocate a parent-owned Skill dispatch workspace set.\n只读审计所有 git worktree,并对 canary 压力提供仅基于审计的安全清理(先 --dry-run,再 --apply,最后 roll loop resume)。" });
+  }, { help: worktreeUsage });
   // `loop` is FULLY TS as of US-PORT-021 prep — no subcommand falls back to bash.
   // `on` generates the v3 self-contained runner (DELIBERATE divergence from the
   // v2 tmux outer/inner pair, whitelisted in AGENTS.md). Bare `roll loop`

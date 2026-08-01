@@ -370,17 +370,22 @@ Backlog-clearing 模式下，Supervisor 的默认 scope 是所有 live 且非 Ho
 
 这套 runbook 是 `roll supervisor next/why/live` 的产品标准：CLI 输出应能解释当前卡、当前 cast、为什么继续、为什么停止，以及下一步需要谁做什么。
 
-#### 分支/worktree canary 与安全恢复 / Branch-worktree canary & safe recovery (FIX-1273)
+#### 受管 WorkspaceSet canary 与安全恢复 / Managed WorkspaceSet canary & safe recovery (FIX-1273)
 
-The branch/worktree leak canary (US-LOOP-096) counts every ephemeral branch + every dir under `.roll/loop/worktrees` and PAUSEs the loop over threshold (`ROLL_BRANCH_CANARY_MAX`, default 8). It counts inactive worktrees deliberately preserved for unpublished commits or dirty recovery too — so historical pressure can pause the loop even when nothing is genuinely leaking.
+The workspace leak canary (US-LOOP-096) reads the same projection-backed audit
+model as release: it counts anomalous managed WorkspaceSet members once each and
+reports healthy retained capacity separately. It PAUSEs the loop over
+`ROLL_BRANCH_CANARY_MAX` (default 8), but an unavailable inspection is fail-loud
+rather than a guessed zero. External/manual directories and a `.submodules`
+container are never silently promoted into a managed member merely by their path.
 
-- 触发即枚举 / Auditable trip：canary 触发时,PAUSE marker、ALERT 与 `branch_canary_tripped` 事件枚举出被计数的**每一条** ephemeral branch 与 loop worktree,并附上各 worktree 的审计处置 (disposition),而不是一个裸数字。
-- 唯一权威是审计 / Audit is the sole authority：`roll worktree cleanup` 从 `roll worktree audit` 派生动作,**只**移除审计判定为 inactive + merged + clean 的 `disposable_candidate`。它绝不因为 worktree "旧" 或 "被计数" 就删除,也绝不把 canary 计数翻译成批量删除。
-- 先演练后执行 / Dry-run first：`roll worktree cleanup --dry-run`(默认)打印被计数的 refs/dirs、审计处置、以及把总数拉回阈值以下所需的**最小**候选集;它绝不改动 git 状态。
-- 应用即复核 / Apply revalidates：`roll worktree cleanup --apply` 在**每一次**移除前立刻重跑审计,要求 path + head + inactive + no-tracked-dirt + merged-ancestry + `disposable_candidate` 全部一致,才通过 git 移除该 worktree 并 prune 注册、发出 `worktree_cleanup_applied` 事件。changed head / 新脏 / 缺失 path / 并发激活一律 fail-closed(发 `worktree_cleanup_refused`),绝不改删其它 preserved worktree 作替补。
-- 恢复要显式 / Explicit resume：成功清理后,unpublished / dirty / active / external worktree 依旧保留在 canary 账上;操作者确认压力已清除后,显式执行 `roll loop resume` 让 loop 重新派卡。
+- 触发即枚举 / Auditable trip：canary 触发时，PAUSE marker、ALERT 与 `branch_canary_tripped` 事件枚举被计数的**每一个**受管 WorkspaceSet member 及其审计处置 (disposition)，而不是一个裸数字。
+- 唯一权威是集合审计 / WorkspaceSet audit is the sole authority：`roll worktree cleanup` 只从 fresh audit 派生动作，且只处理全体相关 members 都是 `safe_to_release` 的 WorkspaceSet。selector 必须证明 confirmed merge、accepted attest、inactive、clean、registered 与 expected HEAD；一个成员 unknown、stale、dirty、external 或 refused 就保留整个 Story reservation。
+- 先演练后执行 / Dry-run first：`roll worktree cleanup --dry-run`（默认）只打印 audit disposition、阻塞原因与可由操作者审阅的 release 计划；它绝不改动 Git 状态，也不把 canary 计数翻译为批量删除。
+- 应用即复核 / Apply revalidates：`roll worktree cleanup --apply` 是操作者显式请求的 release 操作；它在**每一个** member 删除前重跑 all-member audit，并以冻结的 expected HEAD compare-and-revalidate。任一 changed head、新脏、缺失注册、并发激活或未知状态都 fail-closed（`worktree_cleanup_refused`）：不删除该集合中的任何替补成员，不自动销毁 checkout。
+- 恢复要显式 / Explicit resume：清理拒绝或完成后，外部、脏、active、unknown 与 retained workspace 仍保留在 board/canary 账上；操作者确认压力已清除后，显式执行 `roll loop resume` 让 loop 重新派卡。
 
-Preserved（unpublished / dirty / active / external）worktree 永远不会被 cleanup 移除;它们仍计入 canary,是 Truth preflight 里 “preserved worktree” 这一停摆信号的一部分。
+`handoff_ready` 不是 Delivered/Done，也不是 cleanup trigger。没有 confirmed merge、accepted attest 和全体 relevant members 的 `safe_to_release` 证明，Roll 不会自动进行破坏性清理。
 
 #### 受管主 worktree 分配 / Managed primary-worktree allocation (US-LOOP-124)
 
@@ -428,6 +433,20 @@ US-LOOP-123 的 merged + accepted-attest + inactive + clean selector 判为 `saf
 逐 member 执行非-force compare-and-revalidate 删除。若 Git 删除成功而 `released` 事件遗漏，
 retry 可跳过已证明缺失的 member、继续其余 member；只有全部 member 均已删除时才补写
 `worktree:released`。任一未知、变化或拒绝都会保留 checkout 和 Story reservation。
+
+#### 旧工作区迁移与恢复边界 / Legacy workspace migration and recovery
+
+`<project>/.roll/loop/worktrees/` 是唯一的 Roll-owned 创建根；`.worktrees/*`、`../wt-*`
+和其他项目外 checkout 都是 external/manual，不因名称相似而获得 DeliveryRun 身份。它们可以在
+audit 和 Supervisor board 中被看见，但不会被自动 adopt、move、reuse 或 cleanup。历史 Delta
+没有 workspace 字段时保留 legacy-protocol-only 读法，显示 unknown 而不是补造 WorkspaceSet。
+
+已有 workspace key、stale reservation、未注册 member 或 event/Git 不一致都进入
+`recovery_required`：保留现场和 Story reservation，读取 `roll worktree audit` 与
+`roll supervisor live` 的具体原因，按 owner 明确确认的恢复路径处理。`roll worktree cleanup`
+只能处理 fresh all-member audit 证明为 `safe_to_release` 的集合；这要求 confirmed merge、accepted
+attest、inactive、expected HEAD 和干净状态。`handoff_ready`、外部、脏、stale、unknown 或任一
+member 被拒绝时绝不成为自动候选。
 
 #### Retired terms and breaking boundary
 

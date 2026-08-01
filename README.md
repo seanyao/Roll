@@ -353,6 +353,16 @@ the same board open and redraws it in-place from the same event-backed view
 model. A browser/TUI Supervisor Live Console remains future work and must reuse
 that view model.
 
+All Roll-owned delivery workspaces live under `.roll/loop/worktrees/` as one
+managed WorkspaceSet per DeliveryRun; submodule worktrees are explicit members.
+`handoff_ready` preserves its Story reservation and workspace and is never
+Delivered/Done. Only a confirmed merge, accepted attest, and fresh clean,
+registered, inactive all-member inspection make a run eligible for release.
+Start recovery with `roll worktree audit` and `roll supervisor live`; cleanup is
+dry-run-first and refuses stale, unknown, dirty, external, or unregistered
+members. Legacy `.worktrees/*` and `../wt-*` checkouts are external/manual:
+Roll shows them but never adopts or deletes them automatically.
+
 ## Rules registry and doc-drift
 
 [`policy/rules.yaml`](policy/rules.yaml) is the single machine-readable authority
