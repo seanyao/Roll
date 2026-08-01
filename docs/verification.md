@@ -50,6 +50,14 @@ roll 的可靠性不靠「线上没出事」来证明，靠可执行、可证伪
 
 任何能力从 S 降级 = 回归，触发 ALERT。
 
+## 规则注册表与文档漂移
+
+[`policy/rules.yaml`](../policy/rules.yaml) 是已注册 redline、doc-drift 模式和源码到文档映射的唯一机器可读权威。本页、README、双语指南与生成的[职责地图](maps/)只是它的说明投影，不重复声明策略。`node scripts/audit-rules.mjs` 的成功结果是“**已注册 N** 条规则通过存活审计”；它不声称已经穷尽仓库中所有应有规则。
+
+当前 `gates.doc_drift: soft` 依照注册表的 `doc_surfaces` 判断：声明源码变更而对应声明文档未变，会产生可见诊断；soft 命中保持 exit 0，且没有豁免通道。CI 使用同一注册表做只读检查；在本仓的手工 GitHub UI 合并路径中，它只提供 advisory 结果，不写 `.roll` 事件，也不构成 Roll 驱动的硬拦截。
+
+hard 模式尚未启用。它不能仅靠修改模式字段来获得可信性：先要完成可信的 owner 授权与校准设计。peer 会话、TTY 或 `actor` 字段都不能证明 owner 身份，因此不能作为 hard 模式授权依据。
+
 ## diff-test
 
 port 期间，每个从 v2.0 迁移的函数和命令，输出必须与 bash 版对齐：

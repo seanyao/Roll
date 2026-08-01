@@ -344,6 +344,26 @@ keeps the same board open and redraws it in-place from the same event-backed vie
 model. A browser/TUI Supervisor Live Console remains future work and must reuse
 that view model.
 
+## Rules registry and doc-drift
+
+[`policy/rules.yaml`](policy/rules.yaml) is the single machine-readable authority
+for registered redlines, the doc-drift mode, and source-to-documentation mappings.
+The README, guides, verification notes, and generated
+[responsibility maps](docs/maps/) explain that registry; they do not declare a
+second policy. `node scripts/audit-rules.mjs` reports that the **registered N**
+rules are live. It is not a claim that every possible repository rule has already
+been registered.
+
+The current `doc_drift: soft` mode is registry-driven and observable: a declared
+source surface changed without its declared documentation emits a diagnostic, but
+the soft hit exits 0. There is no exemption path. The named CI check is likewise
+advisory for manual GitHub UI merges in this repository shape; CI records its
+result but does not create Roll events or authenticate a merge decision.
+
+Hard doc-drift enforcement is **not enabled**. Enabling it needs a trusted owner
+authorization and calibration design first. A peer session, an interactive TTY,
+or an `actor` field is not owner authentication and must not be presented as one.
+
 ## Repository layout
 
 Dev side — a pnpm monorepo. Publish side — one npm package.

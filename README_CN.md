@@ -241,6 +241,14 @@ AC 状态、无豁免可视卡缺截图，都会拒合。PR body 里的 `Roll-Ev
 
 `roll supervisor live` 是已交付的 CLI-first 多角色看板。它默认打印一帧快照，适合脚本和快速查看；`roll supervisor live --watch` 会让同一个看板保持打开，并从同一条事件驱动 view model 原地刷新。浏览器/TUI 版 Supervisor Live Console 仍是未来工作，必须复用这个 view model。
 
+## 规则注册表与文档漂移
+
+[`policy/rules.yaml`](policy/rules.yaml) 是已注册 redline、doc-drift 模式以及源码到文档映射的唯一机器可读权威。README、指南、验证说明和生成的[职责地图](docs/maps/)只解释这份注册表，不再声明第二份策略。`node scripts/audit-rules.mjs` 报告的是**已注册 N** 条规则仍然有效；这不是“仓库所有可能规则均已覆盖”的声明。
+
+当前 `doc_drift: soft` 由注册表驱动且可观测：已声明的源码面变更而其声明文档未同步时，会输出诊断，但 soft 命中仍以 exit 0 结束。不存在豁免路径。在本仓形态下，命名 CI 检查对手工 GitHub UI 合并同样只是 advisory：CI 记录结果，但不写 Roll 事件，也不认证合并决定。
+
+hard doc-drift 执行**尚未启用**。启用前必须先有可信的 owner 授权与校准设计。peer 会话、交互式 TTY 或 `actor` 字段都不是 owner 身份认证，文档不得把它们说成认证。
+
 ## 仓库结构
 
 开发态是 pnpm monorepo，发布态是单一 npm 包。

@@ -35,6 +35,19 @@ Roll 的 pre-commit hook 要求：测试必须在 **60 秒内**、**与当前暂
 
 ## CI E2E Gate
 
+PR CI 还会发布一个名为 `doc-drift` 的检查。它获取 `origin/main`，用
+`merge-base HEAD origin/main` 比较 PR，并按
+[`policy/rules.yaml`](../../policy/rules.yaml) 中注册表驱动的判定执行。当前
+`gates.doc_drift: soft` 时，命中会以 annotation 形式可见且以 exit 0 结束；没有
+豁免通道。缺少 base 或注册表无效则 fail closed。CI 从不写 `.roll` 事件。在本仓
+形态下，这个结果对手工 GitHub UI 合并仍然只是 advisory：它记录结果，不是可信的
+合并授权。
+
+hard doc-drift 模式尚未启用，仍受可信 owner 授权与校准设计阻塞。peer 会话、TTY 或
+`actor` 字段都不能认证 owner。如果该设计完成且注册表启用 hard，命名检查才可以和
+`test-ts` 一起进入 Roll 驱动的 exact-SHA 合并闸。审计只报告**已注册 N** 条规则仍然
+有效，不代表已经穷尽仓库规则；源码派生的权属视图见生成的[职责地图](../../docs/maps/)。
+
 模板 CI 工作流（`.github/workflows/ci.yml`）将 E2E 测试作为独立任务，必须通过才能合并。失败时：
 
 1. 查看失败测试名——对应一个 Story ID。
