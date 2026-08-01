@@ -133,6 +133,56 @@ describe("US-LOOP-123 conservative projection release", () => {
   });
 });
 
+describe("US-LOOP-127 dispatch WorkspaceSet release lifecycle", () => {
+  it("writes the complete release lifecycle, verifies every member is absent, then releases the parent reservation", async () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "roll-cleanup-"));
+    const primaryPath = join(repositoryRoot, ".roll/loop/worktrees/dispatch-parent");
+    const childPath = join(repositoryRoot, ".roll/loop/worktrees/dispatch-parent.children/implement");
+    mkdirSync(primaryPath, { recursive: true });
+    mkdirSync(childPath, { recursive: true });
+    const records = [
+      rec({ path: primaryPath, runId: "dispatch-parent", memberLocator: "dispatch-parent", storyId: "US-LOOP-127", head: "primary-head" }),
+      rec({ path: childPath, runId: "dispatch-parent", memberLocator: "dispatch-parent.children/implement", storyId: "US-LOOP-127", head: "child-head" }),
+    ];
+    const plan = planWorktreeCleanup(auditOf(records), 0);
+    const lifecycle: RollEvent[] = [];
+    const release = vi.fn(() => !existsSync(primaryPath) && !existsSync(childPath));
+    try {
+      const result = await applyWorktreeCleanup(plan, {
+        repositoryRoot,
+        dryRun: false,
+        audit: () => auditOf(records),
+        removeWorktree: (_repo, path) => {
+          rmSync(path, { recursive: true, force: true });
+          return { ok: true, detail: "" };
+        },
+        appendLifecycle: (event) => { lifecycle.push(event); return true; },
+        releaseDispatchReservation: release,
+      });
+      expect(result.refused).toEqual([]);
+      expect(lifecycle.map((event) => event.type)).toEqual(["worktree:release_requested", "worktree:released"]);
+      expect((lifecycle[0] as Extract<RollEvent, { type: "worktree:release_requested" }>).expectedHeads).toHaveLength(2);
+      expect(release).toHaveBeenCalledWith("US-LOOP-127", "dispatch-parent");
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the complete WorkspaceSet before Git removal when release intent is not durable", async () => {
+    const planned = rec({ runId: "dispatch-parent", memberLocator: "dispatch-parent", storyId: "US-LOOP-127" });
+    const removeWorktree = vi.fn(() => ({ ok: true, detail: "must not remove" }));
+    const result = await applyWorktreeCleanup(planWorktreeCleanup(auditOf([planned]), 0), {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => auditOf([planned]),
+      removeWorktree,
+      appendLifecycle: () => false,
+    });
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(result.refused).toMatchSnapshot();
+  });
+});
+
 describe("US-LOOP-123 leak safety and capacity", () => {
   it("does not classify a healthy handoff as a leak while still reporting it as retained capacity", () => {
     const audit = auditOf([

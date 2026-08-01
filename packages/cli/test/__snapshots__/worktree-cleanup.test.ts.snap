@@ -112,3 +112,12 @@ exports[`US-LOOP-123 conservative projection release > preserves untracked dirt 
   },
 ]
 `;
+
+exports[`US-LOOP-127 dispatch WorkspaceSet release lifecycle > refuses the complete WorkspaceSet before Git removal when release intent is not durable 1`] = `
+[
+  {
+    "path": "/repo/.roll/loop/worktrees/cycle-1",
+    "reason": "lifecycle-write-failed: could not durably request workspace release",
+  },
+]
+`;

@@ -25,7 +25,10 @@ export interface ManagedWorkspaceMember {
   readonly repositoryId: string;
   /** The direct-child key of the primary workspace for this set. */
   readonly workspaceKey: string;
-  /** Primary: key. Submodule: `${key}.submodules/<repository-relative path>`. */
+  /**
+   * Primary: key. Submodule: `${key}.submodules/<repository-relative path>`.
+   * A Skill-dispatch child: `${key}.children/<actionId>`.
+   */
   readonly relativeLocator: ManagedWorkspaceMemberLocator;
   /** Present only for a parent skill-dispatch child member. */
   readonly actionId?: string;
@@ -151,10 +154,20 @@ export function normalizeManagedWorkspaceSet(input: unknown): ManagedWorkspaceNo
       primaryKey = key;
       if (member.relativeLocator !== key || member.actionId !== undefined) return { ok: false, reason: "invalid_primary_locator" };
     } else {
-      if (key !== primaryKey || !member.relativeLocator.startsWith(`${primaryKey}.submodules/`)) return { ok: false, reason: "invalid_submodule_locator" };
+      const isSubmodule = member.relativeLocator.startsWith(`${primaryKey}.submodules/`);
+      const isDispatchChild = kind === "skill_dispatch" && member.relativeLocator.startsWith(`${primaryKey}.children/`);
+      if (key !== primaryKey || (!isSubmodule && !isDispatchChild)) return { ok: false, reason: "invalid_submodule_locator" };
+      // A dispatch set is a parent project checkout plus declared action
+      // children. Combining an action boundary with a submodule checkout needs
+      // its own explicit contract; accepting an unscoped hybrid would make the
+      // submodule invisible to the dispatch scope guard.
+      if (kind === "skill_dispatch" && isSubmodule) return { ok: false, reason: "invalid_member" };
+      if (isDispatchChild && (!nonEmptyString(member.actionId) || member.relativeLocator !== `${primaryKey}.children/${member.actionId}`)) {
+        return { ok: false, reason: "invalid_member" };
+      }
     }
     if (kind !== "skill_dispatch" && (member.actionId !== undefined || member.declaredFileScope !== undefined)) return { ok: false, reason: "invalid_member" };
-    if (kind === "skill_dispatch" && index > 0 && !nonEmptyString(member.actionId)) return { ok: false, reason: "invalid_member" };
+    if (kind === "skill_dispatch" && member.relativeLocator.startsWith(`${primaryKey}.children/`) && member.declaredFileScope === undefined) return { ok: false, reason: "invalid_declared_scope" };
     if (locators.has(member.relativeLocator)) return { ok: false, reason: "duplicate_locator" };
     locators.add(member.relativeLocator);
     const declaredFileScope = normaliseScope(member.declaredFileScope);

@@ -1,0 +1,632 @@
+/** US-LOOP-127 — production allocator for parent-owned Skill dispatch. */
+import {
+  EventBus,
+  claimStoryLease,
+  createSkillDispatchPlan,
+  readLeases,
+  releaseStoryLease,
+  skillDispatchAuthority,
+  type SkillDispatchActionInput,
+} from "@roll/core";
+import { MANAGED_WORKSPACE_SCHEMA, normalizeManagedWorkspaceSet, type ManagedWorkspaceSet } from "@roll/spec";
+import { git, inspectManagedWorktree, projectIdentity, resolveIntegrationBranch, worktreeAdd } from "@roll/infra";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import { bootstrapWorktreeDeps, bootstrapWorktreePrebuild, bootstrapWorktreeSkills, linkRollIntoWorktree, readPrebuildDistEnabled } from "./worktree-bootstrap.js";
+import type { EventsPort } from "./ports.js";
+
+export interface SkillDispatchRunInput {
+  /** The parent project checkout. Child paths and repository identity are derived here. */
+  readonly projectRoot: string;
+  readonly storyId: string;
+  /** Must be the parent DeliveryRun id, e.g. dispatch-<uuid>. */
+  readonly runId: string;
+  readonly actions: readonly SkillDispatchActionInput[];
+}
+
+export interface AllocatedSkillDispatchRun {
+  readonly workspace: ManagedWorkspaceSet;
+  readonly paths: Readonly<Record<string, string>>;
+}
+
+export type SkillDispatchAllocationRefusal =
+  | "invalid_parent_run"
+  | "parent_reservation_held"
+  | "base_identity_unknown"
+  | "target_exists"
+  | "git_add_failed"
+  | "workspace_identity_mismatch"
+  | "event_write_failed"
+  | "bootstrap_failed"
+  | "parent_contract_refused";
+
+export interface SkillDispatchAllocatorDeps {
+  readonly now?: () => number;
+  readonly base?: (projectRoot: string) => string;
+  readonly facts?: (projectRoot: string, base: string) => Promise<{ readonly baseSha: string; readonly repositoryId: string } | undefined>;
+  readonly inspect?: (projectRoot: string, path: string) => Promise<{ readonly head: string; readonly repositoryId: string; readonly registered: boolean } | undefined>;
+  readonly add?: (projectRoot: string, path: string, publishRef: string, base: string) => Promise<{ readonly code: number }>;
+  readonly append?: (eventsPath: string, event: Parameters<EventBus["appendEvent"]>[1]) => void;
+  /** Injectable only for tests; production runs the same bootstrap as managed cycles. */
+  readonly bootstrap?: (projectRoot: string, path: string) => Promise<boolean>;
+}
+
+function inside(root: string, target: string): boolean {
+  const path = relative(root, target);
+  return path !== "" && !path.startsWith("..") && !path.includes("../");
+}
+
+function workspacePaths(root: string, workspace: ManagedWorkspaceSet): Readonly<Record<string, string>> {
+  return Object.fromEntries(workspace.members.map((member) => [member.relativeLocator, resolve(root, member.relativeLocator)]));
+}
+
+function appendRecovery(
+  append: (eventsPath: string, event: Parameters<EventBus["appendEvent"]>[1]) => void,
+  eventsPath: string,
+  workspace: ManagedWorkspaceSet,
+  operationId: string,
+  reason: string,
+  now: number,
+): boolean {
+  try {
+    append(eventsPath, {
+      type: "worktree:recovery_required",
+      runId: workspace.runId,
+      relativeLocator: workspace.members[0].relativeLocator,
+      reason,
+      workspace,
+      operationId,
+      ts: now,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type LifecycleRecord = { readonly type?: unknown; readonly workspace?: ManagedWorkspaceSet; readonly operationId?: unknown; readonly runId?: unknown; readonly expectedHeads?: unknown };
+
+function lifecycleEvents(path: string): LifecycleRecord[] {
+  try {
+    return readFileSync(path, "utf8").split("\n").flatMap((line) => {
+      try { return [JSON.parse(line) as LifecycleRecord]; } catch { return []; }
+    });
+  } catch {
+    return [];
+  }
+}
+
+function sameWorkspace(left: ManagedWorkspaceSet, right: ManagedWorkspaceSet): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function matchingLifecycle(events: readonly LifecycleRecord[], type: "worktree:allocated" | "worktree:recovery_required", workspace: ManagedWorkspaceSet, operationId: string): boolean {
+  return events.some((event) => event.type === type && event.operationId === operationId && event.workspace !== undefined && sameWorkspace(event.workspace, workspace));
+}
+
+/**
+ * A write-ahead allocation workspace is the durable request identity.  A retry
+ * must reuse it instead of rebuilding one from a moving integration branch.
+ */
+function frozenAllocationWorkspace(
+  events: readonly LifecycleRecord[],
+  storyId: string,
+  runId: string,
+): { readonly found: false } | { readonly found: true; readonly workspace?: ManagedWorkspaceSet } {
+  const operationId = `${runId}:allocate`;
+  const record = events.find((event) => (
+    (event.type === "worktree:recovery_required" || event.type === "worktree:allocated")
+    && event.operationId === operationId
+    && (event.runId === runId || event.workspace?.runId === runId)
+  ));
+  if (record === undefined || record.workspace === undefined) return { found: false };
+  const normalized = normalizeManagedWorkspaceSet(record.workspace);
+  if (!normalized.ok || normalized.value.kind !== "skill_dispatch"
+    || normalized.value.storyId !== storyId || normalized.value.runId !== runId) return { found: true };
+  return { found: true, workspace: normalized.value };
+}
+
+function workspaceMatchesDispatchInput(workspace: ManagedWorkspaceSet, input: SkillDispatchRunInput): boolean {
+  if (workspace.kind !== "skill_dispatch" || workspace.storyId !== input.storyId || workspace.runId !== input.runId) return false;
+  const parent = workspace.members[0];
+  if (parent === undefined) return false;
+  const plan = createSkillDispatchPlan({
+    reservation: { storyId: input.storyId, runId: input.runId },
+    workspace: {
+      ...workspace,
+      members: [parent],
+    },
+  }, input.actions);
+  if (!plan.ok) return false;
+  const expected: ManagedWorkspaceSet = {
+    ...workspace,
+    members: [
+      parent,
+      ...plan.value.children.map((child) => ({
+        repositoryId: parent.repositoryId,
+        workspaceKey: parent.workspaceKey,
+        relativeLocator: child.relativeLocator,
+        actionId: child.actionId,
+        declaredFileScope: child.declaredFileScope,
+        checkoutRef: parent.checkoutRef,
+        publishRef: `refs/heads/${input.runId}/${child.actionId}`,
+      })),
+    ] as ManagedWorkspaceSet["members"],
+  };
+  return sameWorkspace(workspace, expected);
+}
+
+/**
+ * A release request freezes the heads that the fresh cleanup audit actually
+ * observed. They intentionally need not equal the allocation base: a normal
+ * child delivery advances its detached checkout before the parent can release
+ * the reservation. We only accept a complete, unique locator set here; the
+ * paired completion must repeat this exact frozen set below.
+ */
+function isCompleteExpectedHeadSet(value: unknown, workspace: ManagedWorkspaceSet): value is readonly { readonly relativeLocator: string; readonly head: string }[] {
+  if (!Array.isArray(value)) return false;
+  const expected = workspace.members.map((member) => member.relativeLocator).sort();
+  const found = value.flatMap((item) => typeof item === "object" && item !== null
+    && typeof (item as { relativeLocator?: unknown }).relativeLocator === "string"
+    && typeof (item as { head?: unknown }).head === "string"
+    && (item as { head: string }).head.length > 0
+    ? [(item as { relativeLocator: string }).relativeLocator]
+    : []).sort();
+  return JSON.stringify(found) === JSON.stringify(expected);
+}
+
+function sameExpectedHeadSet(
+  left: readonly { readonly relativeLocator: string; readonly head: string }[],
+  right: readonly { readonly relativeLocator: string; readonly head: string }[],
+): boolean {
+  const normalized = (heads: readonly { readonly relativeLocator: string; readonly head: string }[]) =>
+    heads.map((head) => `${head.relativeLocator}:${head.head}`).sort();
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+async function defaultBootstrap(projectRoot: string, path: string): Promise<boolean> {
+  const alertsPath = join(projectRoot, ".roll", "loop", "alerts.md");
+  const bus = new EventBus();
+  const events: EventsPort = {
+    ensureEventFiles: bus.ensureEventFiles.bind(bus),
+    appendEvent: bus.appendEvent.bind(bus),
+    upsertRun: bus.upsertRun.bind(bus),
+    appendAlert: (target: string, message: string): void => {
+      mkdirSync(dirname(target), { recursive: true });
+      appendFileSync(target, `${message}\n`, "utf8");
+    },
+  };
+  try {
+    await linkRollIntoWorktree(projectRoot, path);
+    if (!await bootstrapWorktreeSkills(path, alertsPath, events, (worktreePath) => git(["submodule", "update", "--init", "--recursive"], worktreePath))) return false;
+    if (!await bootstrapWorktreeDeps(path, alertsPath, events)) return false;
+    await bootstrapWorktreePrebuild(path, alertsPath, events, readPrebuildDistEnabled(projectRoot));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function inspectedMatches(
+  observed: { readonly head: string; readonly repositoryId: string; readonly registered: boolean } | undefined,
+  workspace: ManagedWorkspaceSet,
+  locator: string,
+): boolean {
+  const member = workspace.members.find((item) => item.relativeLocator === locator);
+  return member !== undefined && observed !== undefined && observed.registered
+    && observed.repositoryId === member.repositoryId && observed.head === member.checkoutRef.head;
+}
+
+/**
+ * Allocate one parent `skill_dispatch` DeliveryRun and all of its children.
+ * This is the only production allocation entry: it derives the canonical root,
+ * repository identity, base SHA, lifecycle event path, and Story reservation
+ * from the project checkout. Callers cannot inject a root, parent workspace, or
+ * claimed reservation.
+ */
+export async function allocateSkillDispatchRun(
+  input: SkillDispatchRunInput,
+  deps: SkillDispatchAllocatorDeps = {},
+): Promise<{ readonly ok: true; readonly value: AllocatedSkillDispatchRun } | { readonly ok: false; readonly reason: SkillDispatchAllocationRefusal }> {
+  if (!input.runId.startsWith("dispatch-") || input.storyId.trim() === "") return { ok: false, reason: "invalid_parent_run" };
+
+  const projectRoot = realpathSync(input.projectRoot);
+  const canonicalRootInput = join(projectRoot, ".roll", "loop", "worktrees");
+  mkdirSync(canonicalRootInput, { recursive: true });
+  const canonicalRoot = realpathSync(canonicalRootInput);
+  const eventsPath = join(projectRoot, ".roll", "loop", "events.ndjson");
+  const leasePath = join(projectRoot, ".roll", "loop", "leases");
+  const events = lifecycleEvents(eventsPath);
+  const frozen = frozenAllocationWorkspace(events, input.storyId, input.runId);
+  if (frozen.found && frozen.workspace === undefined) return { ok: false, reason: "workspace_identity_mismatch" };
+  const frozenWorkspace = frozen.found ? frozen.workspace : undefined;
+  if (frozenWorkspace !== undefined && !workspaceMatchesDispatchInput(frozenWorkspace, input)) {
+    return { ok: false, reason: "workspace_identity_mismatch" };
+  }
+  const base = frozenWorkspace?.members[0].checkoutRef.head ?? deps.base?.(projectRoot) ?? resolveIntegrationBranch(projectRoot);
+  const facts = await (deps.facts?.(projectRoot, base) ?? defaultFacts(projectRoot, base));
+  if (facts === undefined) return { ok: false, reason: "base_identity_unknown" };
+  if (frozenWorkspace !== undefined && (facts.baseSha !== frozenWorkspace.members[0].checkoutRef.head
+    || facts.repositoryId !== frozenWorkspace.members[0].repositoryId)) return { ok: false, reason: "workspace_identity_mismatch" };
+  const workspaceCandidate = frozenWorkspace ?? (() => {
+    const parent = {
+      reservation: { storyId: input.storyId, runId: input.runId },
+      workspace: {
+        schema: MANAGED_WORKSPACE_SCHEMA,
+        runId: input.runId,
+        storyId: input.storyId,
+        kind: "skill_dispatch" as const,
+        topology: "solo" as const,
+        members: [{
+          repositoryId: facts.repositoryId,
+          workspaceKey: input.runId,
+          relativeLocator: input.runId,
+          checkoutRef: { kind: "detached" as const, head: facts.baseSha },
+          publishRef: `refs/heads/${input.runId}`,
+        }] as const,
+      },
+    };
+    const plan = createSkillDispatchPlan(parent, input.actions);
+    if (!plan.ok) return undefined;
+    return {
+      ...plan.value.parent.workspace,
+      members: [
+        plan.value.parent.workspace.members[0],
+        ...plan.value.children.map((child) => ({
+          repositoryId: facts.repositoryId,
+          workspaceKey: input.runId,
+          relativeLocator: child.relativeLocator,
+          actionId: child.actionId,
+          declaredFileScope: child.declaredFileScope,
+          checkoutRef: { kind: "detached" as const, head: facts.baseSha },
+          publishRef: `refs/heads/${input.runId}/${child.actionId}`,
+        })),
+      ] as ManagedWorkspaceSet["members"],
+    };
+  })();
+  if (workspaceCandidate === undefined) return { ok: false, reason: "parent_contract_refused" };
+  const workspace: ManagedWorkspaceSet = workspaceCandidate;
+  const paths = workspacePaths(canonicalRoot, workspace);
+  if (Object.values(paths).some((path) => !inside(canonicalRoot, path))) return { ok: false, reason: "workspace_identity_mismatch" };
+  const now = deps.now?.() ?? Date.now();
+  const operationId = `${input.runId}:allocate`;
+  const recoveryRecorded = matchingLifecycle(events, "worktree:recovery_required", workspace, operationId);
+  const allocationRecorded = matchingLifecycle(events, "worktree:allocated", workspace, operationId);
+  const existingLease = readLeases(leasePath)[input.storyId];
+  const matchingLease = existingLease?.source === "skill-dispatch" && existingLease.runId === input.runId;
+  let claimedNow = false;
+  if (existingLease === undefined) {
+    const claim = claimStoryLease(leasePath, input.storyId, { source: "skill-dispatch", runId: input.runId, claimedAt: now });
+    if (claim.status !== "claimed") return { ok: false, reason: "parent_reservation_held" };
+    claimedNow = true;
+  } else if (!matchingLease) {
+    return { ok: false, reason: "parent_reservation_held" };
+  }
+  const abandonFreshClaim = (): void => {
+    if (claimedNow) releaseStoryLease(leasePath, input.storyId, { source: "skill-dispatch", runId: input.runId });
+  };
+  const inspect = deps.inspect ?? ((repoCwd, path) => inspectManagedWorktree(repoCwd, path));
+  if (allocationRecorded) {
+    for (const [locator, path] of Object.entries(paths)) {
+      if (!inspectedMatches(await inspect(projectRoot, path), workspace, locator)) {
+        appendRecovery(deps.append ?? ((eventPath, event) => new EventBus().appendEvent(eventPath, event)), eventsPath, workspace, operationId, "allocated_event_workspace_missing", now);
+        return { ok: false, reason: "workspace_identity_mismatch" };
+      }
+    }
+    return { ok: true, value: { workspace, paths } };
+  }
+
+  const append = deps.append ?? ((path, event) => new EventBus().appendEvent(path, event));
+  if (!recoveryRecorded) {
+    for (const path of Object.values(paths)) {
+      if (existsSync(path) || await inspect(projectRoot, path) !== undefined) {
+        abandonFreshClaim();
+        return { ok: false, reason: "target_exists" };
+      }
+    }
+    // This durable write-ahead marker precedes the first Git effect. A retry
+    // with the same runId adopts only this exact workspace and operation.
+    if (!appendRecovery(append, eventsPath, workspace, operationId, "allocation_started", now)) {
+      abandonFreshClaim();
+      return { ok: false, reason: "event_write_failed" };
+    }
+  }
+  const add = deps.add ?? ((repoCwd, path, publishRef, baseRef) => worktreeAdd(repoCwd, path, publishRef, baseRef));
+  const bootstrap = deps.bootstrap ?? defaultBootstrap;
+  for (const member of workspace.members) {
+    const path = paths[member.relativeLocator]!;
+    const observedBefore = await inspect(projectRoot, path);
+    if (observedBefore === undefined) {
+      if (existsSync(path)) {
+        appendRecovery(append, eventsPath, workspace, operationId, "existing_target_identity_unproven", now);
+        return { ok: false, reason: "workspace_identity_mismatch" };
+      }
+      const result = await add(projectRoot, path, member.publishRef ?? input.runId, base);
+      if (result.code !== 0) {
+        appendRecovery(append, eventsPath, workspace, operationId, "git_add_failed", now);
+        return { ok: false, reason: "git_add_failed" };
+      }
+    }
+    const observed = await inspect(projectRoot, path);
+    if (!inspectedMatches(observed, workspace, member.relativeLocator)) {
+      appendRecovery(append, eventsPath, workspace, operationId, "workspace_identity_mismatch", now);
+      return { ok: false, reason: "workspace_identity_mismatch" };
+    }
+    if (!await bootstrap(projectRoot, path)) {
+      appendRecovery(append, eventsPath, workspace, operationId, "git_created_bootstrap_incomplete", now);
+      return { ok: false, reason: "bootstrap_failed" };
+    }
+  }
+  try {
+    append(eventsPath, { type: "worktree:allocated", workspace, operationId, ts: now });
+  } catch {
+    appendRecovery(append, eventsPath, workspace, operationId, "git_created_event_missing", now);
+    return { ok: false, reason: "event_write_failed" };
+  }
+  return { ok: true, value: { workspace, paths } };
+}
+
+/** Runtime closure boundary. Child commands cannot release their parent's lease. */
+export function releaseSkillDispatchReservation(
+  projectRoot: string,
+  storyId: string,
+  runId: string,
+  executionCwd: string,
+): { readonly ok: true } | { readonly ok: false; readonly reason: "parent_required" | "workspace_release_required" | "reservation_release_refused" } {
+  const actor = skillDispatchActorForCwd(executionCwd);
+  // Release executes from the parent integration/control-plane checkout after
+  // children are gone. A recognized child is always denied; an unclassified
+  // project-root runner is the parent control plane, never a child assertion.
+  const authority = skillDispatchAuthority(actor === "child" ? "child" : "parent", "release_reservation");
+  if (!authority.ok) return authority;
+  const root = realpathSync(projectRoot);
+  const eventsPath = join(root, ".roll", "loop", "events.ndjson");
+  const events = lifecycleEvents(eventsPath);
+  const allocation = [...events].reverse().find((record): record is LifecycleRecord & { workspace: ManagedWorkspaceSet; operationId: string } => {
+    return record.type === "worktree:allocated" && record.workspace?.runId === runId && record.workspace.storyId === storyId;
+  });
+  if (allocation === undefined || allocation.operationId === undefined) return { ok: false, reason: "workspace_release_required" };
+  const operationId = `${allocation.operationId}:release`;
+  let requestIndex = -1;
+  let requestHeads: readonly { readonly relativeLocator: string; readonly head: string }[] | undefined;
+  let completed = false;
+  for (const [index, record] of events.entries()) {
+    const expectedHeads = isCompleteExpectedHeadSet(record.expectedHeads, allocation.workspace)
+      ? record.expectedHeads
+      : undefined;
+    if (record.runId !== runId || record.operationId !== operationId || expectedHeads === undefined) continue;
+    if (record.type === "worktree:released") {
+      // Completion is valid only after this operation's durable request. A
+      // reversed terminal fact is corrupt lifecycle evidence, not a retry.
+      if (requestIndex < 0) return { ok: false, reason: "workspace_release_required" };
+      if (requestHeads === undefined || !sameExpectedHeadSet(requestHeads, expectedHeads)) {
+        return { ok: false, reason: "workspace_release_required" };
+      }
+      completed = true;
+    } else if (record.type === "worktree:release_requested" && requestIndex < 0) {
+      requestIndex = index;
+      requestHeads = expectedHeads;
+    }
+  }
+  if (requestIndex < 0 || requestHeads === undefined) return { ok: false, reason: "workspace_release_required" };
+  const canonicalRoot = join(root, ".roll", "loop", "worktrees");
+  if (allocation.workspace.members.some((member) => existsSync(resolve(canonicalRoot, member.relativeLocator)))) {
+    return { ok: false, reason: "workspace_release_required" };
+  }
+  // Git removal may have succeeded immediately before a durable completion
+  // append failed. The paired request is the write-ahead proof; replay only its
+  // exact allocation operation and never infer a release from missing paths.
+  if (!completed) {
+    try {
+      new EventBus().appendEvent(eventsPath, {
+        type: "worktree:released",
+        runId,
+        operationId,
+        expectedHeads: requestHeads,
+        ts: Date.now(),
+      });
+    } catch {
+      return { ok: false, reason: "workspace_release_required" };
+    }
+  }
+  const leasePath = join(root, ".roll", "loop", "leases");
+  // The durable request/completion pair is the closure authority. Once a
+  // matching lease was removed, an operator or cleanup retry is deliberately
+  // idempotent rather than reporting a false recovery failure.
+  if (readLeases(leasePath)[storyId] === undefined) return { ok: true };
+  const released = releaseStoryLease(leasePath, storyId, {
+    source: "skill-dispatch",
+    runId,
+  });
+  return released ? { ok: true } : { ok: false, reason: "reservation_release_refused" };
+}
+
+/** A pure boundary used by the parent integration command and tests. */
+export function skillDispatchScopeAllows(scope: readonly string[], changedPaths: readonly string[]): boolean {
+  return changedPaths.every((path) => scope.some((root) => path === root || path.startsWith(`${root}/`)));
+}
+
+/**
+ * Parse Git's NUL-delimited name-status output without losing the source side
+ * of a rename/copy. Both paths are writes for a scoped child integration.
+ */
+export function skillDispatchChangedPaths(nameStatus: string): readonly string[] | undefined {
+  const fields = nameStatus.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const paths: string[] = [];
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++];
+    if (status === undefined || status.length === 0) return undefined;
+    const code = status[0];
+    const needsPair = code === "R" || code === "C";
+    const first = fields[index++];
+    if (first === undefined || first.length === 0) return undefined;
+    paths.push(first);
+    if (needsPair) {
+      const second = fields[index++];
+      if (second === undefined || second.length === 0) return undefined;
+      paths.push(second);
+    }
+  }
+  return paths;
+}
+
+export type SkillDispatchIntegrationRefusal =
+  | "parent_required"
+  | "workspace_release_required"
+  | "unknown_action"
+  | "child_commit_unproven"
+  | "scope_violation"
+  | "integration_failed";
+
+function allocatedDispatch(eventsPath: string, storyId: string, runId: string): ManagedWorkspaceSet | undefined {
+  return [...lifecycleEvents(eventsPath)].reverse().find((record): record is LifecycleRecord & { workspace: ManagedWorkspaceSet } =>
+    record.type === "worktree:allocated" && record.workspace?.kind === "skill_dispatch"
+      && record.workspace.storyId === storyId && record.workspace.runId === runId,
+  )?.workspace;
+}
+
+/**
+ * Parent-only integration. It verifies the actual candidate commit's changed
+ * paths against the child declaration before cherry-picking it into the parent
+ * checkout, so declarations are an enforced write boundary rather than audit
+ * metadata.
+ */
+export function integrateSkillDispatchChild(
+  projectRoot: string,
+  storyId: string,
+  runId: string,
+  actionId: string,
+  commit: string,
+  executionCwd: string,
+): { readonly ok: true } | { readonly ok: false; readonly reason: SkillDispatchIntegrationRefusal } {
+  if (skillDispatchActorForCwd(executionCwd) === "child") return { ok: false, reason: "parent_required" };
+  const root = realpathSync(projectRoot);
+  const workspace = allocatedDispatch(join(root, ".roll", "loop", "events.ndjson"), storyId, runId);
+  const child = workspace?.members.find((member) => member.actionId === actionId);
+  const parent = workspace?.members[0];
+  if (workspace === undefined || child === undefined || parent === undefined || child.declaredFileScope === undefined) return { ok: false, reason: "unknown_action" };
+  const canonicalRoot = join(root, ".roll", "loop", "worktrees");
+  const childPath = resolve(canonicalRoot, child.relativeLocator);
+  const parentPath = resolve(canonicalRoot, parent.relativeLocator);
+  if (!existsSync(childPath) || !existsSync(parentPath)) return { ok: false, reason: "workspace_release_required" };
+  try {
+    execFileSync("git", ["-C", childPath, "merge-base", "--is-ancestor", child.checkoutRef.head, commit], { stdio: "ignore" });
+    execFileSync("git", ["-C", childPath, "merge-base", "--is-ancestor", commit, "HEAD"], { stdio: "ignore" });
+  } catch {
+    return { ok: false, reason: "child_commit_unproven" };
+  }
+  let commits: readonly string[];
+  try {
+    commits = execFileSync("git", ["-C", childPath, "rev-list", "--reverse", "--topo-order", `${child.checkoutRef.head}..${commit}`], { encoding: "utf8" })
+      .trim().split("\n").filter((value) => value !== "");
+    if (commits.length === 0) return { ok: false, reason: "child_commit_unproven" };
+    // The parent applies these commits one by one, therefore every individual
+    // patch must prove its own scope before *any* parent mutation. A net
+    // base-to-tip diff can hide a cancelled write from an earlier TCR commit.
+    // Merge commits have no single-parent patch semantics, so reject them
+    // rather than guessing which side of their history a child is allowed to
+    // import.
+    for (const candidate of commits) {
+      const parents = execFileSync("git", ["-C", childPath, "rev-list", "--parents", "-n", "1", candidate], { encoding: "utf8" })
+        .trim().split(/\s+/).filter((value) => value !== "");
+      if (parents.length !== 2) return { ok: false, reason: "child_commit_unproven" };
+      const changed = skillDispatchChangedPaths(execFileSync("git", [
+        // `--find-copies` considers only modified sources. A child can copy an
+        // unchanged file from outside its scope into an allowed destination,
+        // which would otherwise be reported as a scoped add. Include every
+        // eligible source so the NUL parser can prove both sides before any
+        // parent mutation.
+        "-C", childPath, "diff-tree", "--no-commit-id", "--name-status", "-z", "--find-renames", "--find-copies-harder", "-r", `${candidate}^`, candidate,
+      ], { encoding: "utf8" }));
+      if (changed === undefined) return { ok: false, reason: "child_commit_unproven" };
+      if (!skillDispatchScopeAllows(child.declaredFileScope, changed)) return { ok: false, reason: "scope_violation" };
+    }
+  } catch {
+    return { ok: false, reason: "child_commit_unproven" };
+  }
+  try {
+    const parentHead = execFileSync("git", ["-C", parentPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    try {
+      execFileSync("git", ["-C", parentPath, "merge-base", "--is-ancestor", commit, parentHead], { stdio: "ignore" });
+      return { ok: true };
+    } catch {
+      // A normal cherry-pick has distinct object IDs; compare patch identity
+      // below to make that retry idempotent as well.
+    }
+    // `git cherry` compares patch identities, so a retry after the complete
+    // range landed is a no-op while a partial previous integration fails loud.
+    const equivalence = execFileSync("git", ["-C", childPath, "cherry", parentHead, commit], { encoding: "utf8" })
+      .trim().split("\n").filter((value) => value !== "");
+    // `git cherry` deliberately abbreviates object names. Its output is still
+    // unambiguous for this repository, but compare the returned prefix to the
+    // complete proven range SHA rather than treating the abbreviation as a new
+    // or missing commit.
+    const stateFor = (candidate: string): string | undefined =>
+      equivalence.find((line) => candidate.startsWith(line.slice(2)))?.[0];
+    if (commits.some((candidate) => stateFor(candidate) === undefined)) return { ok: false, reason: "integration_failed" };
+    const alreadyApplied = commits.map(stateFor);
+    if (alreadyApplied.every((state) => state === "-")) return { ok: true };
+    if (alreadyApplied.some((state) => state !== "+")) return { ok: false, reason: "integration_failed" };
+    // Apply every proven TCR commit in order. If any pick fails, restore the
+    // parent checkout to its exact pre-integration HEAD: partial integration is
+    // never a successful result or a state a retry may silently extend.
+    try {
+      execFileSync("git", ["-C", parentPath, "cherry-pick", "--no-edit", ...commits], { stdio: "ignore" });
+    } catch {
+      try { execFileSync("git", ["-C", parentPath, "cherry-pick", "--abort"], { stdio: "ignore" }); } catch { /* no active sequence */ }
+      try { execFileSync("git", ["-C", parentPath, "reset", "--hard", parentHead], { stdio: "ignore" }); } catch { /* failure remains fail-closed */ }
+      return { ok: false, reason: "integration_failed" };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "integration_failed" };
+  }
+}
+
+/**
+ * Resolve the delivery actor from a real allocated workspace path. This is used
+ * at command boundaries (for example attest) rather than trusting an agent to
+ * volunteer that it is a child.
+ */
+export function skillDispatchActorForCwd(cwd: string): "parent" | "child" | undefined {
+  let resolvedCwd: string;
+  try {
+    resolvedCwd = realpathSync(cwd);
+  } catch {
+    return undefined;
+  }
+  const marker = `${sep}.roll${sep}loop${sep}worktrees${sep}`;
+  const markerIndex = resolvedCwd.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  const projectRoot = resolvedCwd.slice(0, markerIndex);
+  const canonicalRoot = join(projectRoot, ".roll", "loop", "worktrees");
+  let events: unknown[];
+  try {
+    events = readFileSync(join(projectRoot, ".roll", "loop", "events.ndjson"), "utf8")
+      .split("\n")
+      .flatMap((line) => {
+        try { return [JSON.parse(line) as unknown]; } catch { return []; }
+      });
+  } catch {
+    return undefined;
+  }
+  for (const event of [...events].reverse()) {
+    if (typeof event !== "object" || event === null) continue;
+    const record = event as { type?: unknown; workspace?: ManagedWorkspaceSet };
+    if (record.type !== "worktree:allocated" || record.workspace?.kind !== "skill_dispatch") continue;
+    for (const member of record.workspace.members) {
+      const path = resolve(canonicalRoot, member.relativeLocator);
+      if (resolvedCwd === path || resolvedCwd.startsWith(`${path}${sep}`)) return member.actionId === undefined ? "parent" : "child";
+    }
+  }
+  return undefined;
+}
+
+async function defaultFacts(projectRoot: string, base: string): Promise<{ readonly baseSha: string; readonly repositoryId: string } | undefined> {
+  const { git } = await import("@roll/infra");
+  const resolved = await git(["rev-parse", "--verify", `${base}^{commit}`], projectRoot);
+  if (resolved.code !== 0 || resolved.stdout.trim() === "") return undefined;
+  return { baseSha: resolved.stdout.trim(), repositoryId: (await projectIdentity(projectRoot)).slug };
+}

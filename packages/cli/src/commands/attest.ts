@@ -126,6 +126,7 @@ import { currentLang } from "./agent-list.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
 import { collectRollCaptureReadiness, type RollCaptureReadiness } from "../lib/roll-capture-readiness.js";
 import { designContractDeliveredEvidence } from "../runner/attest-gate.js";
+import { skillDispatchActorForCwd } from "../runner/skill-dispatch-workspace.js";
 import { resolveCardDeliveryRecord } from "../lib/delivery-record.js";
 import { readReviewScoreTrend, readStoryReviewScores } from "../lib/review-score.js";
 import { collectToolEvidenceFromEventsPath, formatToolCostSummary } from "../lib/tool-display.js";
@@ -1373,6 +1374,10 @@ export function resolveStoryAcItems(projectPath: string, storyId: string): Retur
 /** `roll attest <story-id> [--deploy-url <url>] [--capture-tmux <s> | --capture-command <c>]` */
 export async function attestCommand(args: string[], deps: AttestDeps = {}): Promise<number> {
   if (args[0] === "audit") return attestAuditCommand(args.slice(1));
+  if (skillDispatchActorForCwd(process.cwd()) === "child") {
+    process.stderr.write("roll attest: refused in a Skill dispatch child workspace; only the parent DeliveryRun may attest.\n");
+    return 1;
+  }
   // FIX-329 — the `attest backfill` loophole is removed. Acceptance evidence is
   // produced DURING delivery (the loop's HARD attest:gate renders the report
   // in-cycle; manual deliveries run attest as their Phase 10.6 step), never

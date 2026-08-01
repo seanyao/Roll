@@ -87,6 +87,7 @@ import { updateCommand } from "./update.js";
 import { versionCommand } from "./version.js";
 import { worktreeAuditCommand } from "./worktree-audit.js";
 import { worktreeCleanupCommand } from "./worktree-cleanup.js";
+import { skillDispatchCommand } from "./skill-dispatch.js";
 import { deltaCommand } from "./delta.js";
 
 let registered = false;
@@ -428,9 +429,10 @@ export function registerAll(): void {
   registerPorted("worktree", (args): number | Promise<number> => {
     if (args[0] === "audit") return worktreeAuditCommand(args.slice(1));
     if (args[0] === "cleanup") return worktreeCleanupCommand(args.slice(1));
-    process.stderr.write("roll worktree: unknown subcommand. Try 'roll worktree audit' or 'roll worktree cleanup'.\n");
+    if (args[0] === "dispatch") return skillDispatchCommand(args.slice(1));
+    process.stderr.write("roll worktree: unknown subcommand. Try 'roll worktree audit', 'roll worktree cleanup', or 'roll worktree dispatch'.\n");
     return 1;
-  }, { help: "Usage: roll worktree <audit|cleanup> [options]\n  audit    Read-only audit of all git worktrees: ownership, dirt, merge evidence, disposition.\n  cleanup  Safe, audit-derived recovery for branch/worktree canary pressure (--dry-run first, then --apply, then roll loop resume).\n只读审计所有 git worktree,并对 canary 压力提供仅基于审计的安全清理(先 --dry-run,再 --apply,最后 roll loop resume)。" });
+  }, { help: "Usage: roll worktree <audit|cleanup|dispatch> [options]\n  audit    Read-only audit of all git worktrees: ownership, dirt, merge evidence, disposition.\n  cleanup  Safe, audit-derived recovery for branch/worktree canary pressure (--dry-run first, then --apply, then roll loop resume).\n  dispatch Allocate a parent-owned Skill dispatch workspace set.\n只读审计所有 git worktree,并对 canary 压力提供仅基于审计的安全清理(先 --dry-run,再 --apply,最后 roll loop resume)。" });
   // `loop` is FULLY TS as of US-PORT-021 prep — no subcommand falls back to bash.
   // `on` generates the v3 self-contained runner (DELIBERATE divergence from the
   // v2 tmux outer/inner pair, whitelisted in AGENTS.md). Bare `roll loop`

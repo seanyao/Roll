@@ -28,8 +28,9 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { appendFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { DEFAULT_BRANCH_CANARY_MAX } from "@roll/core";
-import { resolveLang, type RollEvent } from "@roll/spec";
+import { DEFAULT_BRANCH_CANARY_MAX, EventBus } from "@roll/core";
+import { resolveLang, type RollEvent, type WorktreeLifecycleEvent } from "@roll/spec";
+import { releaseSkillDispatchReservation, skillDispatchActorForCwd } from "../runner/skill-dispatch-workspace.js";
 import {
   auditWorktrees,
   type WorktreeAuditDeps,
@@ -426,6 +427,16 @@ export interface ApplyCleanupOptions {
   removeBranch?: (repositoryRoot: string, branch: string, expectedSha: string) => { ok: boolean; detail: string };
   /** Structured event sink (defaults to no-op; the CLI wires events.ndjson). */
   emit?: (event: RollEvent) => void;
+  /**
+   * Durable lifecycle sink. The release request is write-ahead: cleanup refuses
+   * the whole WorkspaceSet before touching Git when this write fails. The final
+   * released event is likewise required before a dispatch Story lease may close.
+   */
+  appendLifecycle?: (event: WorktreeLifecycleEvent) => boolean;
+  /** Parent control-plane hook used only after every member is absent + released. */
+  releaseDispatchReservation?: (storyId: string, runId: string) => boolean;
+  /** Dispatch releases are bound to the durable allocation operation, never a time-only cleanup attempt. */
+  releaseOperationId?: (runId: string) => string | undefined;
   nowISO?: () => string;
   nowMs?: () => number;
 }
@@ -560,6 +571,7 @@ export async function applyWorktreeCleanup(
   const removeFn = options.removeWorktree ?? defaultRemoveWorktree;
   const removeBranchFn = options.removeBranch ?? defaultRemoveBranch;
   const emit = options.emit ?? (() => {});
+  const appendLifecycle = options.appendLifecycle ?? (() => true);
   const nowMs = options.nowMs ?? (() => Date.now());
 
   const removed: CleanupRemoval[] = [];
@@ -618,9 +630,29 @@ export async function applyWorktreeCleanup(
     if (failure !== undefined) { refuseSet(failure); continue; }
     if (options.dryRun) { removed.push(...revalidated.map((entry) => entry.removal)); continue; }
 
+    const expectedHeads = revalidated.map(({ candidate }) => ({
+      relativeLocator: candidate.memberLocator,
+      head: candidate.expectedHead,
+    }));
+    const operationId = options.releaseOperationId?.(runId) ?? `${runId}:cleanup:${nowMs()}`;
+    // Write intent before the first destructive effect. A failed event append
+    // leaves the complete WorkspaceSet and its Story reservation intact.
+    if (!appendLifecycle({
+      type: "worktree:release_requested",
+      runId,
+      reason: "delivered",
+      operationId,
+      expectedHeads,
+      ts: nowMs(),
+    })) {
+      refuseSet("lifecycle-write-failed: could not durably request workspace release");
+      continue;
+    }
+
     // Subordinate Git worktrees are registered by their own repository. Remove
     // them before the primary, keeping any failed remainder on disk for the
     // next fresh audit/recovery instead of fabricating a released set.
+    let removalFailed = false;
     for (const entry of [...revalidated].sort((a, b) => b.candidate.memberLocator.length - a.candidate.memberLocator.length)) {
       const marker = ".submodules/";
       const at = entry.candidate.memberLocator.indexOf(marker);
@@ -628,10 +660,29 @@ export async function applyWorktreeCleanup(
       const result = removeFn(memberRepository, entry.record.path, repositoryRoot);
       if (!result.ok) {
         refuseSet(`remove-failed: ${result.detail}; workspace set requires recovery`);
+        removalFailed = true;
         break;
       }
       removed.push(entry.removal);
       emit({ type: "worktree_cleanup_applied", path: entry.record.path, expectedHead: entry.candidate.expectedHead, ...(entry.record.branch ? { branch: entry.record.branch } : {}), ...(entry.record.cycleId ? { cycleId: entry.record.cycleId } : {}), ts: nowMs() });
+    }
+    if (removalFailed || revalidated.some((entry) => existsSync(entry.record.path))) continue;
+    if (!appendLifecycle({
+      type: "worktree:released",
+      runId,
+      operationId,
+      expectedHeads,
+      ts: nowMs(),
+    })) {
+      // Git has completed, but a missing durable completion marker means the
+      // lease must remain held for recovery rather than pretending closure.
+      refuseSet("lifecycle-write-failed: workspace removed but release completion was not durable");
+      continue;
+    }
+    const storyId = freshSet[0]?.storyId;
+    if (storyId !== undefined && options.releaseDispatchReservation !== undefined
+      && !options.releaseDispatchReservation(storyId, runId)) {
+      refuseSet("reservation-release-failed: workspace released but Story lease remains held for recovery");
     }
   }
 
@@ -1173,6 +1224,10 @@ export async function worktreeCleanupCommand(
   const repoIdx = args.indexOf("--repo");
   const repoOverride = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
   const repoRoot = resolve(repoOverride ?? process.cwd());
+  if (skillDispatchActorForCwd(process.cwd()) === "child") {
+    process.stderr.write("roll worktree cleanup: child Skill workspaces cannot release the parent delivery run.\n");
+    return 2;
+  }
 
   const fullDeps: WorktreeAuditDeps = {
     repoRoot,
@@ -1263,6 +1318,14 @@ export async function worktreeCleanupCommand(
         /* best-effort observability */
       }
     });
+  const appendLifecycle = (event: WorktreeLifecycleEvent): boolean => {
+    try {
+      new EventBus().appendEvent(eventsPath, event);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   const result = await applyWorktreeCleanup(plan, {
     repositoryRoot: repoRoot,
@@ -1275,6 +1338,35 @@ export async function worktreeCleanupCommand(
     },
     ...(deps?.removeWorktree ? { removeWorktree: deps.removeWorktree } : {}),
     emit,
+    appendLifecycle,
+    releaseDispatchReservation: (storyId, runId) => {
+      // Cycle and host-delta WorkspaceSets use their own closure paths. Only a
+      // durable `skill_dispatch` allocation owns the Story lease this command
+      // is allowed to release.
+      try {
+        const allocatedDispatch = new EventBus().readEvents(eventsPath).some((event) =>
+          event.type === "worktree:allocated"
+          && event.workspace.runId === runId
+          && event.workspace.storyId === storyId
+          && event.workspace.kind === "skill_dispatch",
+        );
+        return !allocatedDispatch || releaseSkillDispatchReservation(repoRoot, storyId, runId, repoRoot).ok;
+      } catch {
+        return false;
+      }
+    },
+    releaseOperationId: (runId) => {
+      try {
+        const allocated = new EventBus().readEvents(eventsPath).find((event) =>
+          event.type === "worktree:allocated" && event.workspace.runId === runId && event.workspace.kind === "skill_dispatch",
+        );
+        return allocated?.type === "worktree:allocated" && allocated.operationId !== undefined
+          ? `${allocated.operationId}:release`
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    },
     ...(deps?.nowMs ? { nowMs: deps.nowMs } : {}),
   });
 

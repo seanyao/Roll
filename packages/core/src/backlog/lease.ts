@@ -47,13 +47,14 @@ import { randomUUID } from "node:crypto";
 export const HUMAN_SOFT_LEASE_HOURS = 24;
 
 /** Recognised claim sources. */
-export type LeaseSource = "cycle" | "human" | "supervisor" | "host-delegation";
+export type LeaseSource = "cycle" | "human" | "supervisor" | "host-delegation" | "skill-dispatch";
 
 const VALID_SOURCES: ReadonlySet<string> = new Set([
   "cycle",
   "human",
   "supervisor",
   "host-delegation",
+  "skill-dispatch",
 ]);
 
 /** A lease entry — who claimed a story and when. */
@@ -366,7 +367,8 @@ export function injectClaimOps(ops: ClaimStepOps | null): void {
  * valid legacy entry exists for the same storyId and no canonical record
  * exists, the claim returns `exists` and no canonical record is created.
  *
- * Host-delegation claims MUST carry delegationId for match-only release.
+ * Host-delegation and Skill-dispatch claims carry their durable run identity
+ * for match-only release.
  *
  * @param dirPath  Path to the leases directory (e.g. `.roll/loop/leases`)
  * @param storyId  The story id to claim
@@ -380,6 +382,9 @@ export function claimStoryLease(
   // Host-delegation claims MUST carry delegationId for match-only release
   if (entry.source === "host-delegation" && !entry.delegationId) {
     throw new Error("claimStoryLease: host-delegation source requires delegationId");
+  }
+  if (entry.source === "skill-dispatch" && !entry.runId) {
+    throw new Error("claimStoryLease: skill-dispatch source requires runId");
   }
 
   // ═══ Step 0: Validate ALL legacy entries before any side effect ═══
@@ -599,6 +604,12 @@ export function releaseStoryLease(
     ) {
       return false;
     }
+  }
+
+  // A dispatch reservation belongs to its parent DeliveryRun. Children never
+  // receive this identity, so they cannot release the Story reservation.
+  if (identity.source === "skill-dispatch") {
+    if (!identity.runId || existing.runId !== identity.runId) return false;
   }
 
   // For cycle: pid is REQUIRED and must match

@@ -23,6 +23,33 @@ const workspace: ManagedWorkspaceSet = {
 };
 
 describe("US-LOOP-122 — managed workspace boundary", () => {
+  it("persists Skill children as members of their parent's workspace set", () => {
+    expect(normalizeManagedWorkspaceSet({
+      schema: 1,
+      runId: "dispatch-r1",
+      storyId: "US-LOOP-127",
+      kind: "skill_dispatch",
+      topology: "solo",
+      members: [{
+        repositoryId: "github.com/acme/roll",
+        workspaceKey: "dispatch-r1",
+        relativeLocator: "dispatch-r1",
+        checkoutRef: { kind: "detached", head: "a".repeat(40) },
+      }, {
+        repositoryId: "github.com/acme/roll",
+        workspaceKey: "dispatch-r1",
+        relativeLocator: "dispatch-r1.children/docs",
+        actionId: "docs",
+        declaredFileScope: ["docs"],
+        checkoutRef: { kind: "detached", head: "a".repeat(40) },
+        publishRef: "refs/heads/dispatch-r1/docs",
+      }],
+    })).toMatchObject({ ok: true, value: { members: [
+      expect.objectContaining({ relativeLocator: "dispatch-r1" }),
+      expect.objectContaining({ actionId: "docs", declaredFileScope: ["docs"] }),
+    ] } });
+  });
+
   it("normalizes a primary and submodule member deterministically", () => {
     const result = normalizeManagedWorkspaceSet({
       ...workspace,

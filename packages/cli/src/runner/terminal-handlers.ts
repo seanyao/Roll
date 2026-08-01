@@ -24,6 +24,7 @@ import { eventTs } from "./runner-time.js";
 import { appendCleanupEvent, cleanupGuardResult, recordCleanupFailures } from "./sandbox-boundary.js";
 import { releaseReason, releaseRecovery, releaseVerdict } from "./managed-workspace-guidance.js";
 import { executeAppendRunCommand } from "./terminal-run-handler.js";
+import { skillDispatchActorForCwd } from "./skill-dispatch-workspace.js";
 
 type TerminalCommand = Extract<CycleCommand, { kind:
   | "publish_pr"
@@ -56,6 +57,17 @@ export async function executeTerminalCommand(
   ports: Ports,
   ctx: CycleContext,
 ): Promise<ExecuteResult> {
+  // A child dispatch checkout is a bounded implementation input, never a
+  // delivery authority. Reject actual runner publish/merge/release commands
+  // from that location rather than relying on Skill prose or an actor flag.
+  if (skillDispatchActorForCwd(ports.paths.worktreePath) === "child" && (
+    cmd.kind === "publish_pr" || cmd.kind === "merge_back" || cmd.kind === "push_orphan" || cmd.kind === "cleanup_worktree"
+  )) {
+    ports.events.appendAlert(ports.paths.alertsPath, `skill-dispatch child denied ${cmd.kind}; parent DeliveryRun required`);
+    return cmd.kind === "publish_pr"
+      ? { event: { type: "published", result: { status: 1, manualMerge: false } } }
+      : {};
+  }
   switch (cmd.kind) {
     // delivery/pr planPublishPr → github.runPublishPlan → published result.
     case "publish_pr": {

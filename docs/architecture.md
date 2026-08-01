@@ -399,6 +399,28 @@ prune、force-remove、递归删除目标，也不会回退到 main checkout、`
 也不等于可重领：只要 lifecycle 仍是 allocated、recovery-required 或 release-requested，Story
 reservation 必须继续保留。
 
+#### Skill 并行 dispatch / Parallel Skill dispatch (US-LOOP-127)
+
+Skill 的并行 Action 是同一 `skill_dispatch` 父 DeliveryRun 的 detached child checkout，不是
+同一 Story 的独立 delivery。父 run 在任何 child checkout 分配前原子持有 Story reservation；
+每个 child 都从父 run 派生稳定 action ID、canonical-root-relative locator，以及已排序、成对
+互不重叠的 repository-relative file scope。重复 action ID、缺失/未知 scope、scope 重叠、无效
+parent reservation、已有目标或任何 root 外目标都会 fail-loud；不创建外部 `.worktrees/*`、`../wt-*`
+或 main checkout fallback。
+
+Child 只交回 commit 和 artifact inputs。PR、attest、Story closure 与 reservation release 全部由
+parent integration 执行；child 没有 merge/release authority。活跃 Skill contract 只可请求 allocator-backed
+parent/child dispatch，不可自行命名或创建 Git worktree。
+
+分配失败后的重试必须重复 `roll worktree dispatch allocate` 的同一 Story ID、dispatch run ID 和
+action contract；该命令只会采纳同一 `runId:allocate` recovery marker、逐一重新检查 Git identity，
+再补完 `.roll` link、skills、依赖及可选 prebuild bootstrap。它不会释放自己的 lease 后重新分配。
+父级集成必须调用 `roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>`；
+命令在 cherry-pick 前验证该 commit 是对应 child checkout 的后代，并拒绝任何不在 child
+`declaredFileScope` 内的实际变更。若 Git 删除已完成但 lifecycle event 或 lease 写入失败，父控制面可
+用 `roll worktree dispatch release <story-id> <dispatch-run-id>` 重试：它只补写与 allocation operation
+配对的 release completion，绝不把“路径已不存在”当作无证据的 release。
+
 Release 也使用独立 operation ID：terminal writer 先 fresh-inspect 每个 member，证明 merged
 delivery + accepted attest，随后写入 `worktree:release_requested` 并冻结每个 member 的 expected
 HEAD。每次 retry 都使用这份 durable HEAD（绝不采用 retry 时新观察到的 HEAD），并仅在
