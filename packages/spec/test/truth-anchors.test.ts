@@ -40,6 +40,7 @@ const EXPECTED_AGGREGATES = {
   "view-meta": ["dossier_freshness", "index_freshness"],
   goal: ["goal_state"],
   delegation: ["delegation_lifecycle", "delegation_provenance"],
+  execution: ["managed_workspace_lifecycle"],
 } as const;
 
 describe("US-TRUTH-000 AC1 — the matrix covers every drift-prone fact field", () => {

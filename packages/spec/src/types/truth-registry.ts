@@ -21,7 +21,7 @@
 import { TRUTH_ANCHORS } from "./truth.js";
 
 /** Which persisted surface a field lives on. */
-export type TruthSurface = "runs" | "event:cycle:terminal" | "event:release:gate" | "event:release:waiver" | "goal" | "delivery" | "browser" | "event:delta" | "artifact:delta";
+export type TruthSurface = "runs" | "event:cycle:terminal" | "event:release:gate" | "event:release:waiver" | "goal" | "delivery" | "browser" | "event:delta" | "artifact:delta" | "event:worktree";
 
 export interface RegisteredField {
   /** The literal key as persisted (e.g. "cost_usd"). */
@@ -158,6 +158,17 @@ export const TRUTH_FIELD_REGISTRY: readonly RegisteredField[] = [
   { field: "diagnosticOnly", surface: "browser", anchor: "browser_diagnostic", writer: "BrowserOperationLedger", kind: "authoritative" },
   { field: "failure", surface: "browser", anchor: "browser_diagnostic", writer: "BrowserOperationLedger", kind: "authoritative" },
   { field: "captureRequestId", surface: "browser", anchor: "browser_capture_link", writer: "CaptureBridge", kind: "authoritative" },
+
+  // ── US-LOOP-122 — managed workspace lifecycle (event:worktree) ──────────
+  { field: "type", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace lifecycle commands", kind: "authoritative" },
+  { field: "ts", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace lifecycle commands", kind: "authoritative" },
+  { field: "workspace", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace allocator", kind: "authoritative" },
+  { field: "runId", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace lifecycle commands", kind: "authoritative" },
+  { field: "source", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace activity observer", kind: "authoritative" },
+  { field: "reason", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace lifecycle commands", kind: "authoritative" },
+  { field: "operationId", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace release command", kind: "authoritative" },
+  { field: "expectedHeads", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace release command", kind: "authoritative" },
+  { field: "relativeLocator", surface: "event:worktree", anchor: "managed_workspace_lifecycle", writer: "managed workspace recovery command", kind: "authoritative" },
 
   // ── US-DELTA-001 — Delegation event fields (event:delta surface) ──────────
   { field: "type", surface: "event:delta", anchor: "delegation_lifecycle", writer: "roll delta commands", kind: "authoritative" },

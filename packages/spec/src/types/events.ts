@@ -24,6 +24,7 @@ import type { LoopType } from "./loop.js";
 import type { BlockCause, FailureClass, TerminalEvent, TerminalOutcome } from "./terminal.js";
 import type { TaskLevel } from "./story.js";
 import type { BuilderFinalizationFacts, BuilderFinalizationVerdict } from "./builder.js";
+import type { WorktreeLifecycleEvent } from "./managed-workspace.js";
 
 /**
  * US-PAIR-014 — why a recorded cost figure is what it is.
@@ -665,6 +666,10 @@ export type RollEvent =
       reason: string;
       ts: number;
     }
+  // US-LOOP-122 — append-only managed-workspace lifecycle. Absolute paths,
+  // live Git registration, delivery truth, and release verdicts deliberately
+  // stay outside this Execution event aggregate.
+  | WorktreeLifecycleEvent
   // US-TRUTH-001 — the versioned complete-or-reasoned terminal record. One per
   // cycle from schema v1 on; events older than the switch are GRANDFATHERED
   // (read under legacy rules, never retro-rewritten).

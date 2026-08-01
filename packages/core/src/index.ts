@@ -56,6 +56,7 @@ export * from "./loop/correction-actuator.js";
 export * from "./loop/correction-safety.js";
 export * from "./loop/cycle-observer.js";
 export * from "./loop/cycle-activity.js";
+export * from "./loop/managed-workspace.js";
 export * from "./loop/execution-profile.js";
 export * from "./loop/evaluator-artifact.js";
 export * from "./loop/design-contract.js";
