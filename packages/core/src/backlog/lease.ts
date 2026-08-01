@@ -37,8 +37,10 @@ import {
   closeSync,
   readFileSync,
   readdirSync,
+  statSync,
   unlinkSync,
   writeFileSync,
+  renameSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -47,7 +49,7 @@ import { randomUUID } from "node:crypto";
 export const HUMAN_SOFT_LEASE_HOURS = 24;
 
 /** Recognised claim sources. */
-export type LeaseSource = "cycle" | "human" | "supervisor" | "host-delegation" | "skill-dispatch";
+export type LeaseSource = "cycle" | "human" | "supervisor" | "host-delegation" | "skill-dispatch" | "delivery-reservation";
 
 const VALID_SOURCES: ReadonlySet<string> = new Set([
   "cycle",
@@ -55,6 +57,7 @@ const VALID_SOURCES: ReadonlySet<string> = new Set([
   "supervisor",
   "host-delegation",
   "skill-dispatch",
+  "delivery-reservation",
 ]);
 
 /** A lease entry — who claimed a story and when. */
@@ -67,7 +70,7 @@ export interface LeaseEntry {
   source: LeaseSource;
   /** Host delegation identity — only meaningful when source === "host-delegation". */
   delegationId?: string;
-  /** Run ID for host delegation — only meaningful when source === "host-delegation". */
+  /** Run ID for a protocol-owned reservation. */
   runId?: string;
 }
 
@@ -594,8 +597,9 @@ export function releaseStoryLease(
   // Source must match
   if (existing.source !== identity.source) return false;
 
-  // For host-delegation: delegationId AND runId must both be non-empty and match.
-  if (identity.source === "host-delegation") {
+  // Protocol and durable delivery reservations are both identity-owned.  A
+  // merge, abandonment, or named continuation may release only its own run.
+  if (identity.source === "host-delegation" || identity.source === "delivery-reservation") {
     if (
       !identity.delegationId ||
       !identity.runId ||
@@ -612,6 +616,12 @@ export function releaseStoryLease(
     if (!identity.runId || existing.runId !== identity.runId) return false;
   }
 
+  // A promotion holds this short-lived hard-link lock while it verifies and
+  // swaps the record.  Refusing a release here prevents a matching release
+  // from opening an ABA window between identity verification and rename.
+  if (existsSync(join(dirPath, `.${storyId}.promotion.lock`))
+    || existsSync(join(dirPath, `.${storyId}.continuation.lock`))) return false;
+
   // For cycle: pid is REQUIRED and must match
   if (identity.source === "cycle") {
     if (identity.pid === undefined) return false;
@@ -625,6 +635,294 @@ export function releaseStoryLease(
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Atomically turn the protocol guard into its durable delivery reservation.
+ *
+ * The lease filename is deliberately retained while its complete JSON record is
+ * replaced in the same directory.  A competing hard-link claimant therefore
+ * always observes a record: there is no release/reclaim gap between terminal
+ * handoff and normal delivery reconciliation.
+ */
+export function promoteHostDelegationLease(
+  dirPath: string,
+  storyId: string,
+  delegationId: string,
+  runId: string,
+): boolean {
+  const path = recordPath(dirPath, storyId);
+  if (!existsSync(path)) return false;
+  const promotionLock = join(dirPath, `.${storyId}.promotion.lock`);
+  type PromotionLock = Readonly<{
+    schema: "roll-lease-promotion-lock/v1";
+    pid: number;
+    token: string;
+    delegationId: string;
+    runId: string;
+    recordDev: number;
+    recordIno: number;
+  }>;
+  const writeDurable = (file: string, bytes: string, flags: string): void => {
+    const fd = openSync(file, flags);
+    try {
+      writeFileSync(fd, bytes, "utf8");
+      fdatasyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  };
+  const syncDir = (): void => {
+    const fd = openSync(dirPath, "r");
+    try { fdatasyncSync(fd); } finally { closeSync(fd); }
+  };
+  const lockOwnerAlive = (pid: number): boolean => {
+    if (pid === process.pid) return true;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const acquirePromotionLock = (): boolean => {
+    try {
+      // An exclusive, fsynced metadata lock makes a crashed owner
+      // distinguishable from a live matching owner.  The former version used a
+      // hard-link copy of the lease itself, so any matching lock looked stale
+      // and one concurrent promoter could delete another's active lock.
+      const stat = statSync(path);
+      const lock: PromotionLock = {
+        schema: "roll-lease-promotion-lock/v1",
+        pid: process.pid,
+        token: randomUUID(),
+        delegationId,
+        runId,
+        recordDev: stat.dev,
+        recordIno: stat.ino,
+      };
+      writeDurable(promotionLock, JSON.stringify(lock) + "\n", "wx");
+      syncDir();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!acquirePromotionLock()) {
+    // A process can die after taking the durable lock.  Recover only a lock
+    // whose owner is demonstrably dead and whose pinned record still names
+    // this exact handoff.  A matching *live* lock is never treated as stale.
+    try {
+      const locked = JSON.parse(readFileSync(promotionLock, "utf8").trim()) as PromotionLock;
+      const current = decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim()));
+      const currentStat = statSync(path);
+      const sameIdentity = (entry: LeaseEntry): boolean => entry.delegationId === delegationId && entry.runId === runId
+        && (entry.source === "host-delegation" || entry.source === "delivery-reservation");
+      // A rename has already committed the promotion if the canonical record
+      // is the durable reservation.  Its inode intentionally differs from the
+      // host guard inode captured by the old lock.  Treating that expected
+      // difference as foreign permanently wedged an otherwise completed
+      // handoff after a crash between rename and unlink.
+      const promotionAlreadyCommitted = current.source === "delivery-reservation" && sameIdentity(current);
+      if (locked.schema !== "roll-lease-promotion-lock/v1"
+        || locked.delegationId !== delegationId
+        || locked.runId !== runId
+        || lockOwnerAlive(locked.pid)
+        || !sameIdentity(current)
+        || (!promotionAlreadyCommitted && (currentStat.dev !== locked.recordDev || currentStat.ino !== locked.recordIno))) return false;
+      unlinkSync(promotionLock);
+      syncDir();
+    } catch {
+      return false;
+    }
+    if (!acquirePromotionLock()) return false;
+  }
+  let existing: LeaseEntry;
+  try {
+    existing = decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim()));
+  } catch {
+    try { unlinkSync(promotionLock); } catch { /* best effort */ }
+    return false;
+  }
+  if (existing.source === "delivery-reservation"
+    && existing.delegationId === delegationId
+    && existing.runId === runId) {
+    try { unlinkSync(promotionLock); } catch { /* best effort */ }
+    return true;
+  }
+  if (existing.source !== "host-delegation" || existing.delegationId !== delegationId || existing.runId !== runId) {
+    try { unlinkSync(promotionLock); } catch { /* best effort */ }
+    return false;
+  }
+  const next: LeaseEntry = {
+    claimedAt: existing.claimedAt,
+    source: "delivery-reservation",
+    delegationId,
+    runId,
+  };
+  const tmp = join(dirPath, `.${storyId}.${randomUUID()}.promotion.tmp`);
+  try {
+    writeDurable(tmp, JSON.stringify(next) + "\n", "wx");
+    // The durable lock pins the exact inode that was checked before the swap.
+    // releaseStoryLease refuses while it exists, so there is no ABA window.
+    const lock = JSON.parse(readFileSync(promotionLock, "utf8").trim()) as PromotionLock;
+    const currentStat = statSync(path);
+    if (lock.schema !== "roll-lease-promotion-lock/v1"
+      || lock.pid !== process.pid
+      || lock.delegationId !== delegationId
+      || lock.runId !== runId
+      || lock.recordDev !== currentStat.dev
+      || lock.recordIno !== currentStat.ino) {
+      try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+      return false;
+    }
+    renameSync(tmp, path);
+    syncDir();
+    return true;
+  } catch {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    return false;
+  } finally {
+    try { if (existsSync(promotionLock)) unlinkSync(promotionLock); } catch { /* best effort */ }
+  }
+}
+
+/** Closure is explicit: no terminal Delta handoff may free a reservation. */
+export type DeliveryReservationReleaseReason = "merged" | "abandoned" | "continuation_transferred";
+
+/** Release a durable host-Delta reservation after named delivery closure. */
+export function releaseDeliveryReservation(
+  dirPath: string,
+  storyId: string,
+  delegationId: string,
+  runId: string,
+  reason: DeliveryReservationReleaseReason,
+): boolean {
+  // Keep the reason in the public API: a caller must consciously select a
+  // delivery closure, rather than treating a terminal Delta event as release.
+  if (reason !== "merged" && reason !== "abandoned" && reason !== "continuation_transferred") return false;
+  return releaseStoryLease(dirPath, storyId, {
+    source: "delivery-reservation",
+    delegationId,
+    runId,
+  });
+}
+
+/**
+ * Atomically move a durable host-Delta reservation to a named continuation.
+ * The canonical lease file is never absent, so a competing Cycle cannot claim
+ * the Story between abandonment of one host session and pickup by its declared
+ * successor.
+ */
+export function transferDeliveryReservation(
+  dirPath: string,
+  storyId: string,
+  delegationId: string,
+  runId: string,
+  continuationRunId: string,
+): boolean {
+  if (continuationRunId === "" || continuationRunId === runId) return false;
+  const path = recordPath(dirPath, storyId);
+  if (!existsSync(path)) return false;
+  type TransferLock = Readonly<{
+    schema: "roll-lease-continuation-lock/v1";
+    pid: number;
+    delegationId: string;
+    runId: string;
+    continuationRunId: string;
+    recordDev: number;
+    recordIno: number;
+  }>;
+  const lockPath = join(dirPath, `.${storyId}.continuation.lock`);
+  const syncDir = (): void => {
+    const fd = openSync(dirPath, "r");
+    try { fdatasyncSync(fd); } finally { closeSync(fd); }
+  };
+  const alive = (pid: number): boolean => {
+    if (pid === process.pid) return true;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const readCurrent = (): LeaseEntry | undefined => {
+    try { return decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim())); } catch { return undefined; }
+  };
+  const clearCommittedDeadLock = (): boolean => {
+    // A rename has made the successor canonical, but a kill before `finally`
+    // can leave the old operation mutex behind.  Clean only the exact,
+    // demonstrably-dead owner; a live or different-successor lock is authority
+    // and must remain untouched.
+    try {
+      const lock = JSON.parse(readFileSync(lockPath, "utf8").trim()) as TransferLock;
+      if (lock.schema !== "roll-lease-continuation-lock/v1"
+        || lock.delegationId !== delegationId
+        || lock.runId !== runId
+        || lock.continuationRunId !== continuationRunId
+        || alive(lock.pid)) return false;
+      unlinkSync(lockPath);
+      syncDir();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // The already-transferred successor is idempotent success.  It is checked
+  // before acquiring the source CAS lock so a crash after rename is retryable.
+  // It must still retire the dead matching mutex: release is deliberately
+  // blocked while that lock exists.
+  const initial = readCurrent();
+  if (initial?.source === "delivery-reservation" && initial.delegationId === delegationId && initial.runId === continuationRunId) {
+    if (!existsSync(lockPath)) return true;
+    return clearCommittedDeadLock();
+  }
+  if (initial?.source !== "delivery-reservation" || initial.delegationId !== delegationId || initial.runId !== runId) return false;
+  const acquire = (): boolean => {
+    try {
+      const stat = statSync(path);
+      const lock: TransferLock = {
+        schema: "roll-lease-continuation-lock/v1", pid: process.pid,
+        delegationId, runId, continuationRunId, recordDev: stat.dev, recordIno: stat.ino,
+      };
+      const fd = openSync(lockPath, "wx");
+      try { writeFileSync(fd, JSON.stringify(lock) + "\n", "utf8"); fdatasyncSync(fd); } finally { closeSync(fd); }
+      syncDir();
+      return true;
+    } catch { return false; }
+  };
+  if (!acquire()) {
+    try {
+      const lock = JSON.parse(readFileSync(lockPath, "utf8").trim()) as TransferLock;
+      const current = readCurrent();
+      // A dead predecessor which already named our successor committed safely;
+      // clean the stale mutex and let the idempotent check above win.
+      if (current?.source === "delivery-reservation" && current.delegationId === delegationId && current.runId === continuationRunId) return clearCommittedDeadLock();
+      if (lock.schema !== "roll-lease-continuation-lock/v1" || alive(lock.pid)) return false;
+      const stat = statSync(path);
+      if (current?.source !== "delivery-reservation" || current.delegationId !== delegationId || current.runId !== runId
+        || stat.dev !== lock.recordDev || stat.ino !== lock.recordIno) return false;
+      unlinkSync(lockPath); syncDir();
+    } catch { return false; }
+    if (!acquire()) return false;
+  }
+  const tmp = join(dirPath, `.${storyId}.${randomUUID()}.continuation.tmp`);
+  try {
+    const fd = openSync(tmp, "wx");
+    try {
+      writeFileSync(fd, JSON.stringify({ ...initial, runId: continuationRunId }) + "\n", "utf8");
+      fdatasyncSync(fd);
+    } finally { closeSync(fd); }
+    // Re-read and compare the inode pinned by the exclusive lock immediately
+    // before rename.  Two different named successors therefore cannot both
+    // pass a stale read and last-writer-win.
+    const current = decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim()));
+    const lock = JSON.parse(readFileSync(lockPath, "utf8").trim()) as TransferLock;
+    const stat = statSync(path);
+    if (current.source !== "delivery-reservation" || current.delegationId !== delegationId || current.runId !== runId
+      || lock.schema !== "roll-lease-continuation-lock/v1" || lock.pid !== process.pid
+      || lock.delegationId !== delegationId || lock.runId !== runId || lock.continuationRunId !== continuationRunId
+      || stat.dev !== lock.recordDev || stat.ino !== lock.recordIno) return false;
+    renameSync(tmp, path);
+    syncDir();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    try { if (existsSync(lockPath)) unlinkSync(lockPath); } catch { /* best effort */ }
   }
 }
 

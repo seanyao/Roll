@@ -1073,6 +1073,10 @@ export const v3Catalog: Catalog = {
     en: "roll delta: --cycle is not supported for host-guided prepare (no cycle allocation)",
     zh: "roll delta：host-guided prepare 不支持 --cycle（无 cycle 分配）",
   },
+  "delta.error.full_delta_requires_cycle_workspace": {
+    en: "roll delta prepare: host-guided full-delta-team requires an existing Cycle WorkspaceSet",
+    zh: "roll delta prepare：host-guided full-delta-team 需要既有的 Cycle WorkspaceSet",
+  },
   "delta.error.status_selector": {
     en: "roll delta status: provide --story <id> or --delegation <id>",
     zh: "roll delta status：请提供 --story <id> 或 --delegation <id>",
@@ -1093,6 +1097,24 @@ export const v3Catalog: Catalog = {
     en: "No delegation found.",
     zh: "未找到委派。",
   },
+  "delta.prepare.prepared": { en: "Delegation prepared", zh: "委派已准备" },
+  "delta.field.run_id": { en: "run ID", zh: "运行 ID" },
+  "delta.field.frame": { en: "frame", zh: "帧" },
+  "delta.field.workspace": { en: "workspace", zh: "工作区" },
+  "delta.field.member": { en: "member", zh: "成员" },
+  "delta.field.detached_head": { en: "detached HEAD", zh: "分离 HEAD" },
+  "delta.field.publish_ref": { en: "publish ref", zh: "发布引用" },
+  "delta.field.delegation": { en: "Delegation", zh: "委派" },
+  "delta.field.story": { en: "Story", zh: "故事" },
+  "delta.field.status": { en: "Status", zh: "状态" },
+  "delta.field.mode": { en: "Mode", zh: "模式" },
+  "delta.field.trigger": { en: "Trigger", zh: "触发方式" },
+  "delta.field.topology": { en: "Topology", zh: "拓扑" },
+  "delta.field.profile": { en: "Profile", zh: "质量配置" },
+  "delta.field.cost": { en: "Cost", zh: "成本" },
+  "delta.field.roles": { en: "Roles", zh: "角色" },
+  "delta.field.block": { en: "Block", zh: "阻塞" },
+  "delta.field.terminal": { en: "Terminal", zh: "终态" },
   // `doc_drift.*` — US-RULE-004a soft doc-drift gate diagnostic. Soft mode
   // NEVER blocks: the annotation makes the hit observable while exit stays 0.
   "doc_drift.soft_hit.summary": {

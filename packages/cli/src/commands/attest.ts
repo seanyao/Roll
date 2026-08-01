@@ -130,6 +130,7 @@ import { skillDispatchActorForCwd } from "../runner/skill-dispatch-workspace.js"
 import { resolveCardDeliveryRecord } from "../lib/delivery-record.js";
 import { readReviewScoreTrend, readStoryReviewScores } from "../lib/review-score.js";
 import { collectToolEvidenceFromEventsPath, formatToolCostSummary } from "../lib/tool-display.js";
+import { recordHostDeltaAttestationClosure } from "../lib/delta-allocation.js";
 import { attestAuditCommand } from "./attest-audit.js";
 import { runOutwardSmoke, smokeResultsFromReport } from "../attest/outward-smoke-runner.js";
 import { parseEvaluationContract } from "../lib/evaluation-contract.js";
@@ -1991,5 +1992,11 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
     warn(`capture command failed with exit ${commandFact.exitCode}`);
     return 3;
   }
+  // Manual host-Delta delivery has no synthetic Cycle.  Once the owner has
+  // merged, pulled the integration branch, and this Story-scoped attestation
+  // has succeeded, bind that real closure to the retained reservation.  The
+  // reconcile tick releases it from the identity-bearing event; this command
+  // never releases a lease directly.
+  recordHostDeltaAttestationClosure(projectPath, storyId);
   return 0;
 }

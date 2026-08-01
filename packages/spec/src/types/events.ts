@@ -307,14 +307,36 @@ export type RollEvent =
   | { type: "delivery:merge_confirmed"; cycleId: string; storyId: string; branch: string; prNumber?: number; signal: "ancestor" | "patch_id" | "merge_commit"; mergeCommit?: string; ts: number }
   // A published PR was closed without merging. This is terminal for the
   // cycle and releases its delivery lease without claiming delivery.
-  | { type: "delivery:abandoned"; cycleId: string; storyId: string; reason: "pr_closed_unmerged"; ts: number }
+  | {
+      type: "delivery:abandoned";
+      cycleId: string;
+      storyId: string;
+      reason: "pr_closed_unmerged";
+      /** Host Delta closure must name the exact terminal reservation. */
+      delegationId?: string;
+      runId?: string;
+      ts: number;
+    }
   // Reconcile-from-main backfill (emitter lands with US-DELIV-002): a strong
   // signal (PR-state / patch-id) confirmed the cycle's change on main.
   // E3: `delivered_local` — a local-only delivery landed the cycle on the LOCAL
   // integration branch (no push / no PR / no remote merge). `mergedBy:"runner"`,
   // `mergeCommit` = the local landing SHA, `signal:"patch_id"` (the local commit
   // identity, not a PR state).
-  | { type: "delivery:reconciled"; cycleId: string; storyId: string; state: "delivered" | "delivered_external" | "delivered_local" | "superseded"; mergedBy: "runner" | "external"; mergeCommit: string; signal: "pr_state" | "patch_id" | "backlog_attest"; patchId?: string; ts: number }
+  | {
+      type: "delivery:reconciled";
+      cycleId: string;
+      storyId: string;
+      state: "delivered" | "delivered_external" | "delivered_local" | "superseded";
+      mergedBy: "runner" | "external";
+      mergeCommit: string;
+      signal: "pr_state" | "patch_id" | "backlog_attest";
+      patchId?: string;
+      /** Host Delta closure must name the exact terminal reservation. */
+      delegationId?: string;
+      runId?: string;
+      ts: number;
+    }
   // Alert (BC2/BC6)
   | { type: "alert:notify"; channel: string; message: string; ts: number }
   // Supervisor journal (US-OBS-048) — structured narrative of decisions,
@@ -698,6 +720,8 @@ export type RollEvent =
       presetId: string;
       presetSha256: string;
       hostId: string;
+      /** Explicit cutover discriminator.  Absent records are legacy only. */
+      workspaceSchema?: 2;
       ts: number;
     }
   | {
@@ -732,21 +756,62 @@ export type RollEvent =
       delegationId: string;
       storyId: string;
       role: DeltaRole;
+      /** Exact managed run that admitted this post-cutover Builder artifact. */
+      runId?: string;
       path: string;
       sha256: string;
       manifestPath: string;
       sessionId: string;
       roleInstanceId: string;
       identityProvenance: IdentityProvenance;
+      /**
+       * The detached Builder commit admitted by managed-workspace validation.
+       * It is a delivery candidate, never a merge claim: the attest bridge
+       * must still prove that this exact commit reached the integration ref.
+       */
+      deliveryCommit?: string;
+      /** Immutable tree of deliveryCommit; enables PR-anchored squash proof. */
+      deliveryTree?: string;
+      /** Publish ref allocated with the managed primary member. */
+      publishRef?: string;
+      /**
+       * Repository-scoped delivery facts.  A WorkspaceSet can span the primary
+       * repository and a target submodule, so a primary ref/tree must never be
+       * used to prove a submodule Builder commit (or vice versa).
+       */
+      deliveryMembers?: Array<{
+        repositoryId: string;
+        relativeLocator: string;
+        /** Immutable member base allocated before the Builder's detached work. */
+        deliveryBase?: string;
+        deliveryCommit: string;
+        deliveryTree: string;
+        publishRef?: string;
+      }>;
       ts: number;
     }
   | {
       type: "delta:terminal";
       delegationId: string;
       storyId: string;
+      /** Durable host run identity when this terminal owns a reservation. */
+      runId?: string;
       outcome: DeltaTerminalOutcome;
       terminalBinding: TerminalBinding;
       deliveryDisposition?: DeliveryDisposition;
+      /** Post-cutover handoff has atomically promoted the protocol guard. */
+      reservationSource?: "delivery-reservation";
+      /** Named holder when a host session hands its reservation to a successor. */
+      continuationRunId?: string;
+      ts: number;
+    }
+  | {
+      /** Durable closure of a host-Delta delivery reservation after main truth. */
+      type: "delta:reservation_closed";
+      delegationId: string;
+      storyId: string;
+      runId: string;
+      reason: "merged" | "abandoned";
       ts: number;
     }
   | {

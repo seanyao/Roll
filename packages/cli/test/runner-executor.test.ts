@@ -2683,10 +2683,11 @@ describe("executeCommand — command → executor mapping", () => {
         alertsPath: join(repo, ".roll", "loop", "alerts.log"),
       },
       agentSpawn: vi.fn(async () => {
-        setTimeout(() => {
-          chmodSync(repo, 0o755);
-          writeFileSync(join(repo, "active-main-leak.ts"), "export const dirty = true;\n");
-        }, 10);
+        // This is the first operation the child performs.  The executor must
+        // already have frozen the watchdog baseline before this callback runs;
+        // a deferred write would leave the original race unexercised.
+        chmodSync(repo, 0o755);
+        writeFileSync(join(repo, "active-main-leak.ts"), "export const dirty = true;\n");
         await new Promise((resolve) => setTimeout(resolve, 80));
         return { stdout: "agent claimed success", stderr: "", exitCode: 0, timedOut: false };
       }),
@@ -2812,8 +2813,9 @@ describe("executeCommand — command → executor mapping", () => {
       const { ports, calls } = watchdogPorts(repo);
       let kills = 0;
       const wd = startMainCheckoutLeakWatchdog(ports, CTX, { pollMs: 10, kill: () => (kills += 1, 1) });
-      // Let the baseline settle (it captures the ancestral dirt), THEN leak a new path.
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      // The caller-visible readiness boundary removes the old timing race:
+      // after it resolves, a write is necessarily outside the frozen baseline.
+      await wd.ready();
       writeFileSync(join(repo, "agent-leaked-new.ts"), "export const leaked = 1;\n");
       await until(() => kills > 0);
       const { detected, files } = await wd.stop();
@@ -2832,7 +2834,7 @@ describe("executeCommand — command → executor mapping", () => {
       const { ports } = watchdogPorts(repo);
       let kills = 0;
       const wd = startMainCheckoutLeakWatchdog(ports, CTX, { pollMs: 10, kill: () => (kills += 1, 1) });
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await wd.ready();
       writeFileSync(join(repo, "leaked-on-clean-repo.ts"), "export const leaked = 1;\n");
       await until(() => kills > 0);
       const { detected, files } = await wd.stop();
@@ -7783,6 +7785,44 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
     // The US-LOOP-101 role framing is prepended to the skill body.
     expect(spawns[0]?.skillBody).toContain("test author");
     expect(spawns[0]?.env?.["ROLL_ADVERSARIAL_MARKER"]).toBeTruthy();
+  });
+
+  it("E7-C: spawn_role freezes the main-checkout baseline before an immediate role write", async () => {
+    const repo = initCleanGitRepo("roll-role-main-leak-ready-");
+    mkdirSync(join(repo, ".roll", "loop"), { recursive: true });
+    const wt = join(repo, ".roll", "loop", "wt");
+    mkdirSync(wt);
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      repoCwd: repo,
+      paths: {
+        ...base.ports.paths,
+        worktreePath: wt,
+        eventsPath: join(repo, ".roll", "loop", "events.ndjson"),
+        alertsPath: join(repo, ".roll", "loop", "alerts.log"),
+      },
+      agentSpawn: vi.fn(async () => {
+        // The role writes on its first turn, before it reports any progress.
+        // This must be seen as a delta, never adopted by an async baseline.
+        chmodSync(repo, 0o755);
+        writeFileSync(join(repo, "role-immediate-main-leak.ts"), "export const dirty = true;\n");
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return { stdout: "role claimed success", stderr: "", exitCode: 0, timedOut: false };
+      }),
+    });
+    const previousPoll = process.env["ROLL_MAIN_LEAK_POLL_MS"];
+    process.env["ROLL_MAIN_LEAK_POLL_MS"] = "5";
+    try {
+      const r = await executeCommand({ kind: "spawn_role", role: "implementer", agent: "codex", round: 0 }, ports, CTX);
+      expect(r.event).toMatchObject({ type: "role_exited", role: "implementer", exit: 1, timedOut: true });
+      const mainDirty = (calls["event"] ?? [])
+        .map((a) => (a as unknown[])[1] as RollEvent)
+        .find((e) => e.type === "sandbox:main_dirty");
+      expect(mainDirty).toMatchObject({ phase: "active-spawn", files: ["role-immediate-main-leak.ts"] });
+    } finally {
+      if (previousPoll === undefined) delete process.env["ROLL_MAIN_LEAK_POLL_MS"];
+      else process.env["ROLL_MAIN_LEAK_POLL_MS"] = previousPoll;
+    }
   });
 
   it("E4: spawn_role runs the adversarial role INSIDE the submodule cycle worktree when ctx.targetSubmodule is set", async () => {

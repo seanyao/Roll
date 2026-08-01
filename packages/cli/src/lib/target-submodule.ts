@@ -1,3 +1,5 @@
+import { parseTargetSubmodule } from "@roll/core";
+
 /**
  * E2 — read a story spec's `target_submodule:` frontmatter field.
  *
@@ -40,6 +42,64 @@ function stripQuotes(value: string): string {
     return stripped.slice(1, -1);
   }
   return stripped;
+}
+
+/**
+ * Resolve one story's declared target from immutable story inputs.  Both the
+ * Cycle runner and host-guided Delta call this pure selector: transport must
+ * not change which repository is part of a WorkspaceSet.
+ */
+export function resolveTargetSubmodule(input: {
+  readonly storyDescription?: string;
+  readonly specText?: string;
+  readonly gitmodulesText?: string;
+  readonly defaultSubmodule?: string;
+}): string | undefined {
+  const fromTag = input.storyDescription === undefined
+    ? undefined
+    : parseTargetSubmodule(input.storyDescription);
+  if (fromTag !== undefined) return fromTag;
+
+  if (input.specText !== undefined) {
+    const explicit = targetSubmoduleFromSpecText(input.specText);
+    if (explicit !== undefined) return explicit;
+    const inferred = input.gitmodulesText === undefined
+      ? undefined
+      : inferTargetSubmodule(input.specText, gitmodulesPaths(input.gitmodulesText));
+    if (inferred !== undefined) return inferred;
+  }
+  return input.defaultSubmodule === "" ? undefined : input.defaultSubmodule;
+}
+
+/**
+ * The immutable caller-neutral plan captured before workspace effects.  Both
+ * Cycle and host Delta carry this same plan across their transport boundary so
+ * a backlog tag cannot select one repository for Cycle and another for host.
+ */
+export interface ManagedWorkspaceBootstrapPlan {
+  readonly targetSubmodule?: string;
+  readonly linkRoll: true;
+  readonly initializeSkills: true;
+  readonly installDependencies: true;
+  readonly policyPrebuild: true;
+}
+
+export function planManagedWorkspaceBootstrap(input: {
+  readonly storyDescription?: string;
+  readonly specText?: string;
+  readonly gitmodulesText?: string;
+  readonly defaultSubmodule?: string;
+}): ManagedWorkspaceBootstrapPlan {
+  const targetSubmodule = resolveTargetSubmodule(input);
+  return {
+    ...(targetSubmodule === undefined
+      ? {}
+      : { targetSubmodule }),
+    linkRoll: true,
+    initializeSkills: true,
+    installDependencies: true,
+    policyPrebuild: true,
+  };
 }
 
 /**

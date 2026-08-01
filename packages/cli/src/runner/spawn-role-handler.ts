@@ -107,6 +107,9 @@ export async function executeSpawnRoleCommand(
       }),
     );
     mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
+    // The adversarial writer has the same main-checkout boundary as the normal
+    // builder: do not launch it until the watchdog's baseline is immutable.
+    await mainLeakWatchdog.ready();
     // E4: an adversarial role (test_author/implementer/attacker) writes code +
     // tests just like the builder, so a submodule cycle runs it in the submodule
     // cycle worktree (execCwd) with the submodule's git env + writable roots. No

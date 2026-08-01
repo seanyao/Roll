@@ -63,6 +63,8 @@ import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRe
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
 import { settleDeliveredCycle, gitPlaneVerifier, hasMergeConfirmedEvent } from "./loop-reconcile-merge.js";
 import { configuredRequiredChecks } from "../lib/ci-doc-drift.js";
+import { reconcileHostDeltaReservationClosures } from "../lib/delta-allocation.js";
+import { hostDeltaDeliveryBinding } from "../lib/delta-delivery-binding.js";
 
 /** Keep story merges on the same registry-selected exact-SHA check set as releases. */
 function applyConfiguredRequiredChecks(cwd: string, facts: ReconcileFacts): void {
@@ -411,6 +413,13 @@ export async function runReconcileTick(
 ): Promise<ReconcileTickResult> {
   const slug = resolveRepoSlug(cwd);
 
+  // Host-guided Delta has no synthetic Cycle to release its reservation.  Main
+  // reconciliation is therefore its production closure owner as well.  This
+  // is deliberately before the no-awaiting-cycles return: an externally
+  // reconciled host delivery must not be stranded just because no Cycle is
+  // currently pending.
+  reconcileHostDeltaReservationClosures(cwd);
+
   // Read awaiting cycles from event stream.
   let cycles = readAwaitingCycles(cwd);
   if (opts?.storyFilter !== undefined) {
@@ -755,11 +764,13 @@ export async function runReconcileTick(
       else waiting++;
     }
     if (result.kind === "terminal") {
+      const binding = hostDeltaDeliveryBinding(readAllEvents(eventsPath) as readonly Record<string, unknown>[], cyc.storyId, cyc.cycleId);
       bus.appendEvent(eventsPath, {
         type: "delivery:abandoned",
         cycleId: cyc.cycleId,
         storyId: cyc.storyId,
         reason: result.reason,
+        ...(binding === undefined ? {} : binding),
         ts: now,
       });
     }
@@ -995,11 +1006,13 @@ export async function loopReconcileCommand(
       }
     }
     if (result.kind === "terminal" && !dryRun) {
+      const binding = hostDeltaDeliveryBinding(readAllEvents(eventsPath) as readonly Record<string, unknown>[], cyc.storyId, cyc.cycleId);
       deps.bus.appendEvent(eventsPath, {
         type: "delivery:abandoned",
         cycleId: cyc.cycleId,
         storyId: cyc.storyId,
         reason: result.reason,
+        ...(binding === undefined ? {} : binding),
         ts: now,
       });
     }

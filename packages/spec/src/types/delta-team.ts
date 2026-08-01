@@ -195,6 +195,25 @@ export interface DeltaArtifactManifest {
   readonly delegationId: string;
   readonly storyId: string;
   readonly cycleId?: string;
+  /**
+   * US-LOOP-126: newly prepared host Delta frames are bound to the delivery
+   * run and one registered member.  They are optional only because v2 was
+   * already persisted before the managed-workspace cutover; readers must not
+   * reinterpret those historical records.
+   */
+  readonly runId?: string;
+  readonly workspaceMember?: {
+    readonly workspaceKey: string;
+    readonly relativeLocator: string;
+    readonly checkoutRef: { readonly kind: "detached"; readonly head: string };
+    readonly publishRef?: string;
+    /**
+     * Host-attested canonical Builder cwd for a post-cutover managed run.
+     * It is deliberately an assertion, not an OS execution proof; validation
+     * resolves it afresh against the registered managed member.
+     */
+    readonly executionCwd?: string;
+  };
   readonly role: DeltaRole;
   /** Read contract over a persisted v2 artifact — may be a historical value. */
   readonly trigger: DelegationTrigger | HistoricalDelegationTrigger;

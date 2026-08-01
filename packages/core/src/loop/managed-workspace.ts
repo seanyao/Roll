@@ -163,7 +163,8 @@ export function projectManagedWorkspaceRuns(
       }
       case "worktree:release_requested": {
         const run = runs.get(event.runId);
-        if (run !== undefined && run.workspace !== undefined && run.state !== "released" && run.state !== "recovery_required") {
+        // Builder admission freezes heads but does not authorize teardown.
+        if (event.reason !== "builder_validation" && run !== undefined && run.workspace !== undefined && run.state !== "released" && run.state !== "recovery_required") {
           run.state = "release_requested";
           run.releaseOperationId = event.operationId;
         }

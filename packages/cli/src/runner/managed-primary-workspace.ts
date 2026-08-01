@@ -9,13 +9,16 @@ import {
 import { readLeases } from "@roll/core";
 import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { createSubmoduleWorktreeIfDeclared } from "./submodule-worktree.js";
 import { eventTs } from "./runner-time.js";
-import { bootstrapWorktreeDeps, bootstrapWorktreePrebuild, bootstrapWorktreeSkills, linkRollIntoWorktree, readPrebuildDistEnabled } from "./worktree-bootstrap.js";
 import type { CycleContext } from "@roll/core";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { allocationReason, allocationRecovery } from "./managed-workspace-guidance.js";
+import { managedWorkspaceOperationId } from "../lib/managed-workspace-operation.js";
+import { bootstrapManagedWorkspaceEffects } from "../lib/managed-workspace-bootstrap-effects.js";
+import { reconcileManagedWorkspaceAllocation } from "./managed-workspace-allocator.js";
 
 function readLifecycleEvents(path: string): RollEvent[] {
   try {
@@ -32,23 +35,6 @@ function readLifecycleEvents(path: string): RollEvent[] {
   }
 }
 
-function sameWorkspace(left: ManagedWorkspaceSet, right: ManagedWorkspaceSet): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function hasMatchingAllocation(events: readonly RollEvent[], workspace: ManagedWorkspaceSet, operationId: string): boolean {
-  return events.some((event) => event.type === "worktree:allocated"
-    && event.operationId === operationId
-    && sameWorkspace(event.workspace, workspace));
-}
-
-function hasMatchingRecovery(events: readonly RollEvent[], workspace: ManagedWorkspaceSet, operationId: string): boolean {
-  return events.some((event) => event.type === "worktree:recovery_required"
-    && event.operationId === operationId
-    && event.workspace !== undefined
-    && sameWorkspace(event.workspace, workspace));
-}
-
 function reservationMatches(ports: Ports, ctx: CycleContext): boolean {
   const leaseDir = join(dirname(ports.paths.eventsPath), "leases");
   // Unit ports intentionally do not materialise a lease directory.  A real
@@ -60,10 +46,22 @@ function reservationMatches(ports: Ports, ctx: CycleContext): boolean {
 
 async function bootstrapManagedWorkspace(ports: Ports): Promise<boolean> {
   try {
-    await linkRollIntoWorktree(ports.repoCwd, ports.paths.worktreePath);
-    if (!await bootstrapWorktreeSkills(ports.paths.worktreePath, ports.paths.alertsPath, ports.events, ports.git.worktreeSubmoduleInit)) return false;
-    if (!await bootstrapWorktreeDeps(ports.paths.worktreePath, ports.paths.alertsPath, ports.events, ports.depsExec)) return false;
-    await bootstrapWorktreePrebuild(ports.paths.worktreePath, ports.paths.alertsPath, ports.events, readPrebuildDistEnabled(ports.repoCwd), ports.depsExec);
+    await bootstrapManagedWorkspaceEffects({
+      repoCwd: ports.repoCwd,
+      worktreePath: ports.paths.worktreePath,
+      alert: (message) => ports.events.appendAlert(ports.paths.alertsPath, message),
+      run: async (command, args, options) => {
+        if (command === "git") return ports.git.worktreeSubmoduleInit(options.cwd);
+        try {
+          if (ports.depsExec === undefined) {
+            execFileSync(command, args, { cwd: options.cwd, timeout: options.timeout, stdio: "ignore" });
+          } else {
+            await ports.depsExec(command, args, { ...options, maxBuffer: 16 * 1024 * 1024 });
+          }
+          return { code: 0 };
+        } catch (error) { return { code: 1, error: error instanceof Error ? error.message : String(error) }; }
+      },
+    });
     return true;
   } catch {
     return false;
@@ -113,7 +111,7 @@ export async function allocateManagedPrimaryWorkspace(
     return { event: { type: "worktree_failed" } };
   }
 
-  const operationId = `${ctx.cycleId}:allocate`;
+  const operationId = managedWorkspaceOperationId(ctx.cycleId);
   const primaryBase = resolveIntegrationBranch(ports.repoCwd);
   const primaryFacts = await ports.git.managedWorktreeFacts?.(ports.repoCwd, primaryBase);
   if (ports.git.managedWorktreeFacts !== undefined && primaryFacts === undefined) {
@@ -164,74 +162,51 @@ export async function allocateManagedPrimaryWorkspace(
     return { event: { type: "worktree_failed" } };
   }
 
-  const events = readLifecycleEvents(ports.paths.eventsPath);
-  const existing = await ports.git.managedWorktreeInspect?.(ports.repoCwd, ports.paths.worktreePath);
-  if (existing !== undefined) {
-    const identityMatches = await workspaceSetMatches(ports, workspace, primary);
-    if (!identityMatches) {
-      recordRecovery(ports, ctx, primary, operationId, "existing_target_identity_mismatch", workspace);
-      return { event: { type: "worktree_failed" } };
-    }
-    if (hasMatchingAllocation(events, workspace, operationId)) {
-      return { event: { type: "worktree_created" }, ...(targetSubmodule === undefined ? {} : { ctxPatch: { targetSubmodule } }) };
-    }
-    if (hasMatchingRecovery(events, workspace, operationId)) {
-      if (!await bootstrapManagedWorkspace(ports)) {
-        recordRecovery(ports, ctx, primary, operationId, "git_created_bootstrap_incomplete", workspace);
-        return { event: { type: "worktree_failed" } };
-      }
-      try {
-        ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:allocated", workspace, operationId, ts: eventTs(ports) });
-        return { event: { type: "worktree_created" }, ...(targetSubmodule === undefined ? {} : { ctxPatch: { targetSubmodule } }) };
-      } catch {
-        recordRecovery(ports, ctx, primary, operationId, "git_created_event_missing", workspace);
-        return { event: { type: "worktree_failed" } };
-      }
-    }
-    recordRecovery(ports, ctx, primary, operationId, "existing_target_unproven", workspace);
-    return { event: { type: "worktree_failed" } };
-  }
-  if (hasMatchingAllocation(events, workspace, operationId)) {
-    recordRecovery(ports, ctx, primary, operationId, "allocated_event_git_missing", workspace);
-    return { event: { type: "worktree_failed" } };
-  }
-
-  // The operation marker is durable before the first Git effect.  A kill after
-  // `worktree add` but before `allocated` therefore remains projected as a
-  // reserved recovery candidate instead of being cleaned as a dead lease.
-  if (!hasMatchingRecovery(events, workspace, operationId)) {
-    try {
-      ports.events.appendEvent(ports.paths.eventsPath, {
-        type: "worktree:recovery_required", runId: ctx.cycleId, relativeLocator: primary.relativeLocator,
-        reason: "allocation_started", workspace, operationId, ts: eventTs(ports),
-      });
-    } catch {
-      ports.events.appendAlert(ports.paths.alertsPath, allocationRecovery(ctx.storyId, allocationReason("operation_write_failed")));
-      return { event: { type: "worktree_failed" } };
-    }
-  }
-
-  const added = await ports.git.worktreeAdd(ports.repoCwd, ports.paths.worktreePath, branch, primaryBase);
-  if (added.code !== 0) {
-    ports.events.appendAlert(ports.paths.alertsPath, allocationRecovery(ctx.storyId, allocationReason("git_add_failed")));
-    return { event: { type: "worktree_failed" } };
-  }
-  const sub = await createSubmoduleWorktreeIfDeclared(ports, ctx, { id: ctx.storyId, ...(targetSubmodule === undefined ? {} : { targetSubmodule }) });
-  if (sub.failed) {
-    recordRecovery(ports, ctx, primary, operationId, "primary_created_submodule_failed", workspace);
-    return { event: { type: "worktree_failed" } };
-  }
-  if (!await bootstrapManagedWorkspace(ports)) {
-    recordRecovery(ports, ctx, primary, operationId, "git_created_bootstrap_failed", workspace);
-    return { event: { type: "worktree_failed" } };
-  }
+  let resolvedSubmodule = targetSubmodule;
   try {
-    ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:allocated", workspace, operationId, ts: eventTs(ports) });
-  } catch {
-    recordRecovery(ports, ctx, primary, operationId, "git_created_event_missing", workspace);
+    await reconcileManagedWorkspaceAllocation(workspace, operationId, {
+      events: () => readLifecycleEvents(ports.paths.eventsPath),
+      recordRecovery: () => {
+        try {
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "worktree:recovery_required", runId: ctx.cycleId, relativeLocator: primary.relativeLocator,
+            reason: "allocation_started", workspace, operationId, ts: eventTs(ports),
+          });
+        } catch {
+          throw new Error("operation_write_failed");
+        }
+      },
+      inspect: async () => ports.git.managedWorktreeInspect === undefined
+        ? "unverified"
+        : await workspaceSetMatches(ports, workspace, primary) ? "present" : "absent",
+      materialize: async () => {
+        const added = await ports.git.worktreeAdd(ports.repoCwd, ports.paths.worktreePath, branch, primaryBase);
+        if (added.code !== 0) throw new Error("git_add_failed");
+        const sub = await createSubmoduleWorktreeIfDeclared(ports, ctx, {
+          id: ctx.storyId!,
+          ...(targetSubmodule === undefined ? {} : { targetSubmodule }),
+        });
+        if (sub.failed) throw new Error("primary_created_submodule_failed");
+        resolvedSubmodule = sub.targetSubmodule;
+      },
+      bootstrap: async () => {
+        if (!await bootstrapManagedWorkspace(ports)) throw new Error("git_created_bootstrap_failed");
+      },
+      appendAllocated: () => {
+        ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:allocated", workspace, operationId, ts: eventTs(ports) });
+      },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "allocation_failed";
+    recordRecovery(ports, ctx, primary, operationId, reason, workspace);
+    ports.events.appendAlert(ports.paths.alertsPath, allocationRecovery(ctx.storyId, allocationReason(
+      reason === "operation_write_failed" ? "operation_write_failed"
+        : reason === "git_add_failed" ? "git_add_failed"
+        : "identity_invalid",
+    )));
     return { event: { type: "worktree_failed" } };
   }
-  return { event: { type: "worktree_created" }, ...(sub.targetSubmodule === undefined ? {} : { ctxPatch: { targetSubmodule: sub.targetSubmodule } }) };
+  return { event: { type: "worktree_created" }, ...(resolvedSubmodule === undefined ? {} : { ctxPatch: { targetSubmodule: resolvedSubmodule } }) };
 }
 
 function recordRecovery(ports: Ports, ctx: CycleContext, primary: ManagedWorkspaceMember, operationId: string, reason: string, workspace?: ManagedWorkspaceSet): void {

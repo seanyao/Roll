@@ -107,6 +107,13 @@ export async function quarantineMainCheckoutForCycle(
 }
 
 export interface MainCheckoutLeakWatchdog {
+  /**
+   * Resolves only after the pre-spawn dirt baseline is frozen.  Callers that
+   * are about to launch an agent must await this before the agent can write:
+   * otherwise a write in the baseline's async capture window is adopted as
+   * ancestral dirt and becomes invisible to the diff guard.
+   */
+  ready(): Promise<void>;
   stop(): Promise<{ detected: boolean; files: string[] }>;
 }
 
@@ -117,7 +124,7 @@ export function startMainCheckoutLeakWatchdog(
 ): MainCheckoutLeakWatchdog {
   try {
     if (realpathSync(ports.repoCwd) === realpathSync(ports.paths.worktreePath)) {
-      return { stop: async () => ({ detected: false, files: [] }) };
+      return { ready: async () => {}, stop: async () => ({ detected: false, files: [] }) };
     }
   } catch {
     /* fall through; checkMainDirty handles unreadable paths as clean */
@@ -189,6 +196,9 @@ export function startMainCheckoutLeakWatchdog(
   timer.unref?.();
 
   return {
+    ready: async () => {
+      await baselinePromise;
+    },
     stop: async () => {
       stopped = true;
       clearInterval(timer);

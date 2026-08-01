@@ -264,6 +264,10 @@ export async function executeSpawnAgentCommand(
           }),
         );
         mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
+        // Freeze the diff baseline before the child is allowed to run.  Without
+        // this await, an immediate main-checkout write can race into the
+        // watchdog's async baseline and evade the active-spawn guard.
+        await mainLeakWatchdog.ready();
         res = await Promise.race([
           ports.agentSpawn(cmd.agent, {
           purpose: "builder",

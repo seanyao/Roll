@@ -23,6 +23,9 @@ import {
   HUMAN_SOFT_LEASE_HOURS,
   readLeases,
   releaseStoryLease,
+  releaseDeliveryReservation,
+  promoteHostDelegationLease,
+  transferDeliveryReservation,
   writeLeases,
   setLease,
   removeLease,
@@ -2574,6 +2577,135 @@ describe("legacy story-leases.json compatibility", () => {
 
       // cleanDeadLeases on empty dir
       expect(cleanDeadLeases(dir)).toEqual([]);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 promotes and names the durable reservation release", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-reservation";
+      const runId = `delta-${delegationId}`;
+      expect(claimStoryLease(dir, "US-LOOP-126", {
+        claimedAt: NOW,
+        source: "host-delegation",
+        delegationId,
+        runId,
+      }).status).toBe("claimed");
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126", delegationId, runId)).toBe(true);
+      // Restart after the atomic rename is idempotent, not a foreign lease.
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126", delegationId, runId)).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126"]?.source).toBe("delivery-reservation");
+      expect(releaseDeliveryReservation(dir, "US-LOOP-126", delegationId, runId, "merged")).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126"]).toBeUndefined();
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 recovers an interrupted identity-pinned promotion lock", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-stale-promotion";
+      const runId = `delta-${delegationId}`;
+      expect(claimStoryLease(dir, "US-LOOP-126-STALE", {
+        claimedAt: NOW, source: "host-delegation", delegationId, runId,
+      }).status).toBe("claimed");
+      // Simulate a process death after a durable promotion lock.  A matching
+      // live owner must not be treated as stale merely because identities
+      // match, so the lock carries an explicitly dead PID and pinned inode.
+      const record = statSync(join(dir, "US-LOOP-126-STALE.lease"));
+      writeFileSync(join(dir, ".US-LOOP-126-STALE.promotion.lock"), JSON.stringify({
+        schema: "roll-lease-promotion-lock/v1",
+        pid: 999_999,
+        token: "dead-owner",
+        delegationId,
+        runId,
+        recordDev: record.dev,
+        recordIno: record.ino,
+      }) + "\n");
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126-STALE", delegationId, runId)).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126-STALE"]?.source).toBe("delivery-reservation");
+      expect(existsSync(join(dir, ".US-LOOP-126-STALE.promotion.lock"))).toBe(false);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 recognizes a completed promotion after rename before stale-lock cleanup", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-post-rename";
+      const runId = `delta-${delegationId}`;
+      const storyId = "US-LOOP-126-POST-RENAME";
+      expect(claimStoryLease(dir, storyId, {
+        claimedAt: NOW, source: "host-delegation", delegationId, runId,
+      }).status).toBe("claimed");
+      const oldRecord = statSync(join(dir, `${storyId}.lease`));
+      // Simulate the only dangerous crash interval: rename has made the
+      // reservation durable but the old-inode lock cleanup has not run.
+      setLease(dir, storyId, {
+        claimedAt: NOW, source: "delivery-reservation", delegationId, runId,
+      });
+      writeFileSync(join(dir, `.${storyId}.promotion.lock`), JSON.stringify({
+        schema: "roll-lease-promotion-lock/v1", pid: 999_999, token: "dead-after-rename",
+        delegationId, runId, recordDev: oldRecord.dev, recordIno: oldRecord.ino,
+      }) + "\n");
+      expect(promoteHostDelegationLease(dir, storyId, delegationId, runId)).toBe(true);
+      expect(existsSync(join(dir, `.${storyId}.promotion.lock`))).toBe(false);
+      expect(releaseDeliveryReservation(dir, storyId, delegationId, runId, "merged")).toBe(true);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 never steals a matching live promotion lock and transfers only to a named continuation", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-continuation";
+      const runId = `delta-${delegationId}`;
+      expect(claimStoryLease(dir, "US-LOOP-126-CONT", {
+        claimedAt: NOW, source: "host-delegation", delegationId, runId,
+      }).status).toBe("claimed");
+      const record = statSync(join(dir, "US-LOOP-126-CONT.lease"));
+      writeFileSync(join(dir, ".US-LOOP-126-CONT.promotion.lock"), JSON.stringify({
+        schema: "roll-lease-promotion-lock/v1", pid: process.pid, token: "live-owner",
+        delegationId, runId, recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126-CONT", delegationId, runId)).toBe(false);
+      unlinkSync(join(dir, ".US-LOOP-126-CONT.promotion.lock"));
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126-CONT", delegationId, runId)).toBe(true);
+      expect(transferDeliveryReservation(dir, "US-LOOP-126-CONT", delegationId, runId, "named-successor")).toBe(true);
+      expect(transferDeliveryReservation(dir, "US-LOOP-126-CONT", delegationId, runId, "named-successor")).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126-CONT"]?.runId).toBe("named-successor");
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 retries a post-rename continuation only after retiring its dead matching lock", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-continuation-post-rename";
+      const runId = `delta-${delegationId}`;
+      const successor = "named-successor";
+      const storyId = "US-LOOP-126-CONT-POST-RENAME";
+      expect(claimStoryLease(dir, storyId, {
+        claimedAt: NOW, source: "delivery-reservation", delegationId, runId: successor,
+      }).status).toBe("claimed");
+      const record = statSync(join(dir, `${storyId}.lease`));
+      writeFileSync(join(dir, `.${storyId}.continuation.lock`), JSON.stringify({
+        schema: "roll-lease-continuation-lock/v1", pid: 999_999,
+        delegationId, runId, continuationRunId: successor,
+        recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      expect(transferDeliveryReservation(dir, storyId, delegationId, runId, successor)).toBe(true);
+      expect(existsSync(join(dir, `.${storyId}.continuation.lock`))).toBe(false);
+      // A different successor cannot use the cleanup retry to steal the
+      // completed reservation.
+      expect(transferDeliveryReservation(dir, storyId, delegationId, runId, "other-successor")).toBe(false);
+      expect(releaseDeliveryReservation(dir, storyId, delegationId, successor, "merged")).toBe(true);
     } finally {
       try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
     }

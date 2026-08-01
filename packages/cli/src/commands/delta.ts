@@ -29,12 +29,14 @@ import {
   type PrepareInput,
 } from "../lib/delta-allocation.js";
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
+import { managedWorkspaceOperationId } from "../lib/managed-workspace-operation.js";
 import { renderDeltaBanner, renderDeltaPhaseBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
-import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest } from "@roll/core";
-import type { DelegationResolution, DeltaArtifactManifest } from "@roll/spec";
+import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation } from "@roll/core";
+import type { DelegationResolution, DeltaArtifactManifest, ManagedWorkspaceSet } from "@roll/spec";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join, resolve, sep, relative } from "node:path";
 
 // ── Locale resolution ────────────────────────────────────────────────────────
 
@@ -101,6 +103,18 @@ function concludePhaseBanner(input: {
 /** Read only the persisted resolution artifact before rendering any banner facts. */
 function readPersistedResolution(resolutionPath: string): DelegationResolution {
   return JSON.parse(readFileSync(resolutionPath, "utf8")) as DelegationResolution;
+}
+
+/**
+ * Workspace schema is a write-time protocol discriminator.  Only the absent
+ * historical field and the explicitly recorded v1 boundary are legacy; an
+ * unknown literal must never be quietly interpreted as old data.
+ */
+function preparedWorkspaceSchema(prepared: Record<string, unknown>): "legacy" | "managed-v2" | "unknown" {
+  const schema = prepared.workspaceSchema;
+  if (schema === undefined || schema === 1) return "legacy";
+  if (schema === 2) return "managed-v2";
+  return "unknown";
 }
 
 // ── Argument parser ──────────────────────────────────────────────────────────
@@ -170,7 +184,7 @@ function checkEnumFlag(flags: Record<string, string | true>, key: string, allowe
 
 // ── Subcommand routing ────────────────────────────────────────────────────────
 
-export function deltaCommand(args: string[]): number {
+export async function deltaCommand(args: string[]): Promise<number> {
   const sub = args[0];
 
   // Help
@@ -182,7 +196,7 @@ export function deltaCommand(args: string[]): number {
   // Route to subcommand
   switch (sub) {
     case "prepare":
-      return prepareCommand(args.slice(1));
+      return await prepareCommand(args.slice(1));
     case "validate":
       return validateCommand(args.slice(1));
     case "conclude":
@@ -197,7 +211,7 @@ export function deltaCommand(args: string[]): number {
 
 // ── Prepare ──────────────────────────────────────────────────────────────────
 
-function prepareCommand(args: string[]): number {
+async function prepareCommand(args: string[]): Promise<number> {
   const { positional, flags } = parseArgs(args);
   const json = flags["json"] === true;
 
@@ -265,6 +279,16 @@ function prepareCommand(args: string[]): number {
     else process.stderr.write(`${topologyErr}\n`);
     return 1;
   }
+  // A host-guided session has no Cycle-owned allocator to attach to.  Full
+  // Delta is the runner topology and must reuse that Cycle WorkspaceSet; do
+  // not create a nested host frame/lease and discover the incompatibility
+  // after durable side effects.
+  if (flags["topology"] === "full-delta-team") {
+    const msg = T("delta.error.full_delta_requires_cycle_workspace");
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
   const profileErr = checkEnumFlag(flags, "profile", QUALITY_PROFILES);
   if (profileErr) {
     if (json) process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: profileErr }) + "\n");
@@ -285,8 +309,11 @@ function prepareCommand(args: string[]): number {
   }
 
   let resolutionTemplate: unknown;
+  let resolutionSha256: string;
   try {
-    resolutionTemplate = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    const resolutionBytes = readFileSync(resolutionPath, "utf8");
+    resolutionTemplate = JSON.parse(resolutionBytes);
+    resolutionSha256 = createHash("sha256").update(resolutionBytes).digest("hex");
   } catch {
     const msg = `Failed to parse resolution file: ${resolutionPath}`;
     if (json) {
@@ -356,11 +383,12 @@ function prepareCommand(args: string[]): number {
     qualityProfile: flags["profile"] as QualityProfile,
     presetId,
     presetSha256: hostPresetSha256 ?? "",
+    resolutionSha256,
     resolutionTemplate: resolutionTemplate as PrepareInput["resolutionTemplate"],
   };
 
   try {
-    const result = prepareDelegation(process.cwd(), input);
+    const result = await prepareDelegation(process.cwd(), input);
 
     // ── Test seam: crash point between file write and event append ──────────
     // At this point marker, resolution, preparation, and lease are all on disk.
@@ -374,21 +402,34 @@ function prepareCommand(args: string[]): number {
     try {
       const bus = getEventBus();
       const now = Date.now();
+      const alreadyPrepared = (() => {
+        try {
+          return readFileSync(result.eventsPath, "utf8").split("\n").some((line) => {
+            try { const event = JSON.parse(line) as Record<string, unknown>; return event.type === "delta:prepared" && event.delegationId === result.delegationId; } catch { return false; }
+          });
+        } catch { return false; }
+      })();
 
       // delta:prepared
-      bus.appendEvent(result.eventsPath, {
-        type: "delta:prepared",
-        delegationId: result.delegationId,
-        runId: result.runId,
-        storyId,
-        trigger: input.trigger,
-        topology: input.topology,
-        qualityProfile: input.qualityProfile,
-        presetId: input.presetId,
-        presetSha256: input.presetSha256,
-        hostId: resolvedHostId,
-        ts: now,
-      });
+      if (!alreadyPrepared) {
+        bus.appendEvent(result.eventsPath, {
+          type: "delta:prepared",
+          delegationId: result.delegationId,
+          runId: result.runId,
+          storyId,
+          trigger: input.trigger,
+          topology: input.topology,
+          qualityProfile: input.qualityProfile,
+          presetId: input.presetId,
+          presetSha256: input.presetSha256,
+          hostId: resolvedHostId,
+          ...(result.workspace === undefined ? {} : { workspaceSchema: 2 as const }),
+          ts: now,
+        });
+      }
+      // The allocator wrote worktree:allocated before returning.  Role
+      // admission can therefore never observe delta:prepared without the
+      // matching durable allocation fact.
       if (_eventAppendFailure) {
         try { _eventAppendFailure({ type: "delta:prepared" }); } catch {
           if (json) process.stderr.write(JSON.stringify({ ok: false, error: "event_append_failure", detail: "Event append failure after delta:prepared" }) + "\n");
@@ -397,11 +438,21 @@ function prepareCommand(args: string[]): number {
         }
       }
 
-      // delta:role_resolved for each role
-      const roles = (input.resolutionTemplate as unknown as Record<string, unknown>).roles;
+      // Each role event is independently resumable.  A process can die after
+      // `delta:prepared`; retrying must complete the persisted resolution
+      // rather than silently treating the delegation as ready.
+      const roles = readPersistedResolution(result.resolutionPath).roles;
+      const resolvedRoles = new Set<string>();
+      try {
+        for (const line of readFileSync(result.eventsPath, "utf8").split("\n")) {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          if (event.type === "delta:role_resolved" && event.delegationId === result.delegationId && typeof event.role === "string") resolvedRoles.add(event.role);
+        }
+      } catch { /* no event stream means every role still needs publication */ }
       if (Array.isArray(roles)) {
         for (const role of roles) {
           const r = role as Record<string, unknown>;
+          if (resolvedRoles.has(r.role as string)) continue;
           bus.appendEvent(result.eventsPath, {
             type: "delta:role_resolved",
             delegationId: result.delegationId,
@@ -450,12 +501,21 @@ function prepareCommand(args: string[]): number {
           resolutionPath: result.resolutionPath,
           markerPath: result.markerPath,
           preparationPath: result.preparationPath,
+          ...(result.workspace === undefined ? {} : { workspace: result.workspace }),
         },
       }) + "\n");
     } else {
-      process.stdout.write(`Delegation prepared: ${result.delegationId}\n`);
-      process.stdout.write(`  runId: ${result.runId}\n`);
-      process.stdout.write(`  frame: ${result.frameDir}\n`);
+      process.stdout.write(`${T("delta.prepare.prepared")}: ${result.delegationId}\n`);
+      process.stdout.write(`  ${T("delta.field.run_id")}: ${result.runId}\n`);
+      process.stdout.write(`  ${T("delta.field.frame")}: ${result.frameDir}\n`);
+      if (result.workspace !== undefined) {
+        process.stdout.write(`  ${T("delta.field.workspace")}: ${result.workspace.runId}\n`);
+        for (const member of result.workspace.members) {
+          process.stdout.write(`    ${T("delta.field.member")}: ${member.relativeLocator}\n`);
+          process.stdout.write(`    ${T("delta.field.detached_head")}: ${member.checkoutRef.head}\n`);
+          if (member.publishRef !== undefined) process.stdout.write(`    ${T("delta.field.publish_ref")}: ${member.publishRef}\n`);
+        }
+      }
     }
     return 0;
   } catch (err) {
@@ -508,6 +568,10 @@ export interface DeltaValidationInput {
   readonly qualityProfile: string;
   /** Frame directory for the delegation (read-only reference, not for path derivation). */
   readonly frameDir: string;
+  /** Undefined exclusively for a pre-cutover record with no workspace facts. */
+  readonly workspace?: ManagedWorkspaceSet;
+  /** True only for an explicitly persisted post-cutover preparation record. */
+  readonly managedRecord?: boolean;
 }
 
 /** Narrow validator interface — tests inject, production uses the default stub. */
@@ -546,6 +610,163 @@ export function injectEventBus(bus: EventBus | null): void {
 
 function getEventBus(): EventBus {
   return _injectedEventBus ?? new EventBus();
+}
+
+/**
+ * Re-inspect the materialized member rather than trusting a manifest's copied
+ * WorkspaceSet literals.  A member is valid only when it lives below the one
+ * managed root, is registered by Git, belongs to this repository identity, and
+ * is still on the detached commit recorded before allocation.
+ */
+function independentlyVerifyWorkspaceMember(
+  projectPath: string,
+  workspace: ManagedWorkspaceSet,
+  member: NonNullable<DeltaArtifactManifest["workspaceMember"]>,
+): boolean {
+  const root = resolve(projectPath, ".roll", "loop", "worktrees");
+  const checkout = resolve(root, member.relativeLocator);
+  if (relative(root, checkout) === "" || relative(root, checkout).startsWith("..") || relative(root, checkout).includes(`..${sep}`)) return false;
+  try {
+    const canonicalRoot = realpathSync(root);
+    const canonicalCheckout = realpathSync(checkout);
+    if (!canonicalCheckout.startsWith(`${canonicalRoot}${sep}`)) return false;
+    const git = (args: string[], cwd = projectPath): string => execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const primary = workspace.members[0];
+    if (primary === undefined) return false;
+    // Each WorkspaceSet member owns a repository identity.  A submodule
+    // checkout is registered by that submodule's Git directory, not by its
+    // superproject; inspecting from projectPath accepted/rejected the wrong
+    // worktree list and collapsed multi-repository identity into one repo.
+    const prefix = `${primary.workspaceKey}.submodules/`;
+    const submodulePath = member.relativeLocator.startsWith(prefix)
+      ? member.relativeLocator.slice(prefix.length)
+      : undefined;
+    const repositoryCwd = submodulePath === undefined
+      ? projectPath
+      : join(projectPath, submodulePath);
+    const registered = git(["worktree", "list", "--porcelain"], repositoryCwd)
+      .split("\n\n")
+      .some((entry) => entry.split("\n").some((line) => {
+        if (!line.startsWith("worktree ")) return false;
+        try { return realpathSync(line.slice("worktree ".length)) === canonicalCheckout; } catch { return false; }
+      }));
+    if (!registered || !existsSync(checkout)) return false;
+    const head = git(["rev-parse", "HEAD"], checkout);
+    // A Builder is required to commit.  The immutable WorkspaceSet retains the
+    // allocation base, while a durable release request records the committed
+    // member heads that may safely replace it.  Never admit an arbitrary newer
+    // checkout: it must be the manifest's observed detached head AND either the
+    // allocation base or an exact, complete release-request fact for this run.
+    const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
+    const requestedHead = (() => {
+      try {
+        const records = readFileSync(eventsPath, "utf8").split("\n").flatMap((line) => {
+          try { return line === "" ? [] : [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+        });
+        const request = [...records].reverse().find((event) => {
+          if (event.type !== "worktree:release_requested" || event.runId !== workspace.runId || !Array.isArray(event.expectedHeads)) return false;
+          const expectedHeads = event.expectedHeads as unknown[];
+          if (expectedHeads.length !== workspace.members.length) return false;
+          const expectedLocators = expectedHeads.flatMap((expected) => {
+            if (typeof expected !== "object" || expected === null) return [];
+            const value = expected as Record<string, unknown>;
+            return typeof value.relativeLocator === "string" && typeof value.head === "string"
+              ? [value.relativeLocator]
+              : [];
+          });
+          return expectedLocators.length === workspace.members.length
+            && new Set(expectedLocators).size === workspace.members.length
+            && workspace.members.every((candidate) => expectedLocators.includes(candidate.relativeLocator));
+        });
+        if (request === undefined) return undefined;
+        const expected = (request.expectedHeads as Array<Record<string, unknown>>)
+          .find((entry) => entry.relativeLocator === member.relativeLocator)?.head;
+        return typeof expected === "string" ? expected : undefined;
+      } catch { return undefined; }
+    })();
+    if (head !== member.checkoutRef.head) return false;
+    const allocated = workspace.members.find((candidate) => candidate.relativeLocator === member.relativeLocator);
+    if (allocated === undefined || (head !== allocated.checkoutRef.head && head !== requestedHead)) return false;
+    try { if (git(["symbolic-ref", "-q", "HEAD"], checkout) !== "") return false; } catch { /* detached HEAD returns non-zero */ }
+    let repositoryId = "";
+    try { repositoryId = git(["config", "--get", "remote.origin.url"], repositoryCwd); } catch { /* local identity below */ }
+    if (repositoryId === "") repositoryId = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repositoryCwd).replace(/[^A-Za-z0-9._/-]/g, "_");
+    const expected = allocated;
+    // A copied WorkspaceSet literal is insufficient: the Builder must attest
+    // the canonical cwd it used, and that assertion must resolve to this exact
+    // registered member (not main, a sibling run, or a symlink escape).
+    const executionCwd = (member as { executionCwd?: string }).executionCwd;
+    if (executionCwd === undefined || executionCwd === "") return false;
+    let assertedCwd: string;
+    try { assertedCwd = realpathSync(executionCwd); } catch { return false; }
+    return expected !== undefined
+      && expected.repositoryId === repositoryId
+      && assertedCwd === canonicalCheckout;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persist the observed managed set immediately before Builder admission.  This
+ * is deliberately a write-ahead lifecycle checkpoint: it freezes the heads a
+ * Builder actually produced without changing the workspace to
+ * `release_requested` in the execution projection.  Cleanup still requires its
+ * separate delivered/attested release request.
+ */
+function recordBuilderValidationHeads(
+  projectPath: string,
+  eventsPath: string,
+  workspace: ManagedWorkspaceSet,
+  now: number,
+): boolean {
+  const root = resolve(projectPath, ".roll", "loop", "worktrees");
+  try {
+    const expectedHeads = workspace.members.map((member) => {
+      const checkout = resolve(root, member.relativeLocator);
+      if (relative(root, checkout) === "" || relative(root, checkout).startsWith("..") || relative(root, checkout).includes(`..${sep}`)) throw new Error("workspace escape");
+      const canonicalRoot = realpathSync(root);
+      const canonicalCheckout = realpathSync(checkout);
+      if (!canonicalCheckout.startsWith(`${canonicalRoot}${sep}`)) throw new Error("workspace escape");
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: canonicalCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (head === "") throw new Error("missing head");
+      try {
+        if (execFileSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: canonicalCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() !== "") throw new Error("attached head");
+      } catch (error) {
+        // `symbolic-ref -q` exits non-zero for a legitimate detached HEAD.
+        if (error instanceof Error && error.message === "attached head") throw error;
+      }
+      return { relativeLocator: member.relativeLocator, head };
+    });
+    const opDigest = createHash("sha256").update(JSON.stringify(expectedHeads)).digest("hex").slice(0, 16);
+    const operationId = `${workspace.runId}:builder-validation:${opDigest}`;
+    const prior = existsSync(eventsPath)
+      ? readFileSync(eventsPath, "utf8").split("\n").some((line) => {
+        try {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          return event.type === "worktree:release_requested"
+            && event.runId === workspace.runId
+            && event.operationId === operationId
+            && event.reason === "builder_validation";
+        } catch { return false; }
+      })
+      : false;
+    if (!prior) new EventBus().appendEvent(eventsPath, {
+      type: "worktree:release_requested",
+      runId: workspace.runId,
+      reason: "builder_validation",
+      operationId,
+      expectedHeads,
+      ts: now,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── Event append failure seam (test-only, retained for backward compat) ───────
@@ -592,6 +813,44 @@ function defaultValidator(input: DeltaValidationInput): ValidatorResult {
   // identity + report-format checks yet still publish an evaluator event.
   if (manifest.role !== input.stage) {
     return { ok: false, reason: "artifact_invalid", detail: `manifest role '${manifest.role}' ≠ validated stage '${input.stage}'`, role: input.stage };
+  }
+  if (input.managedRecord === true && input.workspace === undefined) {
+    return { ok: false, reason: "artifact_invalid", detail: "managed Delta has no durable allocated WorkspaceSet", role: input.stage };
+  }
+  if (input.workspace !== undefined) {
+    if (input.stage === "builder" && (
+      manifest.delegationId !== input.delegationId
+      || manifest.storyId !== input.storyId
+      || manifest.trigger !== input.trigger
+      || manifest.topology !== input.topology
+      || manifest.qualityProfile !== input.qualityProfile
+    )) {
+      return {
+        ok: false,
+        reason: "artifact_invalid",
+        detail: "manifest delegation context does not match the immutable prepared delegation",
+        role: input.stage,
+      };
+    }
+    if (input.stage === "builder") {
+      const binding = manifest.workspaceMember;
+      const member = binding === undefined ? undefined : input.workspace.members.find((candidate) =>
+        candidate.workspaceKey === binding.workspaceKey
+        && candidate.relativeLocator === binding.relativeLocator
+        && candidate.checkoutRef.kind === binding.checkoutRef.kind
+        && candidate.publishRef === binding.publishRef,
+      );
+      const independentlyVerified = binding !== undefined
+        && independentlyVerifyWorkspaceMember(process.cwd(), input.workspace, binding);
+      if (manifest.runId !== input.workspace.runId || member === undefined || !independentlyVerified) {
+        return {
+          ok: false,
+          reason: "artifact_invalid",
+          detail: "manifest is not bound to a registered canonical DeliveryRun managed workspace member",
+          role: input.stage,
+        };
+      }
+    }
   }
   const frameDir = input.frameDir;
   const contains = (p: string): boolean => {
@@ -749,6 +1008,14 @@ function validateCommand(args: string[]): number {
     return 1;
   }
 
+  if (preparedWorkspaceSchema(preparedEvent) === "unknown") {
+    const msg = `Delegation ${delegationId}: unsupported workspace schema ${JSON.stringify(preparedEvent.workspaceSchema)}`;
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "artifact_invalid")}\n`);
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "unsupported_workspace_schema", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
   const storyId = preparedEvent.storyId as string;
   const cardDir = resolveExistingUniqueCardArchiveDir(cwd, storyId);
   if (!cardDir) {
@@ -902,6 +1169,21 @@ function validateCommand(args: string[]): number {
   const stageArtifactPath = join(stageArtifactDir, "evaluation-manifest.json");
   const evaluationManifestPath = stageArtifactPath;
 
+  let workspace: ManagedWorkspaceSet | undefined;
+  // Only the immutable prepared event chooses the compatibility path.  A
+  // missing/corrupt new preparation can never impersonate legacy history.
+  const managedRecord = preparedWorkspaceSchema(preparedEvent) === "managed-v2";
+  try {
+    const preparation = JSON.parse(readFileSync(join(frameDir, "preparation.json"), "utf8")) as { schema?: unknown; workspace?: ManagedWorkspaceSet; runId?: unknown };
+    if (managedRecord && preparation.schema === "roll-delta-preparation/v2") workspace = preparation.workspace;
+    if (managedRecord && workspace !== undefined) {
+      const operationId = managedWorkspaceOperationId(preparation.runId as string, "prepare");
+      const allocated = events.some((event) => event.type === "worktree:allocated"
+        && (event as Record<string, unknown>).operationId === operationId
+        && JSON.stringify((event as Record<string, unknown>).workspace) === JSON.stringify(workspace));
+      if (!allocated) workspace = undefined;
+    }
+  } catch { /* a v2 prepared event remains managed and fails closed below */ }
   const validationInput: DeltaValidationInput = {
     artifactPath: stageArtifactPath,
     manifestPath: evaluationManifestPath,
@@ -915,7 +1197,19 @@ function validateCommand(args: string[]): number {
     topology: preparedEvent.topology as string,
     qualityProfile: preparedEvent.qualityProfile as string,
     frameDir,
+    ...(managedRecord ? { managedRecord: true } : {}),
+    ...(workspace === undefined ? {} : { workspace }),
   };
+
+  // A normal detached Builder commits before it writes its evidence.  Record
+  // the complete same-run member set before validating that evidence, rather
+  // than requiring tests/hosts to forge a later destructive release event.
+  if (stage === "builder" && workspace !== undefined && _injectedValidator === null) {
+    // A malformed/attached/foreign member remains a validator failure with its
+    // precise existing diagnostic.  Only a successfully observed checkpoint is
+    // admitted as evidence for a committed detached Builder.
+    recordBuilderValidationHeads(cwd, eventsPath, workspace, now);
+  }
 
   const validator = _injectedValidator ?? defaultValidator;
   const result = validator(validationInput);
@@ -966,6 +1260,41 @@ function validateCommand(args: string[]): number {
   const roleResolved = delegationEvents.find(
     (e) => e.type === "delta:role_resolved" && (e as Record<string, unknown>).role === stage,
   ) as Record<string, unknown> | undefined;
+  const admittedBuilderDelivery = (() => {
+    if (stage !== "builder" || workspace === undefined) return undefined;
+    try {
+      const published = JSON.parse(readFileSync(evaluationManifestPath, "utf8")) as DeltaArtifactManifest;
+      const selectedLocator = published.workspaceMember?.relativeLocator;
+      if (selectedLocator === undefined) return undefined;
+      const root = resolve(cwd, ".roll", "loop", "worktrees");
+      const members = workspace.members.map((member) => {
+        const checkout = resolve(root, member.relativeLocator);
+        const canonical = realpathSync(checkout);
+        const deliveryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: canonical, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+        const deliveryTree = execFileSync("git", ["show", "-s", "--format=%T", deliveryCommit], {
+          cwd: canonical, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+        if (deliveryCommit === "" || deliveryTree === "") throw new Error("missing delivery Git fact");
+        return {
+          repositoryId: member.repositoryId,
+          relativeLocator: member.relativeLocator,
+          deliveryBase: member.checkoutRef.head,
+          deliveryCommit,
+          deliveryTree,
+          ...(member.publishRef === undefined ? {} : { publishRef: member.publishRef }),
+        };
+      });
+      const selected = members.find((member) => member.relativeLocator === selectedLocator);
+      return selected === undefined ? undefined : { selected, members };
+    } catch {
+      // The structural validator has already authenticated the selected member.
+      // A missing immutable Git fact must leave publication without delivery
+      // authority; attest will fail closed instead of guessing from primary.
+      return undefined;
+    }
+  })();
 
   bus.appendEvent(eventsPath, {
     type: "delta:artifact_published",
@@ -986,6 +1315,15 @@ function validateCommand(args: string[]): number {
     sessionId: "host-native",
     roleInstanceId: (roleResolved?.roleInstanceId as string) ?? "",
     identityProvenance: "host-attested" as const,
+    ...(stage === "builder" && workspace !== undefined ? { runId: workspace.runId } : {}),
+    ...(admittedBuilderDelivery !== undefined
+      ? { deliveryCommit: admittedBuilderDelivery.selected.deliveryCommit }
+      : {}),
+    ...(admittedBuilderDelivery !== undefined ? { deliveryTree: admittedBuilderDelivery.selected.deliveryTree } : {}),
+    ...(admittedBuilderDelivery?.selected.publishRef !== undefined
+      ? { publishRef: admittedBuilderDelivery.selected.publishRef }
+      : {}),
+    ...(admittedBuilderDelivery !== undefined ? { deliveryMembers: admittedBuilderDelivery.members } : {}),
     ts: now,
   });
 
@@ -1011,7 +1349,7 @@ function concludeCommand(args: string[]): number {
   const json = flags["json"] === true;
 
   // Reject duplicate flags (parser error → zero side effects)
-  const concludeKnownFlags = new Set(["delegation", "delivery-disposition", "json"]);
+  const concludeKnownFlags = new Set(["delegation", "delivery-disposition", "continuation-run", "json"]);
   const dupFlag = detectDuplicateFlags(args, concludeKnownFlags);
   if (dupFlag) {
     const msg = T("delta.error.duplicate_flag", `--${dupFlag}`);
@@ -1091,6 +1429,13 @@ function concludeCommand(args: string[]): number {
     return 1;
   }
 
+  if (preparedWorkspaceSchema(preparedEvent) === "unknown") {
+    const detail = `Delegation ${delegationId}: unsupported workspace schema ${JSON.stringify(preparedEvent.workspaceSchema)}`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "unsupported_workspace_schema", detail }) + "\n");
+    else process.stderr.write(`Conclude failed: ${detail}\n`);
+    return 1;
+  }
+
   const storyId = preparedEvent.storyId as string;
   const now = Date.now();
 
@@ -1143,6 +1488,19 @@ function concludeCommand(args: string[]): number {
     return 1;
   }
 
+  const continuationRun = flags["continuation-run"];
+  // Redelegation is a real delivery handoff, never a silent deletion of the
+  // host guard.  Require the next durable owner before any terminal event is
+  // written so an interrupted owner cannot make the Story claimable by an
+  // anonymous competing Cycle.
+  if (disposition === "owner_redelegate" && preparedWorkspaceSchema(preparedEvent) === "managed-v2"
+    && (typeof continuationRun !== "string" || continuationRun === "")) {
+    const detail = "Managed owner_redelegate requires --continuation-run <named-run-id>";
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "continuation_required", detail }) + "\n");
+    else process.stderr.write(`Conclude failed: ${detail}\n`);
+    return 1;
+  }
+
   // Verify lease identity match BEFORE writing terminal event.
   // If the lease entry has a mismatched delegationId/runId, fail-loud with
   // non-zero exit and do NOT write terminal.
@@ -1150,7 +1508,56 @@ function concludeCommand(args: string[]): number {
   const slDir = join(cwd, ".roll", "loop", "leases");
   const leases = readLeases(slDir);
   const leaseEntry = leases[storyId];
-  if (leaseEntry && leaseEntry.source === "host-delegation") {
+
+  // Read the immutable cutover fact before accepting a terminal transition.
+  // Historical frames retain their previous readable behavior; a prepared v2
+  // event must prove it still owns the exact workspace reservation.  Missing
+  // files never turn a post-cutover run into legacy behavior.
+  let managedWorkspace: ManagedWorkspaceSet | undefined;
+  const managedRecord = preparedWorkspaceSchema(preparedEvent) === "managed-v2";
+  if (managedRecord) {
+    try {
+      const preparation = JSON.parse(readFileSync(join(
+        resolveExistingUniqueCardArchiveDir(cwd, storyId)!,
+        `delta-${delegationId}`,
+        "preparation.json",
+      ), "utf8")) as { schema?: unknown; workspace?: ManagedWorkspaceSet; runId?: unknown };
+      if (preparation.schema !== "roll-delta-preparation/v2" || preparation.runId !== runId || preparation.workspace === undefined) {
+        throw new Error("v2 preparation identity is incomplete");
+      }
+      managedWorkspace = preparation.workspace;
+    } catch {
+      const detail = `Managed Delta preparation is missing or corrupt for story ${storyId}`;
+      if (json) process.stderr.write(JSON.stringify({ ok: false, error: "recovery_required", detail }) + "\n");
+      else process.stderr.write(`Conclude failed: ${detail}\n`);
+      return 1;
+    }
+  }
+
+  if (managedWorkspace !== undefined) {
+    const requestedContinuation = disposition === "owner_redelegate" && typeof continuationRun === "string"
+      ? continuationRun
+      : undefined;
+    const matchingReservation = leaseEntry?.source === "delivery-reservation"
+      && leaseEntry.delegationId === delegationId
+      && leaseEntry.runId === runId;
+    // A kill after the continuation CAS has changed the durable holder but
+    // before this command returned must be a retry of the same terminal, not
+    // a lease mismatch.  A different successor is deliberately refused.
+    const matchingTransferredReservation = requestedContinuation !== undefined
+      && leaseEntry?.source === "delivery-reservation"
+      && leaseEntry.delegationId === delegationId
+      && leaseEntry.runId === requestedContinuation;
+    const matchingHostGuard = leaseEntry?.source === "host-delegation"
+      && leaseEntry.delegationId === delegationId
+      && leaseEntry.runId === runId;
+    if (!matchingHostGuard && !matchingReservation && !matchingTransferredReservation) {
+      const detail = `Managed Delta reservation missing or foreign for story ${storyId}`;
+      if (json) process.stderr.write(JSON.stringify({ ok: false, error: "lease_mismatch", detail }) + "\n");
+      else process.stderr.write(`Conclude failed: ${detail}\n`);
+      return 1;
+    }
+  } else if (leaseEntry && leaseEntry.source === "host-delegation") {
     if (leaseEntry.delegationId !== delegationId || leaseEntry.runId !== runId) {
       if (json) {
         process.stderr.write(JSON.stringify({ ok: false, error: "lease_mismatch", detail: `Lease identity mismatch: expected delegationId=${delegationId} runId=${runId}, found delegationId=${leaseEntry.delegationId} runId=${leaseEntry.runId}` }) + "\n");
@@ -1161,17 +1568,52 @@ function concludeCommand(args: string[]): number {
     }
   }
 
+  // Promote while the canonical lease filename remains present.  This has no
+  // claimable gap: a concurrent Cycle sees either the host guard or the named
+  // delivery reservation, never an absent story lease.
+  const priorTerminal = delegationEvents.find((event) => event.type === "delta:terminal") as Record<string, unknown> | undefined;
+  const promotedReservation = managedWorkspace !== undefined;
+  const alreadyTransferred = disposition === "owner_redelegate" && typeof continuationRun === "string"
+    && leaseEntry?.source === "delivery-reservation"
+    && leaseEntry.delegationId === delegationId
+    && leaseEntry.runId === continuationRun;
+  if (promotedReservation && !alreadyTransferred && !promoteHostDelegationLease(slDir, storyId, delegationId, runId)) {
+    const detail = `Managed Delta reservation promotion failed for story ${storyId}`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "lease_promotion_failed", detail }) + "\n");
+    else process.stderr.write(`Conclude failed: ${detail}\n`);
+    return 1;
+  }
+
+  // Persist the managed activity before terminal truth.  If this append fails,
+  // the promoted reservation remains conservative and no handoff is claimed.
+  // Lifecycle activity is keyed by run, not delegationId, so it is present in
+  // the global ledger rather than the delegation-only projection.
+  const hasActivity = managedWorkspace !== undefined && events.some((event) =>
+    event.type === "worktree:activity_observed" && (event as Record<string, unknown>).runId === managedWorkspace!.runId,
+  );
+  if (managedWorkspace !== undefined && !hasActivity) {
+    bus.appendEvent(eventsPath, {
+      type: "worktree:activity_observed",
+      runId: managedWorkspace.runId,
+      source: "host_attested",
+      ts: now,
+    });
+  }
+
   // Record delta:terminal with Option C binding
   const terminalEvent = {
     type: "delta:terminal" as const,
     delegationId,
     storyId,
+    ...(managedWorkspace !== undefined ? { runId } : {}),
     outcome: "handoff_ready" as const,
     terminalBinding: "handoff_only" as const,
     deliveryDisposition: disposition as "owner_continue" | "owner_hold" | "owner_redelegate",
+    ...(promotedReservation ? { reservationSource: "delivery-reservation" as const } : {}),
+    ...(disposition === "owner_redelegate" && typeof continuationRun === "string" ? { continuationRunId: continuationRun } : {}),
     ts: now,
   };
-  bus.appendEvent(eventsPath, terminalEvent);
+  if (priorTerminal === undefined) bus.appendEvent(eventsPath, terminalEvent);
 
   // ── Test seam: event append failure after terminal write ────────────────
   // If the seam throws, the terminal event IS written but the caller must
@@ -1191,8 +1633,24 @@ function concludeCommand(args: string[]): number {
     }
   }
 
-  // Release host-delegation lease (identity match requires delegationId + runId)
-  const released = releaseHostDelegationLease(cwd, storyId, delegationId, runId);
+  if (managedWorkspace !== undefined && disposition === "owner_redelegate") {
+    // The terminal fact is written before the transfer.  A process death here
+    // is recoverable: retrying conclude observes the same promoted reservation
+    // and idempotently installs the named successor rather than dropping it.
+    if (!transferDeliveryReservation(slDir, storyId, delegationId, runId, continuationRun as string)) {
+      const detail = `Managed Delta continuation transfer failed for story ${storyId}`;
+      if (json) process.stderr.write(JSON.stringify({ ok: false, error: "continuation_transfer_failed", detail }) + "\n");
+      else process.stderr.write(`Conclude failed: ${detail}\n`);
+      return 1;
+    }
+  }
+
+  // A managed handoff is only a role-guard transfer.  It is not delivery and
+  // must continue excluding a competing Cycle until the owner deliberately
+  // abandons/redelegates or normal delivery reconciliation releases it.  Legacy
+  // frames retain their historical behavior for read compatibility.
+  const mustRetainReservation = promotedReservation;
+  const released = mustRetainReservation || releaseHostDelegationLease(cwd, storyId, delegationId, runId);
   if (!released) {
     // Lease release failed — terminal event already written, but the lease
     // remains. Fail-loud so the caller knows the state is split.
@@ -1297,6 +1755,18 @@ function statusCommand(args: string[]): number {
     statusView = projectDelegationStatus(delegationId, events);
   }
 
+  const workspaceFor = (view: NonNullable<typeof statusView>): ManagedWorkspaceSet | undefined => {
+    const cardDir = resolveExistingUniqueCardArchiveDir(cwd, view.storyId);
+    if (cardDir === null) return undefined;
+    try {
+      const preparation = JSON.parse(readFileSync(join(cardDir, `delta-${view.delegationId}`, "preparation.json"), "utf8")) as {
+        schema?: unknown; workspace?: ManagedWorkspaceSet;
+      };
+      return preparation.schema === "roll-delta-preparation/v2" ? preparation.workspace : undefined;
+    } catch { return undefined; }
+  };
+  const statusWorkspace = statusView === null ? undefined : workspaceFor(statusView);
+
   // If we have a storyId but no delegation, project ALL delegations for that story
   const delegationViews: Array<ReturnType<typeof projectDelegationStatus>> = [];
   if (storyId && typeof storyId === "string" && !delegationId) {
@@ -1329,6 +1799,7 @@ function statusCommand(args: string[]): number {
         deliveryDisposition: statusView.deliveryDisposition,
         roles: statusView.roles,
         totalCost: statusView.totalCost,
+        ...(statusWorkspace === undefined ? {} : { workspace: statusWorkspace }),
       });
     }
     if (delegationViews.length > 0) {
@@ -1358,18 +1829,26 @@ function statusCommand(args: string[]): number {
   } else {
     // Human output
     if (statusView) {
-      process.stdout.write(`Delegation: ${statusView.delegationId}\n`);
-      process.stdout.write(`  Story: ${statusView.storyId}\n`);
-      process.stdout.write(`  Status: ${statusView.status}\n`);
-      if (statusView.visibleMode) process.stdout.write(`  Mode: ${statusView.visibleMode}\n`);
-      if (statusView.trigger) process.stdout.write(`  Trigger: ${statusView.trigger}\n`);
-      if (statusView.topology) process.stdout.write(`  Topology: ${statusView.topology}\n`);
-      if (statusView.qualityProfile) process.stdout.write(`  Profile: ${statusView.qualityProfile}\n`);
-      process.stdout.write(`  Cost: ${statusView.totalCost}\n`);
-      if (statusView.blockReason) process.stdout.write(`  Block: ${statusView.blockReason} — ${statusView.blockDetail ?? ""}\n`);
-      if (statusView.terminalBinding) process.stdout.write(`  Terminal: ${statusView.terminalBinding} (${statusView.deliveryDisposition ?? ""})\n`);
+      process.stdout.write(`${T("delta.field.delegation")}: ${statusView.delegationId}\n`);
+      process.stdout.write(`  ${T("delta.field.story")}: ${statusView.storyId}\n`);
+      process.stdout.write(`  ${T("delta.field.status")}: ${statusView.status}\n`);
+      if (statusView.visibleMode) process.stdout.write(`  ${T("delta.field.mode")}: ${statusView.visibleMode}\n`);
+      if (statusView.trigger) process.stdout.write(`  ${T("delta.field.trigger")}: ${statusView.trigger}\n`);
+      if (statusView.topology) process.stdout.write(`  ${T("delta.field.topology")}: ${statusView.topology}\n`);
+      if (statusView.qualityProfile) process.stdout.write(`  ${T("delta.field.profile")}: ${statusView.qualityProfile}\n`);
+      process.stdout.write(`  ${T("delta.field.cost")}: ${statusView.totalCost}\n`);
+      if (statusView.blockReason) process.stdout.write(`  ${T("delta.field.block")}: ${statusView.blockReason} — ${statusView.blockDetail ?? ""}\n`);
+      if (statusView.terminalBinding) process.stdout.write(`  ${T("delta.field.terminal")}: ${statusView.terminalBinding} (${statusView.deliveryDisposition ?? ""})\n`);
+      if (statusWorkspace !== undefined) {
+        process.stdout.write(`  ${T("delta.field.workspace")}: ${statusWorkspace.runId}\n`);
+        for (const member of statusWorkspace.members) {
+          process.stdout.write(`    ${T("delta.field.member")}: ${member.relativeLocator}\n`);
+          process.stdout.write(`    ${T("delta.field.detached_head")}: ${member.checkoutRef.head}\n`);
+          if (member.publishRef !== undefined) process.stdout.write(`    ${T("delta.field.publish_ref")}: ${member.publishRef}\n`);
+        }
+      }
       if (statusView.roles.length > 0) {
-        process.stdout.write(`  Roles:\n`);
+        process.stdout.write(`  ${T("delta.field.roles")}:\n`);
         for (const role of statusView.roles) {
           const prov = role.identityProvenance ? ` (${role.identityProvenance})` : "";
           process.stdout.write(`    ${role.role}: ${role.status} [${role.hostId ?? "?"}/${role.modelId ?? "?"}]${prov} cost=${role.cost}\n`);

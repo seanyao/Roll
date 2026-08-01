@@ -214,10 +214,12 @@ describe("US-DELTA-001 — Delta events parse correctly", () => {
       sessionId: "s1",
       roleInstanceId: "ri-1",
       identityProvenance: "host-attested",
+      runId: "delta-d1",
       ts: 4,
     }));
     expect(e).not.toBeNull();
     expect(e?.type).toBe("delta:artifact_published");
+    if (e?.type === "delta:artifact_published") expect(e.runId).toBe("delta-d1");
   });
 
   it("parses delta:terminal(handoff_ready) event", () => {

@@ -34,6 +34,7 @@ import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { acMapCandidates, storySpecPath, verificationReportFresh } from "./attest-gate.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { eventTs } from "./runner-time.js";
+import { hostDeltaDeliveryBinding } from "../lib/delta-delivery-binding.js";
 
 /**
  * US-DELIV-004 — the push-time evidence gate, shared by the REMOTE publish path
@@ -46,6 +47,17 @@ import { eventTs } from "./runner-time.js";
 function defaultReadProofBody(worktreePath: string): string | undefined {
   try {
     return readFileSync(join(worktreePath, ".roll", "last-test-pass"), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function localHostDeltaBinding(eventsPath: string, storyId: string, runId: string): { delegationId: string; runId: string } | undefined {
+  try {
+    const events = readFileSync(eventsPath, "utf8").split("\n").flatMap((line) => {
+      try { return line === "" ? [] : [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+    });
+    return hostDeltaDeliveryBinding(events, storyId, runId);
   } catch {
     return undefined;
   }
@@ -225,6 +237,7 @@ export async function executeLocalPublish(
   // fact and there is no PR here.
   if (ctx.storyId !== undefined && ctx.cycleId !== undefined) {
     try {
+      const binding = localHostDeltaBinding(ports.paths.eventsPath, ctx.storyId, ctx.cycleId);
       ports.events.appendEvent(ports.paths.eventsPath, {
         type: "delivery:reconciled",
         cycleId: ctx.cycleId,
@@ -233,6 +246,7 @@ export async function executeLocalPublish(
         mergedBy: "runner",
         mergeCommit: landing.sha,
         signal: "patch_id",
+        ...(binding === undefined ? {} : binding),
         ts: eventTs(ports),
       });
     } catch {
