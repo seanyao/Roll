@@ -555,7 +555,8 @@ export function claimStoryLease(
  * Match-only contract:
  * - `source` must match the lease entry's source.
  * - For `host-delegation` source: `delegationId` AND `runId` must all match.
- * - For `cycle` source: `pid` must also match.
+ * - For `cycle` source: `pid` must also match; when a durable `runId` is
+ *   recorded, it must match as well (legacy pid-only leases remain readable).
  * - Never deletes other owners' entries.
  *
  * Returns `true` if the lease was released, `false` if identity mismatch
@@ -604,6 +605,7 @@ export function releaseStoryLease(
   if (identity.source === "cycle") {
     if (identity.pid === undefined) return false;
     if (existing.pid !== identity.pid) return false;
+    if (existing.runId !== undefined && existing.runId !== identity.runId) return false;
   }
 
   // Match confirmed — remove the record
@@ -687,7 +689,16 @@ export function isHumanSoftLeaseActive(entry: LeaseEntry, now: number): boolean 
  *
  * Returns the list of storyIds whose dead leases were cleaned (for alerting).
  */
-export function cleanDeadLeases(dirPath: string): string[] {
+export interface DeadLeaseCleanupOptions {
+  /**
+   * A caller that owns a durable lifecycle projection can retain a dead PID
+   * lease while its workspace is still ambiguous.  A dead process is not proof
+   * that its registered checkout may be handed to another delivery run.
+   */
+  readonly preserve?: (storyId: string, entry: LeaseEntry) => boolean;
+}
+
+export function cleanDeadLeases(dirPath: string, options: DeadLeaseCleanupOptions = {}): string[] {
   // BLOCK-3: Under the read-only legacy contract, cleanDeadLeases cleans
   // canonical records only. Legacy-only data is immutable — return no
   // cleaned IDs and perform no write (never create canonical survivor
@@ -709,7 +720,8 @@ export function cleanDeadLeases(dirPath: string): string[] {
         if (
           decoded.pid !== undefined &&
           decoded.source !== "host-delegation" &&
-          !isPidAlive(decoded.pid)
+          !isPidAlive(decoded.pid) &&
+          options.preserve?.(storyId, decoded) !== true
         ) {
           unlinkSync(rp);
           cleaned.push(storyId);

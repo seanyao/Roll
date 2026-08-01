@@ -421,7 +421,23 @@ export async function executeSpawnAgentCommand(
       // auth blocks and global PAUSEs after real deliveries.
       const builderBlock =
         res.exitCode !== 0 || res.timedOut ? classifyBlockSignature(`${res.stdout}\n${res.stderr}`) : null;
-      if (builderBlock === "quota" || builderBlock === "auth" || builderBlock === "network") {
+      // The watchdog observed the physical cause directly. It wins over a
+      // signature inferred from buffered agent output, which may report a
+      // secondary network/auth failure while the main-checkout breach is what
+      // actually terminated the agent.
+      if (activeMainLeak.detected) {
+        const detail = `agent wrote outside its sandbox into the main checkout: ${activeMainLeak.files.join(", ")}`.slice(0, 200);
+        const suspended = suspendRig(guardRuntimeDir(ports), cmd.agent, "main_checkout_leak", detail, eventTs(ports));
+        ports.events.appendEvent(ports.paths.eventsPath, {
+          type: "rig:suspended",
+          cycleId: ctx.cycleId,
+          agent: cmd.agent,
+          cause: "main_checkout_leak",
+          detail,
+          nextProbeAt: suspended.nextProbeAt ?? eventTs(ports),
+          ts: eventTs(ports),
+        });
+      } else if (builderBlock === "quota" || builderBlock === "auth" || builderBlock === "network") {
         const detail = (`${res.stdout}\n${res.stderr}`.split("\n").find((l) => l.trim() !== "") ?? "").slice(0, 200);
         ports.events.appendEvent(ports.paths.eventsPath, {
           type: "agent:blocked",
@@ -438,23 +454,6 @@ export async function executeSpawnAgentCommand(
           cycleId: ctx.cycleId,
           agent: cmd.agent,
           cause: builderBlock,
-          detail,
-          nextProbeAt: suspended.nextProbeAt ?? eventTs(ports),
-          ts: eventTs(ports),
-        });
-      } else if (activeMainLeak.detected) {
-        // E7: the leak watchdog SIGKILL'd the agent for writing into the main
-        // checkout. That kill folds into `res.timedOut` for teardown (above),
-        // but it is NOT a timeout — report the accurate death cause so on-call
-        // is not misdirected to a no-progress hunt. detail lists the leaked
-        // (newDirty) paths for immediate diagnosis.
-        const detail = `agent wrote outside its sandbox into the main checkout: ${activeMainLeak.files.join(", ")}`.slice(0, 200);
-        const suspended = suspendRig(guardRuntimeDir(ports), cmd.agent, "main_checkout_leak", detail, eventTs(ports));
-        ports.events.appendEvent(ports.paths.eventsPath, {
-          type: "rig:suspended",
-          cycleId: ctx.cycleId,
-          agent: cmd.agent,
-          cause: "main_checkout_leak",
           detail,
           nextProbeAt: suspended.nextProbeAt ?? eventTs(ports),
           ts: eventTs(ports),

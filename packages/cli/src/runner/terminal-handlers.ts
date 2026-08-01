@@ -1,31 +1,29 @@
-import { lstatSync, realpathSync, unlinkSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   appendDelivery,
+  managedWorkspaceReleaseVerdict,
   nodeDeliveryStore,
   planPublishDocPr,
   planPublishPr,
   releaseStoryLease,
+  projectManagedWorkspaceRun,
   type CycleCommand,
   type CycleContext,
   type PublishResult,
-  type RunKey,
 } from "@roll/core";
-import { AWAITING_REVIEW_STATUS_MARKER, STATUS_MARKER, absent, present } from "@roll/spec";
+import { absent, parseEventLine, present, type RollEvent } from "@roll/spec";
 import { prNumberFromUrl, resolvePublishMode, submoduleWorktreePath } from "@roll/infra";
-import { commitInRepoBacklog, isInRepoRollLayout } from "./in-repo-backlog.js";
-import { writeCycleRoleSummaryBestEffort } from "./cycle-role-artifact-writer.js";
 import { evaluateEvidenceGate, executeLocalPublish } from "./local-publish.js";
-import { markDoneGuarded } from "./done-guard.js";
 import { addPendingPrCreate } from "./pending-pr-create.js";
 import { applyCleanupManifest, CLEANUP_TIMEOUT_MS, resolveCleanupManifest } from "./environment-cleanup.js";
 import type { ExecuteResult, Ports } from "./ports.js";
-import { repairCoreWorktreeContamination } from "./main-checkout-guard.js";
 import { publishBodyWithEvidenceTrailer, runPublishDocDriftGate, storyRequiresManualMerge } from "./publish-lifecycle.js";
-import { buildRunRow, buildTerminalRecord, commitRollMetadata, stampTs, withRealCost } from "./run-records.js";
+import { stampTs, withRealCost } from "./run-records.js";
 import { eventTs } from "./runner-time.js";
-import { cleanStaleEvidence, isParkedAtHold, resetStaleSpecTruth, revertPrematureDone } from "./resume-truth.js";
 import { appendCleanupEvent, cleanupGuardResult, recordCleanupFailures } from "./sandbox-boundary.js";
+import { releaseReason, releaseRecovery, releaseVerdict } from "./managed-workspace-guidance.js";
+import { executeAppendRunCommand } from "./terminal-run-handler.js";
 
 type TerminalCommand = Extract<CycleCommand, { kind:
   | "publish_pr"
@@ -41,6 +39,17 @@ type TerminalCommand = Extract<CycleCommand, { kind:
   | "append_alert"
   | "release_lock"
 }>;
+
+function readLifecycleEvents(path: string): RollEvent[] {
+  try {
+    return readFileSync(path, "utf8").split("\n").flatMap((line) => {
+      const event = parseEventLine(line);
+      return event === null ? [] : [event];
+    });
+  } catch {
+    return [];
+  }
+}
 
 export async function executeTerminalCommand(
   cmd: TerminalCommand,
@@ -374,31 +383,107 @@ export async function executeTerminalCommand(
       return {};
     }
 
-    // _worktree_cleanup (tolerant). Side effect; no feedback (terminal path).
-    // NOTE (FIX-354): the lever-4 warm-session CAPTURE used to live here, but
-    // `cleanup_worktree` is SKIPPED when the worktree is preserved (publish-fail /
-    // `unpublished`), so a failed cycle never captured. The capture now fires at
-    // post-agent-exit in `spawn_agent` (above), unconditionally. This branch is
-    // pure worktree teardown again.
     case "cleanup_worktree":
-      // FIX-204C: drop OUR .roll symlink first — `git worktree remove` refuses
-      // untracked entries in repos that don't gitignore .roll, and removing the
-      // LINK explicitly (never the target) keeps the main .roll untouchable.
+      // Remove only our .roll link; never its persistent target.
       try {
         const dst = join(ports.paths.worktreePath, ".roll");
         if (lstatSync(dst, { throwIfNoEntry: false })?.isSymbolicLink() === true) unlinkSync(dst);
       } catch {
         /* tolerant cleanup, mirrors _worktree_cleanup */
       }
-      // US-LOOP-095: worktreeRemove bundles unpushed detached work unless the
-      // caller marks it already-on-remote (bundleUnpushed=false).
-      await ports.git.worktreeRemove(ports.repoCwd, ports.paths.worktreePath, cmd.branch, cmd.bundleUnpushed);
-      // E5: a submodule cycle ALSO created a SIBLING submodule worktree
-      // (`<wt>.submodules/<sub>`, E5-B). Tear it down too, or every submodule
-      // cycle leaks that worktree + its git worktree admin metadata. BEST-EFFORT
-      // (the port is code-0-always; the try/catch is belt-and-braces): a cleanup
-      // blip must never topple the cycle's terminal path.
-      if (ctx.targetSubmodule !== undefined && ctx.targetSubmodule !== "") {
+      const managed = ports.git.managedWorktreeInspect !== undefined && ports.git.managedWorktreeRelease !== undefined;
+      if (managed) {
+        const inspect = ports.git.managedWorktreeInspect;
+        const release = ports.git.managedWorktreeRelease;
+        if (inspect === undefined || release === undefined) return {};
+        const events = readLifecycleEvents(ports.paths.eventsPath);
+        const allocation = [...events].reverse().find((event): event is Extract<typeof event, { type: "worktree:allocated" }> => event.type === "worktree:allocated" && event.workspace.runId === ctx.cycleId);
+        const primary = allocation?.workspace.members[0];
+        if (allocation === undefined || primary === undefined) {
+          ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("missing_identity")));
+          return {};
+        }
+        const operationId = `${ctx.cycleId}:release`;
+        let priorRequest = [...events].reverse().find((event): event is Extract<typeof event, { type: "worktree:release_requested" }> => event.type === "worktree:release_requested" && event.runId === ctx.cycleId && event.operationId === operationId);
+        const inspections = await Promise.all(allocation.workspace.members.map(async (member) => {
+          const suffix = `${primary.workspaceKey}.submodules/`;
+          const submodule = member.relativeLocator.startsWith(suffix) ? member.relativeLocator.slice(suffix.length) : undefined;
+          const repoCwd = submodule === undefined ? ports.repoCwd : join(ports.repoCwd, submodule);
+          const path = submodule === undefined ? ports.paths.worktreePath : submoduleWorktreePath(ports.paths.worktreePath, submodule);
+          return { member, repoCwd, path, inspection: await inspect(repoCwd, path) };
+        }));
+        const delivery = events.some((event) => event.type === "delivery:merge_confirmed" && event.cycleId === ctx.cycleId) ? "merged" : "unknown";
+        const attest = events.some((event) => event.type === "attest:gate" && event.cycleId === ctx.cycleId && event.verdict === "produced") ? "accepted" : "unknown";
+        if (priorRequest === undefined) {
+          const ready = inspections.every(({ member, inspection: fresh }) => fresh !== undefined
+            && fresh.registered
+            && fresh.clean
+            && fresh.repositoryId === member.repositoryId);
+          if (!ready || delivery !== "merged" || attest !== "accepted") {
+            ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("preconditions")));
+            return {};
+          }
+          const expectedHeads = inspections.map(({ member, inspection: fresh }) => ({
+            relativeLocator: member.relativeLocator,
+            head: fresh!.head,
+          }));
+          priorRequest = { type: "worktree:release_requested", runId: ctx.cycleId, reason: "delivered", operationId, expectedHeads, ts: eventTs(ports) };
+          ports.events.appendEvent(ports.paths.eventsPath, priorRequest);
+          events.push(priorRequest);
+        }
+        const expectedHeads = priorRequest.expectedHeads;
+        const absence = await Promise.all(inspections.map(async ({ repoCwd, path, inspection: fresh }) =>
+          fresh === undefined ? ports.git.managedWorktreeAbsent?.(repoCwd, path) ?? false : false));
+        if (inspections.some(({ inspection: fresh }, index) => fresh === undefined && !absence[index])) {
+          ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("inspection_unknown")));
+          return {};
+        }
+        const present = inspections.filter(({ inspection: fresh }) => fresh !== undefined) as Array<typeof inspections[number] & { inspection: NonNullable<typeof inspections[number]["inspection"]> }>;
+        if (present.length === 0) {
+          ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:released", runId: ctx.cycleId, operationId, expectedHeads, ts: eventTs(ports) });
+          if (ctx.storyId !== undefined && ctx.storyId !== "") releaseStoryLease(join(dirname(ports.paths.eventsPath), "leases"), ctx.storyId, { source: "cycle", pid: process.pid, runId: ctx.cycleId });
+          return {};
+        }
+        const run = projectManagedWorkspaceRun(ctx.cycleId, events);
+        const verdict = managedWorkspaceReleaseVerdict({
+          runState: run?.state ?? "unknown",
+          delivery,
+          attest,
+          factsAgree: true,
+          members: present.map(({ member, inspection: fresh }) => ({
+            relativeLocator: member.relativeLocator,
+            registration: fresh.registered === true && fresh.repositoryId === member.repositoryId ? "registered" : "foreign",
+            activity: "inactive",
+            head: fresh.head === expectedHeads.find((expected) => expected.relativeLocator === member.relativeLocator)?.head ? "expected" : "mismatch",
+            cleanliness: fresh.clean === true ? "clean" : "dirty",
+          })),
+        });
+        if (verdict.verdict !== "safe_to_release") {
+          ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseVerdict(verdict.verdict)));
+          return {};
+        }
+        for (const { member, repoCwd, path } of [...present].reverse()) {
+          const expectedHead = expectedHeads.find((expected) => expected.relativeLocator === member.relativeLocator)?.head;
+          if (expectedHead === undefined) {
+            ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("expected_head_incomplete")));
+            return {};
+          }
+          const released = await release(repoCwd, path, expectedHead, member.repositoryId);
+          if (released.code !== 0) {
+            ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("effect_refused")));
+            return {};
+          }
+        }
+        try {
+          ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:released", runId: ctx.cycleId, operationId, expectedHeads, ts: eventTs(ports) });
+          if (ctx.storyId !== undefined && ctx.storyId !== "") releaseStoryLease(join(dirname(ports.paths.eventsPath), "leases"), ctx.storyId, { source: "cycle", pid: process.pid, runId: ctx.cycleId });
+        } catch {
+          ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("event_missing")));
+        }
+      } else {
+        await ports.git.worktreeRemove(ports.repoCwd, ports.paths.worktreePath, cmd.branch, cmd.bundleUnpushed);
+      }
+      if (!managed && ctx.targetSubmodule !== undefined && ctx.targetSubmodule !== "") {
         try {
           await ports.git.worktreeRemoveInSubmodule(
             ports.repoCwd,
@@ -406,9 +491,7 @@ export async function executeTerminalCommand(
             submoduleWorktreePath(ports.paths.worktreePath, ctx.targetSubmodule),
           );
         } catch {
-          /* tolerant cleanup, mirrors _worktree_cleanup — the superproject
-             worktree was already removed above; a submodule remove blip is
-             non-fatal (leaked sibling worktree at worst, never a toppled cycle). */
+          /* legacy cleanup is best-effort */
         }
       }
       return {};
@@ -425,314 +508,13 @@ export async function executeTerminalCommand(
       );
       return {};
 
-    // events/bus upsertRun — the dashboard terminal record (v2 runs.jsonl shape).
-    case "append_run": {
-      // FIX-1210: repair core.worktree contamination at cycle end BEFORE writing
-      // terminal records, so sibling worktrees never see a poisoned config.
-      // Covers ALL terminal outcomes (done/published/failed/idle/gave_up/blocked).
-      const repair = repairCoreWorktreeContamination(ports.repoCwd);
-      if (repair.healed) {
-        ports.events.appendEvent(ports.paths.eventsPath, {
-          type: "cycle:cleanup",
-          cycleId: cmd.cycleId,
-          rule: "core.worktree",
-          path: repair.detail,
-          ok: true,
-          ts: eventTs(ports),
-        });
-        ports.events.appendAlert(
-          ports.paths.alertsPath,
-          `FIX-1210: cycle ${cmd.cycleId} — core.worktree was pointing to "${repair.detail}" — auto-unset at terminal`,
-        );
-      }
-      const metaRepair = repairCoreWorktreeContamination(join(ports.repoCwd, ".roll"));
-      if (metaRepair.healed) {
-        ports.events.appendEvent(ports.paths.eventsPath, {
-          type: "cycle:cleanup",
-          cycleId: cmd.cycleId,
-          rule: "roll-meta.core-worktree",
-          path: metaRepair.detail,
-          ok: true,
-          ts: eventTs(ports),
-        });
-        ports.events.appendAlert(
-          ports.paths.alertsPath,
-          `FIX-1224: cycle ${cmd.cycleId} — roll-meta core.worktree was pointing to "${metaRepair.detail}" — auto-unset at terminal`,
-        );
-      }
+    case "append_run":
+      return executeAppendRunCommand(cmd, ports, ctx);
 
-      const key: RunKey = { storyId: ctx.storyId ?? "", cycleId: cmd.cycleId };
-      ports.events.upsertRun(ports.paths.runsPath, key, buildRunRow(cmd, ctx, ports.clock()));
-      // US-TRUTH-001: the versioned complete-or-reasoned terminal record —
-      // written at the same moment, from the same facts, as the runs row.
-      // Best-effort: the truth twin must never fail the cycle terminal.
-      try {
-        ports.events.appendEvent(
-          ports.paths.eventsPath,
-          // FIX-343 (step ③): resolve report/ac-map from the PERSISTENT .roll
-          // (repoCwd), NOT the worktree — `append_run` runs at the terminal,
-          // after the worktree may be torn down, so a worktree-rooted lookup
-          // false-negatives `acmap_missing`/`not_rendered` even though the
-          // evidence is on disk in the shared .roll.
-          buildTerminalRecord(cmd, ctx, ports.repoCwd, ports.clock()),
-        );
-      } catch {
-        /* the runs row above already landed; audit flags the missing twin */
-      }
-      // FIX-211: Done ≡ merged (backlog.md:4) — no publish-time 抢跑. A
-      // publish-status-0 `done` terminal means the PR was OPENED and merge
-      // handed to the reconciler, NOT that it merged. FIX-198
-      // wrongly flipped the MAIN backlog ✅ the moment the PR opened, so a card
-      // read Done while its PR was still open (the conductor merged minutes
-      // later). Flip ✅ Done ONLY on confirmed MERGED evidence; otherwise the row
-      // rests at 🔨 In Progress (delivered, pending merge) and a later
-      // preflight reconcile (decideClaimReconcile) flips it once the async PR
-      // loop merges. The runs row keeps `done` for v2/dashboard parity — only
-      // the backlog flip waits for the merge evidence.
-      const terminalStoryId = ctx.storyId ?? "";
-      // FIX-1211: the cycle that owned this claim is ending — drop its lease so
-      // the next preflight can recycle a legitimately dead claim. Best-effort.
-      // Scoped to source="cycle": a human claim that preempted mid-flight must
-      // keep its soft-lease protection past this cycle's terminal (kimi review).
-      if (terminalStoryId !== "") {
-        try {
-          releaseStoryLease(join(dirname(ports.paths.eventsPath), "leases"), terminalStoryId, { source: "cycle", pid: process.pid });
-        } catch {
-          /* lease cleanup must never block terminal */
-        }
-      }
-      let terminalMerged = false;
-      // FIX-1475: in the in-repo layout (`.roll` tracked by the product repo, not
-      // its own nested git), the pre-FIX path made the Done flip durable by
-      // committing it onto the shared checkout's HEAD and pushing `HEAD:main` —
-      // which advanced the local `main` ref and clobbered owner WIP / concurrent
-      // dispatch. `markDoneGuarded` still writes Done into the shared working-tree
-      // backlog (the loop legitimately tracks status there; setup already marked
-      // it In Progress), but durability is now pushed as an ORIGIN-BASED object
-      // (see commitInRepoBacklog) so the shared main ref/HEAD/index never move.
-      const inRepoLayout = isInRepoRollLayout(ports.paths.worktreePath);
-      let inRepoDurableFlip: { id: string; status: string } | null = null;
-      if (
-        (cmd.status === "done" || cmd.status === "published") &&
-        terminalStoryId !== "" &&
-        (ctx.publishConfirmed === true || (ctx.prUrl !== undefined && ctx.prUrl !== ""))
-      ) {
-        // US-TRUTH-015 AC2: use prMergeInfo for both the state check AND the
-        // mergedAt/mergeCommit facts (one gh call, not two).
-        const mergeInfo = await ports.github.prMergeInfo(ports.repoCwd, ctx.branch).catch(() => undefined);
-        const state = mergeInfo?.state ?? "UNKNOWN";
-        if (state === "MERGED") {
-          terminalMerged = true;
-          // Force-write a done DeliveryRecord with real mergedAt/mergeCommit.
-          if (ctx.cycleId !== undefined) {
-            try {
-              const mergedAtVal = mergeInfo?.mergedAt !== undefined
-                ? present(new Date(mergeInfo.mergedAt).getTime())
-                : absent("not_recorded");
-              const mergeCommitVal = mergeInfo?.mergeCommit !== undefined
-                ? present(mergeInfo.mergeCommit)
-                : absent("not_recorded");
-              appendDelivery(nodeDeliveryStore, ports.repoCwd, {
-                storyId: terminalStoryId,
-                cycleId: ctx.cycleId,
-                lifecycleState: "done",
-                prNumber: ctx.prUrl !== undefined
-                  ? present(Number(prNumberFromUrl(ctx.prUrl) ?? 0))
-                  : absent("not_recorded"),
-                prUrl: ctx.prUrl !== undefined
-                  ? present(ctx.prUrl)
-                  : absent("not_recorded"),
-                mergedAt: mergedAtVal,
-                mergeCommit: mergeCommitVal,
-                recordedAt: ports.clock(),
-              });
-            } catch {
-              ports.events.appendAlert(
-                ports.paths.alertsPath,
-                `US-TRUTH-015: appendDelivery done failed for ${terminalStoryId} (cycle ${ctx.cycleId})`,
-              );
-            }
-          }
-          const doneResult = markDoneGuarded(ports.repoCwd, terminalStoryId, { mergedToMain: true }, {
-            markStatus: (projectCwd, id, status) => ports.backlog.markStatus?.(projectCwd, id, status),
-            alert: (m) => ports.events.appendAlert(ports.paths.alertsPath, m),
-          });
-          // FIX-1475: when the guard actually marked Done, mirror the EXACT status
-          // it wrote (Done vs Done · evidence_debt) onto the remote as an
-          // origin-based object — the durable-commit trigger. Skipped when the
-          // guard rejected the flip (missing evidence): nothing to make durable.
-          if (doneResult.ok && inRepoLayout) {
-            const durableStatus = doneResult.debt
-              ? `${STATUS_MARKER.done} · evidence_debt`
-              : STATUS_MARKER.done;
-            inRepoDurableFlip = { id: terminalStoryId, status: durableStatus };
-          }
-        } else {
-          // FIX-304: done ≡ merged. The PR did NOT merge (still OPEN / closed /
-          // gh down), yet the agent may have ALREADY flipped this row ✅ Done in
-          // the symlinked .roll backlog (FIX-204C → the REAL .roll). A delivered
-          // row legitimately rests at 🔨 (pending merge), but a premature ✅ Done
-          // is a FALSE-Done — undo it back to the pre-cycle status so the backlog
-          // reflects TRUE delivery. A later reconciler tick
-          // (decideClaimReconcile) flips it once the PR actually merges.
-          revertPrematureDone(ports, terminalStoryId, ctx.preCycleStatus);
-        }
-      } else if ((cmd.status === "idle" || cmd.status === "gave_up" || cmd.status === "local") && terminalStoryId !== "") {
-        // idle / gave_up / local never merged → the row goes back to 📋 Todo
-        // (re-pickable) — UNLESS this cycle deliberately parked it at 🚫 Hold
-        // via self-downgrade (US-AGENT-042). A too-big card runs
-        // `roll loop self-downgrade`, which flips the parent to Hold and
-        // appends sub-stories, then exits with NO TCR commits → an idle
-        // terminal. Blindly flipping it back to Todo would clobber the
-        // authoritative Hold and re-pick the too-big card forever (the
-        // harness-systemic failure FIX-364 was opened to prevent). A Hold at
-        // the terminal is a deliberate park (self-downgrade or a manual hold),
-        // never a premature claim to release — leave it.
-        // FIX-1232: `local` (unpublished) — gates passed but publish could
-        // not land (FIX-351). The work is sound and committed, not a failure,
-        // but the story must be re-pickable so the loop does not stall.
-        if (!isParkedAtHold(ports, terminalStoryId)) {
-          ports.backlog.markStatus?.(ports.repoCwd, terminalStoryId, STATUS_MARKER.todo);
-        }
-        // US-TRUTH-015 AC2: write a delivery record when the cycle finished
-        // without merging. The lifecycle reflects the terminal outcome:
-        // idle/gave_up → "failed", local (unpublished, work committed) →
-        // "abandoned".
-        if (ctx.cycleId !== undefined) {
-          try {
-            appendDelivery(nodeDeliveryStore, ports.repoCwd, {
-              storyId: terminalStoryId,
-              cycleId: ctx.cycleId,
-              lifecycleState: cmd.status === "local" ? "abandoned" : "failed",
-              prNumber: ctx.prUrl !== undefined
-                ? present(Number(prNumberFromUrl(ctx.prUrl) ?? 0))
-                : absent("no_publish_attempted"),
-              prUrl: ctx.prUrl !== undefined
-                ? present(ctx.prUrl)
-                : absent("no_publish_attempted"),
-              mergedAt: absent("not_recorded"),
-              mergeCommit: absent("not_recorded"),
-              recordedAt: ports.clock(),
-            });
-          } catch {
-            // best-effort — never block the terminal on delivery record write
-          }
-        }
-      } else if (cmd.status === "needs_review" && terminalStoryId !== "") {
-        ports.backlog.markStatus?.(ports.repoCwd, terminalStoryId, AWAITING_REVIEW_STATUS_MARKER);
-        if (ctx.cycleId !== undefined) {
-          try {
-            appendDelivery(nodeDeliveryStore, ports.repoCwd, {
-              storyId: terminalStoryId,
-              cycleId: ctx.cycleId,
-              lifecycleState: "pending_merge",
-              prNumber: ctx.prUrl !== undefined
-                ? present(Number(prNumberFromUrl(ctx.prUrl) ?? 0))
-                : absent("no_publish_attempted"),
-              prUrl: ctx.prUrl !== undefined
-                ? present(ctx.prUrl)
-                : absent("no_publish_attempted"),
-              mergedAt: absent("not_recorded"),
-              mergeCommit: absent("not_recorded"),
-              recordedAt: ports.clock(),
-            });
-          } catch {
-            // best-effort — never block the terminal on delivery record write
-          }
-        }
-      } else if (terminalStoryId !== "") {
-        // FIX-304: a failed / blocked / aborted / orphan terminal NEVER merged
-        // this cycle's work to main. If the agent pre-flipped the row ✅ Done
-        // (the FIX-284 / FIX-285 false-Done), revert it to the pre-cycle status
-        // so a non-merged cycle can never leave a premature Done in the backlog.
-        revertPrematureDone(ports, terminalStoryId, ctx.preCycleStatus);
-        // US-TRUTH-015 AC2: write a DeliveryRecord for non-success terminals
-        // (failed / blocked / aborted / orphan) so the truth stream is complete.
-        if (ctx.cycleId !== undefined) {
-          const terminalLcs = cmd.status === "blocked" ? "blocked" as const
-            : cmd.status === "aborted" || cmd.status === "orphan" ? "abandoned" as const
-            : "failed" as const;
-          try {
-            appendDelivery(nodeDeliveryStore, ports.repoCwd, {
-              storyId: terminalStoryId,
-              cycleId: ctx.cycleId,
-              lifecycleState: terminalLcs,
-              prNumber: ctx.prUrl !== undefined
-                ? present(Number(prNumberFromUrl(ctx.prUrl) ?? 0))
-                : absent("no_publish_attempted"),
-              prUrl: ctx.prUrl !== undefined
-                ? present(ctx.prUrl)
-                : absent("no_publish_attempted"),
-              mergedAt: absent("not_recorded"),
-              mergeCommit: absent("not_recorded"),
-              recordedAt: ports.clock(),
-            });
-          } catch {
-            // best-effort — never block the terminal on delivery record write
-          }
-        }
-      }
-      // Hook 3 (spec-truth reconciliation): on ANY non-merged terminal
-      // (idle/gave_up/failed/blocked/aborted/orphan/local) reset a stale "✅ Fixed/Done"
-      // tick and the "[x]" AC checkboxes in the card's spec.md back to unchecked.
-      // The agent commits a false "done" spec into the symlinked .roll on a cycle
-      // whose product work never merged (FIX-284/285); FIX-304 only fixed the
-      // backlog ROW, leaving the spec poisoned so every re-run reads "done" → 0
-      // commits → idles forever. Resetting it here (committed via the
-      // commitRollMetadata path below) closes that permanent dead-end so a re-run
-      // CAN deliver. A genuinely MERGED Done spec is left untouched.
-      if (!terminalMerged && terminalStoryId !== "") {
-        resetStaleSpecTruth(ports, terminalStoryId);
-        // FIX-1043: also move authoritative-looking delivery evidence (report,
-        // ac-map, latest symlink) out of the gate-visible paths so a failed /
-        // skipped-attest / unpublished cycle cannot leave roll-meta looking
-        // delivered. Diagnostics are preserved under failed-diagnostics/.
-        // FIX-1063: a published/built terminal is a gate-passing pending-merge
-        // state, NOT a failure — its evidence must stay visible in the standard
-        // latest/<ID>-report.html + ac-map.json paths until the PR actually merges.
-        const pendingMerge = cmd.status === "published" || cmd.status === "built";
-        cleanStaleEvidence(
-          ports.repoCwd,
-          terminalStoryId,
-          ctx.cycleId ?? "",
-          pendingMerge ? "published_pending_merge" : undefined,
-        );
-      }
-      // US-V4-001: a cycle terminal no longer refreshes the global dossier
-      // aggregate pages as a side effect. Cycle facts are durable events
-      // (events.ndjson / runs.jsonl) surfaced by `roll cycles` / `roll cycle
-      // watch` / `roll truth`; render dossier pages on demand with `roll index`.
-      // FIX-306: the RUNNER commits + pushes the `.roll` metadata repo — the
-      // sandboxed agent (codex) only WROTE its files (acceptance report, evidence,
-      // ac-map, backlog marks) and CANNOT git-commit `.roll` (its git-internal dir
-      // is outside the sandbox writable roots → meta-commit-blocked → failed
-      // cycle). Runs LAST so it captures everything this terminal wrote (the runs
-      // twin's backlog flip + the refreshed aggregates) plus the agent's files.
-      // Uniform for every agent (no `if codex`). This does NOT decide the Done
-      // flip — that stays gated on MERGED above; it only commits whatever `.roll`
-      // state exists. A push failure is surfaced as an ALERT (never a silent
-      // false-success); a clean tree no-ops without noise.
-      await commitRollMetadata(ports, ctx);
-      // FIX-1238: for in-repo layout (`.roll` tracked by main repo, not its own
-      // git), commitRollMetadata is a no-op. Commit and push the backlog.md flip
-      // to origin/main so the Done status is durable on the remote.
-      if (terminalStoryId !== "" && inRepoLayout && inRepoDurableFlip !== null) {
-        await commitInRepoBacklog(ports, ctx, inRepoDurableFlip.id, inRepoDurableFlip.status);
-      }
-      // US-OBS-032: best-effort cycle role summary from the event stream
-      if (ctx.cycleId !== undefined) {
-        const cycleLogDir = join(dirname(ports.paths.eventsPath), "cycle-logs");
-        writeCycleRoleSummaryBestEffort(ctx.cycleId, ports.paths.eventsPath, cycleLogDir);
-      }
-      return {};
-    }
-
-    // _worktree_alert.
     case "append_alert":
       ports.events.appendAlert(ports.paths.alertsPath, cmd.message);
       return {};
 
-    // infra/process releaseLock.
     case "release_lock":
       ports.process.releaseLock(ports.paths.lockPath);
       return { lockReleased: true };

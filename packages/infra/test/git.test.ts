@@ -21,6 +21,8 @@ import {
   fetchRemoteBranch,
   isAncestor,
   landLocalDelivery,
+  inspectManagedWorktree,
+  managedWorktreeRelease,
   lsRemote,
   mergeBase,
   projectIdentity,
@@ -89,15 +91,36 @@ describe("worktree lifecycle", () => {
     await worktreeRemove(repo, wt, "feat-stale");
   });
 
-  it("worktreeAdd is idempotent over a leftover path", async () => {
+  it("US-LOOP-124: worktreeAdd refuses a leftover path without deleting it", async () => {
     const repo = initRepo("idem");
     const wt = join(tmp("idemwt"), "wt");
     expect((await worktreeAdd(repo, wt, "b1", "main")).code).toBe(0);
-    // Second add to the SAME path: the existing worktree is removed first, so
-    // this still succeeds (now detached).
-    expect((await worktreeAdd(repo, wt, "b2", "main")).code).toBe(0);
+    const marker = join(wt, "preserve-me");
+    writeFileSync(marker, "do not delete");
+    const retry = await worktreeAdd(repo, wt, "b2", "main");
+    expect(retry.code).toBe(1);
+    expect(retry.stderr).toContain("recovery_required");
+    expect(existsSync(marker)).toBe(true);
     expect(await currentBranch(wt)).toBe("HEAD");
-    await worktreeRemove(repo, wt, "b2");
+    await worktreeRemove(repo, wt, "b1");
+  });
+
+  it("US-LOOP-124: managed release revalidates HEAD and dirt instead of force-removing", async () => {
+    const repo = initRepo("managed-release");
+    const wt = join(tmp("managed-release-wt"), "wt");
+    expect((await worktreeAdd(repo, wt, "loop/cycle-safe", "main")).code).toBe(0);
+    const inspection = await inspectManagedWorktree(repo, wt);
+    expect(inspection).toBeDefined();
+    const dirty = join(wt, "preserve-me");
+    writeFileSync(dirty, "do not delete");
+    const refused = await managedWorktreeRelease(repo, wt, inspection!.head, inspection!.repositoryId);
+    expect(refused).toMatchObject({ code: 1, reason: "workspace_dirty" });
+    expect(existsSync(dirty)).toBe(true);
+    execFileSync("git", ["clean", "-fd"], { cwd: wt });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "head changed"], { cwd: wt });
+    const changed = await managedWorktreeRelease(repo, wt, inspection!.head, inspection!.repositoryId);
+    expect(changed).toMatchObject({ code: 1, reason: "head_changed" });
+    expect(existsSync(wt)).toBe(true);
   });
 
   it("US-LOOP-095: worktreeRemove bundles UNPUSHED detached work before teardown", async () => {

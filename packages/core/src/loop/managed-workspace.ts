@@ -32,6 +32,7 @@ export interface ManagedWorkspaceRunView {
   readonly lastActivityAt?: number;
   readonly activitySource?: "runner" | "host_attested";
   readonly releaseOperationId?: string;
+  readonly allocationOperationId?: string;
   readonly recoveryReason?: string;
 }
 
@@ -50,6 +51,7 @@ interface MutableRun {
   lastActivityAt?: number;
   activitySource?: "runner" | "host_attested";
   releaseOperationId?: string;
+  allocationOperationId?: string;
   recoveryReason?: string;
 }
 
@@ -63,6 +65,7 @@ function asView(run: MutableRun): ManagedWorkspaceRunView {
     ...(run.lastActivityAt === undefined ? {} : { lastActivityAt: run.lastActivityAt }),
     ...(run.activitySource === undefined ? {} : { activitySource: run.activitySource }),
     ...(run.releaseOperationId === undefined ? {} : { releaseOperationId: run.releaseOperationId }),
+    ...(run.allocationOperationId === undefined ? {} : { allocationOperationId: run.allocationOperationId }),
     ...(run.recoveryReason === undefined ? {} : { recoveryReason: run.recoveryReason }),
   };
 }
@@ -93,7 +96,7 @@ function ensureLegacyDelta(runs: Map<string, MutableRun>, event: Extract<RollEve
   return run;
 }
 
-function workspaceRun(runs: Map<string, MutableRun>, workspace: ManagedWorkspaceSet): MutableRun {
+function workspaceRun(runs: Map<string, MutableRun>, workspace: ManagedWorkspaceSet, operationId?: string): MutableRun {
   const existing = runs.get(workspace.runId);
   if (existing === undefined) {
     const run: MutableRun = {
@@ -102,11 +105,12 @@ function workspaceRun(runs: Map<string, MutableRun>, workspace: ManagedWorkspace
       kind: workspace.kind,
       state: "active_unstarted",
       workspace,
+      ...(operationId === undefined ? {} : { allocationOperationId: operationId }),
     };
     runs.set(run.runId, run);
     return run;
   }
-  if (existing.workspace !== undefined) {
+  if (existing.workspace !== undefined && (existing.allocationOperationId !== operationId || operationId === undefined)) {
     existing.state = "recovery_required";
     existing.recoveryReason = "duplicate_allocation";
     return existing;
@@ -114,6 +118,7 @@ function workspaceRun(runs: Map<string, MutableRun>, workspace: ManagedWorkspace
   existing.storyId = workspace.storyId;
   existing.kind = workspace.kind;
   existing.workspace = workspace;
+  existing.allocationOperationId = operationId;
   existing.state = "active_unstarted";
   return existing;
 }
@@ -142,7 +147,7 @@ export function projectManagedWorkspaceRuns(
       case "worktree:allocated": {
         const normalized = normalizeManagedWorkspaceSet(event.workspace);
         if (normalized.ok) {
-          const run = workspaceRun(runs, normalized.value);
+          const run = workspaceRun(runs, normalized.value, event.operationId);
           if (normalized.value.delegationId !== undefined) delegationToRun.set(normalized.value.delegationId, run.runId);
         }
         break;
@@ -174,6 +179,13 @@ export function projectManagedWorkspaceRuns(
         if (run !== undefined) {
           run.state = "recovery_required";
           run.recoveryReason = event.reason;
+        } else if (event.workspace !== undefined) {
+          const normalized = normalizeManagedWorkspaceSet(event.workspace);
+          if (normalized.ok && normalized.value.runId === event.runId) {
+            const recovered = workspaceRun(runs, normalized.value, event.operationId);
+            recovered.state = "recovery_required";
+            recovered.recoveryReason = event.reason;
+          }
         }
         break;
       }

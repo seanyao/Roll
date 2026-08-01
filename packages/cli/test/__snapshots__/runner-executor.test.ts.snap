@@ -1,0 +1,5 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`executeCommand — command → executor mapping > US-LOOP-124: freezes the actual terminal release refusal in EN and ZH 1`] = `"US-LOOP-124: release recovery_required for 20260605-000000-1; fresh member inspection, merged delivery, and accepted attest are required before release — preserved"`;
+
+exports[`executeCommand — command → executor mapping > US-LOOP-124: freezes the actual terminal release refusal in EN and ZH 2`] = `"US-LOOP-124：20260605-000000-1 的释放需要恢复；释放前必须完成成员实时检查、确认已合并交付并获得已接受的验收证明 — 已保留"`;

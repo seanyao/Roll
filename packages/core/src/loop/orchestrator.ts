@@ -969,9 +969,8 @@ export interface CycleState {
   ctx: CycleContext;
   /** 1-based agent attempt in flight (execute phase). */
   attempt: number;
-  /** True once the worktree was created (distinguishes the pre-worktree pick
-   *  phase, which accepts `preflight_done`, from the in-worktree pick phase,
-   *  which accepts `story_picked`/`no_story`). */
+  /** True once the worktree was created. Story reservation deliberately happens
+   *  before this flips so a Git side effect never precedes a Story owner. */
   worktreeReady?: boolean;
   /** US-LOOP-102: the adversarial subsequence runtime (execute phase). Present
    *  only for verified/designed cycles whose route_resolved carried a plan; a
@@ -1023,8 +1022,8 @@ export interface StepResult {
  */
 const EVENT_VALID_PHASES: Record<Exclude<CycleEvent["type"], "start">, CyclePhase[]> = {
   preflight_done: ["pick"],
-  worktree_created: ["worktree"],
-  worktree_failed: ["worktree"],
+  worktree_created: ["worktree", "pick"],
+  worktree_failed: ["worktree", "pick"],
   story_picked: ["pick"],
   no_story: ["pick"],
   route_resolved: ["route"],
@@ -1120,10 +1119,9 @@ function terminate(
 
 /**
  * The pure cycle stepper — `(state, event) → { state, commands }`. Walks the
- * {@link CyclePhase} ladder in the v2 order (pick→route→worktree→execute→publish→
- * merge-wait→reconcile→cleanup), but mirrors v2's ACTUAL sequencing where the
- * worktree is created BEFORE the pick (the pick runs inside the worktree,
- * bin/roll:8938): phase `worktree` covers create→pick→route; `execute` runs the
+ * {@link CyclePhase} ladder in reservation-first order (pick→worktree→route→
+ * execute→publish→merge-wait→reconcile→cleanup). `pick` durably claims the
+ * Story before `worktree` creates a detached checkout; `execute` runs the
  * agent (with the retry budget threaded via {@link retryPlan} by the caller, who
  * re-emits `agent_exited` per attempt); `reconcile` classifies + (optionally)
  * folds merge evidence; `cleanup` is terminal.
@@ -1146,12 +1144,10 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
     // has no phase entry — treat it as inert, exactly like a stale/out-of-phase
     // event, rather than crashing the resumable replay.
     if (valid === undefined || !valid.includes(state.phase)) return { state, commands: [] };
-    // Disambiguate the two `pick`-phase events: `preflight_done` only PRE-worktree,
-    // `story_picked`/`no_story` only POST-worktree (the pick runs inside it).
+    // `preflight_done` is only valid before allocation. The picker claims the
+    // Story before Git effects; `story_picked` therefore also belongs to the
+    // pre-worktree pick phase.
     if (event.type === "preflight_done" && state.worktreeReady === true) return { state, commands: [] };
-    if ((event.type === "story_picked" || event.type === "no_story") && state.worktreeReady !== true) {
-      return { state, commands: [] };
-    }
   }
 
   switch (event.type) {
@@ -1163,50 +1159,59 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
 
     case "preflight_done":
       return {
-        state: { ...state, phase: "worktree" },
-        commands: [{ kind: "create_worktree", branch: state.ctx.branch }],
+        state: { ...state, phase: "pick" },
+        commands: [{ kind: "pick_story" }],
       };
 
     case "worktree_created":
-      // Worktree up → pick the next story INSIDE it (bin/roll:8938).
-      // FIX-382: cycle:start moved to route_resolved so it carries real storyId+agent.
+      // Historical/replayed cycles used the old allocate-before-pick ordering.
+      // Preserve their readable state machine while new cycles arrive here with
+      // an already-reserved Story in context.
+      if (state.ctx.storyId === undefined || state.ctx.storyId === "") {
+        return {
+          state: { ...state, phase: "pick", worktreeReady: true },
+          commands: [{ kind: "pick_story" }],
+        };
+      }
+      // The Story lease is already durable. Only now may the runner route/spawn.
       return {
-        state: { ...state, phase: "pick", worktreeReady: true },
+        state: { ...state, phase: "route", worktreeReady: true },
         commands: [
-          { kind: "pick_story" },
+          { kind: "resume_worktree", storyId: state.ctx.storyId ?? "" },
+          { kind: "resolve_route", storyId: state.ctx.storyId ?? "" },
         ],
       };
 
     case "worktree_failed":
-      // Setup failed before story pick / agent spawn. Cleanup is tolerant, so it
-      // is safe for both git-worktree-add failure and post-create bootstrap
-      // failure; no cycle:start was emitted, but a terminal runs row is written.
-      return terminate({ ...state, phase: "worktree" }, "failed", [
-        { kind: "cleanup_environment" }, { kind: "cleanup_worktree", branch: state.ctx.branch },
-      ]);
+      // Setup failed after a Story reservation. Do not run generic cleanup here:
+      // an existing target is a recovery-required artifact, not permission to
+      // force-remove it. A terminal runs row still makes the failure visible.
+      return terminate({ ...state, phase: "worktree" }, "failed", state.worktreeReady === true
+        ? [{ kind: "cleanup_environment" }, { kind: "cleanup_worktree", branch: state.ctx.branch }]
+        : [{ kind: "cleanup_environment" }]);
 
     case "no_story":
-      // Nothing pickable → idle terminal (clean no-op; worktree reclaimed).
-      return terminate({ ...state, phase: "pick" }, "idle", [
-        { kind: "cleanup_environment" }, { kind: "cleanup_worktree", branch: state.ctx.branch },
-      ]);
+      return state.worktreeReady === true
+        ? terminate({ ...state, phase: "pick" }, "idle", [{ kind: "cleanup_environment" }, { kind: "cleanup_worktree", branch: state.ctx.branch }])
+        : terminate({ ...state, phase: "pick" }, "idle");
 
     case "story_picked":
-      // RESUME-PRIOR-WORK is decided HERE, not at create_worktree: the picker
-      // reads the backlog INSIDE the worktree (FIX-198/FIX-204C), so the story id
-      // is only known AFTER the worktree exists. The worktree was created on
-      // origin/main (the fresh-context default); now that we have the picked
-      // story, `resume_worktree` consults resolveResumeBase(storyId) and — only
-      // when a resumable un-merged branch cleanly rebases — RE-POINTS the worktree
-      // to it (fetch + reset --hard) so the agent resumes the prior product code.
-      // It runs BEFORE resolve_route → spawn_agent (commands execute in order), so
-      // the worktree carries the resume tree by the time the agent spawns. When no
-      // resume branch exists it is a clean no-op (worktree stays on origin/main).
+      if (state.worktreeReady === true) {
+        return {
+          state: { ...state, phase: "route", ctx: { ...state.ctx, storyId: event.storyId } },
+          commands: [
+            { kind: "resume_worktree", storyId: event.storyId },
+            { kind: "resolve_route", storyId: event.storyId },
+          ],
+        };
+      }
+      // Reserve the Story before any Git effect. The executor makes the
+      // no-clobber lease durable before returning this event; allocation is the
+      // next command and cannot fall back to the main checkout.
       return {
-        state: { ...state, phase: "route", ctx: { ...state.ctx, storyId: event.storyId } },
+        state: { ...state, phase: "worktree", ctx: { ...state.ctx, storyId: event.storyId } },
         commands: [
-          { kind: "resume_worktree", storyId: event.storyId },
-          { kind: "resolve_route", storyId: event.storyId },
+          { kind: "create_worktree", branch: state.ctx.branch },
         ],
       };
 

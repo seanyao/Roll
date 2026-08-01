@@ -60,6 +60,37 @@ describe("US-LOOP-122 — managed workspace projection", () => {
     expect(view.state).toBe("handoff_ready");
     expect("delivery" in view).toBe(false);
   });
+
+  it("keeps a Git-created/event-missing allocation visible with its operation identity", () => {
+    const view = projectManagedWorkspaceRuns([{
+      type: "worktree:recovery_required",
+      runId: "delta-d1",
+      relativeLocator: "delta-d1",
+      reason: "git_created_event_missing",
+      workspace,
+      operationId: "delta-d1:allocate",
+      ts: 1,
+    }])[0]!;
+    expect(view).toMatchObject({
+      runId: "delta-d1",
+      state: "recovery_required",
+      allocationOperationId: "delta-d1:allocate",
+      recoveryReason: "git_created_event_missing",
+    });
+  });
+
+  it("accepts an idempotent same-operation allocation but blocks a different operation", () => {
+    const same = projectManagedWorkspaceRuns([
+      { type: "worktree:allocated", workspace, operationId: "delta-d1:allocate", ts: 1 },
+      { type: "worktree:allocated", workspace, operationId: "delta-d1:allocate", ts: 2 },
+    ])[0]!;
+    const different = projectManagedWorkspaceRuns([
+      { type: "worktree:allocated", workspace, operationId: "delta-d1:allocate", ts: 1 },
+      { type: "worktree:allocated", workspace, operationId: "other", ts: 2 },
+    ])[0]!;
+    expect(same.state).toBe("active_unstarted");
+    expect(different).toMatchObject({ state: "recovery_required", recoveryReason: "duplicate_allocation" });
+  });
 });
 
 describe("US-LOOP-122 — release verdict", () => {

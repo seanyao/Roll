@@ -371,8 +371,8 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
           expectWorktreeDetached("after-worktree-creation");
           return r;
         },
-        async worktreeRemove(repoCwd, path, branchName, bundleUnpushed) {
-          const r = await base.git.worktreeRemove(repoCwd, path, branchName, bundleUnpushed);
+        async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId) {
+          const r = await base.git.managedWorktreeRelease!(repoCwd, path, expectedHead, repositoryId);
           expectMainHasNoLocalLoopBranches("after-cleanup");
           return r;
         },
@@ -426,11 +426,13 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       "after-agent-commit",
       "after-refspec-push",
       "after-publish",
-      "after-cleanup",
     ]);
     expect(localLoopCycleBranches(repo)).toEqual([]);
     expect(bareRemoteHasRef(remote, branch)).toBe(false);
-    expect(existsSync(p.worktreePath)).toBe(false);
+    // A published PR is not merge + accepted-attest truth.  US-LOOP-124 keeps
+    // the managed checkout and its Story reservation for the later release
+    // operation instead of treating an open-PR terminal as permission to delete.
+    expect(existsSync(p.worktreePath)).toBe(true);
   });
 
   it("drives pick→route→worktree→execute→publish→done, writes events/runs, releases lock", async () => {
@@ -532,7 +534,9 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // The shim's tcr commit really landed in the worktree (captured at execute
     // time; the worktree is cleaned by the `done` terminal path afterward).
     expect(tcrLogAtExecute).toContain("tcr: deliver US-RUN-001");
-    expect(existsSync(p.worktreePath)).toBe(false);
+    // Published is pending merge, so the managed release writer preserves this
+    // checkout until the merged-delivery and accepted-attest facts are durable.
+    expect(existsSync(p.worktreePath)).toBe(true);
 
     // FIX-343 (step ③): the cycle:terminal twin resolves report/ac-map from the
     // PERSISTENT .roll (repoCwd) — never the worktree, which is torn down before
@@ -594,7 +598,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     });
   });
 
-  it("kill-mid-execute (watchdog breach): terminal still written, lock released, next cycle takes over (I2)", async () => {
+  it("US-LOOP-124: watchdog breach preserves its Story reservation; a new cycle does not reuse the worktree", async () => {
     const { repo } = makeFixture("kill");
     const rt = tmp("kill-rt");
     const cycleId = "20260605-111111-2222";
@@ -640,7 +644,8 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // Lock released despite the abort.
     expect(existsSync(p.lockPath)).toBe(false);
 
-    // A FRESH runCycleOnce takes over cleanly (lock free, new terminal).
+    // A FRESH runCycleOnce finds the lock free but must not reuse the Story:
+    // the ambiguous preserved checkout retains its delivery reservation.
     const cycleId2 = "20260605-222222-3333";
     const p2 = paths(rt, cycleId2);
     // US-CYCLE-011: the takeover cycle actually PUBLISHES, so its evidence gate
@@ -660,7 +665,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       ctx: { cycleId: cycleId2, branch: `loop/cycle-${cycleId2}`, loop: "ci" as never },
     });
     expect(result2.ran).toBe(true);
-    expect(result2.terminal).toBe("published"); // FIX-244
+    expect(result2.terminal).toBe("idle");
   });
 
   // FIX-1244 (实证 cycle-20260713-154751): a builder killed by the watchdog AFTER
@@ -1508,8 +1513,9 @@ describe("FIX-204C — worktree sees the main .roll via symlink", () => {
     // the delivered commit carries the work, never the link
     expect(committed).toContain("delivered.txt");
     expect(committed).not.toContain(".roll");
-    // cleanup: worktree gone, MAIN .roll intact (the LINK died, not the target)
-    expect(existsSync(p.worktreePath)).toBe(false);
+    // The `.roll` link remains with the preserved managed checkout while the PR
+    // is pending; the persistent main `.roll` is still the source of truth.
+    expect(existsSync(p.worktreePath)).toBe(true);
     expect(readFileSync(join(repo, ".roll", "backlog.md"), "utf8")).toContain("✅ Done");
   });
 

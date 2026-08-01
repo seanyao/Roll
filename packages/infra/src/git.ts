@@ -290,8 +290,9 @@ export async function git(args: readonly string[], cwd?: string): Promise<GitRes
  *
  * Steps:
  *   1. `mkdir -p $(dirname path)`.
- *   2. if `path` exists on disk → `git worktree remove --force path` (lenient)
- *      then `rm -rf path` (lenient).
+ *   2. refuse when `path` already exists. A caller must inspect and recover the
+ *      exact prior run; allocation never makes an existing checkout convenient
+ *      by pruning, force-removing, or recursively deleting it.
  *   3. `git worktree add --detach <path> <base>` — STRICT: the one step whose
  *      failure the caller propagates. NO local branch is created.
  *
@@ -315,12 +316,12 @@ export async function worktreeAdd(
   exists: (p: string) => boolean = defaultExists,
 ): Promise<GitResult> {
   mkdirSync(dirname(path), { recursive: true });
-  // US-LOOP-096: clear stale worktree admin metadata a crashed prior cycle left
-  // behind (git's default prune expiry is 3 months) BEFORE creating this one.
-  await git(["worktree", "prune", "--expire", "now"], repoCwd); // lenient
   if (exists(path)) {
-    await git(["worktree", "remove", "--force", path], repoCwd); // lenient
-    rmSyncQuiet(path);
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `recovery_required: managed worktree target already exists: ${path}`,
+    };
   }
   const result = await git(["worktree", "add", "--detach", path, base], repoCwd);
   // FIX-1231: enable extensions.worktreeConfig on the new worktree so
@@ -383,6 +384,67 @@ export async function worktreeRemove(
   // prune expiry is 3 months). No `git branch -D` — detached, there is no branch.
   await git(["worktree", "prune", "--expire", "now"], repoCwd); // lenient
   return { code: 0, stdout: r.stdout, stderr: r.stderr };
+}
+
+/**
+ * The managed-workspace releaser is deliberately stricter than the historical
+ * tolerant `worktreeRemove` helper.  A lifecycle caller supplies the HEAD it
+ * observed while recording `worktree:release_requested`; this function obtains
+ * fresh registration, identity, cleanliness and HEAD facts immediately before
+ * the destructive effect.  It never uses `--force`, `rm -rf`, or a convenient
+ * replacement path.
+ */
+export async function managedWorktreeRelease(
+  repoCwd: string,
+  path: string,
+  expectedHead: string,
+  repositoryId: string,
+): Promise<{ code: number; reason?: string }> {
+  const identity = (await projectIdentity(repoCwd)).slug;
+  if (identity !== repositoryId) return { code: 1, reason: "repository_identity_changed" };
+
+  const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
+  if (registered.code !== 0 || !registered.stdout.split("\n").some((line) => line === `worktree ${path}`)) {
+    return { code: 1, reason: "registration_missing" };
+  }
+  const head = await git(["rev-parse", "HEAD"], path);
+  if (head.code !== 0 || head.stdout.trim() !== expectedHead) return { code: 1, reason: "head_changed" };
+  const dirt = await git(["status", "--porcelain"], path);
+  if (dirt.code !== 0 || dirt.stdout.trim() !== "") return { code: 1, reason: "workspace_dirty" };
+
+  const removed = await git(["worktree", "remove", path], repoCwd);
+  if (removed.code !== 0) return { code: removed.code, reason: "remove_refused" };
+  await git(["worktree", "prune", "--expire", "now"], repoCwd);
+  return { code: 0 };
+}
+
+/** Fresh, non-destructive inspection used immediately before a managed release. */
+export async function inspectManagedWorktree(
+  repoCwd: string,
+  path: string,
+): Promise<{ repositoryId: string; head: string; registered: boolean; clean: boolean } | undefined> {
+  const identity = (await projectIdentity(repoCwd)).slug;
+  const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
+  const head = await git(["rev-parse", "HEAD"], path);
+  const dirt = await git(["status", "--porcelain"], path);
+  if (registered.code !== 0 || head.code !== 0 || dirt.code !== 0 || head.stdout.trim() === "") return undefined;
+  return {
+    repositoryId: identity,
+    head: head.stdout.trim(),
+    registered: registered.stdout.split("\n").some((line) => line === `worktree ${path}`),
+    clean: dirt.stdout.trim() === "",
+  };
+}
+
+/**
+ * Stronger than an unsuccessful inspection: used only to finish the durable
+ * event after Git removed a worktree but the `released` append crashed.
+ */
+export async function managedWorktreeAbsent(repoCwd: string, path: string): Promise<boolean> {
+  const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
+  return registered.code === 0
+    && !registered.stdout.split("\n").some((line) => line === `worktree ${path}`)
+    && !existsSync(path);
 }
 
 /**
@@ -511,10 +573,12 @@ export async function worktreeAddInSubmodule(
   // (3) Detached worktree on the SUBMODULE repo (same contract as worktreeAdd).
   const path = submoduleWorktreePath(cycleWorktreePath, submoduleName);
   mkdirSync(dirname(path), { recursive: true });
-  await git(["worktree", "prune", "--expire", "now"], submoduleCwd); // lenient
   if (exists(path)) {
-    await git(["worktree", "remove", "--force", path], submoduleCwd); // lenient
-    rmSyncQuiet(path);
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `recovery_required: managed submodule worktree target already exists: ${path}`,
+    };
   }
   const result = await git(["worktree", "add", "--detach", path, base], submoduleCwd);
   if (result.code === 0) {

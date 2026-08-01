@@ -175,9 +175,11 @@ export interface SubmoduleWorktreeResult {
 export async function createSubmoduleWorktreeIfDeclared(
   ports: Ports,
   ctx: { cycleId: string },
-  story: { id: string; desc?: string },
+  story: { id: string; desc?: string; targetSubmodule?: string },
 ): Promise<SubmoduleWorktreeResult> {
-  const targetSubmodule = resolveStoryTargetSubmodule(ports, story);
+  // The picker carries an explicit backlog tag in CycleContext.  Re-resolving
+  // from only an id here would lose that highest-precedence declaration.
+  const targetSubmodule = story.targetSubmodule ?? resolveStoryTargetSubmodule(ports, story);
   if (targetSubmodule === undefined) return { failed: false };
 
   const base = resolveIntegrationBranch(join(ports.repoCwd, targetSubmodule));

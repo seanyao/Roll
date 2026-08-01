@@ -72,11 +72,13 @@ export type ManagedWorkspaceReleaseVerdict =
 
 /** Lifecycle facts appended to the shared Roll event ledger. */
 export type WorktreeLifecycleEvent =
-  | { readonly type: "worktree:allocated"; readonly workspace: ManagedWorkspaceSet; readonly ts: number }
+  /** operationId binds a crash-retry to this exact allocation attempt. Legacy
+   * records omit it and remain read-compatible. */
+  | { readonly type: "worktree:allocated"; readonly workspace: ManagedWorkspaceSet; readonly operationId?: string; readonly ts: number }
   | { readonly type: "worktree:activity_observed"; readonly runId: string; readonly source: "runner" | "host_attested"; readonly ts: number }
   | { readonly type: "worktree:release_requested"; readonly runId: string; readonly reason: "delivered" | "abandoned" | "blocked"; readonly operationId: string; readonly expectedHeads: ReadonlyArray<{ readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly head: string }>; readonly ts: number }
   | { readonly type: "worktree:released"; readonly runId: string; readonly operationId: string; readonly expectedHeads: ReadonlyArray<{ readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly head: string }>; readonly ts: number }
-  | { readonly type: "worktree:recovery_required"; readonly runId: string; readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly reason: string; readonly ts: number };
+  | { readonly type: "worktree:recovery_required"; readonly runId: string; readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly reason: string; /** Carries the exact allocation identity when the allocation event could not be appended. */ readonly workspace?: ManagedWorkspaceSet; readonly operationId?: string; readonly ts: number };
 
 const KEY_PREFIX: Readonly<Record<DeliveryRunKind, string>> = {
   cycle: "cycle-",

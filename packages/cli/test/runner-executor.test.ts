@@ -1088,6 +1088,7 @@ function fakePorts(over: Partial<Ports> = {}): { ports: Ports; calls: Record<str
     backlog: {
       read: vi.fn(() => [{ id: "US-RUN-001", desc: "est_min:5", status: "📋 Todo" }]),
     },
+    reserveStory: vi.fn(() => ({ claimed: true })),
     metadata: {
       commit: vi.fn(async () => ({ committed: true, pushed: true, nothingToCommit: false })),
     },
@@ -1453,6 +1454,26 @@ describe("executeCommand — command → executor mapping", () => {
     expect(r2.event).toEqual({ type: "no_story" });
   });
 
+  it("US-LOOP-124: a cross-kind reservation loser creates no worktree and preserves the Story row", async () => {
+    const { ports, calls } = fakePorts({
+      reserveStory: vi.fn(() => ({ claimed: false, existingSource: "host-delegation" })),
+    });
+    const result = await executeCommand({ kind: "pick_story" }, ports, CTX);
+    expect(result.event).toEqual({ type: "no_story" });
+    expect(ports.git.worktreeAdd).not.toHaveBeenCalled();
+    expect(ports.backlog.markStatus).toBeUndefined();
+    expect((calls["alert"] ?? []).flat().join(" ")).toContain("reservation refused");
+  });
+
+  it("US-LOOP-124: the state machine emits allocation only after a Story is reserved", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    const preflight = cycleStep(state, { type: "preflight_done" });
+    expect(preflight.commands).toEqual([{ kind: "pick_story" }]);
+    const reserved = cycleStep(preflight.state, { type: "story_picked", storyId: "US-RUN-001" });
+    expect(reserved.commands).toEqual([{ kind: "create_worktree", branch: CTX.branch }]);
+  });
+
   it("E2: a non-submodule story sets NO targetSubmodule and creates NO submodule worktree", async () => {
     const { ports } = fakePorts();
     const r = await executeCommand({ kind: "pick_story" }, ports, CTX);
@@ -1461,7 +1482,7 @@ describe("executeCommand — command → executor mapping", () => {
     expect(ports.git.worktreeAddInSubmodule).not.toHaveBeenCalled();
   });
 
-  it("E2: a target-submodule story patches ctx.targetSubmodule and creates the submodule worktree", async () => {
+  it("US-LOOP-124: picking a target-submodule Story reserves it before any submodule Git effect", async () => {
     const { ports } = fakePorts({
       backlog: {
         read: () => [
@@ -1471,19 +1492,13 @@ describe("executeCommand — command → executor mapping", () => {
     });
     const r = await executeCommand({ kind: "pick_story" }, ports, CTX);
     expect(r.event).toEqual({ type: "story_picked", storyId: "US-RUN-002" });
-    // ctx is threaded to the later delivery via the merged liveCtx.
+    // Preserve the highest-precedence backlog tag across reservation so the
+    // allocator never has to re-guess it from only a story id.
     expect(r.ctxPatch?.targetSubmodule).toBe("dukang-service-online");
-    // the submodule worktree was created at the canonical cycle worktree path
-    // (superprojectCwd=repoCwd, base=integration branch default origin/main).
-    expect(ports.git.worktreeAddInSubmodule).toHaveBeenCalledWith(
-      "/repo",
-      "dukang-service-online",
-      "/rt/wt",
-      "origin/main",
-    );
+    expect(ports.git.worktreeAddInSubmodule).not.toHaveBeenCalled();
   });
 
-  it("E2: a submodule-worktree creation FAILURE fails the cycle honestly (worktree_failed)", async () => {
+  it("US-LOOP-124: a submodule worktree is never created during reservation", async () => {
     const { ports } = fakePorts({
       backlog: {
         read: () => [{ id: "US-RUN-002", desc: "`target-submodule:sub`", status: "📋 Todo" }],
@@ -1494,7 +1509,104 @@ describe("executeCommand — command → executor mapping", () => {
       },
     });
     const r = await executeCommand({ kind: "pick_story" }, ports, CTX);
-    expect(r.event).toEqual({ type: "worktree_failed" });
+    expect(r.event).toEqual({ type: "story_picked", storyId: "US-RUN-002" });
+    expect(ports.git.worktreeAddInSubmodule).not.toHaveBeenCalled();
+  });
+
+  it("US-LOOP-124: allocation carries a target submodule into context and the managed workspace set", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "roll-124-submodule-"));
+    execDirs.push(repo);
+    mkdirSync(join(repo, ".roll", "features", "demo", "US-RUN-001"), { recursive: true });
+    writeFileSync(join(repo, ".roll", "features", "demo", "US-RUN-001", "spec.md"), "---\ntarget_submodule: sub\n---\n");
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      repoCwd: repo,
+      paths: { ...base.ports.paths, worktreePath: join(repo, "cycle") },
+      git: { ...base.ports.git, managedWorktreeFacts: vi.fn(async () => ({ baseSha: "a".repeat(40), repositoryId: "repo" })) },
+    });
+
+    const result = await executeCommand({ kind: "create_worktree", branch: CTX.branch }, ports, { ...CTX, targetSubmodule: "sub" });
+
+    expect(result).toMatchObject({ event: { type: "worktree_created" }, ctxPatch: { targetSubmodule: "sub" } });
+    const allocation = (calls.event ?? []).map((call) => (call as unknown[])[1]).find((event) => (event as { type?: string }).type === "worktree:allocated") as { workspace: { members: readonly unknown[] } };
+    expect(allocation.workspace.members).toHaveLength(2);
+  });
+
+  it("US-LOOP-124: same-operation allocation recovery reuses only the proven checkout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-allocation-retry-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const baseSha = "a".repeat(40);
+    const workspace = {
+      schema: 1,
+      runId: CTX.cycleId,
+      storyId: CTX.storyId,
+      kind: "cycle",
+      topology: "solo",
+      members: [{ repositoryId: "repo", workspaceKey: `cycle-${CTX.cycleId}`, relativeLocator: `cycle-${CTX.cycleId}`, checkoutRef: { kind: "detached", head: baseSha }, publishRef: `refs/heads/${CTX.branch}` }],
+    };
+    writeFileSync(eventsPath, `${JSON.stringify({ type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 })}\n`);
+    const base = fakePorts();
+    const { ports } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: {
+        ...base.ports.git,
+        managedWorktreeFacts: vi.fn(async () => ({ baseSha, repositoryId: "repo" })),
+        managedWorktreeInspect: vi.fn(async () => ({ repositoryId: "repo", head: baseSha, registered: true, clean: true })),
+      },
+    });
+
+    const result = await executeCommand({ kind: "create_worktree", branch: CTX.branch }, ports, CTX);
+    expect(result.event).toEqual({ type: "worktree_created" });
+    expect(ports.git.worktreeAdd).not.toHaveBeenCalled();
+  });
+
+  it("US-LOOP-124: allocation records an operation before Git so a no-event checkout keeps its reservation", async () => {
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      git: {
+        ...base.ports.git,
+        worktreeAdd: vi.fn(async () => {
+          const lifecycle = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]);
+          expect(lifecycle.at(-1)).toMatchObject({ type: "worktree:recovery_required", reason: "allocation_started" });
+          return { code: 1 };
+        }),
+      },
+    });
+
+    await executeCommand({ kind: "create_worktree", branch: CTX.branch }, ports, CTX);
+    const lifecycle = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]);
+    expect(lifecycle).toContainEqual(expect.objectContaining({ type: "worktree:recovery_required", operationId: `${CTX.cycleId}:allocate` }));
+  });
+
+  it("US-LOOP-124: an allocated event with a missing checkout blocks recreation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-allocation-drift-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const baseSha = "b".repeat(40);
+    const workspace = {
+      schema: 1,
+      runId: CTX.cycleId,
+      storyId: CTX.storyId,
+      kind: "cycle",
+      topology: "solo",
+      members: [{ repositoryId: "repo", workspaceKey: `cycle-${CTX.cycleId}`, relativeLocator: `cycle-${CTX.cycleId}`, checkoutRef: { kind: "detached", head: baseSha }, publishRef: `refs/heads/${CTX.branch}` }],
+    };
+    writeFileSync(eventsPath, `${JSON.stringify({ type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 })}\n`);
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: {
+        ...base.ports.git,
+        managedWorktreeFacts: vi.fn(async () => ({ baseSha, repositoryId: "repo" })),
+        managedWorktreeInspect: vi.fn(async () => undefined),
+      },
+    });
+
+    const result = await executeCommand({ kind: "create_worktree", branch: CTX.branch }, ports, CTX);
+    expect(result.event).toEqual({ type: "worktree_failed" });
+    expect(ports.git.worktreeAdd).not.toHaveBeenCalled();
+    expect((calls.event ?? []).flat().some((call) => (call as { reason?: string }).reason === "allocated_event_git_missing")).toBe(true);
   });
 
   it("E4: measure_worktree counts TCR in the SUBMODULE worktree when ctx.targetSubmodule is set", async () => {
@@ -1856,7 +1968,7 @@ describe("executeCommand — command → executor mapping", () => {
       expect(alerts.some((m) => m.includes("reclaim FIX-1211") && m.includes("annotated soft lease expired"))).toBe(true);
     });
 
-    it("writes a cycle lease on pick_story and removes it on append_run terminal", async () => {
+    it("US-LOOP-124: retains a cycle lease at terminal until a managed release is durable", async () => {
       const dir = mkdtempSync(join(tmpdir(), "roll-fix1211-lifecycle-"));
       execDirs.push(dir);
       const eventsPath = join(dir, "events.ndjson");
@@ -1870,6 +1982,7 @@ describe("executeCommand — command → executor mapping", () => {
           read: () => [{ id: "US-RUN-001", desc: "est_min:5", status: "📋 Todo" }],
           markStatus,
         },
+        reserveStory: undefined,
       });
       const pick = await executeCommand({ kind: "pick_story" }, ports, CTX);
       expect(pick.event).toEqual({ type: "story_picked", storyId: "US-RUN-001" });
@@ -1882,7 +1995,7 @@ describe("executeCommand — command → executor mapping", () => {
 
       const terminal = await executeCommand({ kind: "append_run", cycleId: CTX.cycleId, status: "idle" }, ports, CTX);
       expect(terminal.event).toBeUndefined();
-      expect(existsSync(leaseRecordPath)).toBe(false);
+      expect(existsSync(leaseRecordPath)).toBe(true);
     });
   });
 
@@ -2610,7 +2723,9 @@ describe("executeCommand — command → executor mapping", () => {
           writeFileSync(join(repo, "active-main-leak.ts"), "export const dirty = true;\n");
         }, 10);
         await new Promise((resolve) => setTimeout(resolve, 80));
-        return { stdout: "agent claimed success", stderr: "", exitCode: 0, timedOut: false };
+        // The watchdog's observed sandbox breach is authoritative even when the
+        // agent's buffered output happens to resemble an external network fault.
+        return { stdout: "agent claimed success", stderr: "network error while flushing output", exitCode: 0, timedOut: false };
       }),
     });
     const previousPoll = process.env["ROLL_MAIN_LEAK_POLL_MS"];
@@ -5212,6 +5327,178 @@ describe("executeCommand — command → executor mapping", () => {
     expect(ports.git.worktreeRemove).toHaveBeenCalled();
   });
 
+  it("US-LOOP-124: a release retry completes only the missing event after Git deletion is proven", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-release-retry-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const head = "c".repeat(40);
+    const workspace = { schema: 1, runId: CTX.cycleId, storyId: CTX.storyId, kind: "cycle", topology: "solo", members: [{ repositoryId: "repo", workspaceKey: `cycle-${CTX.cycleId}`, relativeLocator: `cycle-${CTX.cycleId}`, checkoutRef: { kind: "detached", head } }] };
+    const operationId = `${CTX.cycleId}:release`;
+    writeFileSync(eventsPath, [
+      { type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 },
+      { type: "worktree:release_requested", runId: CTX.cycleId, reason: "delivered", operationId, expectedHeads: [{ relativeLocator: `cycle-${CTX.cycleId}`, head }], ts: 2 },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: { ...base.ports.git, managedWorktreeInspect: vi.fn(async () => undefined), managedWorktreeRelease: vi.fn(), managedWorktreeAbsent: vi.fn(async () => true) },
+    });
+
+    await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, CTX);
+    expect(ports.git.managedWorktreeRelease).not.toHaveBeenCalled();
+    const released = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]).find((event) => event.type === "worktree:released");
+    expect(released).toMatchObject({ type: "worktree:released", operationId, expectedHeads: [{ relativeLocator: `cycle-${CTX.cycleId}`, head }] });
+  });
+
+  it("US-LOOP-124: the terminal release writer freezes fresh HEADs before deleting a proven delivery", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-release-request-writer-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const head = "9".repeat(40);
+    const key = `cycle-${CTX.cycleId}`;
+    const workspace = { schema: 1, runId: CTX.cycleId, storyId: CTX.storyId, kind: "cycle", topology: "solo", members: [{ repositoryId: "repo", workspaceKey: key, relativeLocator: key, checkoutRef: { kind: "detached", head } }] };
+    writeFileSync(eventsPath, [
+      { type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 },
+      { type: "delivery:merge_confirmed", cycleId: CTX.cycleId, storyId: CTX.storyId, branch: CTX.branch, signal: "ancestor", ts: 2 },
+      { type: "attest:gate", cycleId: CTX.cycleId, verdict: "produced", reasons: [], ts: 3 },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: {
+        ...base.ports.git,
+        managedWorktreeInspect: vi.fn(async () => ({ repositoryId: "repo", head, registered: true, clean: true })),
+        managedWorktreeRelease: vi.fn(async () => ({ code: 0 })),
+      },
+    });
+
+    await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, CTX);
+    const requested = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]).find((event) => event.type === "worktree:release_requested");
+    expect(requested).toMatchObject({ type: "worktree:release_requested", operationId: `${CTX.cycleId}:release`, expectedHeads: [{ relativeLocator: key, head }] });
+    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledWith("/repo", "/rt/wt", head, "repo");
+  });
+
+  it("US-LOOP-124: freezes the actual terminal release refusal in EN and ZH", async () => {
+    for (const locale of ["en", "zh"] as const) {
+      vi.stubEnv("ROLL_LANG", locale);
+      const dir = mkdtempSync(join(tmpdir(), `roll-124-release-locale-${locale}-`));
+      execDirs.push(dir);
+      const eventsPath = join(dir, "events.ndjson");
+      const head = "8".repeat(40);
+      const key = `cycle-${CTX.cycleId}`;
+      const workspace = { schema: 1, runId: CTX.cycleId, storyId: CTX.storyId, kind: "cycle", topology: "solo", members: [{ repositoryId: "repo", workspaceKey: key, relativeLocator: key, checkoutRef: { kind: "detached", head } }] };
+      writeFileSync(eventsPath, `${JSON.stringify({ type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 })}\n`);
+      const base = fakePorts();
+      const { ports, calls } = fakePorts({
+        paths: { ...base.ports.paths, eventsPath },
+        git: { ...base.ports.git, managedWorktreeInspect: vi.fn(async () => ({ repositoryId: "repo", head, registered: true, clean: true })), managedWorktreeRelease: vi.fn(async () => ({ code: 0 })) },
+      });
+      await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, CTX);
+      expect((calls.alert ?? []).map((call) => (call as [string, string])[1]).join("\n")).toMatchSnapshot();
+    }
+    vi.unstubAllEnvs();
+  });
+
+  it("US-LOOP-124: release retry refuses a changed HEAD instead of adopting it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-release-head-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const expected = "d".repeat(40);
+    const changed = "e".repeat(40);
+    const workspace = { schema: 1, runId: CTX.cycleId, storyId: CTX.storyId, kind: "cycle", topology: "solo", members: [{ repositoryId: "repo", workspaceKey: `cycle-${CTX.cycleId}`, relativeLocator: `cycle-${CTX.cycleId}`, checkoutRef: { kind: "detached", head: expected } }] };
+    const operationId = `${CTX.cycleId}:release`;
+    writeFileSync(eventsPath, [
+      { type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 },
+      { type: "worktree:release_requested", runId: CTX.cycleId, reason: "delivered", operationId, expectedHeads: [{ relativeLocator: `cycle-${CTX.cycleId}`, head: expected }], ts: 2 },
+      { type: "delivery:merge_confirmed", cycleId: CTX.cycleId, storyId: CTX.storyId, branch: CTX.branch, signal: "ancestor", ts: 3 },
+      { type: "attest:gate", cycleId: CTX.cycleId, verdict: "produced", reasons: [], ts: 4 },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const base = fakePorts();
+    const { ports } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: { ...base.ports.git, managedWorktreeInspect: vi.fn(async () => ({ repositoryId: "repo", head: changed, registered: true, clean: true })), managedWorktreeRelease: vi.fn(async () => ({ code: 0 })) },
+    });
+
+    await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, CTX);
+    expect(ports.git.managedWorktreeRelease).not.toHaveBeenCalled();
+  });
+
+  it("US-LOOP-124: a declared submodule workspace releases every validated member", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-release-submodule-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const primaryHead = "f".repeat(40);
+    const subHead = "1".repeat(40);
+    const sub = "service";
+    const key = `cycle-${CTX.cycleId}`;
+    const workspace = { schema: 1, runId: CTX.cycleId, storyId: CTX.storyId, kind: "cycle", topology: "solo", members: [
+      { repositoryId: "repo", workspaceKey: key, relativeLocator: key, checkoutRef: { kind: "detached", head: primaryHead } },
+      { repositoryId: "sub-repo", workspaceKey: key, relativeLocator: `${key}.submodules/${sub}`, checkoutRef: { kind: "detached", head: subHead } },
+    ] };
+    const operationId = `${CTX.cycleId}:release`;
+    writeFileSync(eventsPath, [
+      { type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 },
+      { type: "worktree:release_requested", runId: CTX.cycleId, reason: "delivered", operationId, expectedHeads: [{ relativeLocator: key, head: primaryHead }, { relativeLocator: `${key}.submodules/${sub}`, head: subHead }], ts: 2 },
+      { type: "delivery:merge_confirmed", cycleId: CTX.cycleId, storyId: CTX.storyId, branch: CTX.branch, signal: "ancestor", ts: 3 },
+      { type: "attest:gate", cycleId: CTX.cycleId, verdict: "produced", reasons: [], ts: 4 },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const base = fakePorts();
+    const { ports } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: {
+        ...base.ports.git,
+        managedWorktreeInspect: vi.fn(async (repoCwd: string) => repoCwd.endsWith(`/${sub}`)
+          ? { repositoryId: "sub-repo", head: subHead, registered: true, clean: true }
+          : { repositoryId: "repo", head: primaryHead, registered: true, clean: true }),
+        managedWorktreeRelease: vi.fn(async () => ({ code: 0 })),
+      },
+    });
+
+    await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, { ...CTX, targetSubmodule: sub });
+    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledTimes(2);
+    expect((ports.git.managedWorktreeRelease as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[2])).toEqual([subHead, primaryHead]);
+  });
+
+  it("US-LOOP-124: a partial multi-member release retries only the surviving member", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "roll-124-release-partial-"));
+    execDirs.push(dir);
+    const eventsPath = join(dir, "events.ndjson");
+    const primaryHead = "a".repeat(40);
+    const subHead = "b".repeat(40);
+    const sub = "service";
+    const key = `cycle-${CTX.cycleId}`;
+    const subLocator = `${key}.submodules/${sub}`;
+    const workspace = { schema: 1, runId: CTX.cycleId, storyId: CTX.storyId, kind: "cycle", topology: "solo", members: [
+      { repositoryId: "repo", workspaceKey: key, relativeLocator: key, checkoutRef: { kind: "detached", head: primaryHead } },
+      { repositoryId: "sub-repo", workspaceKey: key, relativeLocator: subLocator, checkoutRef: { kind: "detached", head: subHead } },
+    ] };
+    const operationId = `${CTX.cycleId}:release`;
+    writeFileSync(eventsPath, [
+      { type: "worktree:allocated", workspace, operationId: `${CTX.cycleId}:allocate`, ts: 1 },
+      { type: "worktree:release_requested", runId: CTX.cycleId, reason: "delivered", operationId, expectedHeads: [{ relativeLocator: key, head: primaryHead }, { relativeLocator: subLocator, head: subHead }], ts: 2 },
+      { type: "delivery:merge_confirmed", cycleId: CTX.cycleId, storyId: CTX.storyId, branch: CTX.branch, signal: "ancestor", ts: 3 },
+      { type: "attest:gate", cycleId: CTX.cycleId, verdict: "produced", reasons: [], ts: 4 },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      paths: { ...base.ports.paths, eventsPath },
+      git: {
+        ...base.ports.git,
+        managedWorktreeInspect: vi.fn(async (repoCwd: string) => repoCwd.endsWith(`/${sub}`)
+          ? undefined
+          : { repositoryId: "repo", head: primaryHead, registered: true, clean: true }),
+        managedWorktreeAbsent: vi.fn(async (repoCwd: string) => repoCwd.endsWith(`/${sub}`)),
+        managedWorktreeRelease: vi.fn(async () => ({ code: 0 })),
+      },
+    });
+
+    await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, { ...CTX, targetSubmodule: sub });
+    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledTimes(1);
+    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledWith("/repo", "/rt/wt", primaryHead, "repo");
+    const released = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]).find((event) => event.type === "worktree:released");
+    expect(released).toMatchObject({ type: "worktree:released", operationId });
+  });
+
   // E5 (real-pilot fix): a submodule cycle also creates a SIBLING submodule
   // worktree (E5-B). Terminal cleanup must remove it too, or every submodule
   // cycle leaks a *.submodules/<sub> worktree + its git worktree admin metadata.
@@ -6308,6 +6595,48 @@ describe("FIX-907 startSpawnTimeoutWatchdog — kills a hung builder, never the 
       expect(kills).toBe(1);
       expect(wd.stop().firedReason).toBe("no-progress");
       expect(events.find((e) => e.type === "cycle:timeout")).toMatchObject({ reason: "no-progress", cycleId: "c-hang" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("baseline probe racing the first tick does not reset a silent builder's idle clock", async () => {
+    vi.useFakeTimers();
+    try {
+      const fc = clockSeconds(5_000);
+      const events: RollEvent[] = [];
+      let kills = 0;
+      let resolveBaseline: ((count: number) => void) | undefined;
+      const baseline = new Promise<number>((resolve) => {
+        resolveBaseline = resolve;
+      });
+      let probes = 0;
+      const wd = startSpawnTimeoutWatchdog({
+        cycleId: "c-baseline-race",
+        thresholds: { wallSec: 100_000, noProgressSec: 30, noStateChangeSec: 100_000 },
+        clock: fc.clock,
+        // Keep the startup probe pending so the first interval must establish
+        // its own baseline. It must not count that initial zero as progress.
+        commitCount: async () => (++probes === 1 ? baseline : 0),
+        appendEvent: (ev) => events.push(ev),
+        kill: () => (kills += 1, 1),
+        pollMs: 1_000,
+      });
+
+      fc.set(5_031);
+      // The first interval schedules its async probe; advance one more cadence
+      // so Vitest drains that promise before asserting the watchdog outcome.
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(probes).toBeGreaterThan(1);
+      expect(kills).toBe(1);
+      expect(wd.stop().firedReason).toBe("no-progress");
+      expect(events.find((e) => e.type === "cycle:timeout")).toMatchObject({
+        type: "cycle:timeout",
+        cycleId: "c-baseline-race",
+        reason: "no-progress",
+      });
+      resolveBaseline?.(0);
     } finally {
       vi.useRealTimers();
     }
@@ -7545,8 +7874,8 @@ describe("US-LOOP-102 — adversarial-pairing (spawn_role executor + plan seam)"
     const prefix: CycleEvent[] = [
       { type: "start", ctx: CTX },
       { type: "preflight_done" },
-      { type: "worktree_created" },
       { type: "story_picked", storyId: "US-RUN-001" },
+      { type: "worktree_created" },
       { type: "route_resolved", agent: "claude", model: "", adversarial: plan },
     ];
     let pending: CycleEvent | undefined;

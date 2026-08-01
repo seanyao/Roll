@@ -382,6 +382,31 @@ The branch/worktree leak canary (US-LOOP-096) counts every ephemeral branch + ev
 
 Preserved（unpublished / dirty / active / external）worktree 永远不会被 cleanup 移除;它们仍计入 canary,是 Truth preflight 里 “preserved worktree” 这一停摆信号的一部分。
 
+#### 受管主 worktree 分配 / Managed primary-worktree allocation (US-LOOP-124)
+
+循环先以 Story ID 原子获取跨运行形态共享的 reservation，随后才在
+`.roll/loop/worktrees/cycle-<id>` 创建 detached checkout。发布目标是
+`refs/heads/loop/cycle-<id>`，不是本地 delivery branch。已有目标路径、无法验证的
+base HEAD、或 reservation 冲突都会输出 `recovery_required` 并保留现场；allocator 不会
+prune、force-remove、递归删除目标，也不会回退到 main checkout、`.worktrees/*` 或 `../wt-*`。
+
+在首个 Git effect 前先写入同一 operation 的 `worktree:recovery_required` allocating marker；
+`worktree:allocated` 仍只在 `.roll` link、skills、依赖与 prebuild bootstrap 全部完成后写入。
+任一 bootstrap 或事件写入失败，已创建的 Git worktree 与 reservation 都保留为可审计的
+`git_created_*` 恢复状态。恢复必须按同一 run/operation identity 检查**每个** workspace member
+的 Git 注册、repository identity 与 HEAD，并重新完成 bootstrap；event-present/Git-missing、
+缺失 submodule member 以及不匹配的现有目标都会阻塞，不得通过重建或删除来“修复”歧义。死 PID
+也不等于可重领：只要 lifecycle 仍是 allocated、recovery-required 或 release-requested，Story
+reservation 必须继续保留。
+
+Release 也使用独立 operation ID：terminal writer 先 fresh-inspect 每个 member，证明 merged
+delivery + accepted attest，随后写入 `worktree:release_requested` 并冻结每个 member 的 expected
+HEAD。每次 retry 都使用这份 durable HEAD（绝不采用 retry 时新观察到的 HEAD），并仅在
+US-LOOP-123 的 merged + accepted-attest + inactive + clean selector 判为 `safe_to_release` 后，
+逐 member 执行非-force compare-and-revalidate 删除。若 Git 删除成功而 `released` 事件遗漏，
+retry 可跳过已证明缺失的 member、继续其余 member；只有全部 member 均已删除时才补写
+`worktree:released`。任一未知、变化或拒绝都会保留 checkout 和 Story reservation。
+
 #### Retired terms and breaking boundary
 
 `Prime Agent` is a retired active term. `Planner` is a retired active term. `planned` is a retired execution profile, and `planner-contract.md` is a retired active artifact. Historical archives may preserve those words as immutable evidence, but active runtime docs, help, UI, tests, and skills use Supervisor / Designer / Builder / Evaluator.

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   BacklogStore,
+  claimStoryLease,
   EventBus,
   classifyComplexity,
   configuredModelForAgent,
@@ -30,6 +31,7 @@ import {
   branchMergedIntoMain,
   captureFromMarker,
   fetchRemoteBranch,
+  git,
   ghRepoSlug,
   landLocalDelivery,
   lsRemote,
@@ -46,11 +48,15 @@ import {
   worktreeAddInSubmodule,
   worktreeFetchOrigin,
   worktreeRemove,
+  managedWorktreeRelease,
+  managedWorktreeAbsent,
+  inspectManagedWorktree,
   worktreeRemoveInSubmodule,
   worktreeResetHard,
   worktreeSubmoduleInit,
   writeHeartbeat,
   push as gitPush,
+  projectIdentity,
 } from "@roll/infra";
 import { cardArchiveDir } from "../lib/archive.js";
 import { attestCommand } from "../commands/attest.js";
@@ -226,6 +232,12 @@ export function nodePorts(opts: {
     skillBody: opts.skillBody,
     clock,
     agentSpawn: spawn,
+    reserveStory: (storyId, entry) => {
+      const result = claimStoryLease(join(dirname(opts.paths.eventsPath), "leases"), storyId, entry);
+      return result.status === "claimed"
+        ? { claimed: true }
+        : { claimed: false, existingSource: result.existingSource };
+    },
     // FIX-906: unified delivery-truth predicate (structured projection over
     // runs + git merges on origin/main — recognizes external/manual merges).
     mergedDelivery,
@@ -247,6 +259,20 @@ export function nodePorts(opts: {
       },
       async worktreeAdd(repoCwd, path, branch, base) {
         return worktreeAdd(repoCwd, path, branch, base);
+      },
+      async managedWorktreeFacts(repoCwd, base) {
+        const resolved = await git(["rev-parse", "--verify", `${base}^{commit}`], repoCwd);
+        if (resolved.code !== 0 || resolved.stdout.trim() === "") return undefined;
+        return { baseSha: resolved.stdout.trim(), repositoryId: (await projectIdentity(repoCwd)).slug };
+      },
+      async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId) {
+        return managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId);
+      },
+      async managedWorktreeInspect(repoCwd, path) {
+        return inspectManagedWorktree(repoCwd, path);
+      },
+      async managedWorktreeAbsent(repoCwd, path) {
+        return managedWorktreeAbsent(repoCwd, path);
       },
       async worktreeAddInSubmodule(superprojectCwd, submoduleName, cycleWorktreePath, base) {
         const r = await worktreeAddInSubmodule(superprojectCwd, submoduleName, cycleWorktreePath, base);

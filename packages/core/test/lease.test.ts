@@ -418,6 +418,19 @@ describe("removeLease onlySource scoping (kimi review: cycle terminal must not w
 });
 
 describe("cleanDeadLeases (FIX-1232)", () => {
+  it("US-LOOP-124: preserves a crashed cycle lease when its durable workspace lifecycle is ambiguous", () => {
+    const dir = tmpLeaseDir();
+    try {
+      setLease(dir, "US-CRASH-124", { pid: 999_999_999, claimedAt: NOW, source: "cycle", runId: "cycle-crash" });
+      const cleaned = cleanDeadLeases(dir, {
+        preserve: (storyId, entry) => storyId === "US-CRASH-124" && entry.runId === "cycle-crash",
+      });
+      expect(cleaned).toEqual([]);
+      expect(readLeases(dir)["US-CRASH-124"]).toMatchObject({ runId: "cycle-crash" });
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
+  });
   it("removes dead PID entries and keeps live ones", () => {
     const dir = tmpLeaseDir();
     try {
@@ -1699,6 +1712,21 @@ describe("releaseStoryLease — match-only release (US-DELTA-003 directory)", ()
       });
       expect(r).toBe(false);
       expect(readLeases(dir)["US-001"]!.pid).toBe(process.pid);
+    } finally {
+      try { const { rmSync } = require("fs"); rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-124: refuses a same-process cycle release with a different durable run id", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimStoryLease(dir, "US-001", {
+        pid: process.pid, claimedAt: NOW, source: "cycle", runId: "cycle-owner",
+      });
+      expect(releaseStoryLease(dir, "US-001", {
+        source: "cycle", pid: process.pid, runId: "cycle-late-retry",
+      })).toBe(false);
+      expect(readLeases(dir)["US-001"]?.runId).toBe("cycle-owner");
     } finally {
       try { const { rmSync } = require("fs"); rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
     }

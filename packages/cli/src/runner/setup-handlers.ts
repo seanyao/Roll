@@ -12,6 +12,7 @@ import {
   openPrBlockReason,
   pickStory,
   projectDeliveryLeases,
+  projectManagedWorkspaceRuns,
   readLeases,
   reconcileBranchName,
   releaseStoryLease,
@@ -30,7 +31,6 @@ import { dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { storySpecPath } from "./attest-gate.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
-import { createSubmoduleWorktreeIfDeclared } from "./submodule-worktree.js";
 import { markDoneGuarded } from "./done-guard.js";
 import { eventTs } from "./runner-time.js";
 import { readSkipCards } from "./skip-cards.js";
@@ -40,12 +40,14 @@ import { readRunsRows } from "./run-records.js";
 import { resetStaleSpecTruth, resolveResumeBase } from "./resume-truth.js";
 import { runVisualEvidencePreflight } from "./publish-lifecycle.js";
 import { freezeContractSnapshot } from "./contract-snapshot.js";
-import { bootstrapWorktreeDeps, bootstrapWorktreePrebuild, bootstrapWorktreeSkills, linkRollIntoWorktree, readPrebuildDistEnabled } from "./worktree-bootstrap.js";
+import { allocateManagedPrimaryWorkspace } from "./managed-primary-workspace.js";
 import { planAdversarial, recordExecutionProfile, routerEstMin } from "./execution-profile.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { activeRigs, probeDueSuspendedRigs, readRigLifecycleState, suspendedRigs } from "./agent-liveness.js";
 import { latestScreenLockEvent } from "./screen-lock-events.js";
 import { pendingRecoveryCandidateIds } from "./recovery-candidates.js";
+import { resolveStoryTargetSubmodule } from "./submodule-worktree.js";
+import { allocationReason, allocationRecovery, reservationRefused } from "./managed-workspace-guidance.js";
 
 type SetupCommand = Extract<CycleCommand, { kind:
   | "preflight"
@@ -231,71 +233,8 @@ export async function executeSetupCommand(
 
     // infra/git _worktree_create (STRICT). worktree_created on success, else
     // worktree_failed (→ failed terminal, bin/roll:9000).
-    case "create_worktree": {
-      // RESUME-PRIOR-WORK does NOT happen here: the story id is UNDEFINED at
-      // create_worktree (the picker reads the backlog INSIDE the worktree,
-      // FIX-198/FIX-204C), so resume/submodule decisions are deferred to the
-      // post-pick steps (resume_worktree + the E2 submodule worktree) — FIX-284.
-      // E1: base = configured integration branch (default origin/main → unchanged).
-      const base = resolveIntegrationBranch(ports.repoCwd);
-      const r = await ports.git.worktreeAdd(
-        ports.repoCwd,
-        ports.paths.worktreePath,
-        cmd.branch,
-        base,
-      );
-      if (r.code !== 0) return { event: { type: "worktree_failed" } };
-      // FIX-204C: `.roll/` is a nested gitignored repo — a fresh worktree has
-      // NONE of it, while the loop skill promises CWD-relative `.roll/*`. The
-      // 2026-06-06 first live run showed the failure mode: the agent went
-      // hunting, found the MAIN checkout's .roll, and edited THERE — worktree
-      // captured zero commits and the cycle idled. Symlink the main .roll into
-      // the worktree so the contract holds (single source of truth; the inner
-      // lock already guarantees one cycle at a time).
-      await linkRollIntoWorktree(ports.repoCwd, ports.paths.worktreePath);
-      // FIX-302 root cause: a git worktree carries NONE of the parent repo's
-      // submodule contents — `skills/` lands EMPTY (0 files; main has 28). The
-      // full `roll test`/`pnpm -r test` reads skills/, so on an empty worktree
-      // the suite can never run, AC4 stays "partial", and the cycle can never
-      // honestly close a card. Populate the submodule HERE, in the runner (same
-      // place deps install — network + warm caches). On failure, fail the
-      // worktree setup with an honest terminal reason rather than spawn the
-      // agent into an env where AC4 silently goes partial.
-      const skillsOk = await bootstrapWorktreeSkills(
-        ports.paths.worktreePath,
-        ports.paths.alertsPath,
-        ports.events,
-        ports.git.worktreeSubmoduleInit,
-      );
-      if (!skillsOk) return { event: { type: "worktree_failed" } };
-      // FIX-268 root cause: a fresh worktree has NO node_modules, and the
-      // agent sandbox has no network — its own install dies on ENOTFOUND,
-      // tests never run, the TCR gate never passes, and the whole cycle can
-      // evaporate as idle_no_work. Install HERE, in the runner (outside the
-      // sandbox, with network). If that fails, fail the worktree setup before
-      // the agent spawns so the terminal reason is the dependency bootstrap.
-      const depsOk = await bootstrapWorktreeDeps(
-        ports.paths.worktreePath,
-        ports.paths.alertsPath,
-        ports.events,
-        ports.depsExec,
-      );
-      if (!depsOk) return { event: { type: "worktree_failed" } };
-      // FIX-338 (Phase B 杠杆1): with deps now present, PREBUILD the workspace
-      // dist so the agent finds dist/roll.mjs already built (saving the cold
-      // find/build round-trips). DEFAULT-OFF (稳字纪律) — a no-op until
-      // `loop_safety.prebuild_dist: true`. Agent-agnostic + best-effort: a build
-      // failure never topples the cycle, so it runs AFTER the strict deps/skills
-      // gates and its outcome is intentionally ignored.
-      await bootstrapWorktreePrebuild(
-        ports.paths.worktreePath,
-        ports.paths.alertsPath,
-        ports.events,
-        readPrebuildDistEnabled(ports.repoCwd),
-        ports.depsExec,
-      );
-      return { event: { type: "worktree_created" } };
-    }
+    case "create_worktree":
+      return allocateManagedPrimaryWorkspace(ports, ctx, cmd.branch);
 
     // backlog/picker pickStory (read backlog INSIDE the worktree, bin/roll:8938).
     case "pick_story": {
@@ -316,17 +255,7 @@ export async function executeSetupCommand(
       // PR) that runs.jsonl is blind to — the exact case that had the picker
       // re-selecting already-merged cards (FIX-903/904/390) every cycle.
       const pickRunRows = readRunsRows(ports.paths.runsPath);
-      // FIX-363 (loop resilience): skip poison-pill cards (failed K times) so a
-      // single un-deliverable card no longer halts the WHOLE loop — it keeps
-      // delivering the rest. Runtime overlay (.roll/loop/skip-cards.json); backlog
-      // truth is untouched.
       const skipCards = readSkipCards(dirname(ports.paths.eventsPath));
-      // FIX-1205: de-dup from both GitHub PR references and durable delivery
-      // truth. Loop PR titles may be only `loop cycle cycle-<id>`, so body
-      // trailers and published-pending delivery records must also block a pick.
-      // FIX-1215: fail-OPEN on gh query failure — a network blip must not
-      // silently block every card (fail-closed = starvation). Log the blip and
-      // proceed with an empty PR list so the picker stays honest.
       let openPrTitles: OpenPrReferenceInput[];
       let ghError = false;
       try {
@@ -362,11 +291,18 @@ export async function executeSetupCommand(
         },
       });
       const pendingPublish = readPendingPublish(dirname(ports.paths.eventsPath));
-      // FIX-1232: clean dead PID leases from the lease file before the picker
-      // runs. A crashed cycle leaves a stale cycle-lease that accumulates in the
-      // file — harmless to the picker (isClaimedByOther is not wired) but noise
-      // for diagnostics and the preflight reclaim step.
-      const deadLeases = cleanDeadLeases(storyLeasePath(ports));
+      // A crashed runner has a dead PID, but its durable workspace facts can
+      // still name a real checkout.  Preserve that reservation until an explicit
+      // release completes; otherwise a fresh picker can overwrite its recovery.
+      const cycleEvents = readLeaseEvents(ports.paths.eventsPath);
+      const ambiguousWorkspaceStories = new Set(
+        projectManagedWorkspaceRuns(cycleEvents)
+          .filter((run) => run.state !== "released")
+          .map((run) => run.storyId),
+      );
+      const deadLeases = cleanDeadLeases(storyLeasePath(ports), {
+        preserve: (storyId) => ambiguousWorkspaceStories.has(storyId),
+      });
       if (deadLeases.length > 0) {
         ports.events.appendAlert(
           ports.paths.alertsPath,
@@ -377,7 +313,6 @@ export async function executeSetupCommand(
       // parallel work, then the first merge supersedes its siblings.
       const raceMode = process.env["ROLL_LOOP_RACE"] === "1";
       const liveClaims = readLeases(storyLeasePath(ports));
-      const cycleEvents = readLeaseEvents(ports.paths.eventsPath);
       const recoveryCandidateIds = pendingRecoveryCandidateIds(cycleEvents);
       const activeLeases = projectDeliveryLeases(cycleEvents).filter(
         // An in_flight lease with no LIVE cycle claim is a ghost (crashed
@@ -547,31 +482,35 @@ export async function executeSetupCommand(
       // 🔨 we are about to write. Best-effort: an absent status leaves it unset
       // (no revert target — the terminal then leaves the row untouched).
       const preCycleStatus = (story as { status?: string }).status;
-      // Claim immediately on the MAIN backlog: 🔨 In Progress is the
-      // anti-duplicate-pick signal and must be visible to `roll backlog`/brief
-      // the moment the story is taken (owner观察: 行一直红着不动 = 此处之前
-      // 写在 worktree 的虚空里，且真实 ports 从未绑定 markStatus).
-      ports.backlog.markStatus?.(ports.repoCwd, story.id, STATUS_MARKER.in_progress);
-      // FIX-1211: atomically claim a cycle lease so another loop instance
-      // (or a host-delegation prepare) cannot claim the same story.
-      // Uses the single-truth claimStoryLease primitive — no-clobber.
-      // A claim failure here means another owner already holds the lease;
-      // the picker already filtered those, so this is a diagnostic guard.
+      // US-LOOP-124: this no-clobber reservation happens BEFORE any Git
+      // allocation. All run kinds share it, so one Story has exactly one winner.
       try {
-        const claimResult = claimStoryLease(storyLeasePath(ports), story.id, {
+        const leaseEntry = {
           pid: process.pid,
           source: "cycle",
           claimedAt: Date.now(),
-        });
-        if (claimResult.status !== "claimed") {
+          runId: ctx.cycleId,
+        } as const;
+        const claim = ports.reserveStory?.(story.id, leaseEntry) ?? (() => {
+          const result = claimStoryLease(storyLeasePath(ports), story.id, leaseEntry);
+          return result.status === "claimed"
+            ? { claimed: true }
+            : { claimed: false, existingSource: result.existingSource };
+        })();
+        if (!claim.claimed) {
           ports.events.appendAlert(
             ports.paths.alertsPath,
-            `[FIX-1211] claimStoryLease for ${story.id} returned ${claimResult.status} (source: ${claimResult.status === "exists" ? claimResult.existingSource : "?"}) — another owner holds the lease`,
+            reservationRefused(story.id, claim.existingSource ?? "unknown"),
           );
+          return { event: { type: "no_story" } };
         }
       } catch {
-        /* lease claim is a safety guard; a write failure must not block the pick */
+        ports.events.appendAlert(ports.paths.alertsPath, allocationRecovery(story.id, allocationReason("reservation_failed")));
+        return { event: { type: "no_story" } };
       }
+      // Only the reservation winner makes the visible backlog transition.
+      ports.backlog.markStatus?.(ports.repoCwd, story.id, STATUS_MARKER.in_progress);
+      const targetSubmodule = resolveStoryTargetSubmodule(ports, story);
       const evidenceRunDir = ports.evidence.openFrame(ports.repoCwd, story.id, ctx.cycleId);
       ports.events.appendEvent(ports.paths.eventsPath, {
         type: "evidence:frame-opened",
@@ -580,15 +519,12 @@ export async function executeSetupCommand(
         runDir: evidenceRunDir,
         ts: eventTs(ports),
       });
-      // E2: post-pick submodule worktree (fail-loud) — see submodule-worktree.ts.
-      const sub = await createSubmoduleWorktreeIfDeclared(ports, ctx, story);
-      if (sub.failed) return { event: { type: "worktree_failed" } };
       return {
         event: { type: "story_picked", storyId: story.id },
         ctxPatch: {
           evidenceRunDir,
+          ...(targetSubmodule === undefined ? {} : { targetSubmodule }),
           ...(preCycleStatus !== undefined && preCycleStatus !== "" ? { preCycleStatus } : {}),
-          ...(sub.targetSubmodule !== undefined ? { targetSubmodule: sub.targetSubmodule } : {}),
         },
       };
     }

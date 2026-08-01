@@ -3,6 +3,7 @@ import type { RollEvent } from "@roll/spec";
 import type { CaptureMarker, Clock, ScreenshotResult } from "@roll/infra";
 import type { AgentSpawn } from "./agent-spawn.js";
 import type { ReachResult } from "./agent-liveness.js";
+import type { LeaseEntry } from "@roll/core";
 
 /** The injectable wall clock (epoch seconds) — infra's {@link Clock}. */
 export type ProcessClock = Clock;
@@ -20,6 +21,20 @@ export interface GitPort {
   fetchOrigin(repoCwd: string, branch: string): Promise<{ fetched: boolean }>;
   /** `_worktree_create` — STRICT add (exit code propagated). */
   worktreeAdd(repoCwd: string, path: string, branch: string, base: string): Promise<{ code: number }>;
+  /** US-LOOP-124 allocation identity check. Production supplies a fresh base
+   * SHA and repository identity; legacy test ports omit it. */
+  managedWorktreeFacts?(repoCwd: string, base: string): Promise<{ baseSha: string; repositoryId: string } | undefined>;
+  /** US-LOOP-124 managed release: fresh compare-and-revalidate followed by a
+   * non-force remove.  Optional only for legacy unit doubles. */
+  managedWorktreeRelease?(
+    repoCwd: string,
+    path: string,
+    expectedHead: string,
+    repositoryId: string,
+  ): Promise<{ code: number; reason?: string }>;
+  managedWorktreeInspect?(repoCwd: string, path: string): Promise<{ repositoryId: string; head: string; registered: boolean; clean: boolean } | undefined>;
+  /** Proves that a retry sees neither a registration nor an on-disk target. */
+  managedWorktreeAbsent?(repoCwd: string, path: string): Promise<boolean>;
   /** E2: create the cycle worktree ON a git SUBMODULE of the superproject
    *  (`git -C <super>/<sub> worktree add --detach <cycleWorktreePath>/<sub> <base>`)
    *  so it shares the submodule's object store/refs. Validates the submodule is
@@ -257,6 +272,9 @@ export interface Ports {
   process: ProcessPort;
   events: EventsPort;
   backlog: BacklogPort;
+  /** The Story reservation boundary. Kept injectable so command tests never
+   * create host filesystem leases; nodePorts binds the atomic core primitive. */
+  reserveStory?(storyId: string, entry: LeaseEntry): { claimed: boolean; existingSource?: string };
   /** FIX-306: the runner-owned `.roll` metadata commit (never the sandboxed agent). */
   metadata: MetadataPort;
   route: RoutePort;

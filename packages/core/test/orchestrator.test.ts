@@ -544,8 +544,8 @@ describe("happy-path phase walk → done", () => {
     const { state, kinds } = walk([
       { type: "start", ctx: CTX },
       { type: "preflight_done" },
-      { type: "worktree_created" },
       { type: "story_picked", storyId: "US-1" },
+      { type: "worktree_created" },
       { type: "route_resolved", agent: "claude", model: "sonnet" },
       { type: "agent_exited", exit: 0, timedOut: false },
       { type: "facts_captured", facts: { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 2 } },
@@ -556,8 +556,8 @@ describe("happy-path phase walk → done", () => {
     // FIX-382: cycle:start moved from worktree_created to route_resolved.
     expect(kinds).toEqual([
       "preflight",
-      "create_worktree",
       "pick_story",
+      "create_worktree",
       "resume_worktree", // RESUME-PRIOR-WORK re-point (post-pick, before route/spawn)
       "resolve_route",
       "emit_event", // cycle:start (FIX-382: now emitted at route_resolved with real storyId+agent)
@@ -685,14 +685,15 @@ describe("failure branches", () => {
     });
   });
 
-  it("worktree setup fail → failed + tolerant worktree cleanup", () => {
+  it("US-LOOP-124: worktree setup failure preserves a recovery-required target", () => {
     const { state, kinds } = walk([
       { type: "start", ctx: CTX },
       { type: "preflight_done" },
       { type: "worktree_failed" },
     ]);
     expect(state.terminal).toBe("failed");
-    expect(kinds.slice(-5)).toEqual(["emit_event", "append_run", "release_lock", "cleanup_environment", "cleanup_worktree"]);
+    expect(kinds.slice(-4)).toEqual(["emit_event", "append_run", "release_lock", "cleanup_environment"]);
+    expect(kinds).not.toContain("cleanup_worktree");
   });
 
   it("agent fail after retry budget → failed + ALERT (I6, no agent-swap)", () => {

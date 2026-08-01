@@ -290,7 +290,7 @@ function mergeCtx(live: CycleContext, next: CycleContext): CycleContext {
 /**
  * Render the command PLAN the cycle WOULD execute, without running anything.
  * Drives the pure {@link cycleStep} with a SCRIPTED happy-path event sequence
- * (preflight→worktree→pick→route→execute(accept)→capture(built)→publish→
+ * (preflight→pick/reserve→worktree→route→execute(accept)→capture(built)→publish→
  * done), collecting every command. No ports, no I/O — purely the orchestrator's
  * command vocabulary, so `roll loop run-once --dry-run` shows the executor map.
  */
@@ -298,8 +298,8 @@ export function dryRunPlan(ctx: CycleContext): string[] {
   const scripted: CycleEvent[] = [
     { type: "start", ctx },
     { type: "preflight_done" },
-    { type: "worktree_created" },
     { type: "story_picked", storyId: ctx.storyId ?? "US-EXAMPLE" },
+    { type: "worktree_created" },
     { type: "route_resolved", agent: ctx.agent ?? "claude", model: ctx.model ?? "" },
     { type: "agent_exited", exit: 0, timedOut: false },
     {
