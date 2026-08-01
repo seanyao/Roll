@@ -1532,6 +1532,16 @@ describe("executeCommand — command → executor mapping", () => {
     expect(allocation.workspace.members).toHaveLength(2);
   });
 
+  it("US-LOOP-125: a designed Cycle persists the actual Full Delta topology", async () => {
+    const base = fakePorts();
+    const { ports, calls } = fakePorts({
+      git: { ...base.ports.git, managedWorktreeFacts: vi.fn(async () => ({ baseSha: "a".repeat(40), repositoryId: "repo" })) },
+    });
+    await executeCommand({ kind: "create_worktree", branch: CTX.branch }, ports, { ...CTX, selectedProfile: "designed" });
+    const allocation = (calls.event ?? []).map((call) => (call as unknown[])[1]).find((event) => (event as { type?: string }).type === "worktree:allocated") as { workspace: { topology: string } };
+    expect(allocation.workspace.topology).toBe("full-delta-team");
+  });
+
   it("US-LOOP-124: same-operation allocation recovery reuses only the proven checkout", async () => {
     const dir = mkdtempSync(join(tmpdir(), "roll-124-allocation-retry-"));
     execDirs.push(dir);

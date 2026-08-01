@@ -14,10 +14,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RollEvent } from "@roll/spec";
+import { projectSlug } from "@roll/spec";
 import type { WorktreeAuditOutput, WorktreeAuditRecord } from "../src/commands/worktree-audit.js";
 import { auditWorktrees } from "../src/commands/worktree-audit.js";
 import {
@@ -25,8 +26,10 @@ import {
   CLEANUP_USAGE,
   classifyBranchMerge,
   defaultRemoveBranch,
+  defaultRemoveWorktree,
   formatCanaryTripReport,
   isBoundedLoopWorktreeDir,
+  isBoundedManagedWorkspacePath,
   isFullGitOid,
   isReclaimableOrphan,
   isSafelyDisposable,
@@ -191,7 +194,7 @@ describe("US-LOOP-123 CLI canary and cleanup snapshots", () => {
       kind: "cycle",
       topology: "solo",
       members: [{
-        repositoryId: "origin:repo",
+        repositoryId: projectSlug({ path: "/fake/repo" }),
         workspaceKey: "cycle-clean",
         relativeLocator: "cycle-clean",
         checkoutRef: { kind: "detached", head: "head-clean" },
@@ -208,6 +211,9 @@ describe("US-LOOP-123 CLI canary and cleanup snapshots", () => {
   function cleanupGit(status: () => string): (args: string[], cwd: string) => string {
     return (args, cwd) => {
       if (args[0] === "worktree") return "worktree /fake/repo/.roll/loop/worktrees/cycle-clean\nHEAD head-clean\nbranch refs/heads/loop/cycle-clean\n";
+      if (args[0] === "-C" && args[2] === "worktree") return "worktree /fake/repo/.roll/loop/worktrees/cycle-clean\nHEAD head-clean\nbranch refs/heads/loop/cycle-clean\n";
+      if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+      if (args[0] === "-C" && args[2] === "remote") return "";
       if (args[0] === "branch" && args[1] === "--format=%(refname:short)") return "loop/cycle-clean\n";
       if (args[0] === "status") return status();
       if (args[0] === "rev-parse") return "head-clean";
@@ -596,6 +602,79 @@ describe("AC4: preservation and fail-closed refusals", () => {
 // ─── AC5: 9 → 8 worked sample + idempotent/concurrent ──────────────────────
 
 describe("AC5: 9→8 worked sample clears pressure; repeat is idempotent", () => {
+  it("US-LOOP-125 releases a complete WorkspaceSet through each member repository", async () => {
+    const primary = rec({ path: "/repo/.roll/loop/worktrees/cycle-125", runId: "cycle-125", memberLocator: "cycle-125", head: "primary" });
+    const subordinate = rec({ path: "/repo/.roll/loop/worktrees/cycle-125.submodules/packages/sub", runId: "cycle-125", memberLocator: "cycle-125.submodules/packages/sub", head: "sub" });
+    const audit = auditOf([primary, subordinate]);
+    const plan = planWorktreeCleanup(audit, 1);
+    expect(plan.candidates.map((candidate) => candidate.memberLocator).sort()).toEqual(["cycle-125", "cycle-125.submodules/packages/sub"]);
+    const removals: Array<[string, string]> = [];
+    const result = await applyWorktreeCleanup(plan, {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => audit,
+      removeWorktree: (repository, path) => { removals.push([repository, path]); return { ok: true, detail: "" }; },
+      emit: () => {},
+    });
+    expect(removals).toEqual([
+      ["/repo/packages/sub", subordinate.path],
+      ["/repo", primary.path],
+    ]);
+    expect(result.removed).toHaveLength(2);
+  });
+
+  it("US-LOOP-125 refuses an entire WorkspaceSet before effects when one member becomes risky", async () => {
+    const primary = rec({ path: "/repo/.roll/loop/worktrees/cycle-125", runId: "cycle-125", memberLocator: "cycle-125", head: "primary" });
+    const subordinate = rec({ path: "/repo/.roll/loop/worktrees/cycle-125.submodules/packages/sub", runId: "cycle-125", memberLocator: "cycle-125.submodules/packages/sub", head: "sub" });
+    const plan = planWorktreeCleanup(auditOf([primary, subordinate]), 1);
+    const removeWorktree = vi.fn(() => ({ ok: true, detail: "" }));
+    const result = await applyWorktreeCleanup(plan, {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => auditOf([primary, { ...subordinate, dirtyTracked: true, disposition: "preserved_dirty_no_tcr", releaseVerdict: "preserve_unknown" }]),
+      removeWorktree,
+      emit: () => {},
+    });
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(result.refused).toHaveLength(2);
+  });
+
+  it("US-LOOP-125 reclaims a deregistered subordinate scratch only through its owning managed-storage root", () => {
+    const root = mkdtempSync(join(tmpdir(), "roll-125-cleanup-"));
+    const subRepo = join(root, "packages", "sub");
+    const scratch = join(root, ".roll", "loop", "worktrees", "cycle-125.submodules", "packages", "sub");
+    const git = (cwd: string, args: string[]): string =>
+      execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    try {
+      mkdirSync(subRepo, { recursive: true });
+      git(subRepo, ["init", "-q", "-b", "main"]);
+      git(subRepo, ["config", "user.email", "test@example.invalid"]);
+      git(subRepo, ["config", "user.name", "Roll test"]);
+      writeFileSync(join(subRepo, "README.md"), "seed\n");
+      git(subRepo, ["add", "README.md"]);
+      git(subRepo, ["commit", "-qm", "seed"]);
+
+      // Reproduce the partial-failure state: Git has already deregistered the
+      // subordinate but a scratch directory remains beneath the superproject's
+      // managed storage. The second default-effect call must finish recovery.
+      mkdirSync(join(root, ".roll", "loop", "worktrees", "cycle-125.submodules", "packages"), { recursive: true });
+      git(subRepo, ["worktree", "add", "--detach", scratch, "HEAD"]);
+      git(subRepo, ["worktree", "remove", "--force", scratch]);
+      mkdirSync(scratch, { recursive: true });
+      writeFileSync(join(scratch, "left-behind.txt"), "scratch\n");
+
+      const wrongBoundary = defaultRemoveWorktree(subRepo, scratch);
+      expect(wrongBoundary.ok).toBe(false);
+      expect(existsSync(scratch)).toBe(true);
+
+      const recovered = defaultRemoveWorktree(subRepo, scratch, root);
+      expect(recovered.ok).toBe(true);
+      expect(existsSync(scratch)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("plans exactly the one merged clean candidate (9 → 8)", () => {
     // 5 ephemeral branches + 4 loop worktrees (3 preserved + 1 disposable).
     const audit = auditOf(
@@ -1207,6 +1286,16 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
     expect(isBoundedLoopWorktreeDir(root, "/repo/.roll/loop/worktrees/cycle-1/nested")).toBe(false); // nested
     expect(isBoundedLoopWorktreeDir(root, "/repo/src")).toBe(false); // outside
     expect(isBoundedLoopWorktreeDir(root, "/etc")).toBe(false);
+  });
+
+  it("US-LOOP-125 permits only canonical nested submodule and child members for managed cleanup", () => {
+    const root = "/repo";
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1")).toBe(true);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.submodules/packages/sub")).toBe(true);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.children/action-a")).toBe(true);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.children/action-a/deeper")).toBe(false);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.submodules")).toBe(false);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/outside")).toBe(false);
   });
 
   it("isReclaimableOrphan requires loop-owned, inactive, orphan_reclaimable", () => {

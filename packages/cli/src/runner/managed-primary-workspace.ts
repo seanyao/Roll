@@ -151,7 +151,12 @@ export async function allocateManagedPrimaryWorkspace(
     runId: ctx.cycleId,
     storyId: ctx.storyId,
     kind: "cycle",
-    topology: "solo",
+    // A verified/designed Cycle is the actual Full Delta runtime path. Persist
+    // that topology with the allocated set instead of asking audits/tests to
+    // infer it from a hand-written event literal.
+    topology: ctx.selectedProfile === "verified" || ctx.selectedProfile === "designed"
+      ? "full-delta-team"
+      : "solo",
     members: members as [ManagedWorkspaceMember, ...ManagedWorkspaceMember[]],
   };
   if (!normalizeManagedWorkspaceSet(workspace).ok) {

@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isEphemeralBranch, managedWorkspaceReleaseVerdict, projectManagedWorkspaceRuns, type ManagedWorkspaceRunView } from "@roll/core";
 import { resolveIntegrationBranch } from "@roll/infra";
-import { parseEventLine, resolveLang, type RollEvent } from "@roll/spec";
+import { parseEventLine, projectSlug, resolveLang, type RollEvent } from "@roll/spec";
 
 // ─── types (shared with the spec) ───────────────────────────────────────────
 
@@ -72,6 +72,8 @@ export interface WorktreeAuditRecord {
   memberLocator?: string;
   runState?: string;
   registration?: "registered" | "missing" | "unknown" | "foreign";
+  /** The recorded repository identity matched during a subordinate-repo audit. */
+  repositoryIdentity?: "expected" | "foreign" | "unknown";
   releaseVerdict?: "safe_to_release" | "preserve_active" | "preserve_unmerged" | "preserve_pending_evidence" | "preserve_truth_disagreement" | "preserve_unknown";
 }
 
@@ -106,6 +108,12 @@ interface ProjectedMember {
   readonly run: ManagedWorkspaceRunView;
   readonly locator: string;
   readonly expectedHead?: string;
+}
+
+interface RawWorktree {
+  path: string;
+  head: string;
+  branch: string;
 }
 
 // ─── dependency hooks (injectable for tests) ──────────────────────────────
@@ -226,8 +234,20 @@ function projectedMembers(events: readonly RollEvent[]): ProjectedMember[] {
   const members: ProjectedMember[] = [];
   for (const run of projectManagedWorkspaceRuns(events)) {
     if (run.workspace !== undefined) {
+      // Allocation HEAD names the checkout created for a run. Once release has
+      // been requested, the only valid destructive expectation is the fresh
+      // per-member HEAD frozen immediately before release (a child may have
+      // committed since allocation). Use the latest matching durable request.
+      const release = [...events].reverse().find((event) => event.type === "worktree:release_requested" && event.runId === run.runId) as unknown as {
+        readonly expectedHeads: readonly { readonly relativeLocator: string; readonly head: string }[];
+      } | undefined;
+      const releaseHeads = release?.expectedHeads;
       for (const member of run.workspace.members) {
-        members.push({ run, locator: member.relativeLocator, expectedHead: member.checkoutRef.head });
+        members.push({
+          run,
+          locator: member.relativeLocator,
+          expectedHead: releaseHeads?.find((head) => head.relativeLocator === member.relativeLocator)?.head ?? member.checkoutRef.head,
+        });
       }
     } else if (run.state === "legacy_cycle") {
       // The legacy adapter is deliberately bounded to the event identity.  It
@@ -241,7 +261,17 @@ function projectedMembers(events: readonly RollEvent[]): ProjectedMember[] {
 function withinManagedRoot(repoRoot: string, locator: string): string | undefined {
   const root = resolve(repoRoot, ".roll", "loop", "worktrees");
   const path = resolve(root, locator);
-  return path.startsWith(root + "/") ? path : undefined;
+  if (!path.startsWith(root + "/")) return undefined;
+  // Git returns physical worktree paths.  On macOS `/var` commonly resolves to
+  // `/private/var`; compare the same physical locator so a valid registered
+  // member is never downgraded to an unregistered phantom.
+  const physicalRoot = realpathSafe(root);
+  const physicalPath = realpathSafe(path);
+  // A missing member cannot be realpath'd. Preserve its canonical-root
+  // relative locator while using the physical root, so missing registration is
+  // a first-class audit fault rather than a silently omitted member.
+  const comparablePath = physicalPath === path ? resolve(physicalRoot, relative(root, path)) : physicalPath;
+  return comparablePath.startsWith(physicalRoot + "/") ? comparablePath : undefined;
 }
 
 /**
@@ -249,19 +279,74 @@ function withinManagedRoot(repoRoot: string, locator: string): string | undefine
  * list would turn every real submodule checkout into a false orphan, while the
  * `<key>.submodules` directory itself is intentionally never a member.
  */
-function memberRegistration(path: string, locator: string, deps: WorktreeAuditDeps): "registered" | "missing" | "unknown" {
-  if (!locator.includes(".submodules/")) return "missing";
+function submoduleRepositoryPath(repoRoot: string, locator: string): string | undefined {
+  const marker = ".submodules/";
+  const index = locator.indexOf(marker);
+  if (index < 1) return undefined;
+  const submodule = locator.slice(index + marker.length);
+  return submodule === "" ? undefined : resolve(repoRoot, submodule);
+}
+
+function parseWorktreeEntries(output: string): RawWorktree[] {
+  const entries: RawWorktree[] = [];
+  let current: Partial<RawWorktree> = {};
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current.path) entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
+      current = { path: line.slice("worktree ".length).trim() };
+    } else if (line.startsWith("HEAD ")) {
+      current.head = line.slice("HEAD ".length).trim();
+    } else if (line.startsWith("branch ")) {
+      current.branch = line.slice("branch ".length).trim();
+    } else if (line === "" && current.path) {
+      entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
+      current = {};
+    }
+  }
+  if (current.path) entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
+  return entries;
+}
+
+function memberRepositoryEntry(
+  repository: string,
+  path: string,
+  expectedRepositoryId: string,
+  deps: WorktreeAuditDeps,
+): { registration: "registered" | "missing" | "unknown" | "foreign"; repositoryIdentity: "expected" | "foreign" | "unknown"; entry?: RawWorktree } {
   try {
     const g = deps.git ?? git;
-    const listed = g(["-C", path, "worktree", "list", "--porcelain"], path);
-    return listed
-      .split("\n")
-      .some((line) => line.startsWith("worktree ") && resolve(line.slice("worktree ".length).trim()) === resolve(path))
-      ? "registered"
-      : "missing";
+    const listed = g(["-C", repository, "worktree", "list", "--porcelain"], repository);
+    const entry = parseWorktreeEntries(listed).find((candidate) => realpathSafe(resolve(candidate.path)) === realpathSafe(resolve(path)));
+    if (entry === undefined) return { registration: "missing", repositoryIdentity: "unknown" };
+    const top = g(["-C", repository, "rev-parse", "--show-toplevel"], repository).trim();
+    if (top === "") return { registration: "registered", repositoryIdentity: "unknown", entry };
+    let remoteUrl: string | undefined;
+    try {
+      const origin = g(["-C", repository, "remote", "get-url", "origin"], repository).trim();
+      remoteUrl = origin === "" ? undefined : origin;
+    } catch { /* a local repository has a path-derived identity */ }
+    // Do not pass ROLL_MAIN_SLUG here. It is the owner namespace, whereas this
+    // comparison proves the identity of this independently registered repo.
+    const identity = projectSlug({ path: realpathSafe(resolve(top)), remoteUrl });
+    return identity === expectedRepositoryId
+      ? { registration: "registered", repositoryIdentity: "expected", entry }
+      : { registration: "foreign", repositoryIdentity: "foreign", entry };
   } catch {
-    return "unknown";
+    return { registration: "unknown", repositoryIdentity: "unknown" };
   }
+}
+
+function submoduleMemberEntry(
+  repoRoot: string,
+  path: string,
+  locator: string,
+  expectedRepositoryId: string,
+  deps: WorktreeAuditDeps,
+): { registration: "registered" | "missing" | "unknown" | "foreign"; repositoryIdentity: "expected" | "foreign" | "unknown"; entry?: RawWorktree } {
+  const repository = submoduleRepositoryPath(repoRoot, locator);
+  return repository === undefined
+    ? { registration: "missing", repositoryIdentity: "unknown" }
+    : memberRepositoryEntry(repository, path, expectedRepositoryId, deps);
 }
 
 function deliveryFacts(events: readonly RollEvent[], runId: string): {
@@ -597,29 +682,9 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
   // Empty historical ledgers retain the pre-cutover read-compatible surface.
   const projectionEnabled = events.some((event) => event.type.startsWith("worktree:"));
 
-  // 3. Parse worktree entries
-  interface RawWorktree { path: string; head: string; branch: string; }
-  const entries: RawWorktree[] = [];
-  let current: Partial<RawWorktree> = {};
-
-  for (const line of wtOutput.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current.path) entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
-      current = { path: line.slice(9).trim() };
-    } else if (line.startsWith("HEAD ")) {
-      current.head = line.slice(5).trim();
-    } else if (line.startsWith("branch ")) {
-      current.branch = line.slice(7).trim();
-    } else if (line === "") {
-      if (current.path) {
-        entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
-        current = {};
-      }
-    }
-  }
-  if (current.path) {
-    entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
-  }
+  // 3. Parse the superproject registrations. Submodule registrations are
+  // enumerated separately below from each member's own repository.
+  const entries = parseWorktreeEntries(wtOutput);
 
   // 4. Build records
   const records: WorktreeAuditRecord[] = [];
@@ -682,19 +747,28 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     };
 
     if (projected !== undefined) {
+      const expectedRepositoryId = projected.run.workspace?.members.find(
+        (member) => member.relativeLocator === projected.locator,
+      )?.repositoryId ?? "";
+      // The superproject list proves only registration. Verify its own live
+      // repository identity too; otherwise a replaced primary can masquerade
+      // as the recorded member just as a replaced submodule could.
+      const memberInspection = memberRepositoryEntry(repoRoot, absPath, expectedRepositoryId, deps);
       const facts = deliveryFacts(events, projected.run.runId);
       const release = managedWorkspaceReleaseVerdict({
         runState: projected.run.state,
         ...facts,
         members: [{
           relativeLocator: projected.locator,
-          registration: "registered",
+          registration: memberInspection.registration,
           activity: active ? "active" : "inactive",
           head: projected.expectedHead === undefined || entry.head === projected.expectedHead ? "expected" : "mismatch",
           cleanliness: dirty.dirtyTracked === false && dirty.dirtyUntracked === false ? "clean" : dirty.dirtyTracked === "unknown" || dirty.dirtyUntracked === "unknown" ? "unknown" : "dirty",
         }],
       });
       baseRec.releaseVerdict = release.verdict;
+      baseRec.registration = memberInspection.registration;
+      baseRec.repositoryIdentity = memberInspection.repositoryIdentity;
       if (release.verdict === "safe_to_release") {
         baseRec.disposition = "disposable_candidate";
         baseRec.reason = "projection confirms merged delivery, accepted attest, and a clean registered member";
@@ -738,14 +812,34 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
       // capacity, or turn inspection into an unavailable safety fault.
       if (member.run.workspace === undefined) continue;
       if (seenProjectedLocators.has(member.locator)) continue;
-      const path = withinManagedRoot(repoRoot, member.locator);
-      if (path === undefined) continue;
-      const registration = memberRegistration(path, member.locator, deps);
+      const containedPath = withinManagedRoot(repoRoot, member.locator);
+      // Never omit an expected member. A lexical or realpath containment fault
+      // is a first-class, counted projection record so a clean sibling cannot
+      // obtain a release verdict by hiding it behind a symlink or `..` locator.
+      const path = containedPath ?? resolve(repoRoot, ".roll", "loop", "worktrees", member.locator);
+      const observed = containedPath === undefined
+        ? { registration: "unknown" as const, repositoryIdentity: "unknown" as const }
+        : submoduleMemberEntry(repoRoot, path, member.locator, member.run.workspace.members.find((candidate) => candidate.relativeLocator === member.locator)?.repositoryId ?? "", deps);
+      const registration = observed.registration;
       const facts = deliveryFacts(events, member.run.runId);
+      const dirty = observed.entry === undefined
+        ? { dirtyTracked: "unknown" as const, dirtyUntracked: "unknown" as const }
+        : detectDirty(path, deps);
+      const active = member.run.state === "active" || member.run.state === "active_unstarted";
       const release = managedWorkspaceReleaseVerdict({
         runState: member.run.state,
         ...facts,
-        members: [{ relativeLocator: member.locator, registration, activity: "unknown", head: "unknown", cleanliness: "unknown" }],
+        members: [{
+          relativeLocator: member.locator,
+          registration,
+          activity: active ? "active" : observed.entry === undefined ? "unknown" : "inactive",
+          head: observed.entry === undefined || member.expectedHead === undefined
+            ? "unknown"
+            : observed.entry.head === member.expectedHead ? "expected" : "mismatch",
+          cleanliness: dirty.dirtyTracked === false && dirty.dirtyUntracked === false
+            ? "clean"
+            : dirty.dirtyTracked === "unknown" || dirty.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+        }],
       });
       records.push({
         path,
@@ -754,15 +848,20 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
         memberLocator: member.locator,
         runState: member.run.state,
         registration,
+        repositoryIdentity: observed.repositoryIdentity,
         storyId: member.run.storyId,
-        dirtyTracked: "unknown",
-        dirtyUntracked: "unknown",
-        ahead: null,
-        mergeEvidence: { kind: "unknown" },
-        active: member.run.state === "active" || member.run.state === "active_unstarted",
-        disposition: member.run.state === "active" || member.run.state === "active_unstarted" ? "active" : "preserved_needs_review",
+        ...(observed.entry?.branch ? { branch: observed.entry.branch } : {}),
+        ...(observed.entry?.head ? { head: observed.entry.head } : {}),
+        dirtyTracked: dirty.dirtyTracked,
+        dirtyUntracked: dirty.dirtyUntracked,
+        ahead: observed.entry === undefined ? null : countAhead(path, deps, integrationBranch),
+        mergeEvidence: observed.entry === undefined ? { kind: "unknown" } : detectMergeEvidence(path, observed.entry.branch || undefined, deps, integrationBranch),
+        active,
+        disposition: active ? "active" : "preserved_needs_review",
         releaseVerdict: release.verdict,
-        reason: registration === "registered"
+        reason: containedPath === undefined
+          ? "projection member escapes its canonical managed root; preserved for owner recovery"
+          : registration === "registered"
           ? "submodule member registration was found but its live inspection is unavailable; preserved"
           : "projection member is not registered in its repository; preserved for recovery",
       });
@@ -783,14 +882,37 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     const run = projectionMembers.find((member) => member.run.runId === runId)?.run;
     if (run === undefined) continue;
     const facts = deliveryFacts(events, runId);
+    const expectedMembers = run.workspace?.members ?? [];
+    const recordsByLocator = new Map(runRecords.map((record) => [record.memberLocator, record]));
+    const complete = expectedMembers.length === runRecords.length
+      && expectedMembers.every((member) => recordsByLocator.has(member.relativeLocator));
     const decision = managedWorkspaceReleaseVerdict({
       runState: run.state,
       ...facts,
-      members: runRecords.map((record) => {
-        const expected = projectionMembers.find((member) => member.run.runId === runId && member.locator === record.memberLocator)?.expectedHead;
+      members: expectedMembers.map((member) => {
+        const record = recordsByLocator.get(member.relativeLocator);
+        if (record === undefined) {
+          return {
+            relativeLocator: member.relativeLocator,
+            registration: "unknown" as const,
+            activity: "unknown" as const,
+            head: "unknown" as const,
+            cleanliness: "unknown" as const,
+          };
+        }
+        // `projectedMembers` is the single lifecycle projection boundary. It
+        // already resolves the latest durable release request for this exact
+        // locator, so do not fall back to the allocation checkout here. A
+        // member is allowed to commit after allocation and freeze that newer
+        // HEAD when terminal release is requested.
+        const expected = projectionMembers.find(
+          (projected) => projected.run.runId === runId && projected.locator === member.relativeLocator,
+        )?.expectedHead;
         return {
-          relativeLocator: record.memberLocator ?? "unknown",
-          registration: record.registration ?? "unknown",
+          relativeLocator: member.relativeLocator,
+          registration: record.repositoryIdentity === "foreign" || record.repositoryIdentity === "unknown"
+            ? record.repositoryIdentity === "foreign" ? "foreign" : "unknown"
+            : record.registration ?? "unknown",
           activity: record.active ? "active" : "inactive",
           head: expected === undefined || record.head === expected ? "expected" : record.head === undefined ? "unknown" : "mismatch",
           cleanliness: record.dirtyTracked === false && record.dirtyUntracked === false ? "clean" : record.dirtyTracked === "unknown" || record.dirtyUntracked === "unknown" ? "unknown" : "dirty",
@@ -798,16 +920,19 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
       }),
     });
     for (const record of runRecords) {
-      record.releaseVerdict = decision.verdict;
-      if (decision.verdict === "safe_to_release") {
+      const verdict = complete ? decision.verdict : "preserve_unknown";
+      record.releaseVerdict = verdict;
+      if (verdict === "safe_to_release") {
         record.disposition = "disposable_candidate";
         record.reason = "projection confirms every workspace member is release-safe";
-      } else if (decision.verdict === "preserve_active") {
+      } else if (verdict === "preserve_active") {
         record.disposition = "active";
         record.reason = "projection retains an active delivery reservation";
       } else {
         record.disposition = "preserved_needs_review";
-        record.reason = `projection release verdict: ${decision.verdict}`;
+        record.reason = complete
+          ? `projection release verdict: ${verdict}`
+          : "projection member set is incomplete; preserved for owner recovery";
       }
     }
   }

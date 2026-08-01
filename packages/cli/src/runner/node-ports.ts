@@ -56,7 +56,7 @@ import {
   worktreeSubmoduleInit,
   writeHeartbeat,
   push as gitPush,
-  projectIdentity,
+  managedRepositoryIdentity,
 } from "@roll/infra";
 import { cardArchiveDir } from "../lib/archive.js";
 import { attestCommand } from "../commands/attest.js";
@@ -263,7 +263,7 @@ export function nodePorts(opts: {
       async managedWorktreeFacts(repoCwd, base) {
         const resolved = await git(["rev-parse", "--verify", `${base}^{commit}`], repoCwd);
         if (resolved.code !== 0 || resolved.stdout.trim() === "") return undefined;
-        return { baseSha: resolved.stdout.trim(), repositoryId: (await projectIdentity(repoCwd)).slug };
+        return { baseSha: resolved.stdout.trim(), repositoryId: (await managedRepositoryIdentity(repoCwd)).slug };
       },
       async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId) {
         return managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId);

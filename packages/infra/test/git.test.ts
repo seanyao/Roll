@@ -615,6 +615,14 @@ describe("worktreeAddInSubmodule — E2 worktree of a submodule", () => {
     // The worktree lives at <cycleWt>/<submoduleName> and is a real checkout.
     const subWt = submoduleWorktreePath(cycleWt, submoduleName);
     expect(existsSync(join(subWt, "sub-file.txt"))).toBe(true);
+    expect(g(subWt, "rev-parse", "--show-toplevel")).toBe(realpathSync(subWt));
+    expect(g(subWt, "status", "--porcelain")).toBe("");
+
+    // The primary checkout may re-run submodule initialization after allocation.
+    // That must not turn the linked subordinate worktree into its Git admin dir.
+    g(superproject, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", submoduleName);
+    expect(g(subWt, "rev-parse", "--show-toplevel")).toBe(realpathSync(subWt));
+    expect(g(subWt, "status", "--porcelain")).toBe("");
 
     // Shared object store proof: a commit made in the worktree is visible to the
     // ACTUAL submodule checkout (git -C <super>/<sub> rev-parse) — the whole

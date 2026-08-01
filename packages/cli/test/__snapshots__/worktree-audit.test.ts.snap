@@ -76,6 +76,7 @@ exports[`US-LOOP-123 projection-backed audit fixture matrix > does not promote a
 {
   "ephemeralBranches": [],
   "generatedAt": "2026-07-08T12:00:00.000Z",
+  "inspectionUnavailable": true,
   "records": [
     {
       "active": true,
@@ -94,8 +95,9 @@ exports[`US-LOOP-123 projection-backed audit fixture matrix > does not promote a
       "owner": "loop",
       "path": "/fake/repo/.roll/loop/worktrees/delta-d-1",
       "reason": "projection retains an active delivery reservation",
-      "registration": "registered",
+      "registration": "missing",
       "releaseVerdict": "preserve_active",
+      "repositoryIdentity": "unknown",
       "runId": "delta-d-1",
       "runState": "active_unstarted",
       "storyId": "US-LOOP-123",
@@ -132,4 +134,130 @@ exports[`US-LOOP-123 projection-backed audit fixture matrix > does not promote a
     "total": 2,
   },
 }
+`;
+
+exports[`US-LOOP-125 real submodule workspace fixtures > freezes public audit and cleanup JSON for a production-allocated Full Delta submodule set > full-delta-submodule-audit-json 1`] = `
+"{
+  "schema": 1,
+  "generatedAt": "2026-08-01T00:00:00.000Z",
+  "repo": "main",
+  "records": [
+    {
+      "path": "<ROOT>/main",
+      "branch": "refs/heads/main",
+      "head": "<OID>",
+      "owner": "external",
+      "dirtyTracked": false,
+      "dirtyUntracked": false,
+      "ahead": 0,
+      "mergeEvidence": {
+        "kind": "ancestor",
+        "detail": "HEAD is ancestor of main"
+      },
+      "active": false,
+      "disposition": "external_unmanaged",
+      "reason": "external worktree; not managed by loop"
+    },
+    {
+      "path": "<ROOT>/main/.roll/loop/worktrees/cycle-125-full-delta",
+      "head": "<OID>",
+      "owner": "loop",
+      "cycleId": "125-full-delta",
+      "storyId": "US-LOOP-125",
+      "dirtyTracked": false,
+      "dirtyUntracked": false,
+      "ahead": 0,
+      "mergeEvidence": {
+        "kind": "ancestor",
+        "detail": "HEAD is ancestor of main"
+      },
+      "active": true,
+      "disposition": "active",
+      "reason": "projection retains an active delivery reservation",
+      "runId": "125-full-delta",
+      "memberLocator": "cycle-125-full-delta",
+      "runState": "active_unstarted",
+      "registration": "registered",
+      "releaseVerdict": "preserve_active",
+      "repositoryIdentity": "expected"
+    },
+    {
+      "path": "<ROOT>/main/.roll/loop/worktrees/cycle-125-full-delta.submodules/packages/sub",
+      "owner": "loop",
+      "runId": "125-full-delta",
+      "memberLocator": "cycle-125-full-delta.submodules/packages/sub",
+      "runState": "active_unstarted",
+      "registration": "registered",
+      "repositoryIdentity": "expected",
+      "storyId": "US-LOOP-125",
+      "head": "<OID>",
+      "dirtyTracked": false,
+      "dirtyUntracked": false,
+      "ahead": 0,
+      "mergeEvidence": {
+        "kind": "ancestor",
+        "detail": "HEAD is ancestor of main"
+      },
+      "active": true,
+      "disposition": "active",
+      "releaseVerdict": "preserve_active",
+      "reason": "projection retains an active delivery reservation"
+    }
+  ],
+  "ephemeralBranches": [],
+  "summary": {
+    "total": 3,
+    "loop": 2,
+    "manual": 0,
+    "external": 1,
+    "active": 2,
+    "disposableCandidates": 0,
+    "preserved": 2,
+    "ephemeralBranches": 0
+  }
+}
+"
+`;
+
+exports[`US-LOOP-125 real submodule workspace fixtures > freezes public audit and cleanup JSON for a production-allocated Full Delta submodule set > full-delta-submodule-cleanup-json 1`] = `
+"{
+  "schema": 1,
+  "generatedAt": "2026-08-01T00:00:00.000Z",
+  "threshold": 8,
+  "cleanupCapacityTotal": 2,
+  "leakSafetyTotal": 0,
+  "managedCapacity": 2,
+  "projectedTotal": 2,
+  "countedBranches": [],
+  "countedWorktrees": [
+    {
+      "path": "<ROOT>/main/.roll/loop/worktrees/cycle-125-full-delta",
+      "disposition": "active"
+    },
+    {
+      "path": "<ROOT>/main/.roll/loop/worktrees/cycle-125-full-delta.submodules/packages/sub",
+      "disposition": "active"
+    }
+  ],
+  "candidates": [],
+  "branchCandidates": [],
+  "preserved": [
+    {
+      "path": "<ROOT>/main",
+      "disposition": "external_unmanaged",
+      "reason": "external worktree; not managed by loop"
+    },
+    {
+      "path": "<ROOT>/main/.roll/loop/worktrees/cycle-125-full-delta",
+      "disposition": "active",
+      "reason": "projection retains an active delivery reservation"
+    },
+    {
+      "path": "<ROOT>/main/.roll/loop/worktrees/cycle-125-full-delta.submodules/packages/sub",
+      "disposition": "active",
+      "reason": "projection retains an active delivery reservation"
+    }
+  ]
+}
+"
 `;

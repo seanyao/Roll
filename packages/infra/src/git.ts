@@ -400,7 +400,7 @@ export async function managedWorktreeRelease(
   expectedHead: string,
   repositoryId: string,
 ): Promise<{ code: number; reason?: string }> {
-  const identity = (await projectIdentity(repoCwd)).slug;
+  const identity = (await managedRepositoryIdentity(repoCwd)).slug;
   if (identity !== repositoryId) return { code: 1, reason: "repository_identity_changed" };
 
   const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
@@ -423,7 +423,7 @@ export async function inspectManagedWorktree(
   repoCwd: string,
   path: string,
 ): Promise<{ repositoryId: string; head: string; registered: boolean; clean: boolean } | undefined> {
-  const identity = (await projectIdentity(repoCwd)).slug;
+  const identity = (await managedRepositoryIdentity(repoCwd)).slug;
   const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
   const head = await git(["rev-parse", "HEAD"], path);
   const dirt = await git(["status", "--porcelain"], path);
@@ -581,13 +581,6 @@ export async function worktreeAddInSubmodule(
     };
   }
   const result = await git(["worktree", "add", "--detach", path, base], submoduleCwd);
-  if (result.code === 0) {
-    try {
-      await git(["config", "extensions.worktreeConfig", "true"], path);
-    } catch {
-      /* best-effort defense-in-depth (mirrors worktreeAdd) */
-    }
-  }
   return result;
 }
 
@@ -1035,6 +1028,22 @@ export async function projectIdentity(
   const url = await remoteUrl(canon);
   const inputs: ProjectIdentityInputs = { path: canon, remoteUrl: url };
   return { path: canon, slug: projectSlug(inputs) };
+}
+
+/**
+ * Identity for one managed workspace repository.
+ *
+ * `ROLL_MAIN_SLUG` namespaces the owning Roll project. It cannot prove that a
+ * superproject and a subordinate Git repository are identical, so lifecycle
+ * facts must derive each member identity without that process-wide override.
+ */
+export async function managedRepositoryIdentity(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<ProjectIdentity> {
+  const canon = await canonicalProjectPath(path, platform);
+  const url = await remoteUrl(canon);
+  return { path: canon, slug: projectSlug({ path: canon, remoteUrl: url }) };
 }
 
 // ─── small lenient fs helpers (mirror bash `rm -rf ... || true`) ──────────────

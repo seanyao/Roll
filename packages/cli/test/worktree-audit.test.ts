@@ -6,8 +6,9 @@
  * dirt split, merge evidence variants, disposition classification, and
  * the hard read-only constraint (no mutation).
  */
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,6 +18,11 @@ import {
   type WorktreeAuditOutput,
   type WorktreeAuditRecord,
 } from "../src/commands/worktree-audit.js";
+import { worktreeCleanupCommand } from "../src/commands/worktree-cleanup.js";
+import { allocateManagedPrimaryWorkspace } from "../src/runner/managed-primary-workspace.js";
+import { nodePorts } from "../src/runner/node-ports.js";
+import { executeTerminalCommand } from "../src/runner/terminal-handlers.js";
+import type { RunnerPaths } from "../src/runner/ports.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -1077,7 +1083,10 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
         return "";
       },
     }));
-    expect(calls.some((args) => args[0] === "-C" && args[2] === "worktree")).toBe(true);
+    // The registration belongs to the submodule repository, not the detached
+    // checkout and never the superproject.  This keeps a broken submodule
+    // registration from being masked by the primary worktree list.
+    expect(calls.some((args) => args[0] === "-C" && args[1] === "/fake/repo/packages/sub" && args[2] === "worktree")).toBe(true);
     expect(out.records.some((record) => record.path.endsWith(".submodules"))).toBe(false);
     expect(out.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("registered");
   });
@@ -1106,6 +1115,215 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
     expect(out.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("unknown");
     expect(out.inspectionUnavailable).toBe(true);
   });
+});
+
+describe("US-LOOP-125 real submodule workspace fixtures", () => {
+  function git(cwd: string, args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  }
+
+  function runtimePaths(root: string, key: string): RunnerPaths {
+    const runtime = join(root, ".roll", "loop");
+    return {
+      eventsPath: join(runtime, "events.ndjson"),
+      runsPath: join(runtime, "runs.jsonl"),
+      alertsPath: join(runtime, "alerts.log"),
+      lockPath: join(runtime, "inner.lock"),
+      heartbeatPath: join(runtime, "heartbeat"),
+      worktreePath: join(runtime, "worktrees", `cycle-${key}`),
+    };
+  }
+
+  /**
+   * This fixture deliberately enters through the production allocator and
+   * terminal command boundary.  In particular, it never creates a cycle
+   * worktree or writes an allocation/release event itself: the events and both
+   * repository registrations are the runtime's own output.
+   */
+  async function fixture(topology: "solo" | "full-delta-team") {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "roll-125-submodule-")));
+    const main = join(root, "main");
+    const source = join(root, "sub-source");
+    mkdirSync(main, { recursive: true });
+    mkdirSync(source, { recursive: true });
+    for (const repo of [main, source]) {
+      git(repo, ["init", "-q", "-b", "main"]);
+      git(repo, ["config", "user.email", "test@example.invalid"]);
+      git(repo, ["config", "user.name", "Roll test"]);
+      writeFileSync(join(repo, "README.md"), `${repo}\n`);
+      git(repo, ["add", "README.md"]);
+      git(repo, ["commit", "-qm", "seed"]);
+    }
+    git(main, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "packages/sub"]);
+    git(main, ["commit", "-qam", "add submodule"]);
+
+    const key = `125-${topology === "solo" ? "ordinary" : "full-delta"}`;
+    mkdirSync(join(main, ".roll", "loop"), { recursive: true });
+    const paths = runtimePaths(main, key);
+    const ports = nodePorts({
+      repoCwd: main,
+      paths,
+      skillBody: "fixture",
+      routeDeps: { readSlot: () => "claude", firstInstalled: () => "claude" },
+    });
+    ports.events.ensureEventFiles(paths.eventsPath, paths.runsPath);
+    const ctx = {
+      cycleId: key,
+      branch: `loop/${key}`,
+      loop: "fixture",
+      storyId: "US-LOOP-125",
+      targetSubmodule: "packages/sub",
+      ...(topology === "full-delta-team" ? { selectedProfile: "designed" as const } : {}),
+    };
+    expect(ports.reserveStory(ctx.storyId, {
+      pid: process.pid,
+      claimedAt: Date.now(),
+      source: "cycle",
+      runId: ctx.cycleId,
+    })).toMatchObject({ claimed: true });
+    expect(await allocateManagedPrimaryWorkspace(ports, ctx, ctx.branch)).toMatchObject({
+      event: { type: "worktree_created" },
+      ctxPatch: { targetSubmodule: "packages/sub" },
+    });
+
+    const primaryPath = paths.worktreePath;
+    const submodulePath = join(main, ".roll", "loop", "worktrees", `cycle-${key}.submodules`, "packages", "sub");
+    // Re-initializing the primary checkout is a normal production operation;
+    // the sibling member must retain its own Git working-tree identity after it.
+    git(main, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "packages/sub"]);
+    git(submodulePath, ["config", "user.email", "test@example.invalid"]);
+    git(submodulePath, ["config", "user.name", "Roll test"]);
+    expect(git(submodulePath, ["rev-parse", "--show-toplevel"])).toBe(realpathSync(submodulePath));
+    const markDeliveredAndAttested = async () => {
+      // These are the same production terminal event commands that the cycle
+      // driver executes.  The fixture does not append raw NDJSON lifecycle
+      // records and leaves release_requested to cleanup_worktree below.
+      await executeTerminalCommand({
+        kind: "emit_event",
+        event: { type: "delivery:merge_confirmed", cycleId: key, storyId: ctx.storyId, branch: ctx.branch, signal: "ancestor", ts: 0 },
+      }, ports, ctx);
+      await executeTerminalCommand({
+        kind: "emit_event",
+        event: { type: "attest:gate", cycleId: key, verdict: "produced", reasons: [], ts: 0 },
+      }, ports, ctx);
+    };
+    const terminalRelease = async () => executeTerminalCommand({ kind: "cleanup_worktree", branch: ctx.branch }, ports, ctx);
+    return { root, main, key, primaryPath, submodulePath, markDeliveredAndAttested, terminalRelease };
+  }
+
+  it.each(["solo", "full-delta-team"] as const)("audits every real %s member without a .submodules phantom", async (topology) => {
+    const f = await fixture(topology);
+    try {
+      await f.markDeliveredAndAttested();
+      const out = auditWorktrees({ repoRoot: f.main, home: f.root });
+      const members = out.records.filter((record) => record.runId === f.key);
+      expect(members).toHaveLength(2);
+      expect(members.map((record) => record.memberLocator).sort()).toEqual([
+        `cycle-${f.key}`,
+        `cycle-${f.key}.submodules/packages/sub`,
+      ]);
+      expect(members.every((record) => record.registration === "registered" && record.repositoryIdentity === "expected")).toBe(true);
+      expect(members.every((record) => record.releaseVerdict === "preserve_active")).toBe(true);
+      expect(out.records.some((record) => record.path.endsWith(`${f.key}.submodules`))).toBe(false);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes public audit and cleanup JSON for a production-allocated Full Delta submodule set", async () => {
+    const f = await fixture("full-delta-team");
+    const originalLimit = process.env["ROLL_BRANCH_CANARY_MAX"];
+    const writes: string[] = [];
+    try {
+      await f.markDeliveredAndAttested();
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(String(chunk));
+        return true;
+      });
+      const auditExit = worktreeAuditCommand(["--json", "--repo", f.main], {
+        home: f.root,
+        nowISO: () => "2026-08-01T00:00:00.000Z",
+      });
+      expect(auditExit).toBe(0);
+      const auditJson = writes.join("");
+      writes.length = 0;
+
+      process.env["ROLL_BRANCH_CANARY_MAX"] = "0";
+      const cleanupExit = await worktreeCleanupCommand(["--dry-run", "--json", "--repo", f.main], {
+        home: f.root,
+        nowISO: () => "2026-08-01T00:00:00.000Z",
+      });
+      expect(cleanupExit).toBe(0);
+      const cleanupJson = writes.join("");
+
+      // Stable public command contracts: both members exactly once, no
+      // `.submodules` container, and cleanup plans one indivisible set.
+      const stable = (text: string): string => text.replaceAll(f.root, "<ROOT>").replace(/[0-9a-f]{40,64}/g, "<OID>");
+      expect(stable(auditJson)).toMatchSnapshot("full-delta-submodule-audit-json");
+      expect(stable(cleanupJson)).toMatchSnapshot("full-delta-submodule-cleanup-json");
+    } finally {
+      vi.restoreAllMocks();
+      if (originalLimit === undefined) delete process.env["ROLL_BRANCH_CANARY_MAX"];
+      else process.env["ROLL_BRANCH_CANARY_MAX"] = originalLimit;
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for a changed or unregistered production-allocated submodule member", async () => {
+    const changed = await fixture("solo");
+    const missing = await fixture("full-delta-team");
+    try {
+      await changed.markDeliveredAndAttested();
+      await missing.markDeliveredAndAttested();
+      const originalSubHead = git(changed.submodulePath, ["rev-parse", "HEAD"]);
+      writeFileSync(join(changed.submodulePath, "changed.txt"), "changed\n");
+      git(changed.submodulePath, ["add", "changed.txt"]);
+      git(changed.submodulePath, ["commit", "-qm", "changed member head"]);
+      const changedAudit = auditWorktrees({ repoRoot: changed.main, home: changed.root });
+      const changedMember = changedAudit.records.find((record) => record.memberLocator?.endsWith("packages/sub"));
+      expect(changedMember?.head).not.toBe(originalSubHead);
+      expect(changedAudit.records.filter((record) => record.runId === changed.key).every((record) => record.releaseVerdict !== "safe_to_release")).toBe(true);
+
+      git(join(missing.main, "packages", "sub"), ["worktree", "remove", "--force", missing.submodulePath]);
+      const missingAudit = auditWorktrees({ repoRoot: missing.main, home: missing.root });
+      expect(missingAudit.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("missing");
+      expect(missingAudit.records.filter((record) => record.runId === missing.key).every((record) => record.releaseVerdict !== "safe_to_release")).toBe(true);
+    } finally {
+      rmSync(changed.root, { recursive: true, force: true });
+      rmSync(missing.root, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes changed heads through the production terminal release path", async () => {
+    const f = await fixture("full-delta-team");
+    try {
+      writeFileSync(join(f.primaryPath, "primary-change.txt"), "primary\n");
+      git(f.primaryPath, ["add", "primary-change.txt"]);
+      git(f.primaryPath, ["commit", "-qm", "primary delivery"]);
+
+      writeFileSync(join(f.submodulePath, "sub-change.txt"), "subordinate\n");
+      git(f.submodulePath, ["add", "sub-change.txt"]);
+      git(f.submodulePath, ["commit", "-qm", "subordinate delivery"]);
+      const subHead = git(f.submodulePath, ["rev-parse", "HEAD"]);
+      const primaryHead = git(f.primaryPath, ["rev-parse", "HEAD"]);
+      await f.markDeliveredAndAttested();
+      await f.terminalRelease();
+
+      const events = readFileSync(join(f.main, ".roll", "loop", "events.ndjson"), "utf8")
+        .split("\n")
+        .flatMap((line) => line === "" ? [] : [JSON.parse(line) as { type: string; expectedHeads?: Array<{ relativeLocator: string; head: string }> }]);
+      const release = events.find((event) => event.type === "worktree:release_requested");
+      expect(release?.expectedHeads).toEqual([
+        { relativeLocator: `cycle-${f.key}`, head: primaryHead },
+        { relativeLocator: `cycle-${f.key}.submodules/packages/sub`, head: subHead },
+      ]);
+      expect(existsSync(f.primaryPath)).toBe(false);
+      expect(existsSync(f.submodulePath)).toBe(false);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
 });
 
 describe("US-LOOP-123 unavailable inspection", () => {
