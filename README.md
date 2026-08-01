@@ -338,9 +338,18 @@ smoke not run` are never green, so acceptance cannot overstate outward behavior.
 No real publish or account action ever runs without a declared authority. See
 [Outward behavior verification](guide/en/acceptance-evidence.md#outward-behavior-verification).
 
-`roll supervisor live` is the shipped CLI-first multi-role board. It prints a
-one-frame snapshot for scripts and quick inspection; `roll supervisor live --watch`
-keeps the same board open and redraws it in-place from the same event-backed view
+`roll supervisor live` is the shipped CLI-first multi-role board. Alongside the
+role panes it renders one shared DeliveryRun projection for ordinary cycles,
+host Delta, Full Delta, and Skill dispatch: workspace reservation/lifecycle,
+Delta handoff state, merge truth, evidence truth, and an explicit recovery
+reason remain separate. Missing or legacy facts render as unknown; a
+`handoff_ready` row is never presented as delivered. The board supplies its
+clock and concrete read-only worktree-audit member checks to the shared adapter:
+only a registered, inactive, expected-HEAD, clean member set with confirmed
+merge and accepted evidence can render `delivered_safe_to_release` — before
+release, never after it. It prints a one-frame
+snapshot for scripts and quick inspection; `roll supervisor live --watch` keeps
+the same board open and redraws it in-place from the same event-backed view
 model. A browser/TUI Supervisor Live Console remains future work and must reuse
 that view model.
 

@@ -26,9 +26,29 @@ function proj(): string {
 function cardDirOf(project: string, id: string): string {
   return join(project, ".roll", "features", "uncategorized", id);
 }
-/** recordSpawnRound fires an async (fire-and-forget) write — let it settle. */
-function flush(): Promise<void> {
-  return new Promise((r) => setTimeout(r, 30));
+/** Wait for a durable observable effect without guessing filesystem latency. */
+async function waitFor(predicate: () => boolean, description: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function journalHasEntries(project: string, id: string, count: number): boolean {
+  try {
+    return readRoundEntries(cardDirOf(project, id)).entries.length >= count;
+  } catch {
+    return false;
+  }
+}
+
+function fileContains(path: string, text: string): boolean {
+  try {
+    return existsSync(path) && readFileSync(path, "utf8").includes(text);
+  } catch {
+    return false;
+  }
 }
 
 describe("recordSpawnRound (US-CYCLE-004 auto-write)", () => {
@@ -37,9 +57,9 @@ describe("recordSpawnRound (US-CYCLE-004 auto-write)", () => {
     const ports = { repoCwd: project } as unknown as Ports;
     // Two separate cycles (c1, c2) for the same card = two rounds.
     recordSpawnRound(ports, { storyId: "US-X-1", model: "glm-5.2", cycleId: "c1" } as unknown as CycleContext, { role: "builder", start: 1_000, durMs: 60_000, outcome: "delivered" });
-    await flush();
+    await waitFor(() => journalHasEntries(project, "US-X-1", 1), "the first round-journal entry");
     recordSpawnRound(ports, { storyId: "US-X-1", model: "glm-5.2", cycleId: "c2" } as unknown as CycleContext, { role: "builder", start: 70_000, durMs: 30_000, outcome: "failed", gateTimeMs: 5_000 });
-    await flush();
+    await waitFor(() => journalHasEntries(project, "US-X-1", 2), "the second round-journal entry");
     const { entries } = readRoundEntries(cardDirOf(project, "US-X-1"));
     expect(entries).toHaveLength(2);
     // No racy round stored on the hot path; derived from cycleId ordering.
@@ -57,17 +77,20 @@ describe("recordSpawnRound (US-CYCLE-004 auto-write)", () => {
       recordSpawnRound(ports, { storyId: "US-BIG", model: "glm-5.2", cycleId: cyc } as unknown as CycleContext, { role: "builder", start: 1, durMs: 1, outcome });
     // Two rounds → still under threshold → no advice yet.
     rec("c1", "failed");
-    await flush();
+    await waitFor(() => journalHasEntries(project, "US-BIG", 1), "the first repair round");
     rec("c2", "refuted");
-    await flush();
+    await waitFor(() => journalHasEntries(project, "US-BIG", 2), "the second repair round");
     const advicePath = join(cardDirOf(project, "US-BIG"), "split-advice.md");
     expect(existsSync(advicePath)).toBe(false);
     // Third round crosses the threshold → advice auto-generated + event emitted.
     rec("c3", "delivered");
-    await flush();
+    const eventsPath = join(project, ".roll", "loop", "events.ndjson");
+    await waitFor(
+      () => existsSync(advicePath) && fileContains(eventsPath, '"split:advice"'),
+      "split advice and its event after the third repair round",
+    );
     expect(existsSync(advicePath)).toBe(true);
     expect(readFileSync(advicePath, "utf8")).toContain("ran **3 rounds**");
-    const eventsPath = join(project, ".roll", "loop", "events.ndjson");
     expect(existsSync(eventsPath)).toBe(true);
     const evLine = readFileSync(eventsPath, "utf8").split("\n").filter((l) => l.includes('"split:advice"'));
     expect(evLine.length).toBe(1);
@@ -85,42 +108,45 @@ describe("recordSpawnRound (US-CYCLE-004 auto-write)", () => {
       recordSpawnRound(ports, { storyId: "US-FAIL", model: "glm-5.2", cycleId: cyc } as unknown as CycleContext, { role: "builder", start: 1, durMs: 1, outcome });
     const candPath = join(cardDirOf(project, "US-FAIL"), "model-swap-candidate.md");
     rec("c1", "failed");
-    await flush();
+    await waitFor(() => journalHasEntries(project, "US-FAIL", 1), "the first failed round");
     expect(existsSync(candPath)).toBe(false); // one failure — under threshold
     rec("c2", "kill:no-state-change");
-    await flush();
+    const eventsPath = join(project, ".roll", "loop", "events.ndjson");
+    await waitFor(
+      () => existsSync(candPath) && fileContains(eventsPath, '"model:swap_candidate"'),
+      "the model-swap candidate and its event",
+    );
     expect(existsSync(candPath)).toBe(true);
     expect(readFileSync(candPath, "utf8")).toContain("builder × glm-5.2");
-    const eventsPath = join(project, ".roll", "loop", "events.ndjson");
     const evs = readFileSync(eventsPath, "utf8").split("\n").filter((l) => l.includes('"model:swap_candidate"'));
     expect(evs.length).toBe(1);
     expect(evs[0]).toContain('"role":"builder"');
     expect(evs[0]).toContain('"streak":2');
   });
 
-  it("returns synchronously (non-blocking) — the write is deferred off the hot path", () => {
+  it("returns synchronously (non-blocking) — the write is deferred off the hot path", async () => {
     const project = proj();
     const ports = { repoCwd: project } as unknown as Ports;
     const ctx = { storyId: "US-X-3", cycleId: "c1" } as unknown as CycleContext;
     recordSpawnRound(ports, ctx, { role: "builder", start: 1, durMs: 1, outcome: "delivered" });
     // Nothing written yet in the same tick — proves the caller isn't blocked on I/O.
-    expect(existsSync(join(cardDirOf(project, "US-X-3"), "round-journal.jsonl"))).toBe(false);
+    const journalPath = join(cardDirOf(project, "US-X-3"), "round-journal.jsonl");
+    expect(existsSync(journalPath)).toBe(false);
+    await waitFor(() => existsSync(journalPath), "the deferred journal write after the synchronous return");
   });
 
-  it("is a no-op for a story-less cycle (nothing to journal into)", async () => {
+  it("is a no-op for a story-less cycle (nothing to journal into)", () => {
     const project = proj();
     const ports = { repoCwd: project } as unknown as Ports;
     const ctx = { storyId: "", cycleId: "c1" } as unknown as CycleContext;
     recordSpawnRound(ports, ctx, { role: "builder", start: 1, durMs: 1, outcome: "delivered" });
-    await flush();
     expect(existsSync(join(project, ".roll", "features"))).toBe(false);
   });
 
-  it("never throws even if the repo path is unusable (best-effort, non-blocking)", async () => {
+  it("never throws even if the repo path is unusable (best-effort, non-blocking)", () => {
     const ports = { repoCwd: "/nonexistent/\0bad" } as unknown as Ports;
     const ctx = { storyId: "US-X-9" } as unknown as CycleContext;
     expect(() => recordSpawnRound(ports, ctx, { role: "builder", start: 1, durMs: 1, outcome: "delivered" })).not.toThrow();
-    await flush();
   });
 });
 
@@ -151,7 +177,7 @@ describe("roll cycle journal (US-CYCLE-004 readout)", () => {
     const ports = { repoCwd: project } as unknown as Ports;
     const ctx = { storyId: "US-X-2", model: "glm", cycleId: "c1" } as unknown as CycleContext;
     recordSpawnRound(ports, ctx, { role: "builder", start: 1_000, durMs: 60_000, outcome: "delivered", gateTimeMs: 6_000 });
-    await flush();
+    await waitFor(() => journalHasEntries(project, "US-X-2", 1), "the journal entry used by the readout");
     const r = runJournal(project, ["journal", "US-X-2"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain("US-X-2 round-journal");

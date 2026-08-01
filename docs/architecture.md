@@ -277,7 +277,7 @@ building ──attest earned──► publishable ──push+PR──► awaitin
 
 #### Supervisor Live Board
 
-`roll supervisor live` 是当前已交付的 CLI-first 多角色 board：读取事件流生成 Supervisor pane 与 Designer / Builder / Evaluator role panes。默认模式输出一帧快照；`roll supervisor live --watch` 在交互式终端中原地重绘同一 view model，不追加重复帧，也不写任何 loop/backlog/release/evidence 状态。未来浏览器/TUI 面应复用同一 view model，并遵守以下边界：
+`roll supervisor live` 是当前已交付的 CLI-first 多角色 board：读取事件流生成 Supervisor pane 与 Designer / Builder / Evaluator role panes，并从共同 DeliveryRun 读模型呈现普通 Cycle、host Delta、Full Delta、Skill dispatch 的工作区预留/生命周期、Delta 状态、合并事实、证据事实和具体恢复原因。它向共同 adapter 注入当前时钟与只读 worktree audit 成员检查；只有已确认合并、已验收且每个成员均已注册/非活动/HEAD 匹配/干净的**尚未释放**运行，才能显示 `delivered_safe_to_release`。`handoff_ready` 明确不等于已交付；缺失或旧协议事实显示 unknown，绝不补造成功。默认模式输出一帧快照；`roll supervisor live --watch` 在交互式终端中原地重绘同一 view model，不追加重复帧，也不写任何 loop/backlog/release/evidence 状态。未来浏览器/TUI 面应复用同一 view model，并遵守以下边界：
 
 - **依赖方向**：浏览器可观测只读消费 `spec` 事件 schema 与 `core` 读侧选择器；loop 不依赖浏览器进程。
 - **只读隔离**：观察面不得写入 loop 状态，不得影响 Story delivery 的 TCR、CI、merge 或 attest 闸。

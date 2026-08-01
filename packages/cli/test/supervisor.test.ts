@@ -3,13 +3,14 @@
  * (backlog + agents.yaml + events.ndjson) and renders observe/advise/next/why/live,
  * never implementing a Story or marking one Done.
  */
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatherSupervisorInput, supervisorCommand } from "../src/commands/supervisor.js";
 import { stripAnsi } from "../src/render.js";
+import { projectSlug } from "@roll/spec";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -30,6 +31,17 @@ function project(backlog: string, opts: { agents?: string; events?: string[]; go
   if (opts.events !== undefined) writeFileSync(join(d, ".roll", "loop", "events.ndjson"), opts.events.join("\n") + "\n");
   if (opts.goal !== undefined) writeFileSync(join(d, ".roll", "loop", "goal.yaml"), opts.goal);
   return d;
+}
+
+function initGitProject(cwd: string): string {
+  const invoke = (args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  invoke(["init", "-q"]);
+  invoke(["config", "user.email", "roll-test@example.invalid"]);
+  invoke(["config", "user.name", "Roll Test"]);
+  invoke(["remote", "add", "origin", "https://github.com/acme/roll.git"]);
+  invoke(["add", "."]);
+  invoke(["commit", "-qm", "fixture"]);
+  return invoke(["rev-parse", "HEAD"]);
 }
 
 function run(cwd: string, args: string[]): { code: number; out: string } {
@@ -704,6 +716,138 @@ describe("supervisorCommand", () => {
       ["builder", "pending"],
       ["evaluator", "not_required"],
     ]);
+    expect(parsed.deliveryRuns.schema).toBe("supervisor-delivery-runs.v1");
+  });
+
+  it("US-LOOP-128: live renders EN/ZH DeliveryRun recovery truth from the shared board", () => {
+    const events = [
+      JSON.stringify({ type: "worktree:allocated", workspace: { schema: 1, runId: "delta-live", storyId: "US-LIVE", kind: "host_delta", topology: "delta-team", delegationId: "live", members: [{ repositoryId: "github.com/acme/roll", workspaceKey: "delta-live", relativeLocator: "delta-live", checkoutRef: { kind: "detached", head: "a".repeat(40) } }] }, operationId: "live:alloc", ts: 1 }),
+      JSON.stringify({ type: "delta:prepared", delegationId: "live", runId: "delta-live", storyId: "US-LIVE", trigger: "host-guided", topology: "delta-team", qualityProfile: "verified", presetId: "p", presetSha256: "x", hostId: "codex", workspaceSchema: 2, ts: 2 }),
+      JSON.stringify({ type: "delta:terminal", delegationId: "live", storyId: "US-LIVE", runId: "delta-live", outcome: "handoff_ready", terminalBinding: "handoff_only", deliveryDisposition: "owner_continue", reservationSource: "delivery-reservation", ts: 3 }),
+    ];
+    const cwd = project(BACKLOG, { events });
+    const before = process.env["ROLL_LANG"];
+    try {
+      process.env["ROLL_LANG"] = "en";
+      const en = run(cwd, ["live"]);
+      expect(en.out).toContain("Delivery runs (shared DeliveryRun projection)");
+      expect(en.out).toContain("handoff_ready");
+      expect(en.out).toContain("owner delivery required; handoff is not a merge or attest verdict");
+      process.env["ROLL_LANG"] = "zh";
+      const zh = run(cwd, ["live"]);
+      expect(zh.out).toContain("交付运行（共同 DeliveryRun 投影）");
+      expect(zh.out).toContain("等待负责人交付；交接不是合并或验收裁定");
+      expect(zh.out).not.toContain("owner delivery required");
+      expect(zh.out).not.toContain("handoff_ready");
+      expect({ en: en.out, zh: zh.out }).toMatchSnapshot();
+    } finally {
+      if (before === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = before;
+    }
+  });
+
+  it("US-LOOP-128: zh live localizes dynamic profile, role, and blocking fields while JSON retains machine truth", () => {
+    const cwd = project(BACKLOG, {
+      events: [
+        JSON.stringify({ type: "cycle:start", cycleId: "C-zh", storyId: "US-ZH", agent: "codex", model: "gpt", ts: 1 }),
+        JSON.stringify({ type: "execution:profile", cycleId: "C-zh", storyId: "US-ZH", profile: "designed", reason: "designed: cross-module", ts: 2 }),
+        JSON.stringify({ type: "agent:blocked", cycleId: "C-zh", agent: "codex", cause: "auth", stage: "build", detail: "login required", ts: 3 }),
+      ],
+    });
+    const before = process.env["ROLL_LANG"];
+    try {
+      process.env["ROLL_LANG"] = "zh";
+      const terminal = run(cwd, ["live"]);
+      const json = run(cwd, ["live", "--json"]);
+      expect(terminal.out).toContain("已设计");
+      expect(terminal.out).toContain("构建者");
+      expect(terminal.out).toContain("相关环节因未知原因而受阻");
+      for (const leak of ["designed", "builder", "auth", "blocked by", "owner", "not_available"]) {
+        expect(terminal.out).not.toContain(leak);
+      }
+      expect(json.out).toContain('"profile": "designed"');
+      expect(json.out).toContain('"reason": "codex blocked by auth"');
+    } finally {
+      if (before === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = before;
+    }
+  });
+
+  it("US-LOOP-128: freezes the complete terminal and JSON DeliveryRun matrix", () => {
+    const now = 1_770_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const cwd = project(BACKLOG);
+    const head = initGitProject(cwd);
+    const repositoryId = projectSlug({ path: cwd, remoteUrl: "https://github.com/acme/roll.git" });
+    const safePath = join(cwd, ".roll", "loop", "worktrees", "cycle-safe");
+    execFileSync("git", ["worktree", "add", "--detach", safePath, "HEAD"], { cwd, stdio: "ignore" });
+    const workspace = (runId: string, storyId: string, kind: "cycle" | "host_delta") => ({
+      schema: 1, runId, storyId, kind, topology: kind === "host_delta" ? "delta-team" : "solo",
+      ...(kind === "host_delta" ? { delegationId: "handoff" } : {}),
+      members: [{ repositoryId, workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached", head } }],
+    });
+    const events = [
+      { type: "worktree:allocated", workspace: workspace("cycle-active", "US-ACTIVE", "cycle"), operationId: "active", ts: Date.now() },
+      { type: "worktree:allocated", workspace: workspace("delta-handoff", "US-HANDOFF", "host_delta"), operationId: "handoff", ts: Date.now() },
+      { type: "delta:prepared", delegationId: "handoff", runId: "delta-handoff", storyId: "US-HANDOFF", trigger: "host-guided", topology: "delta-team", qualityProfile: "verified", presetId: "p", presetSha256: "x", hostId: "codex", workspaceSchema: 2, ts: Date.now() },
+      { type: "delta:terminal", delegationId: "handoff", storyId: "US-HANDOFF", runId: "delta-handoff", outcome: "handoff_ready", terminalBinding: "handoff_only", deliveryDisposition: "owner_continue", reservationSource: "delivery-reservation", ts: Date.now() },
+      { type: "worktree:allocated", workspace: workspace("cycle-stale", "US-STALE", "cycle"), operationId: "stale", ts: 1 },
+      { type: "worktree:activity_observed", runId: "cycle-stale", source: "runner", ts: 1 },
+      { type: "worktree:allocated", workspace: workspace("cycle-safe", "US-SAFE", "cycle"), operationId: "safe", ts: Date.now() },
+      { type: "delivery:merge_confirmed", cycleId: "cycle-safe", storyId: "US-SAFE", branch: "us/safe", signal: "ancestor", ts: Date.now() },
+      { type: "attest:gate", cycleId: "cycle-safe", verdict: "produced", reasons: [], ts: Date.now() },
+      { type: "worktree:release_requested", runId: "cycle-safe", reason: "delivered", operationId: "safe:release", expectedHeads: [{ relativeLocator: "cycle-safe", head }], ts: Date.now() },
+      { type: "cycle:start", cycleId: "cycle-legacy", storyId: "US-LEGACY", agent: "codex", model: "m", ts: Date.now() },
+    ];
+    writeFileSync(join(cwd, ".roll", "loop", "events.ndjson"), events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const before = process.env["ROLL_LANG"];
+    try {
+      process.env["ROLL_LANG"] = "en";
+      const en = run(cwd, ["live"]);
+      process.env["ROLL_LANG"] = "zh";
+      const zh = run(cwd, ["live"]);
+      const json = JSON.parse(run(cwd, ["live", "--json"]).out);
+      const scrubPath = (value: string): string => [cwd, realpathSync(cwd), safePath, realpathSync(safePath)]
+        .sort((left, right) => right.length - left.length)
+        .reduce((scrubbed, path) => scrubbed.replaceAll(path, "<project>"), value);
+      const scrubbed = JSON.parse(scrubPath(JSON.stringify(json)));
+      expect(zh.out).not.toContain("监督状态：observing");
+      expect(zh.out).not.toContain(" · standard · active · ");
+      expect(zh.out).not.toContain("updated ");
+      expect(zh.out).not.toContain("designer  ");
+      expect(zh.out).not.toContain("waiting to execute");
+      expect(zh.out).not.toContain("      handoff ");
+      expect(zh.out).not.toContain("预留=active_unstarted");
+      expect({ en: scrubPath(en.out), zh: scrubPath(zh.out), json: scrubbed.deliveryRuns.rows }).toMatchSnapshot();
+    } finally {
+      clock.mockRestore();
+      if (before === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = before;
+    }
+  });
+
+  it("US-LOOP-128: normalizes physical temporary project paths under default and /tmp roots", () => {
+    const beforeTmpdir = process.env["TMPDIR"];
+    const render = (tmpRoot: string | undefined): { terminal: string; json: string } => {
+      if (tmpRoot === undefined) delete process.env["TMPDIR"];
+      else process.env["TMPDIR"] = tmpRoot;
+      const cwd = project(BACKLOG);
+      initGitProject(cwd);
+      const physical = realpathSync(cwd);
+      const scrub = (value: string): string => [cwd, physical]
+        .sort((left, right) => right.length - left.length)
+        .reduce((scrubbed, path) => scrubbed.replaceAll(path, "<project>"), value);
+      return {
+        terminal: scrub(run(cwd, ["live"]).out),
+        json: scrub(JSON.stringify(JSON.parse(run(cwd, ["live", "--json"]).out))),
+      };
+    };
+    try {
+      expect(render(undefined)).toEqual(render("/tmp"));
+    } finally {
+      if (beforeTmpdir === undefined) delete process.env["TMPDIR"];
+      else process.env["TMPDIR"] = beforeTmpdir;
+    }
   });
 
   it("live --collab --once renders a folded multi-cycle collaboration stream", () => {

@@ -1,5 +1,199 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`supervisorCommand > US-LOOP-128: freezes the complete terminal and JSON DeliveryRun matrix 1`] = `
+{
+  "en": "
+  Supervisor Live — read-only role board
+
+    supervisor: observing · 1 active/recent attention row(s), 1 row(s) rendered; failures env=0 harness=0 card=0 unknown=0
+
+    cycle-legacy · US-LEGACY · standard · active · codex/m
+      updated 2026-02-02T02:40:00Z · standard: no execution profile event yet
+      designer  not_required  agent=- · profile does not require design
+      builder   pending       agent=codex · waiting to execute
+      evaluator not_required  agent=- · profile does not require independent evaluation
+      handoff designer->builder:not_required · builder->evaluator:not_required · evaluator->builder:not_required
+
+
+    Delivery runs (shared DeliveryRun projection)
+    cycle-active · cycle · US-ACTIVE · active
+      members=cycle-active · reservation=active_unstarted · delta=? · merge=unknown · evidence=unknown
+      recover: managed workspace reserved; awaiting first activity
+    cycle-legacy · cycle · US-LEGACY · legacy
+      members=? · reservation=legacy_cycle · delta=? · merge=unknown · evidence=unknown
+      recover: legacy protocol only; managed workspace facts are unavailable
+    cycle-safe · cycle · US-SAFE · delivered_safe_to_release
+      members=cycle-safe · reservation=release_requested · delta=? · merge=merged · evidence=accepted
+      recover: managed workspace is safe to release after owner confirmation
+    cycle-stale · cycle · US-STALE · recovery_required
+      members=cycle-stale · reservation=stale · delta=? · merge=unknown · evidence=unknown
+      recover: managed workspace activity is stale; inspect registration before recovery
+    delta-handoff · host_delta · US-HANDOFF · handoff_ready
+      members=delta-handoff · reservation=handoff_ready · delta=handoff_ready · merge=unknown · evidence=unknown
+      recover: owner delivery required; handoff is not a merge or attest verdict
+    external:<project> · external · unknown · unknown
+      members=<project> · reservation=unknown · delta=? · merge=unknown · evidence=unknown
+      recover: external workspace is unmanaged; inspect manually
+
+",
+  "json": [
+    {
+      "deltaStatus": null,
+      "evidence": "unknown",
+      "kind": "cycle",
+      "lifecycle": "active",
+      "merge": "unknown",
+      "recoveryReason": "managed workspace reserved; awaiting first activity",
+      "reservationState": "active_unstarted",
+      "runId": "cycle-active",
+      "storyId": "US-ACTIVE",
+      "topology": "solo",
+      "workspaceMembers": [
+        "cycle-active",
+      ],
+    },
+    {
+      "deltaStatus": null,
+      "evidence": "unknown",
+      "kind": "cycle",
+      "lifecycle": "legacy",
+      "merge": "unknown",
+      "recoveryReason": "legacy protocol only; managed workspace facts are unavailable",
+      "reservationState": "legacy_cycle",
+      "runId": "cycle-legacy",
+      "storyId": "US-LEGACY",
+      "topology": null,
+      "workspaceMembers": [],
+    },
+    {
+      "deltaStatus": null,
+      "evidence": "accepted",
+      "kind": "cycle",
+      "lifecycle": "delivered_safe_to_release",
+      "merge": "merged",
+      "recoveryReason": "managed workspace is safe to release after owner confirmation",
+      "reservationState": "release_requested",
+      "runId": "cycle-safe",
+      "storyId": "US-SAFE",
+      "topology": "solo",
+      "workspaceMembers": [
+        "cycle-safe",
+      ],
+    },
+    {
+      "deltaStatus": null,
+      "evidence": "unknown",
+      "kind": "cycle",
+      "lifecycle": "recovery_required",
+      "merge": "unknown",
+      "recoveryReason": "managed workspace activity is stale; inspect registration before recovery",
+      "reservationState": "stale",
+      "runId": "cycle-stale",
+      "storyId": "US-STALE",
+      "topology": "solo",
+      "workspaceMembers": [
+        "cycle-stale",
+      ],
+    },
+    {
+      "deltaStatus": "handoff_ready",
+      "evidence": "unknown",
+      "kind": "host_delta",
+      "lifecycle": "handoff_ready",
+      "merge": "unknown",
+      "recoveryReason": "owner delivery required; handoff is not a merge or attest verdict",
+      "reservationState": "handoff_ready",
+      "runId": "delta-handoff",
+      "storyId": "US-HANDOFF",
+      "topology": "delta-team",
+      "workspaceMembers": [
+        "delta-handoff",
+      ],
+    },
+    {
+      "deltaStatus": null,
+      "evidence": "unknown",
+      "kind": "external",
+      "lifecycle": "unknown",
+      "merge": "unknown",
+      "recoveryReason": "external workspace is unmanaged; inspect manually",
+      "reservationState": "unknown",
+      "runId": "external:<project>",
+      "storyId": "unknown",
+      "topology": null,
+      "workspaceMembers": [
+        "<project>",
+      ],
+    },
+  ],
+  "zh": "
+  监督实时面板 — 只读角色面板
+
+    监督状态：观察中 · 关注中的运行 1 条，已渲染 1 条；失败：环境=0、框架=0、任务卡=0、未知=0
+
+    cycle-legacy · US-LEGACY · 标准 · 进行中 · codex/m
+      更新时间 2026-02-02T02:40:00Z · 标准：尚无执行配置事件
+      设计者 无需 · 代理=- · 当前配置无需设计
+      构建者 待处理 · 代理=codex · 等待执行
+      评估者 无需 · 代理=- · 当前配置无需独立评估
+      交接 设计者→构建者：无需 · 构建者→评估者：无需 · 评估者→构建者：无需
+
+
+    交付运行（共同 DeliveryRun 投影）
+    cycle-active · 周期 · US-ACTIVE · 进行中
+      成员=cycle-active · 预留=已预留未开始 · 增量=? · 合并=未知 · 证据=未知
+      恢复: 已保留受管工作区；等待首次活动
+    cycle-legacy · 周期 · US-LEGACY · 旧协议
+      成员=? · 预留=旧周期 · 增量=? · 合并=未知 · 证据=未知
+      恢复: 仅有旧协议记录；受管工作区事实不可用
+    cycle-safe · 周期 · US-SAFE · 可安全释放
+      成员=cycle-safe · 预留=已请求释放 · 增量=? · 合并=已合并 · 证据=已验收
+      恢复: 受管工作区已满足安全释放条件，等待负责人确认
+    cycle-stale · 周期 · US-STALE · 需要恢复
+      成员=cycle-stale · 预留=已过期 · 增量=? · 合并=未知 · 证据=未知
+      恢复: 受管工作区活动已过期；恢复前请检查注册状态
+    delta-handoff · 主机增量 · US-HANDOFF · 已交接
+      成员=delta-handoff · 预留=已交接 · 增量=已交接 · 合并=未知 · 证据=未知
+      恢复: 等待负责人交付；交接不是合并或验收裁定
+    external:<project> · 外部 · 未知 · 未知
+      成员=<project> · 预留=未知 · 增量=? · 合并=未知 · 证据=未知
+      恢复: 外部工作区未受管；请手动检查
+
+",
+}
+`;
+
+exports[`supervisorCommand > US-LOOP-128: live renders EN/ZH DeliveryRun recovery truth from the shared board 1`] = `
+{
+  "en": "
+  Supervisor Live — read-only role board
+
+    supervisor: observing · 0 active/recent attention row(s), 0 row(s) rendered; failures env=0 harness=0 card=0 unknown=0
+
+    no cycle rows yet
+
+    Delivery runs (shared DeliveryRun projection)
+    delta-live · host_delta · US-LIVE · handoff_ready
+      members=delta-live · reservation=handoff_ready · delta=handoff_ready · merge=unknown · evidence=unknown
+      recover: owner delivery required; handoff is not a merge or attest verdict
+
+",
+  "zh": "
+  监督实时面板 — 只读角色面板
+
+    监督状态：观察中 · 关注中的运行 0 条，已渲染 0 条；失败：环境=0、框架=0、任务卡=0、未知=0
+
+    暂无周期运行记录
+
+    交付运行（共同 DeliveryRun 投影）
+    delta-live · 主机增量 · US-LIVE · 已交接
+      成员=delta-live · 预留=已交接 · 增量=已交接 · 合并=未知 · 证据=未知
+      恢复: 等待负责人交付；交接不是合并或验收裁定
+
+",
+}
+`;
+
 exports[`supervisorCommand > live --collab --once renders a folded multi-cycle collaboration stream 1`] = `
 "Collab stream — goal: live non-Hold FIX/US/REFACTOR
 🧭 supervisor: codex

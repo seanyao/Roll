@@ -66,6 +66,7 @@ export * from "./supervisor/observe.js";
 export * from "./supervisor/advise.js";
 export * from "./supervisor/scheduler.js";
 export * from "./supervisor/live-board.js";
+export * from "./supervisor/delivery-run-board.js";
 export * from "./supervisor/repair-evidence.js";
 export * from "./supervisor/agent-health.js";
 export * from "./supervisor/journal.js";
