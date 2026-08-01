@@ -160,6 +160,11 @@ function scrubAll(s: string, dir: string, delegId?: string): string {
   return scrubId(r);
 }
 
+/** JSON-mode banners precede the protocol error record on stderr. */
+function parseStderrJsonTail(stderr: string): Record<string, unknown> {
+  return JSON.parse(stderr.trim().split("\n").at(-1)!) as Record<string, unknown>;
+}
+
 // ── Resolution template helper ───────────────────────────────────────────────
 
 function writeResolutionTemplate(projectDir: string, storyId: string, presetId: string, name?: string): string {
@@ -418,7 +423,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       "--json",
     ], dir);
     expect(r.code).toBe(1);
-    const err = JSON.parse(r.stderr);
+    const err = parseStderrJsonTail(r.stderr);
     expect(err.error).toBe("cycle_rejected");
 
     // No frame, no lease, no events
@@ -755,7 +760,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
     const dir = setupMinimalProject("US-DELTA-VAL", "delta-team");
     const r = tsRunCwd(["validate", "--delegation", "nonexistent-id", "--stage", "designer", "--json"], dir);
     expect(r.code).toBe(1);
-    const err = JSON.parse(r.stderr);
+    const err = parseStderrJsonTail(r.stderr);
     expect(err.error).toBe("delegation_not_found");
   });
 
@@ -874,7 +879,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(bad), "utf8");
     const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(r2.code).toBe(1);
-    expect(JSON.parse(r2.stderr).error).toBe("role_write_violation");
+    expect(parseStderrJsonTail(r2.stderr).error).toBe("role_write_violation");
     // The block is recorded as an event, with the specific reason.
     const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n");
     const last = JSON.parse(events[events.length - 1]!);
@@ -902,7 +907,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest("builder")), "utf8");
     const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(r2.code).toBe(1);
-    expect(JSON.parse(r2.stderr).error).toBe("artifact_invalid");
+    expect(parseStderrJsonTail(r2.stderr).error).toBe("artifact_invalid");
   });
 
   it("validate invokes injected validator seam (BLOCK-3)", () => {
@@ -1024,8 +1029,11 @@ describe("US-DELTA-003 — conclude", () => {
       "conclude", "--delegation", delegationId, "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err = JSON.parse(r2.stderr);
+    const err = parseStderrJsonTail(r2.stderr);
     expect(err.error).toBe("terminal_path_unselected");
+    expect(r2.stderr).toContain("Delta Team concluded");
+    expect(r2.stderr).toContain("blocked");
+    expect(r2.stderr).toContain("not owner-approved");
 
     // Verify delta:blocked event was appended
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
@@ -1451,6 +1459,62 @@ describe("US-DELTA-003 — conclude", () => {
 // ── Snapshot tests ──────────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — CLI snapshots", () => {
+  it("US-DELTA-010: prepare, successful validate, and conclude share a terminal phase banner", () => {
+    const dir = setupMinimalProject("US-DELTA-PHASE-CAPTURE", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-PHASE-CAPTURE", "local-preset");
+    const prepared = tsRunCwd([
+      "prepare", "US-DELTA-PHASE-CAPTURE",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+
+    const stageDir = join(dir, ".roll", "features", "delta-team", "US-DELTA-PHASE-CAPTURE",
+      `delta-${delegationId}`, "role-artifacts", "designer");
+    mkdirSync(stageDir, { recursive: true });
+    writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest()), "utf8");
+
+    const validated = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    expect(validated.code).toBe(0);
+    expect(validated.stdout).toBe(JSON.stringify({ ok: true, delegationId, stage: "designer", verdict: "allow" }) + "\n");
+
+    const concluded = tsRunCwd([
+      "conclude", "--delegation", delegationId,
+      "--delivery-disposition", "owner_continue", "--json",
+    ], dir);
+    expect(concluded.code).toBe(0);
+    expect(concluded.stdout).toBe(JSON.stringify({
+      ok: true,
+      delegationId,
+      storyId: "US-DELTA-PHASE-CAPTURE",
+      outcome: "handoff_ready",
+      terminalBinding: "handoff_only",
+      deliveryDisposition: "owner_continue",
+    }) + "\n");
+
+    expect(scrubAll([prepared.stderr, validated.stderr, concluded.stderr].join("\n"), dir, delegationId)).toMatchSnapshot();
+  });
+
+  it("US-DELTA-010: a blocked validate banner remains on stderr while JSON stdout stays empty", () => {
+    const dir = setupMinimalProject("US-DELTA-PHASE-BLOCKED", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-PHASE-BLOCKED", "local-preset");
+    const prepared = tsRunCwd([
+      "prepare", "US-DELTA-PHASE-BLOCKED",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+
+    const validated = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    expect(validated.code).toBe(1);
+    expect(validated.stdout).toBe("");
+    expect(JSON.parse(validated.stderr.trim().split("\n").at(-1)!).error).toBe("artifact_invalid");
+    expect(scrubAll(validated.stderr, dir, delegationId)).toMatchSnapshot();
+  });
+
   it("US-DELTA-009: prepare prints the persisted team banner on stderr without changing JSON stdout", () => {
     const dir = setupMinimalProject("US-DELTA-BANNER", "delta-team");
     const resPath = join(dir, "resolution-banner.json");
@@ -2253,7 +2317,7 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
     try {
       const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "peer", "--json"], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       // Admission blocks unassigned roles with invalid_resolution
       expect(err.error).toBe("invalid_resolution");
       expect(err.detail).toContain("peer");
@@ -2658,8 +2722,8 @@ describe("US-DELTA-003 — ZH locale error messages", () => {
     const dir = setupMinimalProject("US-DELTA-ZH3", "delta-team");
     const r = tsRunCwd(["validate", "--delegation", "nonexistent", "--stage", "designer", "--json"], dir);
     expect(r.code).toBe(1);
-    expect(() => JSON.parse(r.stderr)).not.toThrow();
-    const err = JSON.parse(r.stderr);
+    expect(() => parseStderrJsonTail(r.stderr)).not.toThrow();
+    const err = parseStderrJsonTail(r.stderr);
     expect(err.ok).toBe(false);
     expect(typeof err.error).toBe("string");
   });
@@ -2694,8 +2758,8 @@ describe("US-DELTA-003 — ZH locale error messages", () => {
 
     const r2 = tsRunCwd(["conclude", "--delegation", delegationId, "--json"], dir);
     expect(r2.code).toBe(1);
-    expect(() => JSON.parse(r2.stderr)).not.toThrow();
-    const err = JSON.parse(r2.stderr);
+    expect(() => parseStderrJsonTail(r2.stderr)).not.toThrow();
+    const err = parseStderrJsonTail(r2.stderr);
     expect(err.error).toBe("terminal_path_unselected");
   });
 });
@@ -3375,7 +3439,7 @@ describe("US-DELTA-003 — conclude event append failure seam", () => {
       // Must NOT output success — code non-zero, stdout empty
       expect(r2.code).toBe(1);
       expect(r2.stdout).toBe("");
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       expect(err.ok).toBe(false);
       expect(err.error).toBe("event_append_failure");
 
@@ -3766,7 +3830,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
         "--stage", "designer", "--json",
       ], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       expect(err.error).toBe("terminal_path_unselected");
 
       // Exactly one delta:blocked event appended with typed reason
@@ -3815,7 +3879,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
         "--stage", "evaluator", "--json",
       ], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       // US-LOOP-110: the ORIGINAL block reason is propagated. This used to report
       // `host_supervisor_required`, which was never what happened — the delegation
       // was blocked by `artifact_invalid` and this check only refuses to advance.
@@ -3867,7 +3931,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
         "--stage", "designer", "--json",
       ], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       expect(err.error).toBe("identity_collision");
 
       // Exactly one delta:blocked event appended
@@ -3971,7 +4035,7 @@ describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", 
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err2 = JSON.parse(r2.stderr);
+    const err2 = parseStderrJsonTail(r2.stderr);
     expect(err2.error).toBe("lease_mismatch");
 
     // NO terminal event written
@@ -4307,7 +4371,7 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
       "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err2 = JSON.parse(r2.stderr);
+    const err2 = parseStderrJsonTail(r2.stderr);
     // Flag-as-bool flows into missing-disposition domain check → terminal_path_unselected
     expect(err2.error).toBe("terminal_path_unselected");
 

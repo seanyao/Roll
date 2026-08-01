@@ -2,11 +2,43 @@
 
 exports[`US-DELTA-003 — CLI snapshots > US-DELTA-009: prepare prints the persisted team banner on stderr without changing JSON stdout 1`] = `
 "▁▁▁ Delta Team assembling ▁▁▁
-  story     US-DELTA-BANNER
+  story        US-DELTA-BANNER
   ├ builder    deepseek · deepseek-v4-flash  ⚠ availability-fallback
   └ evaluator  openai · gpt-5.6-terra  preset-preference
-  diversity  deepseek ≠ openai  ✓
-  frame     <PROJECT>/.roll/features/delta-team/US-DELTA-BANNER/delta-<DELEGATION_ID>  lease held
+  diversity    deepseek ≠ openai  ✓
+  frame        <PROJECT>/.roll/features/delta-team/US-DELTA-BANNER/delta-<DELEGATION_ID>  lease held
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-DELTA-010: a blocked validate banner remains on stderr while JSON stdout stays empty 1`] = `
+"▁▁▁ Delta Team validating ▁▁▁
+  delegation  <DELEGATION_ID>
+  stage       designer
+  verdict     blocked
+  reason      artifact_invalid
+{"ok":false,"error":"artifact_invalid","detail":"Stage artifact not found for role 'designer' at <PROJECT>/.roll/features/delta-team/US-DELTA-PHASE-BLOCKED/delta-<DELEGATION_ID>/role-artifacts/designer/evaluation-manifest.json","role":"designer"}
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-DELTA-010: prepare, successful validate, and conclude share a terminal phase banner 1`] = `
+"▁▁▁ Delta Team assembling ▁▁▁
+  story        US-DELTA-PHASE-CAPTURE
+  ├ designer   pi · claude  user-pin
+  ├ builder    pi · claude  user-pin
+  └ evaluator  pi · claude  user-pin
+  diversity    undeclared heterogeneity
+  frame        <PROJECT>/.roll/features/delta-team/US-DELTA-PHASE-CAPTURE/delta-<DELEGATION_ID>  lease held
+
+▁▁▁ Delta Team validating ▁▁▁
+  delegation  <DELEGATION_ID>
+  stage       designer
+  verdict     allowed
+
+▁▁▁ Delta Team concluded ▁▁▁
+  delegation         <DELEGATION_ID>
+  story              US-DELTA-PHASE-CAPTURE
+  outcome            handoff_ready (handoff_only)
+  owner disposition  owner_continue
 "
 `;
 
@@ -26,7 +58,12 @@ exports[`US-DELTA-003 — CLI snapshots > status --json after prepare is scrubbe
 `;
 
 exports[`US-DELTA-003 — CLI snapshots > validate block on missing artifact is scrubbed and snapshotted 1`] = `
-"{"ok":false,"error":"artifact_invalid","detail":"Stage artifact not found for role 'designer' at <TMP>/roll-delta-test-<UUID>/.roll/features/delta-team/US-DELTA-SNAP-3/delta-<DELEGATION_ID>/role-artifacts/designer/evaluation-manifest.json","role":"designer"}
+"▁▁▁ Delta Team validating ▁▁▁
+  delegation  <UUID>
+  stage       designer
+  verdict     blocked
+  reason      artifact_invalid
+{"ok":false,"error":"artifact_invalid","detail":"Stage artifact not found for role 'designer' at <PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-3/delta-<DELEGATION_ID>/role-artifacts/designer/evaluation-manifest.json","role":"designer"}
 "
 `;
 

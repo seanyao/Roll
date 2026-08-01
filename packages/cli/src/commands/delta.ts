@@ -29,7 +29,7 @@ import {
   type PrepareInput,
 } from "../lib/delta-allocation.js";
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
-import { renderDeltaBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
+import { renderDeltaBanner, renderDeltaPhaseBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
 import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest } from "@roll/core";
 import type { DelegationResolution, DeltaArtifactManifest } from "@roll/spec";
 import { createHash } from "node:crypto";
@@ -60,6 +60,42 @@ function deltaBannerCopy(): DeltaBannerCopy {
     frame: T("delta.banner.frame"),
     leaseHeld: T("delta.banner.lease_held"),
   };
+}
+
+function validationPhaseBanner(
+  delegationId: string,
+  stage: DeltaRole,
+  verdict: "allowed" | "blocked",
+  reason?: string,
+): string {
+  return renderDeltaPhaseBanner({
+    title: T("delta.phase.validate.title"),
+    fields: [
+      { label: T("delta.phase.delegation"), value: delegationId },
+      { label: T("delta.phase.stage"), value: stage },
+      { label: T("delta.phase.verdict"), value: verdict === "allowed" ? T("delta.phase.allowed") : T("delta.phase.blocked") },
+      ...(reason === undefined ? [] : [{ label: T("delta.phase.reason"), value: reason }]),
+    ],
+  });
+}
+
+function concludePhaseBanner(input: {
+  readonly delegationId: string;
+  readonly storyId: string;
+  readonly outcome: string;
+  readonly disposition?: string;
+  readonly reason?: string;
+}): string {
+  return renderDeltaPhaseBanner({
+    title: T("delta.phase.conclude.title"),
+    fields: [
+      { label: T("delta.phase.delegation"), value: input.delegationId },
+      { label: T("delta.banner.story"), value: input.storyId },
+      { label: T("delta.phase.outcome"), value: input.outcome },
+      { label: T("delta.phase.disposition"), value: input.disposition ?? T("delta.phase.disposition_unselected") },
+      ...(input.reason === undefined ? [] : [{ label: T("delta.phase.reason"), value: input.reason }]),
+    ],
+  });
 }
 
 /** Read only the persisted resolution artifact before rendering any banner facts. */
@@ -688,6 +724,7 @@ function validateCommand(args: string[]): number {
   );
   if (delegationEvents.length === 0) {
     const msg = `Delegation not found: ${delegationId}`;
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "delegation_not_found")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
     } else {
@@ -703,6 +740,7 @@ function validateCommand(args: string[]): number {
   const preparedEvent = delegationEvents.find((e) => e.type === "delta:prepared") as Record<string, unknown> | undefined;
   if (!preparedEvent) {
     const msg = `Delegation ${delegationId}: no prepared event found`;
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "delegation_not_found")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
     } else {
@@ -715,6 +753,7 @@ function validateCommand(args: string[]): number {
   const cardDir = resolveExistingUniqueCardArchiveDir(cwd, storyId);
   if (!cardDir) {
     const msg = `Story ${storyId}: card directory not found`;
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "delegation_not_found")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
     } else {
@@ -726,6 +765,7 @@ function validateCommand(args: string[]): number {
   const frameDir = join(cardDir, `delta-${delegationId}`);
   if (!existsSync(frameDir)) {
     const msg = `Frame directory not found: ${frameDir}`;
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "delegation_not_found")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
     } else {
@@ -752,6 +792,7 @@ function validateCommand(args: string[]): number {
       detail: `Delegation ${delegationId} is terminal (outcome: ${(terminalEvent as Record<string, unknown>).outcome}); cannot validate further stages`,
       ts: now,
     });
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "terminal_path_unselected")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "terminal_path_unselected", detail: `Delegation is terminal`, role: stage }) + "\n");
     } else {
@@ -795,6 +836,7 @@ function validateCommand(args: string[]): number {
       detail,
       ts: now,
     });
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", propagated)}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: propagated, detail: `Delegation is blocked`, role: stage }) + "\n");
     } else {
@@ -817,6 +859,7 @@ function validateCommand(args: string[]): number {
       detail: `Stage '${stage}' is not a resolved role in delegation ${delegationId}. Resolved roles: ${resolvedRoles.join(", ")}`,
       ts: now,
     });
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "invalid_resolution")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "invalid_resolution", detail: `Stage '${stage}' not in resolved roles`, role: stage }) + "\n");
     } else {
@@ -839,6 +882,7 @@ function validateCommand(args: string[]): number {
       detail: `Stage '${stage}' has already been published for delegation ${delegationId}`,
       ts: now,
     });
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "identity_collision")}\n`);
     if (json) {
       process.stderr.write(JSON.stringify({ ok: false, error: "identity_collision", detail: `Stage '${stage}' already published`, role: stage }) + "\n");
     } else {
@@ -902,6 +946,8 @@ function validateCommand(args: string[]): number {
       ts: now,
     });
 
+    process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", liveReason)}\n`);
+
     if (json) {
       process.stderr.write(JSON.stringify({
         ok: false,
@@ -942,6 +988,8 @@ function validateCommand(args: string[]): number {
     identityProvenance: "host-attested" as const,
     ts: now,
   });
+
+  process.stderr.write(`${validationPhaseBanner(delegationId, stage, "allowed")}\n`);
 
   if (json) {
     process.stdout.write(JSON.stringify({
@@ -1076,6 +1124,13 @@ function concludeCommand(args: string[]): number {
       ts: now,
     });
 
+    process.stderr.write(`${concludePhaseBanner({
+      delegationId,
+      storyId,
+      outcome: T("delta.phase.blocked"),
+      reason: "terminal_path_unselected",
+    })}\n`);
+
     if (json) {
       process.stderr.write(JSON.stringify({
         ok: false,
@@ -1149,6 +1204,13 @@ function concludeCommand(args: string[]): number {
     return 1;
   }
 
+  process.stderr.write(`${concludePhaseBanner({
+    delegationId,
+    storyId,
+    outcome: "handoff_ready (handoff_only)",
+    disposition: disposition as string,
+  })}\n`);
+
   if (json) {
     process.stdout.write(JSON.stringify({
       ok: true,
@@ -1158,11 +1220,6 @@ function concludeCommand(args: string[]): number {
       terminalBinding: "handoff_only",
       deliveryDisposition: disposition,
     }) + "\n");
-  } else {
-    process.stdout.write(`Delegation concluded: ${delegationId}\n`);
-    process.stdout.write(`  Story: ${storyId}\n`);
-    process.stdout.write(`  Outcome: handoff_ready (handoff_only)\n`);
-    process.stdout.write(`  Disposition: ${disposition}\n`);
   }
 
   return 0;

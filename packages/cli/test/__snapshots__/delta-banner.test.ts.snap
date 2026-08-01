@@ -1,10 +1,29 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`US-DELTA-009 — Delta Team assembly banner > US-DELTA-010: renders every lifecycle phase with one aligned field layout 1`] = `
+"Delta Team assembling
+  story        US-DELTA-PHASE
+  ├ builder    codex · gpt-5.6-terra  user-pin
+  └ evaluator  cursor · cursor-grok  user-pin
+  diversity    codex ≠ cursor  ✓
+  frame        delta-456  lease held
+
+Delta Team validating
+  delegation  delta-456
+  stage       builder
+  verdict     allowed
+
+Delta Team concluded
+  story        US-DELTA-PHASE
+  outcome      handoff_ready (handoff_only)
+  disposition  owner_continue"
+`;
+
 exports[`US-DELTA-009 — Delta Team assembly banner > renders persisted roles and never claims diversity for a shared host and model 1`] = `
 "Delta Team assembling
-  story     US-DELTA-BANNER
+  story        US-DELTA-BANNER
   ├ builder    codex · gpt-5.6-terra  ⚠ availability-fallback
   └ evaluator  codex · gpt-5.6-terra  preset-preference
-  diversity  undeclared heterogeneity
-  frame     delta-123  lease held"
+  diversity    undeclared heterogeneity
+  frame        delta-123  lease held"
 `;

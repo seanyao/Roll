@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderDeltaBanner } from "../src/lib/delta-banner.js";
+import { renderDeltaBanner, renderDeltaPhaseBanner } from "../src/lib/delta-banner.js";
 
 const copy = {
   title: "Delta Team assembling",
@@ -40,5 +40,36 @@ describe("US-DELTA-009 — Delta Team assembly banner", () => {
     expect(output).toContain("⚠ availability-fallback");
     expect(output).toContain("undeclared heterogeneity");
     expect(output).not.toContain("✓");
+  });
+
+  it("US-DELTA-010: renders every lifecycle phase with one aligned field layout", () => {
+    const output = [
+      renderDeltaBanner({
+        storyId: "US-DELTA-PHASE",
+        roles: [
+          { role: "builder", roleInstanceId: "ri-builder", hostId: "codex", modelId: "gpt-5.6-terra", source: "user-pin", reasons: [] },
+          { role: "evaluator", roleInstanceId: "ri-evaluator", hostId: "cursor", modelId: "cursor-grok", source: "user-pin", reasons: [] },
+        ],
+        frameDir: "delta-456",
+      }, copy),
+      renderDeltaPhaseBanner({
+        title: "Delta Team validating",
+        fields: [
+          { label: "delegation", value: "delta-456" },
+          { label: "stage", value: "builder" },
+          { label: "verdict", value: "allowed" },
+        ],
+      }),
+      renderDeltaPhaseBanner({
+        title: "Delta Team concluded",
+        fields: [
+          { label: "story", value: "US-DELTA-PHASE" },
+          { label: "outcome", value: "handoff_ready (handoff_only)" },
+          { label: "disposition", value: "owner_continue" },
+        ],
+      }),
+    ].join("\n\n");
+
+    expect(output).toMatchSnapshot();
   });
 });

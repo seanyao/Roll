@@ -38,6 +38,50 @@ export const v3Catalog: Catalog = {
     en: "lease held",
     zh: "租约已持有",
   },
+  "delta.phase.validate.title": {
+    en: "▁▁▁ Delta Team validating ▁▁▁",
+    zh: "▁▁▁ Delta Team 正在验证 ▁▁▁",
+  },
+  "delta.phase.conclude.title": {
+    en: "▁▁▁ Delta Team concluded ▁▁▁",
+    zh: "▁▁▁ Delta Team 已收尾 ▁▁▁",
+  },
+  "delta.phase.delegation": {
+    en: "delegation",
+    zh: "委派",
+  },
+  "delta.phase.stage": {
+    en: "stage",
+    zh: "阶段",
+  },
+  "delta.phase.verdict": {
+    en: "verdict",
+    zh: "结论",
+  },
+  "delta.phase.allowed": {
+    en: "allowed",
+    zh: "通过",
+  },
+  "delta.phase.blocked": {
+    en: "blocked",
+    zh: "阻断",
+  },
+  "delta.phase.reason": {
+    en: "reason",
+    zh: "原因",
+  },
+  "delta.phase.outcome": {
+    en: "outcome",
+    zh: "结果",
+  },
+  "delta.phase.disposition": {
+    en: "owner disposition",
+    zh: "owner 决定",
+  },
+  "delta.phase.disposition_unselected": {
+    en: "not owner-approved",
+    zh: "尚未获 owner 批准",
+  },
 
   // `north.*` — terminal north-star panel (US-OBS-047). The calculation stays
   // in @roll/core; these strings only label the shared roll.north.v1 report.
