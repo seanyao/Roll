@@ -14,7 +14,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { claimHostDelegationLease, releaseHostDelegationLease, storyLeasesPath, atomicWriteJson, PrepareError, reconcileHostDeltaReservationClosures, recordHostDeltaAttestationClosure } from "../src/lib/delta-allocation.js";
 import { claimStoryLease, releaseStoryLease, readLeases, setLease, writeLeases, EventBus } from "@roll/core";
-import { deltaCommand, injectValidator, injectPrepareInterrupt, injectEventAppendFailure, injectEventBus } from "../src/commands/delta.js";
+import { deltaCommand, injectValidator, injectPrepareInterrupt, injectEventAppendFailure, injectEventBus, isBuilderValidationHeadAllowed } from "../src/commands/delta.js";
 import { injectIdGenerator } from "../src/lib/delta-allocation.js";
 import { renderState } from "../src/render.js";
 
@@ -776,7 +776,71 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
   });
 
-  it("US-LOOP-126 rejects main, external, symlink, wrong-repository, changed-head, and another-run Builder identities", async () => {
+  it("FIX-1500 admits only allocation bases or complete builder-validation checkpoints", () => {
+    const primary = { repositoryId: "fixture-primary", workspaceKey: "delta-checkpoint", relativeLocator: "delta-checkpoint", checkoutRef: { kind: "detached" as const, head: "base-primary" } };
+    const secondary = { repositoryId: "fixture-secondary", workspaceKey: "delta-checkpoint", relativeLocator: "delta-checkpoint.submodules/member", checkoutRef: { kind: "detached" as const, head: "base-secondary" } };
+    const workspace: ManagedWorkspaceSet = {
+      schema: 1,
+      runId: "delta-checkpoint",
+      storyId: "FIX-1500",
+      kind: "host_delta",
+      topology: "solo",
+      delegationId: "checkpoint",
+      members: [primary, secondary],
+    };
+    const checkpoint = (
+      reason: string,
+      expectedHeads: unknown[],
+      operationId?: string,
+      ts?: number,
+    ): Record<string, unknown> => ({
+      type: "worktree:release_requested",
+      runId: workspace.runId,
+      reason,
+      expectedHeads,
+      ...(operationId === undefined ? {} : { operationId }),
+      ...(ts === undefined ? {} : { ts }),
+    });
+    const completeHeads = [
+      { relativeLocator: primary.relativeLocator, head: "committed-primary" },
+      { relativeLocator: secondary.relativeLocator, head: "committed-secondary" },
+    ];
+    const operationId = `${workspace.runId}:builder-validation:${createHash("sha256").update(JSON.stringify(completeHeads)).digest("hex").slice(0, 16)}`;
+
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "base-primary", [])).toBe(true);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", [{ relativeLocator: primary.relativeLocator, head: "committed-primary" }]),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", [
+        { relativeLocator: primary.relativeLocator, head: "different-primary" },
+        { relativeLocator: secondary.relativeLocator, head: "committed-secondary" },
+      ]),
+    ])).toBe(false);
+    for (const reason of ["delivered", "abandoned"]) {
+      expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+        checkpoint(reason, completeHeads, operationId, 1),
+      ])).toBe(false);
+    }
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, `${operationId}-forged`, 1),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, operationId),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, operationId, 0),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, operationId, 1),
+    ])).toBe(true);
+  });
+
+  it("US-LOOP-126 admits checkpointed Builder commits and rejects foreign or forged identities", async () => {
     const prepare = async (storyId: string): Promise<{ dir: string; delegationId: string; workspace: ManagedWorkspaceSet; checkout: string }> => {
       const dir = setupMinimalProject(storyId, "delta-team");
       const prepared = await tsRunCwd(["prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", writeResolutionTemplate(dir, storyId, "local-preset"), "--json"], dir);
@@ -809,8 +873,15 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
 
     const changed = await prepare("US-DELTA-CHANGED-HEAD");
     execFileSync("git", ["-c", "user.email=delta@test.invalid", "-c", "user.name=Delta Test", "commit", "--allow-empty", "-m", "changed identity"], { cwd: changed.checkout, stdio: "ignore" });
+    // A committed Builder keeps the immutable allocation identity in its
+    // manifest. The write-ahead builder-validation checkpoint admits its
+    // actual detached HEAD after that identity preflight succeeds.
     writeManagedBuilderArtifact({ ...changed, storyId: "US-DELTA-CHANGED-HEAD", executionCwd: changed.checkout });
-    await rejected(changed);
+    expect((await tsRunCwd(["validate", "--delegation", changed.delegationId, "--stage", "builder", "--json"], changed.dir)).code).toBe(0);
+    const changedCheckpoint = readFileSync(join(changed.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
+    expect(changedCheckpoint?.expectedHeads).toEqual([{ relativeLocator: changed.workspace.members[0]!.relativeLocator, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: changed.checkout, encoding: "utf8" }).trim() }]);
 
     const released = await prepare("US-DELTA-RELEASED-HEAD");
     execFileSync("git", ["-c", "user.email=delta@test.invalid", "-c", "user.name=Delta Test", "commit", "--allow-empty", "-m", "released delivery"], { cwd: released.checkout, stdio: "ignore" });
@@ -824,12 +895,16 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       member: { ...released.workspace.members[0]!, checkoutRef: { kind: "detached", head: committedHead } },
       executionCwd: released.checkout,
     });
-    expect((await tsRunCwd(["validate", "--delegation", released.delegationId, "--stage", "builder", "--json"], released.dir)).code).toBe(0);
-    const checkpoint = readFileSync(join(released.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
+    // The manifest cannot replace its allocation base with the new commit.
+    // That forgery must fail before it writes a builder-validation checkpoint.
+    const leaseBeforeForgery = readLeases(storyLeasesPath(released.dir));
+    expect((await tsRunCwd(["validate", "--delegation", released.delegationId, "--stage", "builder", "--json"], released.dir)).code).toBe(1);
+    const releasedEvents = readFileSync(join(released.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
-    expect(checkpoint).toMatchObject({ runId: released.workspace.runId, reason: "builder_validation" });
-    expect(checkpoint?.expectedHeads).toEqual([{ relativeLocator: released.workspace.members[0]!.relativeLocator, head: committedHead }]);
+    const checkpoint = releasedEvents.find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
+    expect(checkpoint).toBeUndefined();
+    expect(releasedEvents.at(-1)).toMatchObject({ type: "delta:blocked", role: "builder", reason: "artifact_invalid" });
+    expect(readLeases(storyLeasesPath(released.dir))).toEqual(leaseBeforeForgery);
 
     const wrongRepository = await prepare("US-DELTA-WRONG-REPOSITORY");
     // Change the source repository's identity after allocation.  The checkout

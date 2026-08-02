@@ -616,9 +616,24 @@ function getEventBus(): EventBus {
  * Re-inspect the materialized member rather than trusting a manifest's copied
  * WorkspaceSet literals.  A member is valid only when it lives below the one
  * managed root, is registered by Git, belongs to this repository identity, and
- * is still on the detached commit recorded before allocation.
+ * is still detached. The Builder manifest must keep the immutable allocation
+ * identity; a later checkpoint, never the manifest, proves a committed head.
  */
-function independentlyVerifyWorkspaceMember(
+function allocationMemberForBinding(
+  workspace: ManagedWorkspaceSet,
+  member: NonNullable<DeltaArtifactManifest["workspaceMember"]>,
+) {
+  return workspace.members.find((candidate) =>
+    candidate.workspaceKey === member.workspaceKey
+    && candidate.relativeLocator === member.relativeLocator
+    && candidate.checkoutRef.kind === member.checkoutRef.kind
+    && candidate.checkoutRef.head === member.checkoutRef.head
+    && candidate.publishRef === member.publishRef,
+  );
+}
+
+/** Side-effect-free authentication performed before a Builder checkpoint. */
+function preflightVerifyWorkspaceMemberIdentity(
   projectPath: string,
   workspace: ManagedWorkspaceSet,
   member: NonNullable<DeltaArtifactManifest["workspaceMember"]>,
@@ -655,47 +670,11 @@ function independentlyVerifyWorkspaceMember(
         try { return realpathSync(line.slice("worktree ".length)) === canonicalCheckout; } catch { return false; }
       }));
     if (!registered || !existsSync(checkout)) return false;
-    const head = git(["rev-parse", "HEAD"], checkout);
-    // A Builder is required to commit.  The immutable WorkspaceSet retains the
-    // allocation base, while a durable release request records the committed
-    // member heads that may safely replace it.  Never admit an arbitrary newer
-    // checkout: it must be the manifest's observed detached head AND either the
-    // allocation base or an exact, complete release-request fact for this run.
-    const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
-    const requestedHead = (() => {
-      try {
-        const records = readFileSync(eventsPath, "utf8").split("\n").flatMap((line) => {
-          try { return line === "" ? [] : [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
-        });
-        const request = [...records].reverse().find((event) => {
-          if (event.type !== "worktree:release_requested" || event.runId !== workspace.runId || !Array.isArray(event.expectedHeads)) return false;
-          const expectedHeads = event.expectedHeads as unknown[];
-          if (expectedHeads.length !== workspace.members.length) return false;
-          const expectedLocators = expectedHeads.flatMap((expected) => {
-            if (typeof expected !== "object" || expected === null) return [];
-            const value = expected as Record<string, unknown>;
-            return typeof value.relativeLocator === "string" && typeof value.head === "string"
-              ? [value.relativeLocator]
-              : [];
-          });
-          return expectedLocators.length === workspace.members.length
-            && new Set(expectedLocators).size === workspace.members.length
-            && workspace.members.every((candidate) => expectedLocators.includes(candidate.relativeLocator));
-        });
-        if (request === undefined) return undefined;
-        const expected = (request.expectedHeads as Array<Record<string, unknown>>)
-          .find((entry) => entry.relativeLocator === member.relativeLocator)?.head;
-        return typeof expected === "string" ? expected : undefined;
-      } catch { return undefined; }
-    })();
-    if (head !== member.checkoutRef.head) return false;
-    const allocated = workspace.members.find((candidate) => candidate.relativeLocator === member.relativeLocator);
-    if (allocated === undefined || (head !== allocated.checkoutRef.head && head !== requestedHead)) return false;
     try { if (git(["symbolic-ref", "-q", "HEAD"], checkout) !== "") return false; } catch { /* detached HEAD returns non-zero */ }
     let repositoryId = "";
     try { repositoryId = git(["config", "--get", "remote.origin.url"], repositoryCwd); } catch { /* local identity below */ }
     if (repositoryId === "") repositoryId = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repositoryCwd).replace(/[^A-Za-z0-9._/-]/g, "_");
-    const expected = allocated;
+    const expected = allocationMemberForBinding(workspace, member);
     // A copied WorkspaceSet literal is insufficient: the Builder must attest
     // the canonical cwd it used, and that assertion must resolve to this exact
     // registered member (not main, a sibling run, or a symlink escape).
@@ -706,6 +685,94 @@ function independentlyVerifyWorkspaceMember(
     return expected !== undefined
       && expected.repositoryId === repositoryId
       && assertedCwd === canonicalCheckout;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checks whether an observed Builder head is either its immutable allocation
+ * base or a complete same-run Builder validation checkpoint. This is exported
+ * for protocol tests that need checkpoint combinations no command can produce.
+ */
+export function isBuilderValidationHeadAllowed(
+  workspace: ManagedWorkspaceSet,
+  member: NonNullable<DeltaArtifactManifest["workspaceMember"]>,
+  head: string,
+  events: readonly Record<string, unknown>[],
+): boolean {
+  const allocated = allocationMemberForBinding(workspace, member);
+  if (allocated === undefined) return false;
+  if (head === allocated.checkoutRef.head) return true;
+  return events.some((event) => {
+    if (
+      event.type !== "worktree:release_requested"
+      || event.reason !== "builder_validation"
+      || event.runId !== workspace.runId
+      || !Array.isArray(event.expectedHeads)
+      || event.expectedHeads.length !== workspace.members.length
+    ) return false;
+    const expectedHeads = event.expectedHeads.flatMap((expected) => {
+      if (typeof expected !== "object" || expected === null) return [];
+      const value = expected as Record<string, unknown>;
+      return typeof value.relativeLocator === "string" && typeof value.head === "string"
+        ? [{ relativeLocator: value.relativeLocator, head: value.head }]
+        : [];
+    });
+    if (
+      expectedHeads.length !== workspace.members.length
+      || new Set(expectedHeads.map((expected) => expected.relativeLocator)).size !== workspace.members.length
+      || !workspace.members.every((candidate) => expectedHeads.some((expected) => expected.relativeLocator === candidate.relativeLocator))
+    ) return false;
+    const operationId = `${workspace.runId}:builder-validation:${createHash("sha256").update(JSON.stringify(expectedHeads)).digest("hex").slice(0, 16)}`;
+    if (event.operationId !== operationId || typeof event.ts !== "number" || !Number.isSafeInteger(event.ts) || event.ts <= 0) return false;
+    return expectedHeads.find((expected) => expected.relativeLocator === member.relativeLocator)?.head === head;
+  });
+}
+
+function independentlyVerifyWorkspaceMember(
+  projectPath: string,
+  workspace: ManagedWorkspaceSet,
+  member: NonNullable<DeltaArtifactManifest["workspaceMember"]>,
+): boolean {
+  if (!preflightVerifyWorkspaceMemberIdentity(projectPath, workspace, member)) return false;
+  try {
+    const checkout = resolve(projectPath, ".roll", "loop", "worktrees", member.relativeLocator);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
+    const events = existsSync(eventsPath)
+      ? readFileSync(eventsPath, "utf8").split("\n").flatMap((line) => {
+        try { return line === "" ? [] : [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+      })
+      : [];
+    return isBuilderValidationHeadAllowed(workspace, member, head, events);
+  } catch {
+    return false;
+  }
+}
+
+function builderIdentityPreflight(input: DeltaValidationInput): boolean {
+  if (input.stage !== "builder" || input.workspace === undefined || !existsSync(input.artifactPath)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(input.manifestPath, "utf8")) as { schemaVersion?: unknown };
+    if (parsed.schemaVersion !== 2) return false;
+    const manifest = parsed as DeltaArtifactManifest;
+    if (
+      manifest.role !== "builder"
+      || manifest.delegationId !== input.delegationId
+      || manifest.storyId !== input.storyId
+      || manifest.trigger !== input.trigger
+      || manifest.topology !== input.topology
+      || manifest.qualityProfile !== input.qualityProfile
+      || manifest.runId !== input.workspace.runId
+      || manifest.workspaceMember === undefined
+    ) return false;
+    return allocationMemberForBinding(input.workspace, manifest.workspaceMember) !== undefined
+      && preflightVerifyWorkspaceMemberIdentity(process.cwd(), input.workspace, manifest.workspaceMember);
   } catch {
     return false;
   }
@@ -834,12 +901,7 @@ function defaultValidator(input: DeltaValidationInput): ValidatorResult {
     }
     if (input.stage === "builder") {
       const binding = manifest.workspaceMember;
-      const member = binding === undefined ? undefined : input.workspace.members.find((candidate) =>
-        candidate.workspaceKey === binding.workspaceKey
-        && candidate.relativeLocator === binding.relativeLocator
-        && candidate.checkoutRef.kind === binding.checkoutRef.kind
-        && candidate.publishRef === binding.publishRef,
-      );
+      const member = binding === undefined ? undefined : allocationMemberForBinding(input.workspace, binding);
       const independentlyVerified = binding !== undefined
         && independentlyVerifyWorkspaceMember(process.cwd(), input.workspace, binding);
       if (manifest.runId !== input.workspace.runId || member === undefined || !independentlyVerified) {
@@ -1204,10 +1266,10 @@ function validateCommand(args: string[]): number {
   // A normal detached Builder commits before it writes its evidence.  Record
   // the complete same-run member set before validating that evidence, rather
   // than requiring tests/hosts to forge a later destructive release event.
-  if (stage === "builder" && workspace !== undefined && _injectedValidator === null) {
-    // A malformed/attached/foreign member remains a validator failure with its
-    // precise existing diagnostic.  Only a successfully observed checkpoint is
-    // admitted as evidence for a committed detached Builder.
+  if (stage === "builder" && workspace !== undefined && _injectedValidator === null && builderIdentityPreflight(validationInput)) {
+    // Authenticate the immutable manifest-to-allocation identity before any
+    // checkpoint write. A later validator failure may block the artifact, but
+    // cannot mutate the workspace lifecycle or its Story lease.
     recordBuilderValidationHeads(cwd, eventsPath, workspace, now);
   }
 
