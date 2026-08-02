@@ -2,8 +2,14 @@
 
 ## Unreleased
 
-### 修复
-- **`roll setup` / `roll status` 不再漏掉带下划线的 agent 配置项。** 读取 `~/.roll/config.yaml` 的正则只认 `ai_<纯小写字母>`,`ai_kimi_code:` 这类带下划线的条目被静默丢弃 —— 后果是 `~/.kimi-code` 从不参与 conventions/skills 同步(新技能如 `roll-prime` 永远不会落进去,已删除技能的死链接也从不被清理),`roll status` 同样漏报。现在三处读取点全部接受下划线(FIX-1494)[setup]
+### 新功能
+- Delta 团队现在会直接显示谁在建造、谁在评审、当前走到哪一步。
+- 受监督交付现在统一管理工作区、子仓和交接状态，恢复与清理更安心。
+- `roll supervisor live` 现在把普通交付和 Delta 交付放在同一张看板。
+
+### 稳定性
+- 文档和代码不一致时，会在合并前提醒你，少等到发布后才发现说明过期。
+- `roll setup` 现在能正确识别名称里带下划线的 agent 配置。
 
 ## v4.731.3 — 2026-07-31
 
