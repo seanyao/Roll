@@ -34,7 +34,11 @@ function sandbox(): string {
 }
 
 function git(cwd: string, args: readonly string[]): string {
-  return execFileSync("git", [...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync(
+    "git",
+    ["-c", "user.name=Roll Test", "-c", "user.email=roll@example.test", ...args],
+    { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
 }
 
 function treeDigest(root: string): string {
