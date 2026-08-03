@@ -412,6 +412,61 @@ describe("inspectIssueInit", () => {
   });
 });
 
+describe("per-Issue repository base_ref", () => {
+  it("starts from the exact declared branch ref and keeps the first resolved commit pinned", async () => {
+    const f = fixture();
+    const pusher = join(f.root, "base-ref-pusher");
+    git(f.root, ["clone", "-q", f.remotes.sot1, pusher]);
+    git(pusher, ["config", "user.email", "roll@example.test"]);
+    git(pusher, ["config", "user.name", "Roll Test"]);
+    git(pusher, ["checkout", "-q", "-b", "release-base"]);
+    writeFileSync(join(pusher, "README.md"), "release base v1\n", "utf8");
+    git(pusher, ["add", "README.md"]);
+    git(pusher, ["commit", "-q", "-m", "release base v1"]);
+    const firstBase = git(pusher, ["rev-parse", "HEAD"]);
+    git(pusher, ["push", "-q", "origin", "release-base"]);
+
+    const contract: IssueStoryContract = {
+      storyId: f.contract.storyId,
+      repositories: [{
+        alias: "sot1",
+        access: "write",
+        requiredDelivery: true,
+        baseRef: "refs/heads/release-base",
+      }],
+    };
+    await applyIssueInit({
+      workspaceId: "ws-demo",
+      rollHome: f.rollHome,
+      workspaceRoot: f.workspaceRoot,
+      issueRoot: f.issueRoot,
+      contract,
+      bindings: f.bindings,
+      requirementManifests: [],
+    });
+    expect(git(join(f.issueRoot, "sot1"), ["rev-parse", "HEAD"])).toBe(firstBase);
+    expect(JSON.parse(readFileSync(join(f.issueRoot, "manifest.json"), "utf8"))).toMatchObject({
+      repositories: [{ alias: "sot1", baseRef: "refs/heads/release-base" }],
+    });
+
+    writeFileSync(join(pusher, "README.md"), "release base v2\n", "utf8");
+    git(pusher, ["add", "README.md"]);
+    git(pusher, ["commit", "-q", "-m", "release base v2"]);
+    git(pusher, ["push", "-q", "origin", "release-base"]);
+    const retried = await applyIssueInit({
+      workspaceId: "ws-demo",
+      rollHome: f.rollHome,
+      workspaceRoot: f.workspaceRoot,
+      issueRoot: f.issueRoot,
+      contract,
+      bindings: f.bindings,
+      requirementManifests: [],
+    });
+    expect(retried.outcome).toBe("reused");
+    expect(git(join(f.issueRoot, "sot1"), ["rev-parse", "HEAD"])).toBe(firstBase);
+  });
+});
+
 describe("applyIssueInit", () => {
   it("holds the owning repoId machine lock around worktree add and rollback mutations", async () => {
     const f = fixture();

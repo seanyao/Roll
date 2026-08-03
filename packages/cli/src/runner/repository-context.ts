@@ -103,6 +103,7 @@ export async function resolveRepositoryExecutionContext(
       ...(target.access === "write" ? { noChangePolicy: target.noChangePolicy } : {}),
       ...(workBranch === undefined ? {} : { workBranch }),
       ...(target.dependsOnRepo === undefined ? {} : { dependsOnRepo: target.dependsOnRepo }),
+      ...(target.baseRef === undefined ? {} : { baseRef: target.baseRef }),
       worktreePath: canonicalWorktree,
       baseSha: fact.baseSha,
       headSha: await worktreeHead(canonicalWorktree),

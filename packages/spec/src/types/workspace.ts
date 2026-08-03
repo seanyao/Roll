@@ -947,6 +947,8 @@ export type NoChangePolicy = "changes_required" | "no_change_allowed";
 interface IssueRepositoryTargetBase {
   readonly repoId: string;
   readonly alias: string;
+  /** Exact remote branch or tag ref used only for this Issue's first base pin. */
+  readonly baseRef?: string;
   readonly pathScope?: readonly string[];
   readonly dependsOnRepo?: string;
 }
@@ -984,6 +986,7 @@ export interface RepositoryExecutionContext {
   readonly noChangePolicy?: NoChangePolicy;
   readonly workBranch?: string;
   readonly dependsOnRepo?: string;
+  readonly baseRef?: string;
   readonly worktreePath: string;
   readonly baseSha: string;
   readonly headSha: string;
@@ -1068,6 +1071,7 @@ const workspaceRepositoryExecutionContextSchema = objectSchema(
     noChangePolicy: { type: "string", enum: ["changes_required", "no_change_allowed"] },
     workBranch: stringSchema,
     dependsOnRepo: stringSchema,
+    baseRef: stringSchema,
     worktreePath: stringSchema,
     baseSha: stringSchema,
     headSha: stringSchema,
@@ -1178,6 +1182,7 @@ const issueTargetCommonProperties = {
   repoId: stringSchema,
   alias: stringSchema,
   requiredDelivery: { type: "boolean" },
+  baseRef: stringSchema,
   pathScope: { type: "array", items: stringSchema },
   dependsOnRepo: stringSchema,
 } satisfies Readonly<Record<string, JsonSchema>>;
@@ -1463,6 +1468,16 @@ export function isSafeGitRef(value: string): boolean {
   return value.split("/").every((component) =>
     component !== "" && !component.startsWith(".") && !component.endsWith(".lock")
   );
+}
+
+/** Closed remote source ref accepted for an Issue-local base override. */
+export function isSafeRepositoryBaseRef(value: string): boolean {
+  const prefix = value.startsWith("refs/heads/")
+    ? "refs/heads/"
+    : value.startsWith("refs/tags/") ? "refs/tags/" : undefined;
+  if (prefix === undefined) return false;
+  const suffix = value.slice(prefix.length);
+  return suffix !== "" && isSafeGitRef(suffix);
 }
 
 const WORKFLOW_TOKENS = [
@@ -1901,7 +1916,7 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
   }
   errors.push(...unknownFieldErrors(
     value,
-    ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy", "workBranch", "pathScope", "dependsOnRepo"],
+    ["repoId", "alias", "access", "requiredDelivery", "noChangePolicy", "workBranch", "baseRef", "pathScope", "dependsOnRepo"],
     path,
   ));
   const repoId = requiredString(value, "repoId", `${path}.`, errors);
@@ -1914,6 +1929,10 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
 
   const noChangePolicy = value["noChangePolicy"];
   const workBranch = value["workBranch"];
+  const baseRef = optionalString(value, "baseRef", `${path}.`, errors);
+  if (baseRef !== undefined && !isSafeRepositoryBaseRef(baseRef)) {
+    errors.push({ code: "invalid_value", path: `${path}.baseRef`, message: "base ref must be an exact refs/heads/* or refs/tags/* remote ref" });
+  }
   if (access === "write" && noChangePolicy !== "changes_required" && noChangePolicy !== "no_change_allowed") {
     errors.push({ code: "invalid_value", path: `${path}.noChangePolicy`, message: "write target requires an explicit no-change policy" });
   }
@@ -1952,6 +1971,7 @@ function parseIssueTarget(value: unknown, index: number, errors: ContractError[]
     return undefined;
   }
   const optionalFields = {
+    ...(baseRef !== undefined && isSafeRepositoryBaseRef(baseRef) ? { baseRef } : {}),
     ...(pathScope !== undefined ? { pathScope } : {}),
     ...(dependsOnRepo !== undefined ? { dependsOnRepo } : {}),
   };

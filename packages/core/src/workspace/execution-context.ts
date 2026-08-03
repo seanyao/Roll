@@ -4,6 +4,7 @@ import {
   REPOSITORY_BINDING_V1,
   WORKSPACE_EXECUTION_CONTEXT_V1,
   WORKSPACE_MANIFEST_V1,
+  isSafeRepositoryBaseRef,
   parseWorkspaceContexts,
   type CycleRepositoryExecutionContext,
   type IssueManifest,
@@ -311,12 +312,13 @@ function validIssueTarget(value: unknown): boolean {
   if (!exactRecord(
     value,
     ["repoId", "alias", "access", "requiredDelivery"],
-    ["noChangePolicy", "workBranch", "pathScope", "dependsOnRepo"],
+    ["noChangePolicy", "workBranch", "baseRef", "pathScope", "dependsOnRepo"],
   )) return false;
   if (
     !nonEmptyString(value["repoId"]) || !nonEmptyString(value["alias"]) ||
     (value["access"] !== "read" && value["access"] !== "write") ||
     typeof value["requiredDelivery"] !== "boolean" ||
+    (value["baseRef"] !== undefined && (!nonEmptyString(value["baseRef"]) || !isSafeRepositoryBaseRef(value["baseRef"]))) ||
     (value["pathScope"] !== undefined && !stringArray(value["pathScope"])) ||
     (value["dependsOnRepo"] !== undefined && !nonEmptyString(value["dependsOnRepo"]))
   ) return false;
@@ -437,7 +439,7 @@ function validateContextSnapshot(
       "baseSha",
       "headSha",
       "commands",
-    ], ["noChangePolicy", "workBranch", "dependsOnRepo"])) {
+    ], ["noChangePolicy", "workBranch", "dependsOnRepo", "baseRef"])) {
       return { code: "repository_context_mismatch", message: `Workspace execution context repository ${repoId} has an invalid or open shape` };
     }
     const commands = repository["commands"];
@@ -458,6 +460,7 @@ function validateContextSnapshot(
         !nonEmptyString(repository["workBranch"])
       )) ||
       (repository["dependsOnRepo"] !== undefined && !nonEmptyString(repository["dependsOnRepo"])) ||
+      (repository["baseRef"] !== undefined && (!nonEmptyString(repository["baseRef"]) || !isSafeRepositoryBaseRef(repository["baseRef"]))) ||
       !nonEmptyString(repository["worktreePath"]) || repository["worktreePath"] !== join(issueRoot, repository["alias"]) ||
       !contained(issueRoot, repository["worktreePath"]) ||
       !nonEmptyString(repository["baseSha"]) || !validSha(repository["baseSha"]) ||

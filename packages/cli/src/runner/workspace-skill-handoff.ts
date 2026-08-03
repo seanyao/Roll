@@ -37,6 +37,7 @@ export function workspaceSkillHandoffEnvironment(
   return {
     ROLL_WORKSPACE_EXECUTION_CONTEXT: workspaceExecutionContextJson(context),
     ROLL_WORKSPACE: context.workspace.workspaceId,
+    ROLL_WORKSPACE_LOCK: context.workspace.workspaceId,
     ...(context.issue === undefined ? {} : { ROLL_STORY_ID: context.issue.storyId }),
   };
 }
@@ -67,6 +68,7 @@ export function prepareWorkspaceSkillHandoff(input: {
     `Story: ${input.context.issue?.storyId ?? "none"}`,
     `authorities: ${JSON.stringify(input.context.authorities)}`,
     "This frozen WorkspaceExecutionContextV1 is the only Workspace/Issue authority for this run.",
+    "The task is locked to this Workspace. `roll workspace create` is forbidden until a new host handoff replaces this context.",
     "Do not rediscover or replace Workspace/Issue authority from cwd; do not scan for another Workspace.",
     "Use authority paths from this context for backlog, features, design, evidence, runtime, and locks.",
     "Repository operations require an explicit repository selector; never choose the first repository.",

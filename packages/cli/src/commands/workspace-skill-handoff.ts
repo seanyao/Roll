@@ -253,12 +253,18 @@ export async function workspaceSkillHandoffCommand(args: readonly string[]): Pro
       environmentContext,
       promptBlock: prepared.skillBody.trimEnd(),
       context: prepared.context,
+      workspaceLock: context.workspace.workspaceId,
       cwd: prepared.cwd,
       ...(prepared.selectedRepository === undefined ? {} : { selectedRepository: prepared.selectedRepository }),
     }, parsed.json, prepared.skillBody.trimEnd());
   }
 
   if (loaded.route !== "workspace_target" && loaded.code !== "workspace_discovery_incomplete") {
+    return emitError(loaded.code, parsed.json);
+  }
+  if (parsed.workspace !== undefined) {
+    // An explicit owner/host selector is a task lock, not a soft discovery
+    // hint. Never turn failure to load that exact target into create-new.
     return emitError(loaded.code, parsed.json);
   }
   const discovery = loadWorkspaceDiscovery({ rollHome });

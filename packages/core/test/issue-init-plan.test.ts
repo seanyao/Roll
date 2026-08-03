@@ -14,6 +14,7 @@ repositories:
   - alias: sot1
     access: write
     required_delivery: true
+    base_ref: refs/tags/release-2026-08
   - alias: sot2
     access: write
     required_delivery: true
@@ -155,7 +156,7 @@ describe("parseIssueStoryContract", () => {
       value: {
         storyId: "US-XX1",
         repositories: [
-          { alias: "sot1", access: "write", requiredDelivery: true },
+          { alias: "sot1", access: "write", requiredDelivery: true, baseRef: "refs/tags/release-2026-08" },
           { alias: "sot2", access: "write", requiredDelivery: true, dependsOnRepo: "sot1" },
           { alias: "sot3", access: "read", requiredDelivery: false },
         ],
@@ -169,6 +170,7 @@ describe("parseIssueStoryContract", () => {
     ["mismatched id", storySpec.replace("id: US-XX1", "id: US-OTHER"), "identity_mismatch"],
     ["empty repositories", storySpec.replace(/repositories:[\s\S]*?(?=\n---)/, "repositories: []\n"), "invalid_value"],
     ["unknown field", storySpec.replace("access: write", "access: write\n    weird_field: yes"), "unknown_field"],
+    ["unsafe base ref", storySpec.replace("refs/tags/release-2026-08", "main"), "invalid_value"],
   ])("rejects %s", (_name, text, code) => {
     const parsed = parseIssueStoryContract(text, { storyId: "US-XX1" });
     expect(parsed).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ code })]) });
@@ -195,7 +197,7 @@ describe("resolveIssueInitPlan", () => {
           storyId: "US-XX1",
           requirements: [{ provider: "jira", ref: "SOT-15499" }],
           repositories: [
-            { repoId: "repo-sot1", alias: "sot1", access: "write", workBranch: "roll/ws-demo/US-XX1/sot1" },
+            { repoId: "repo-sot1", alias: "sot1", access: "write", baseRef: "refs/tags/release-2026-08", workBranch: "roll/ws-demo/US-XX1/sot1" },
             { repoId: "repo-sot2", alias: "sot2", access: "write", workBranch: "roll/ws-demo/US-XX1/sot2", dependsOnRepo: "sot1" },
             { repoId: "repo-sot3", alias: "sot3", access: "read" },
           ],

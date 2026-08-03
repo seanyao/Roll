@@ -135,6 +135,9 @@ function emitResult(
 
 export async function workspaceCreateCommand(args: string[]): Promise<number> {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) return emitHelp();
+  if ((process.env["ROLL_WORKSPACE_LOCK"] ?? "").trim() !== "") {
+    return emitError("workspace_locked", args.includes("--json"));
+  }
   const parsedArgs = parseArgs(args);
   if (!parsedArgs.ok) return emitError("invalid_arguments", parsedArgs.json);
   let text: string;

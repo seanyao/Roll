@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -12,6 +12,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   normalizeRepositoryRemote,
   parseRepositoryBinding,
+  isSafeRepositoryBaseRef,
   type RepositoryBinding,
 } from "@roll/spec";
 import { git, isImmutableGitObjectId, type GitExecutionOptions, type GitResult } from "./git.js";
@@ -91,6 +92,8 @@ export type RepositoryCacheGitRunner = (
 
 export interface EnsureRepositoryCacheInput extends ResolveRepositoryCacheIdentityInput {
   readonly integrationRefspec: string;
+  /** Optional exact Issue-local remote source ref; never changes the shared binding. */
+  readonly baseRef?: string;
   readonly runGit?: RepositoryCacheGitRunner;
   readonly lockTimeoutMs?: number;
   readonly lockRetryMs?: number;
@@ -228,6 +231,15 @@ function parseIntegrationRefspec(value: string): ParsedIntegrationRefspec {
     );
   }
   return { value, branch, destination };
+}
+
+/** Stable private cache destination for one exact Issue-local remote base ref. */
+export function repositoryBaseRefDestination(baseRef: string): string {
+  if (!isSafeRepositoryBaseRef(baseRef)) {
+    throw new RepositoryCacheError("unsupported_refspec", "Issue base ref must be an exact refs/heads/* or refs/tags/* remote ref");
+  }
+  const digest = createHash("sha256").update(baseRef).digest("hex");
+  return `refs/roll/base-refs/${digest}`;
 }
 
 function assertSafeExistingPath(path: string, expected: "directory" | "file-or-directory"): void {
@@ -447,6 +459,28 @@ async function fetchAndResolveBaseSha(
   return baseSha;
 }
 
+async function fetchAndResolveExactBaseRef(
+  identity: RepositoryCacheIdentity,
+  baseRef: string,
+  runGit: RepositoryCacheGitRunner,
+  guard: RepositoryCacheGuard,
+): Promise<string> {
+  const destination = repositoryBaseRefDestination(baseRef);
+  await checkedGit(
+    runGit,
+    ["fetch", "--no-tags", identity.transportRemote, `+${baseRef}:${destination}`],
+    identity.cachePath,
+    "Issue base ref fetch",
+    guard,
+  );
+  const resolved = await checkedGit(runGit, ["rev-parse", `${destination}^{commit}`], identity.cachePath, "Issue base resolve", guard);
+  const baseSha = resolved.stdout.trim();
+  if (!isImmutableGitObjectId(baseSha)) {
+    throw new RepositoryCacheError("git_failure", "Issue base resolve did not return an immutable commit ID");
+  }
+  return baseSha;
+}
+
 async function createCache(
   identity: RepositoryCacheIdentity,
   refspec: ParsedIntegrationRefspec,
@@ -499,6 +533,7 @@ export async function ensureRepositoryCache(
 ): Promise<RepositoryCacheResult> {
   const identity = resolveRepositoryCacheIdentity(input);
   const refspec = parseIntegrationRefspec(input.integrationRefspec);
+  if (input.baseRef !== undefined) repositoryBaseRefDestination(input.baseRef);
   if (refspec.branch !== identity.integrationBranch) {
     throw new RepositoryCacheError("unsupported_refspec", "Integration refspec must match the repository binding branch");
   }
@@ -553,6 +588,9 @@ export async function ensureRepositoryCache(
       rmSync(identity.cachePath, { recursive: true, force: true });
       guard();
       baseSha = await createCache(identity, refspec, runGit, guard);
+    }
+    if (input.baseRef !== undefined) {
+      baseSha = await fetchAndResolveExactBaseRef(identity, input.baseRef, runGit, guard);
     }
     writeCacheIdentity(identity, now(), guard);
     guard();

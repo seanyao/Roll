@@ -290,6 +290,7 @@ export const v3Catalog: Catalog = {
   "workspace.create.error.next_action": { en: "Next: %s", zh: "下一步：%s" },
   "workspace.create.error.invalid_arguments": { en: "Usage: roll workspace create <id> --config <file> [--authorization <file>] [--check] [--json]", zh: "用法：roll workspace create <ID> --config <文件> [--authorization <文件>] [--check] [--json]" },
   "workspace.create.error.config_read_failed": { en: "Workspace create config could not be read", zh: "无法读取工作区创建配置" },
+  "workspace.create.error.workspace_locked": { en: "This task is locked to an existing Workspace; request a new host handoff before creating another", zh: "当前任务已锁定到现有工作区；创建其他工作区前必须请求新的 host handoff" },
   "workspace.create.error.authorization_read_failed": { en: "Workspace create authorization could not be read", zh: "无法读取工作区创建授权" },
   "workspace.create.error.invalid_apply_authorization": { en: "Workspace create authorization must be an exact owner-approved preview", zh: "工作区创建授权必须精确对应 owner 已批准的预览" },
   "workspace.create.error.apply_authorization_required": { en: "Workspace create apply requires an exact preview authorization", zh: "工作区创建应用需要精确的预览授权" },

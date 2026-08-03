@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import {
   ISSUE_MANIFEST_V1,
+  isSafeRepositoryBaseRef,
   type ContractErrorCode,
   type IssueManifest,
   type IssueRepositoryTarget,
@@ -14,6 +15,7 @@ export interface IssueStoryContractTarget {
   readonly alias: string;
   readonly access: "read" | "write";
   readonly requiredDelivery: boolean;
+  readonly baseRef?: string;
   readonly dependsOnRepo?: string;
 }
 
@@ -181,7 +183,7 @@ export function parseIssueStoryContract(
         errors.push({ code: "invalid_type", path: `repositories[${index}]`, message: "repository entry must be an object" });
         continue;
       }
-      const unknown = exactKeys(entry, ["alias", "access", "required_delivery", "depends_on_repo"]);
+      const unknown = exactKeys(entry, ["alias", "access", "required_delivery", "base_ref", "depends_on_repo"]);
       if (unknown.length > 0) {
         errors.push({ code: "unknown_field", path: `repositories[${index}].${unknown[0]}`, message: "unknown repository field" });
         continue;
@@ -205,10 +207,16 @@ export function parseIssueStoryContract(
         errors.push({ code: "invalid_value", path: `repositories[${index}].depends_on_repo`, message: "depends_on_repo must be a non-empty string" });
         continue;
       }
+      const baseRef = entry["base_ref"];
+      if (baseRef !== undefined && (!nonEmptyString(baseRef) || !isSafeRepositoryBaseRef(baseRef))) {
+        errors.push({ code: "invalid_value", path: `repositories[${index}].base_ref`, message: "base_ref must be an exact refs/heads/* or refs/tags/* remote ref" });
+        continue;
+      }
       repositories.push({
         alias: entry["alias"],
         access,
         requiredDelivery,
+        ...(baseRef === undefined ? {} : { baseRef }),
         ...(dependsOnRepo === undefined ? {} : { dependsOnRepo }),
       });
     }
@@ -369,7 +377,7 @@ export function resolveIssueInitPlan(
       : null;
     repositories.push(
       declared.access === "read"
-        ? { repoId: binding.repoId, alias: declared.alias, access: "read", requiredDelivery: false, ...(declared.dependsOnRepo === undefined ? {} : { dependsOnRepo: declared.dependsOnRepo }) }
+        ? { repoId: binding.repoId, alias: declared.alias, access: "read", requiredDelivery: false, ...(declared.baseRef === undefined ? {} : { baseRef: declared.baseRef }), ...(declared.dependsOnRepo === undefined ? {} : { dependsOnRepo: declared.dependsOnRepo }) }
         : {
           repoId: binding.repoId,
           alias: declared.alias,
@@ -377,6 +385,7 @@ export function resolveIssueInitPlan(
           requiredDelivery: declared.requiredDelivery,
           noChangePolicy: declared.requiredDelivery ? "changes_required" : "no_change_allowed",
           workBranch: workBranch as string,
+          ...(declared.baseRef === undefined ? {} : { baseRef: declared.baseRef }),
           ...(declared.dependsOnRepo === undefined ? {} : { dependsOnRepo: declared.dependsOnRepo }),
         },
     );

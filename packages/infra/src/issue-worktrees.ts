@@ -31,6 +31,7 @@ import {
 import {
   ensureRepositoryCache,
   inspectRepositoryCache,
+  repositoryBaseRefDestination,
   resolveRepositoryCacheIdentity,
   withRepositoryCacheLock,
   type RepositoryCacheProbeState,
@@ -474,8 +475,11 @@ function integrationRefspecFor(binding: RepositoryBinding): string {
  *  value is the only truth (see {@link readPinnedTargetFacts}) — this
  *  function must never be consulted for an already-pinned target, since the
  *  shared cache's current ref can have advanced independently. */
-async function readCachedBaseSha(cachePath: string, integrationBranch: string): Promise<string | null> {
-  const result = await git(["rev-parse", `refs/remotes/origin/${integrationBranch}`], cachePath);
+async function readCachedBaseSha(cachePath: string, integrationBranch: string, baseRef?: string): Promise<string | null> {
+  const ref = baseRef === undefined
+    ? `refs/remotes/origin/${integrationBranch}`
+    : repositoryBaseRefDestination(baseRef);
+  const result = await git(["rev-parse", `${ref}^{commit}`], cachePath);
   return result.code === 0 ? result.stdout.trim() : null;
 }
 
@@ -510,13 +514,14 @@ async function resolveExpectedTargetFacts(
   access: "read" | "write",
   workBranch: string | null,
   integrationBranch: string,
+  baseRef?: string,
 ): Promise<{ readonly facts: ExpectedWorktreeFacts; readonly isPinned: boolean }> {
   const pinned = readPinnedTargetFacts(issueRoot, alias, { workspaceId, storyId, repoId });
   if (pinned !== undefined) {
     const objectPresent = await pinnedBaseShaExistsInCache(cachePath, pinned.baseSha);
     return { facts: { access, workBranch, baseSha: objectPresent ? pinned.baseSha : null }, isPinned: true };
   }
-  const preview = await readCachedBaseSha(cachePath, integrationBranch);
+  const preview = await readCachedBaseSha(cachePath, integrationBranch, baseRef);
   return { facts: { access, workBranch, baseSha: preview }, isPinned: false };
 }
 
@@ -776,7 +781,7 @@ export async function inspectIssueInit(input: InspectIssueInitInput): Promise<Is
     let isPinned: boolean;
     try {
       if (cacheState === "compatible") {
-        const resolved = await resolveExpectedTargetFacts(input.issueRoot, identity.cachePath, input.workspaceId, input.contract.storyId, declared.alias, binding.repoId, declared.access, workBranch, binding.integrationBranch);
+        const resolved = await resolveExpectedTargetFacts(input.issueRoot, identity.cachePath, input.workspaceId, input.contract.storyId, declared.alias, binding.repoId, declared.access, workBranch, binding.integrationBranch, declared.baseRef);
         expected = resolved.facts;
         isPinned = resolved.isPinned;
       } else {
@@ -1031,7 +1036,7 @@ async function applyIssueInitUnlocked(input: ApplyIssueInitInput, deps: ApplyIss
     let isPinned: boolean;
     try {
       if (cacheState === "compatible") {
-        const resolved = await resolveExpectedTargetFacts(input.issueRoot, identity.cachePath, input.workspaceId, input.contract.storyId, declared.alias, binding.repoId, declared.access, workBranch, binding.integrationBranch);
+        const resolved = await resolveExpectedTargetFacts(input.issueRoot, identity.cachePath, input.workspaceId, input.contract.storyId, declared.alias, binding.repoId, declared.access, workBranch, binding.integrationBranch, declared.baseRef);
         expected = resolved.facts;
         isPinned = resolved.isPinned;
       } else {
@@ -1076,13 +1081,14 @@ async function applyIssueInitUnlocked(input: ApplyIssueInitInput, deps: ApplyIss
     const binding = bindingsByAlias.get(declared.alias);
     if (binding === undefined) continue;
     try {
+      const pinned = readPinnedTargetFacts(input.issueRoot, declared.alias, { workspaceId: input.workspaceId, storyId: input.contract.storyId, repoId: binding.repoId });
       const cache = await ensureRepositoryCache({
         binding,
         rollHome: input.rollHome,
         integrationRefspec: integrationRefspecFor(binding),
+        ...(pinned === undefined && declared.baseRef !== undefined ? { baseRef: declared.baseRef } : {}),
         onLockAcquired: () => deps.onLockAcquired?.("repository", declared.alias),
       });
-      const pinned = readPinnedTargetFacts(input.issueRoot, declared.alias, { workspaceId: input.workspaceId, storyId: input.contract.storyId, repoId: binding.repoId });
       if (pinned !== undefined) {
         const objectPresent = await pinnedBaseShaExistsInCache(cache.cachePath, pinned.baseSha);
         if (!objectPresent) {

@@ -22,7 +22,7 @@ interface CreateResult {
   readonly steps: readonly CreateStep[];
 }
 const roots: string[] = [];
-const ENV_KEYS = ["HOME", "ROLL_HOME", "ROLL_LANG", "NO_COLOR"] as const;
+const ENV_KEYS = ["HOME", "ROLL_HOME", "ROLL_LANG", "NO_COLOR", "ROLL_WORKSPACE_LOCK"] as const;
 
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -144,6 +144,23 @@ beforeEach(() => registerAll());
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("US-WS-006 roll workspace create", () => {
+  it("refuses create and check while an inherited task is locked to an existing Workspace", async () => {
+    const f = fixture();
+    try {
+      process.env["ROLL_WORKSPACE_LOCK"] = "roll";
+      const result = await run(["workspace", "create", "ws-demo", "--config", f.config, "--check", "--json"], f);
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        schema: "roll.workspace-create-error/v1",
+        error: { code: "workspace_locked" },
+      });
+      expect(tree(f.home)).toEqual(expect.arrayContaining([expect.stringMatching(/^f:workspace-create\.yaml:/u)]));
+      expect(existsSync(f.workspace)).toBe(false);
+    } finally {
+      delete process.env["ROLL_WORKSPACE_LOCK"];
+    }
+  });
+
   it("runs check, first apply and idempotent second apply against one local file remote", async () => {
     const f = fixture();
     const before = tree(f.home);

@@ -323,6 +323,38 @@ describe("US-WS-029 agent Workspace clarification host", () => {
     }
   });
 
+  it("treats an explicit Workspace selector as a lock and never offers create-new when that target cannot load", async () => {
+    const fixture = isolatedAuthorityFixture();
+    const originalCwd = process.cwd();
+    const errors: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    vi.stubEnv("HOME", fixture.home);
+    vi.stubEnv("ROLL_HOME", fixture.rollHome);
+    vi.stubEnv("ROLL_WORKSPACE", "");
+    process.stderr.write = ((chunk: string | Uint8Array) => (errors.push(String(chunk)), true)) as typeof process.stderr.write;
+    try {
+      process.chdir(fixture.home);
+      const status = await workspaceCommand([
+        "handoff",
+        "--skill", "roll-design",
+        "--operation", "design",
+        "--requirement", "review the complete workspace feature",
+        "--workspace", "missing-ws",
+        "--json",
+      ]);
+      expect(status).toBe(1);
+      const failure = JSON.parse(errors.join(""));
+      expect(failure).toMatchObject({ route: "error", stopped: true });
+      expect(JSON.stringify(failure)).not.toContain("create_new");
+      expect(JSON.stringify(failure)).not.toContain("roll workspace create");
+    } finally {
+      process.stderr.write = originalWrite;
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+      fixture.cleanup();
+    }
+  });
+
   it("asks for confirmation when owner text suggests one active Workspace ID", async () => {
     const fixture = isolatedAuthorityFixture();
     const originalCwd = process.cwd();

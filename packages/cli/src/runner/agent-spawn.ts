@@ -846,6 +846,7 @@ function childEnv(opts: AgentSpawnOptions): NodeJS.ProcessEnv {
   for (const key of [
     "ROLL_WORKSPACE_EXECUTION_CONTEXT",
     "ROLL_WORKSPACE",
+    "ROLL_WORKSPACE_LOCK",
     "ROLL_STORY_ID",
     "ROLL_REPOSITORY_ID",
     "ROLL_REPOSITORY_ALIAS",

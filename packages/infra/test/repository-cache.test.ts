@@ -117,6 +117,36 @@ async function runCacheWorker(
 }
 
 describe("RepositoryCache identity and path safety", () => {
+  it("fetches an exact annotated tag as an Issue-local base without changing the Workspace integration branch", async () => {
+    const rollHome = sandbox();
+    const upstream = localRemote(sandbox(), "issue-base-tag");
+    const taggedCommit = runGit(upstream.source, ["rev-parse", "HEAD"]);
+    runGit(upstream.source, ["tag", "-a", "release-v1", "-m", "release v1"]);
+    runGit(upstream.source, ["push", "-q", upstream.remote, "refs/tags/release-v1"]);
+    const currentMain = advanceRemote(upstream);
+
+    const resolved = await ensureRepositoryCache({
+      rollHome,
+      binding: binding(upstream.remote),
+      integrationRefspec: "+refs/heads/main:refs/remotes/origin/main",
+      baseRef: "refs/tags/release-v1",
+    });
+    expect(resolved.baseSha).toBe(taggedCommit);
+    expect(resolved.baseSha).not.toBe(currentMain);
+  });
+
+  it("rejects ambiguous short Issue base refs before cache mutation", async () => {
+    const rollHome = sandbox();
+    const upstream = localRemote(sandbox(), "unsafe-issue-base");
+    await expect(ensureRepositoryCache({
+      rollHome,
+      binding: binding(upstream.remote),
+      integrationRefspec: "+refs/heads/main:refs/remotes/origin/main",
+      baseRef: "release-v1",
+    })).rejects.toMatchObject({ code: "unsupported_refspec" });
+    expect(existsSync(join(rollHome, "repos"))).toBe(false);
+  });
+
   it("keeps raw origin identity stable while Git insteadOf rewrites only the fetch transport", async () => {
     const rollHome = sandbox();
     const upstream = localRemote(sandbox(), "transport-rewrite");
