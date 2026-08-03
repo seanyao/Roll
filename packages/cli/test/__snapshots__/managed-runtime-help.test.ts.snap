@@ -58,14 +58,20 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
 
   Host-guided delegation lifecycle commands (protocol-only; no agent spawning).
 
-  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]
     Atomically reserve delivery, allocate the managed workspace, and create the immutable frame.
+    --continuation-run only takes over a task that was explicitly redelegated to <name>
+    (owner_redelegate --continuation-run <name>): it verifies the recorded redelegation,
+    creates a fresh standard delta run, and swaps the occupancy atomically — it never
+    touches any other task.
 
   roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
     Validate a role-stage submission through the protocol-validator boundary.
 
-  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--json]
+  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
+    owner_redelegate transfers the reservation to the named successor; the successor
+    takes over with roll delta prepare --continuation-run <name>.
 
   roll delta status [--story <id>|--delegation <id>] [--json]
     Read-only delegation status projection from event truth.
@@ -143,14 +149,19 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
 
   宿主导引的委派生命周期命令（仅协议层；不启任何 agent）。
 
-  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--json]
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]
     原子预留交付、分配受管工作区，并创建不可变帧。
+    --continuation-run 只接手明确转交给 <name> 的任务（owner_redelegate --continuation-run
+    <name>）：它会核对已落盘的转交记录，创建全新的标准 delta 运行，并原子替换占用——
+    绝不触碰其他任务。
 
   roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
     经过协议校验边界验证角色阶段提交。
 
-  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--json]
+  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。
+    owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
+    --continuation-run <name> 接手。
 
   roll delta status [--story <id>|--delegation <id>] [--json]
     从事件真相只读投影委派状态。

@@ -222,7 +222,7 @@ async function prepareCommand(args: string[]): Promise<number> {
     return 1;
   }
 
-  const knownFlags = new Set(["trigger", "topology", "profile", "preset", "resolution", "json"]);
+  const knownFlags = new Set(["trigger", "topology", "profile", "preset", "resolution", "continuation-run", "json"]);
   const dupFlag = detectDuplicateFlags(args, knownFlags);
   if (dupFlag) {
     const msg = T("delta.error.duplicate_flag", `--${dupFlag}`);
@@ -264,6 +264,15 @@ async function prepareCommand(args: string[]): Promise<number> {
       else process.stderr.write(`${msg}\n`);
       return 1;
     }
+  }
+
+  // --continuation-run is optional but must name a successor when present.
+  const continuationRun = flags["continuation-run"];
+  if (continuationRun !== undefined && (continuationRun === true || continuationRun === "")) {
+    const msg = T("delta.error.missing_value", "--continuation-run");
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "missing_value", detail: msg, flag: "continuation-run" }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
   }
 
   // Validate enum values
@@ -385,10 +394,25 @@ async function prepareCommand(args: string[]): Promise<number> {
     presetSha256: hostPresetSha256 ?? "",
     resolutionSha256,
     resolutionTemplate: resolutionTemplate as PrepareInput["resolutionTemplate"],
+    ...(typeof continuationRun === "string" ? { continuationRunId: continuationRun } : {}),
   };
 
   try {
     const result = await prepareDelegation(process.cwd(), input);
+
+    // FIX-1502 — pickup provenance is durable in the preparation record, so
+    // even a resumed prepare (after a crash between the occupancy swap and
+    // the event append) publishes a prepared event that traces the source.
+    const persistedContinuation = result.continuation ?? (() => {
+      try {
+        const preparation = JSON.parse(readFileSync(result.preparationPath, "utf8")) as { continuation?: unknown };
+        const c = preparation.continuation as Record<string, unknown> | undefined;
+        if (typeof c?.fromDelegationId === "string" && typeof c.fromRunId === "string" && typeof c.continuationRunId === "string") {
+          return { fromDelegationId: c.fromDelegationId, fromRunId: c.fromRunId, continuationRunId: c.continuationRunId };
+        }
+      } catch { /* a normal prepare carries no continuation */ }
+      return undefined;
+    })();
 
     // ── Test seam: crash point between file write and event append ──────────
     // At this point marker, resolution, preparation, and lease are all on disk.
@@ -424,6 +448,7 @@ async function prepareCommand(args: string[]): Promise<number> {
           presetSha256: input.presetSha256,
           hostId: resolvedHostId,
           ...(result.workspace === undefined ? {} : { workspaceSchema: 2 as const }),
+          ...(persistedContinuation === undefined ? {} : { continuation: persistedContinuation }),
           ts: now,
         });
       }
@@ -496,6 +521,7 @@ async function prepareCommand(args: string[]): Promise<number> {
         ok: true,
         delegationId: result.delegationId,
         runId: result.runId,
+        ...(persistedContinuation === undefined ? {} : { continuation: persistedContinuation }),
         artifacts: {
           frameDir: result.frameDir,
           resolutionPath: result.resolutionPath,
@@ -508,6 +534,9 @@ async function prepareCommand(args: string[]): Promise<number> {
       process.stdout.write(`${T("delta.prepare.prepared")}: ${result.delegationId}\n`);
       process.stdout.write(`  ${T("delta.field.run_id")}: ${result.runId}\n`);
       process.stdout.write(`  ${T("delta.field.frame")}: ${result.frameDir}\n`);
+      if (persistedContinuation !== undefined) {
+        process.stdout.write(`  ${T("delta.prepare.continuation_picked_up", persistedContinuation.continuationRunId, persistedContinuation.fromRunId)}\n`);
+      }
       if (result.workspace !== undefined) {
         process.stdout.write(`  ${T("delta.field.workspace")}: ${result.workspace.runId}\n`);
         for (const member of result.workspace.members) {
@@ -520,10 +549,13 @@ async function prepareCommand(args: string[]): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof PrepareError) {
+      // FIX-1502 — pickup refusals are explained in plain language in both
+      // locales; any other PrepareError keeps its historical English detail.
+      const msg = prepareContinuationErrorMessage(err.code, storyId, typeof continuationRun === "string" ? continuationRun : undefined) ?? err.message;
       if (json) {
-        process.stderr.write(JSON.stringify({ ok: false, error: err.code, detail: err.message }) + "\n");
+        process.stderr.write(JSON.stringify({ ok: false, error: err.code, detail: msg }) + "\n");
       } else {
-        process.stderr.write(`roll delta prepare: ${err.message}\n`);
+        process.stderr.write(`roll delta prepare: ${msg}\n`);
       }
       return 1;
     }
@@ -533,6 +565,21 @@ async function prepareCommand(args: string[]): Promise<number> {
 }
 
 // ── Validator seam ────────────────────────────────────────────────────────────
+
+/** FIX-1502 — human-readable pickup refusal, keyed by PrepareError code. */
+function prepareContinuationErrorMessage(code: string, storyId: string, continuationRun: string | undefined): string | undefined {
+  if (continuationRun === undefined) return undefined;
+  switch (code) {
+    case "continuation_not_available":
+      return T("delta.error.continuation_not_available", storyId, continuationRun);
+    case "continuation_not_verifiable":
+      return T("delta.error.continuation_not_verifiable", storyId, continuationRun);
+    case "continuation_adoption_failed":
+      return T("delta.error.continuation_adoption_failed", storyId, continuationRun);
+    default:
+      return undefined;
+  }
+}
 
 /** Result from the thin protocol-validator boundary. */
 export interface ValidatorResult {
@@ -1614,6 +1661,28 @@ function concludeCommand(args: string[]): number {
       && leaseEntry.delegationId === delegationId
       && leaseEntry.runId === runId;
     if (!matchingHostGuard && !matchingReservation && !matchingTransferredReservation) {
+      // FIX-1502 — a redelegated delegation whose reservation has been picked
+      // up by its named successor is superseded, not merely mismatched.  Say
+      // so plainly and record nothing: the old events stay exactly as written.
+      const redelegatedTerminal = delegationEvents.find((event) => event.type === "delta:terminal"
+        && (event as Record<string, unknown>).deliveryDisposition === "owner_redelegate"
+        && typeof (event as Record<string, unknown>).continuationRunId === "string") as Record<string, unknown> | undefined;
+      const successorPrepared = redelegatedTerminal === undefined ? undefined : events.find((event) => {
+        if (event.type !== "delta:prepared") return false;
+        const c = (event as Record<string, unknown>).continuation as Record<string, unknown> | undefined;
+        return c?.fromDelegationId === delegationId;
+      }) as Record<string, unknown> | undefined;
+      if (redelegatedTerminal !== undefined && successorPrepared !== undefined) {
+        const detail = T(
+          "delta.error.continuation_adopted",
+          delegationId,
+          redelegatedTerminal.continuationRunId as string,
+          (successorPrepared.runId as string) ?? "unknown",
+        );
+        if (json) process.stderr.write(JSON.stringify({ ok: false, error: "continuation_adopted", detail }) + "\n");
+        else process.stderr.write(`Conclude failed: ${detail}\n`);
+        return 1;
+      }
       const detail = `Managed Delta reservation missing or foreign for story ${storyId}`;
       if (json) process.stderr.write(JSON.stringify({ ok: false, error: "lease_mismatch", detail }) + "\n");
       else process.stderr.write(`Conclude failed: ${detail}\n`);

@@ -5411,3 +5411,444 @@ describe("US-LOOP-110 — prepare refuses a resolution template with a non-live 
     expect(r.code).toBe(0);
   });
 });
+
+
+// ── FIX-1502 — prepare --continuation-run picks up a redelegated task ─────────
+
+describe("FIX-1502 — prepare --continuation-run picks up a redelegated task", () => {
+  const SUCCESSOR = "successor-alice";
+
+  interface RedelegatedFixture {
+    dir: string;
+    resPath: string;
+    storyId: string;
+    oldDelegationId: string;
+    oldRunId: string;
+    eventsPath: string;
+    cardDir: string;
+  }
+
+  /** Prepare a managed delegation and redelegate its reservation to SUCCESSOR. */
+  async function redelegatedFixture(storyId: string): Promise<RedelegatedFixture> {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const resPath = writeResolutionTemplate(dir, storyId, "local-preset");
+    const prep = await tsRunCwd([
+      "prepare", storyId,
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prep.code).toBe(0);
+    const oldDelegationId = JSON.parse(prep.stdout).delegationId as string;
+    const conclude = await tsRunCwd([
+      "conclude", "--delegation", oldDelegationId,
+      "--delivery-disposition", "owner_redelegate", "--continuation-run", SUCCESSOR, "--json",
+    ], dir);
+    expect(conclude.code).toBe(0);
+    return {
+      dir,
+      resPath,
+      storyId,
+      oldDelegationId,
+      oldRunId: `delta-${oldDelegationId}`,
+      eventsPath: join(dir, ".roll", "loop", "events.ndjson"),
+      cardDir: join(dir, ".roll", "features", "delta-team", storyId),
+    };
+  }
+
+  function prepareArgs(fx: RedelegatedFixture, extra: string[] = []): string[] {
+    return [
+      "prepare", fx.storyId,
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", fx.resPath,
+      ...extra,
+    ];
+  }
+
+  function frameDirs(cardDir: string): string[] {
+    return readdirSync(cardDir).filter((name) => name.startsWith("delta-")).sort();
+  }
+
+  function readEvents(eventsPath: string): Array<Record<string, unknown>> {
+    return readFileSync(eventsPath, "utf8").trim().split("\n").filter((l) => l.trim())
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  it("takes over an exactly matching redelegation with a fresh delta run and full provenance", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP");
+    const terminalBefore = readEvents(fx.eventsPath).filter((e) => e.type === "delta:terminal");
+
+    const r = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(r.code).toBe(0);
+    const result = JSON.parse(r.stdout);
+    // A brand-new standard delta identity; the successor name is never an id.
+    expect(result.delegationId).not.toBe(fx.oldDelegationId);
+    expect(result.runId).toBe(`delta-${result.delegationId}`);
+    expect(result.runId).not.toBe(SUCCESSOR);
+    expect(result.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+
+    // The reservation became a normal preparing host guard for the new run.
+    const lease = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(lease?.source).toBe("host-delegation");
+    expect(lease?.delegationId).toBe(result.delegationId);
+    expect(lease?.runId).toBe(result.runId);
+
+    // The new frame carries normal preparation material plus the pickup source.
+    const frameDir = join(fx.cardDir, `delta-${result.delegationId}`);
+    expect(existsSync(join(frameDir, "delegation-open.json"))).toBe(true);
+    expect(existsSync(join(frameDir, "role-artifacts", "delegation", "delegation-resolution.json"))).toBe(true);
+    const preparation = JSON.parse(readFileSync(join(frameDir, "preparation.json"), "utf8"));
+    expect(preparation.schema).toBe("roll-delta-preparation/v2");
+    expect(preparation.runId).toBe(result.runId);
+    expect(preparation.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+
+    // The new prepared event traces the redelegation; the old terminal is untouched.
+    const events = readEvents(fx.eventsPath);
+    const prepared = events.find((e) => e.type === "delta:prepared" && e.delegationId === result.delegationId);
+    expect(prepared?.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+    expect(events.some((e) => e.type === "worktree:allocated"
+      && (e.workspace as { runId?: string }).runId === result.runId)).toBe(true);
+    const terminalAfter = events.filter((e) => e.type === "delta:terminal");
+    expect(terminalAfter).toEqual(terminalBefore);
+  });
+
+  it("prints a human pickup line in non-JSON output", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-HUMAN");
+    const r = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR]), fx.dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`Picked up the task redelegated to '${SUCCESSOR}'`);
+    expect(r.stdout).toContain(fx.oldRunId);
+  });
+
+  it("resumes the same new delegation when the pickup is retried", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-RETRY");
+    const first = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(first.code).toBe(0);
+    const delegationId = JSON.parse(first.stdout).delegationId as string;
+
+    const retry = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(retry.code).toBe(0);
+    expect(JSON.parse(retry.stdout).delegationId).toBe(delegationId);
+    // Old frame + exactly one new frame: no duplicate pickup material.
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${delegationId}`, `delta-${fx.oldDelegationId}`].sort());
+  });
+
+  it("resumes with the same identity after a crash between occupancy swap and events", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-CRASH");
+    injectPrepareInterrupt(() => { throw new Error("simulated crash after allocation"); });
+    await expect(tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir)).rejects.toThrow("simulated crash");
+    injectPrepareInterrupt(null);
+
+    // The occupancy never vanished: it is already the new run's normal guard,
+    // while no prepared event exists yet.
+    const crashed = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(crashed?.source).toBe("host-delegation");
+    expect(crashed?.delegationId).toBeDefined();
+    expect(crashed?.delegationId).not.toBe(fx.oldDelegationId);
+    expect(readEvents(fx.eventsPath).some((e) => e.type === "delta:prepared" && e.delegationId === crashed?.delegationId)).toBe(false);
+
+    const retry = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(retry.code).toBe(0);
+    expect(JSON.parse(retry.stdout).delegationId).toBe(crashed?.delegationId);
+    const prepared = readEvents(fx.eventsPath).find((e) => e.type === "delta:prepared" && e.delegationId === crashed?.delegationId);
+    expect(prepared?.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+  });
+
+  it("resumes the same new identity after a crash between frame write and occupancy swap", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-PRE-SWAP");
+    // Run a real pickup that crashes after allocation (post-swap), then roll
+    // the lease back to the still-held old reservation.  The on-disk state is
+    // byte-identical to a crash between the frame write and the swap: a frame
+    // with durable pickup provenance plus an untouched redelegated lease.
+    injectPrepareInterrupt(() => { throw new Error("simulated crash after allocation"); });
+    await expect(tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir)).rejects.toThrow("simulated crash");
+    injectPrepareInterrupt(null);
+    const interruptedId = readLeases(storyLeasesPath(fx.dir))[fx.storyId]!.delegationId!;
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(),
+      source: "delivery-reservation",
+      delegationId: fx.oldDelegationId,
+      runId: SUCCESSOR,
+    });
+
+    // The retry must converge on the SAME new identity already durably
+    // recorded in the in-flight frame — never fork a second delta run.
+    const retry = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(retry.code).toBe(0);
+    const result = JSON.parse(retry.stdout);
+    expect(result.delegationId).toBe(interruptedId);
+    expect(result.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+    // Old frame + the single resumed frame: no orphan pickup material.
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${interruptedId}`, `delta-${fx.oldDelegationId}`].sort());
+    const lease = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(lease?.source).toBe("host-delegation");
+    expect(lease?.delegationId).toBe(interruptedId);
+    const prepared = readEvents(fx.eventsPath).find((e) => e.type === "delta:prepared" && e.delegationId === interruptedId);
+    expect(prepared?.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+  });
+
+  it("refuses a pre-swap pickup retry whose immutable inputs differ from the in-flight frame", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PRE-SWAP-RETRYBINDING");
+    // Simulate a crash between frame write and occupancy swap: run a real
+    // pickup that crashes after allocation, then roll the lease back to the
+    // still-held old reservation.  The in-flight frame durably records a
+    // pickup planned for the ORIGINAL resolution bytes.
+    injectPrepareInterrupt(() => { throw new Error("simulated crash after allocation"); });
+    await expect(tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir)).rejects.toThrow("simulated crash");
+    injectPrepareInterrupt(null);
+    const interruptedId = readLeases(storyLeasesPath(fx.dir))[fx.storyId]!.delegationId!;
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(),
+      source: "delivery-reservation",
+      delegationId: fx.oldDelegationId,
+      runId: SUCCESSOR,
+    });
+
+    // Retry with DIFFERENT resolution bytes: the in-flight frame's immutable
+    // pickup plan must not be silently replaced by a new one.
+    const template = JSON.parse(readFileSync(fx.resPath, "utf8")) as { roles: Array<{ modelId: string }> };
+    template.roles[0]!.modelId = "different-model";
+    const otherRes = join(fx.dir, "resolution-other.json");
+    writeFileSync(otherRes, JSON.stringify(template, null, 2), "utf8");
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+    const r = await tsRunCwd([
+      "prepare", fx.storyId,
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", otherRes, "--continuation-run", SUCCESSOR, "--json",
+    ], fx.dir);
+    expect(r.code).toBe(1);
+    expect(parseStderrJsonTail(r.stderr).error).toBe("recovery_required");
+    // Nothing was adopted, written, or released: the old reservation and the
+    // in-flight frame stay exactly as the crash left them.
+    const lease = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(lease?.source).toBe("delivery-reservation");
+    expect(lease?.delegationId).toBe(fx.oldDelegationId);
+    expect(lease?.runId).toBe(SUCCESSOR);
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${interruptedId}`, `delta-${fx.oldDelegationId}`].sort());
+    expect(readEvents(fx.eventsPath).some((e) => e.type === "delta:prepared" && e.delegationId === interruptedId)).toBe(false);
+  });
+
+  it("lets the picked-up run conclude, reconcile, and release like a normal prepare", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-LIFECYCLE");
+    const pickup = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(pickup.code).toBe(0);
+    const delegationId = JSON.parse(pickup.stdout).delegationId as string;
+    const runId = `delta-${delegationId}`;
+
+    const conclude = await tsRunCwd([
+      "conclude", "--delegation", delegationId,
+      "--delivery-disposition", "owner_continue", "--json",
+    ], fx.dir);
+    expect(conclude.code).toBe(0);
+    expect(JSON.parse(conclude.stdout).outcome).toBe("handoff_ready");
+    const retained = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(retained?.source).toBe("delivery-reservation");
+    expect(retained?.delegationId).toBe(delegationId);
+    expect(retained?.runId).toBe(runId);
+
+    // Delivery reconciliation closes exactly this new run's reservation.
+    new EventBus().appendEvent(fx.eventsPath, {
+      type: "delivery:abandoned",
+      cycleId: runId,
+      storyId: fx.storyId,
+      delegationId,
+      runId,
+      reason: "pr_closed_unmerged",
+      ts: Date.now(),
+    });
+    expect(reconcileHostDeltaReservationClosures(fx.dir)).toContain(fx.storyId);
+    expect(readLeases(storyLeasesPath(fx.dir))[fx.storyId]).toBeUndefined();
+  });
+
+  it("tells the old task it was superseded when concluded again, without new events", async () => {
+    const fx = await redelegatedFixture("FIX-1502-OLD-CONCLUDE");
+    const pickup = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(pickup.code).toBe(0);
+    const newRunId = JSON.parse(pickup.stdout).runId as string;
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+
+    const again = await tsRunCwd([
+      "conclude", "--delegation", fx.oldDelegationId,
+      "--delivery-disposition", "owner_continue", "--json",
+    ], fx.dir);
+    expect(again.code).toBe(1);
+    const err = parseStderrJsonTail(again.stderr);
+    expect(err.error).toBe("continuation_adopted");
+    expect(err.detail as string).toContain(SUCCESSOR);
+    expect(err.detail as string).toContain(newRunId);
+    // No old event is rewritten and no new event is appended.
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+  });
+
+  it("keeps a plain prepare refused on a redelegated story until pickup", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PLAIN-REFUSED");
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+    const r = await tsRunCwd(prepareArgs(fx, ["--json"]), fx.dir);
+    expect(r.code).toBe(1);
+    expect(parseStderrJsonTail(r.stderr).error).toBe("builder_lease_conflict");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${fx.oldDelegationId}`]);
+  });
+
+  it("rejects a missing --continuation-run value before side effects", async () => {
+    const fx = await redelegatedFixture("FIX-1502-NO-VALUE");
+    const r = await tsRunCwd(prepareArgs(fx, ["--continuation-run", "--json"]), fx.dir);
+    expect(r.code).toBe(1);
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${fx.oldDelegationId}`]);
+  });
+
+  /** Every refusal must leave zero directories, zero events, zero new occupancy. */
+  async function expectCleanRefusal(
+    fx: RedelegatedFixture,
+    extra: string[],
+    expectedError: string,
+  ): Promise<void> {
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+    const leasesBefore = readFileSync(join(storyLeasesPath(fx.dir), `${fx.storyId}.lease`), "utf8");
+    const dirsBefore = frameDirs(fx.cardDir);
+    const r = await tsRunCwd(prepareArgs(fx, [...extra, "--json"]), fx.dir);
+    expect(r.code).toBe(1);
+    const err = parseStderrJsonTail(r.stderr);
+    expect(err.error).toBe(expectedError);
+    expect(typeof err.detail).toBe("string");
+    expect((err.detail as string).length).toBeGreaterThan(0);
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+    expect(readFileSync(join(storyLeasesPath(fx.dir), `${fx.storyId}.lease`), "utf8")).toBe(leasesBefore);
+    expect(frameDirs(fx.cardDir)).toEqual(dirsBefore);
+  }
+
+  it("refuses a name nothing was redelegated to", async () => {
+    const fx = await redelegatedFixture("FIX-1502-WRONG-NAME");
+    await expectCleanRefusal(fx, ["--continuation-run", "nobody"], "continuation_not_available");
+  });
+
+  it("refuses when the story has no occupancy at all", async () => {
+    const dir = setupMinimalProject("FIX-1502-NO-LEASE", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "FIX-1502-NO-LEASE", "local-preset");
+    const r = await tsRunCwd([
+      "prepare", "FIX-1502-NO-LEASE",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--continuation-run", SUCCESSOR, "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    expect(parseStderrJsonTail(r.stderr).error).toBe("continuation_not_available");
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(frameDirs(join(dir, ".roll", "features", "delta-team", "FIX-1502-NO-LEASE"))).toEqual([]);
+  });
+
+  it("refuses to take over somebody's active normal task", async () => {
+    const dir = setupMinimalProject("FIX-1502-ACTIVE-TASK", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "FIX-1502-ACTIVE-TASK", "local-preset");
+    const prep = await tsRunCwd([
+      "prepare", "FIX-1502-ACTIVE-TASK",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prep.code).toBe(0);
+    const fx: RedelegatedFixture = {
+      dir, resPath, storyId: "FIX-1502-ACTIVE-TASK",
+      oldDelegationId: JSON.parse(prep.stdout).delegationId as string,
+      oldRunId: "",
+      eventsPath: join(dir, ".roll", "loop", "events.ndjson"),
+      cardDir: join(dir, ".roll", "features", "delta-team", "FIX-1502-ACTIVE-TASK"),
+    };
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_available");
+  });
+
+  it("refuses a reservation that no recorded redelegation can verify", async () => {
+    const dir = setupMinimalProject("FIX-1502-GHOST", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "FIX-1502-GHOST", "local-preset");
+    const prep = await tsRunCwd([
+      "prepare", "FIX-1502-GHOST",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prep.code).toBe(0);
+    const delegationId = JSON.parse(prep.stdout).delegationId as string;
+    // A hand-crafted reservation with no owner_redelegate terminal behind it.
+    setLease(storyLeasesPath(dir), "FIX-1502-GHOST", {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId: SUCCESSOR,
+    });
+    const fx: RedelegatedFixture = {
+      dir, resPath, storyId: "FIX-1502-GHOST",
+      oldDelegationId: delegationId, oldRunId: `delta-${delegationId}`,
+      eventsPath: join(dir, ".roll", "loop", "events.ndjson"),
+      cardDir: join(dir, ".roll", "features", "delta-team", "FIX-1502-GHOST"),
+    };
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_verifiable");
+  });
+
+  it("refuses when the recorded redelegation names a different successor than the occupancy", async () => {
+    const fx = await redelegatedFixture("FIX-1502-SPLIT-NAME");
+    // Occupancy points at another name than the recorded redelegation.
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId: fx.oldDelegationId, runId: "successor-bob",
+    });
+    // The recorded name no longer matches the occupancy.
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_available");
+  });
+
+  it("refuses to borrow a foreign active task through a pickup retry", async () => {
+    const fx = await redelegatedFixture("FIX-1502-NO-BORROW");
+    // Someone else's normal preparing task replaced the reservation out of band.
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(), source: "host-delegation", delegationId: "foreign-delegation", runId: "delta-foreign-delegation",
+    });
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_available");
+  });
+
+  it("refuses a pickup retry whose recorded handoff disappeared", async () => {
+    const fx = await redelegatedFixture("FIX-1502-NO-TERMINAL");
+    const pickup = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(pickup.code).toBe(0);
+    // Immutable events cannot really vanish; simulate the pathological state by
+    // rewriting the lease back to the old reservation while the pickup's
+    // preparation names a delegation whose terminal event is absent.
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId: fx.oldDelegationId, runId: SUCCESSOR,
+    });
+    const pickupDir = frameDirs(fx.cardDir).find((d) => d !== `delta-${fx.oldDelegationId}`)!;
+    const preparationPath = join(fx.cardDir, pickupDir, "preparation.json");
+    const preparation = JSON.parse(readFileSync(preparationPath, "utf8")) as { continuation?: unknown };
+    expect((preparation.continuation as { continuationRunId?: string })?.continuationRunId).toBe(SUCCESSOR);
+    // Remove the terminal the in-flight frame's provenance depends on.
+    const eventsPath = fx.eventsPath;
+    const kept = readFileSync(eventsPath, "utf8").trim().split("\n")
+      .filter((line) => {
+        const e = JSON.parse(line) as Record<string, unknown>;
+        return !(e.type === "delta:terminal" && e.delegationId === fx.oldDelegationId);
+      });
+    writeFileSync(eventsPath, kept.join("\n") + "\n", "utf8");
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_verifiable");
+  });
+});

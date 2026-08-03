@@ -26,6 +26,10 @@ import {
   releaseDeliveryReservation,
   promoteHostDelegationLease,
   transferDeliveryReservation,
+  adoptContinuationReservation,
+  acquireAdoptionMutex,
+  releaseAdoptionMutex,
+  injectAdoptionInterrupts,
   writeLeases,
   setLease,
   removeLease,
@@ -2706,6 +2710,180 @@ describe("legacy story-leases.json compatibility", () => {
       // completed reservation.
       expect(transferDeliveryReservation(dir, storyId, delegationId, runId, "other-successor")).toBe(false);
       expect(releaseDeliveryReservation(dir, storyId, delegationId, successor, "merged")).toBe(true);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+});
+
+describe("FIX-1502 — adoptContinuationReservation: atomic pickup of a redelegated reservation", () => {
+  const storyId = "FIX-1502-ADOPT";
+  const oldDelegation = "delta-old-owner";
+  const oldRun = `delta-${oldDelegation}`;
+  const successorName = "named-successor";
+  const newDelegation = "delta-new-owner";
+  const newRun = `delta-${newDelegation}`;
+
+  function claimRedelegatedReservation(dir: string): void {
+    expect(claimStoryLease(dir, storyId, {
+      claimedAt: NOW, source: "delivery-reservation", delegationId: oldDelegation, runId: successorName,
+    }).status).toBe("claimed");
+  }
+
+  it("swaps the named continuation reservation into a normal preparing host guard without a gap", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      const entry = readLeases(dir)[storyId];
+      expect(entry?.source).toBe("host-delegation");
+      expect(entry?.delegationId).toBe(newDelegation);
+      expect(entry?.runId).toBe(newRun);
+      // The adopted guard is a normal preparing occupancy: the new run can
+      // promote and conclude exactly like a fresh prepare.
+      expect(promoteHostDelegationLease(dir, storyId, newDelegation, newRun)).toBe(true);
+      expect(releaseDeliveryReservation(dir, storyId, newDelegation, newRun, "merged")).toBe(true);
+      expect(readLeases(dir)[storyId]).toBeUndefined();
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("is idempotent for the same new identity (crash after rename)", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      expect(readLeases(dir)[storyId]?.runId).toBe(newRun);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("refuses when the reservation names a different successor, delegation, or source", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      // Wrong successor name.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, "other-name", newDelegation, newRun)).toBe(false);
+      // Wrong source delegation.
+      expect(adoptContinuationReservation(dir, storyId, "delta-someone-else", successorName, newDelegation, newRun)).toBe(false);
+      // A fresh identity may still adopt while name and source delegation match.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, "delta-thief", "delta-delta-thief")).toBe(true);
+      // Now held by the new run; the old continuation name must not adopt again.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, "delta-second", "delta-delta-second")).toBe(false);
+      const entry = readLeases(dir)[storyId];
+      expect(entry?.source).toBe("host-delegation");
+      expect(entry?.delegationId).toBe("delta-thief");
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("refuses when no lease exists or the story is held by a non-reservation owner", () => {
+    const dir = tmpLeaseDir();
+    try {
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      expect(claimStoryLease(dir, storyId, {
+        claimedAt: NOW, source: "host-delegation", delegationId: oldDelegation, runId: oldRun,
+      }).status).toBe("claimed");
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      expect(readLeases(dir)[storyId]?.source).toBe("host-delegation");
+      expect(readLeases(dir)[storyId]?.runId).toBe(oldRun);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("blocks releases during the swap and recovers a dead matching adoption lock", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      const record = statSync(join(dir, `${storyId}.lease`));
+      writeFileSync(join(dir, `.${storyId}.adoption.lock`), JSON.stringify({
+        schema: "roll-lease-adoption-lock/v1", pid: process.pid,
+        fromDelegationId: oldDelegation, continuationRunId: successorName,
+        newDelegationId: newDelegation, newRunId: newRun,
+        recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      // A live matching owner holds the swap: neither adopt nor release may proceed.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      expect(releaseDeliveryReservation(dir, storyId, oldDelegation, successorName, "abandoned")).toBe(false);
+      // A dead matching lock is retired and the adoption completes.
+      writeFileSync(join(dir, `.${storyId}.adoption.lock`), JSON.stringify({
+        schema: "roll-lease-adoption-lock/v1", pid: 999_999,
+        fromDelegationId: oldDelegation, continuationRunId: successorName,
+        newDelegationId: newDelegation, newRunId: newRun,
+        recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      expect(existsSync(join(dir, `.${storyId}.adoption.lock`))).toBe(false);
+      expect(readLeases(dir)[storyId]?.runId).toBe(newRun);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("proves the lease never disappears: a matching release is refused while adoption holds the shared mutex through its CAS rename", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      let releaseDuringSwap: boolean | null = null;
+      let recordDuringSwap: LeaseEntry | undefined;
+      injectAdoptionInterrupts({
+        // Fires while the adoption mutex is held, immediately before the CAS
+        // rename: adoption has already verified the identity and written the
+        // successor record to a temp file.  A matching release of the OLD
+        // reservation must be refused and must never unlink the lease.
+        beforeRename: () => {
+          releaseDuringSwap = releaseDeliveryReservation(dir, storyId, oldDelegation, successorName, "abandoned");
+          recordDuringSwap = readLeases(dir)[storyId];
+        },
+      });
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      // The release attempt inside the swap was refused and the record stayed.
+      expect(releaseDuringSwap).toBe(false);
+      expect(recordDuringSwap).toMatchObject({
+        source: "delivery-reservation",
+        delegationId: oldDelegation,
+        runId: successorName,
+      });
+      // The lease existed at every instant: still the reservation mid-swap,
+      // the new host guard after the swap.
+      const after = readLeases(dir)[storyId];
+      expect(after?.source).toBe("host-delegation");
+      expect(after?.delegationId).toBe(newDelegation);
+      expect(after?.runId).toBe(newRun);
+      expect(existsSync(join(dir, `${storyId}.lease`))).toBe(true);
+    } finally {
+      injectAdoptionInterrupts(null);
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("adoption is refused while a release holds the shared mutex; the reservation is untouched until the release completes", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      // Simulate a release mid-flight: it holds the same mutex between its
+      // identity read and its unlink.
+      const mutex = acquireAdoptionMutex(dir, storyId, "release");
+      expect(mutex).toBeDefined();
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      // The reservation is untouched: no tmp, no partial swap, no gap.
+      expect(readLeases(dir)[storyId]).toMatchObject({
+        source: "delivery-reservation",
+        delegationId: oldDelegation,
+        runId: successorName,
+      });
+      expect(existsSync(join(dir, `${storyId}.lease`))).toBe(true);
+      // The release finishes; only then may the pickup proceed.
+      releaseAdoptionMutex(dir, storyId, mutex);
+      expect(releaseDeliveryReservation(dir, storyId, oldDelegation, successorName, "abandoned")).toBe(true);
+      expect(readLeases(dir)[storyId]).toBeUndefined();
+      // After a true release the reservation is gone: adoption now refuses.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
     } finally {
       try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
     }

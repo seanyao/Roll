@@ -18,6 +18,7 @@ import type {
   DeltaTerminalOutcome,
   TerminalBinding,
   DeliveryDisposition,
+  DeltaContinuationProvenance,
 } from "./delta-team.js";
 import type { GoalReviewMode, GoalSafetyGate, GoalScope, GoalStatus, GoalTransitionActor } from "./goal.js";
 import type { LoopType } from "./loop.js";
@@ -722,6 +723,8 @@ export type RollEvent =
       hostId: string;
       /** Explicit cutover discriminator.  Absent records are legacy only. */
       workspaceSchema?: 2;
+      /** FIX-1502 — present when this run picked up a redelegated reservation. */
+      continuation?: DeltaContinuationProvenance;
       ts: number;
     }
   | {

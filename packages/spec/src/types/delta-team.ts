@@ -284,3 +284,17 @@ export function isKnownHistoricalBlockReason(value: unknown): boolean {
 export type DeltaTerminalOutcome = "handoff_ready" | "blocked" | "abandoned";
 export type TerminalBinding = "cycle_adoption" | "manual_host_bridge" | "handoff_only";
 export type DeliveryDisposition = "owner_continue" | "owner_hold" | "owner_redelegate";
+
+/**
+ * FIX-1502 — provenance of a run that picked up a redelegated reservation via
+ * `roll delta prepare --continuation-run <name>`.  The named successor only
+ * verifies the pickup; the new run always carries a fresh standard identity.
+ */
+export interface DeltaContinuationProvenance {
+  /** Delegation whose owner recorded the `owner_redelegate` terminal. */
+  fromDelegationId: string;
+  /** Run of that redelegating delegation. */
+  fromRunId: string;
+  /** Named successor the reservation was transferred to. */
+  continuationRunId: string;
+}

@@ -20,6 +20,7 @@ import {
   readdirSync,
   renameSync,
   unlinkSync,
+  rmSync,
   openSync,
   closeSync,
   fdatasyncSync,
@@ -28,7 +29,7 @@ import { join, dirname, basename } from "node:path";
 import { findFeatureFiles, liveEpicOf } from "./archive.js";
 import { planManagedWorkspaceBootstrap } from "./target-submodule.js";
 import { configResolve, projectConfigPath, resolveIntegrationBranch } from "@roll/infra";
-import { EventBus, claimStoryLease, releaseDeliveryReservation, releaseStoryLease, readLeases, parseBacklog } from "@roll/core";
+import { EventBus, claimStoryLease, releaseDeliveryReservation, releaseStoryLease, readLeases, parseBacklog, adoptContinuationReservation } from "@roll/core";
 import { managedWorkspaceOperationId } from "./managed-workspace-operation.js";
 import {
   allocateManagedWorkspaceSet,
@@ -40,6 +41,7 @@ import type {
   QualityProfile,
   DelegationResolution,
   ManagedWorkspaceSet,
+  DeltaContinuationProvenance,
 } from "@roll/spec";
 
 // Re-export preset loader from existing module
@@ -261,6 +263,12 @@ export interface PrepareInput {
   /** Exact host-supplied resolution bytes.  A retry may resume only this plan. */
   resolutionSha256: string;
   resolutionTemplate: DelegationResolution;
+  /**
+   * FIX-1502 — when set, prepare only takes over the reservation that an
+   * `owner_redelegate` terminal explicitly transferred to this exact named
+   * successor.  The new delegation still receives a fresh standard identity.
+   */
+  continuationRunId?: string;
 }
 
 type PreparationRetryBinding = Readonly<{
@@ -298,6 +306,8 @@ export interface PrepareResult {
   leasePath: string;
   /** Present for post-cutover frames prepared in a real Git worktree. */
   workspace?: ManagedWorkspaceSet;
+  /** Present when this run picked up a redelegated reservation (FIX-1502). */
+  continuation?: DeltaContinuationProvenance;
 }
 
 /** Resolve the same immutable target-member inputs that Cycle uses at pick. */
@@ -391,6 +401,13 @@ export async function prepareDelegation(
   // Ensure loop directory exists
   const loopDir = join(projectPath, ".roll", "loop");
   if (!existsSync(loopDir)) mkdirSync(loopDir, { recursive: true });
+
+  // FIX-1502 — a continuation pickup has its own verified path; it must never
+  // fall into the plain resume and borrow an unrelated active occupancy.
+  if (input.continuationRunId !== undefined) {
+    return prepareContinuationPickup(projectPath, cardDir, input, input.continuationRunId);
+  }
+
   const resumed = await resumablePreparedResult(projectPath, cardDir, input);
   if (resumed !== undefined) return resumed;
 
@@ -520,6 +537,295 @@ export async function prepareDelegation(
   throw lastError ?? new PrepareError(
     "builder_lease_conflict",
     `Story ${input.storyId}: frame directory collision after ${MAX_COLLISION_RETRIES} retries`,
+  );
+}
+
+// ── FIX-1502 — continuation pickup ───────────────────────────────────────────
+
+/** Parse the durable continuation provenance of a preparation record. */
+function persistedContinuation(preparationPath: string): DeltaContinuationProvenance | undefined {
+  try {
+    const preparation = JSON.parse(readFileSync(preparationPath, "utf8")) as { continuation?: unknown };
+    const c = preparation.continuation as Record<string, unknown> | undefined;
+    if (typeof c?.fromDelegationId === "string" && typeof c.fromRunId === "string" && typeof c.continuationRunId === "string") {
+      return { fromDelegationId: c.fromDelegationId, fromRunId: c.fromRunId, continuationRunId: c.continuationRunId };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Find the immutable `owner_redelegate` terminal that names exactly this
+ * successor for exactly this delegation.  Events are append-only, so a pickup
+ * may verify its provenance against the recorded handoff every time.
+ */
+function findRedelegationTerminal(
+  eventsPath: string,
+  storyId: string,
+  fromDelegationId: string,
+  continuationRunId: string,
+): Record<string, unknown> | undefined {
+  try {
+    return readFileSync(eventsPath, "utf8").split("\n").map((line) => {
+      try { return JSON.parse(line) as Record<string, unknown>; } catch { return undefined; }
+    }).find((event) => event?.type === "delta:terminal"
+      && event.storyId === storyId
+      && event.delegationId === fromDelegationId
+      && event.deliveryDisposition === "owner_redelegate"
+      && event.continuationRunId === continuationRunId);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * FIX-1502 — an in-flight pickup frame durably recorded THIS exact pickup
+ * (same source delegation and successor name) while the lease is still the
+ * old reservation: a crash between the frame write and the occupancy swap.
+ * Resuming that identity is the only way a retry stays the same new task;
+ * forking a second identity would strand the first frame as an orphan.
+ */
+function findInFlightPickupFrame(
+  cardDir: string,
+  fromDelegationId: string,
+  continuationRunId: string,
+): { delegationId: string; runId: string; frameDir: string; workspace: ManagedWorkspaceSet } | undefined {
+  let entries: string[] = [];
+  try { entries = readdirSync(cardDir); } catch { return undefined; }
+  for (const name of entries) {
+    if (!name.startsWith("delta-")) continue;
+    const frameDir = join(cardDir, name);
+    const continuation = persistedContinuation(join(frameDir, "preparation.json"));
+    if (continuation === undefined) continue;
+    if (continuation.fromDelegationId !== fromDelegationId || continuation.continuationRunId !== continuationRunId) continue;
+    const delegationId = name.slice("delta-".length);
+    let workspace: ManagedWorkspaceSet | undefined;
+    try {
+      const preparation = JSON.parse(readFileSync(join(frameDir, "preparation.json"), "utf8")) as { workspace?: unknown };
+      workspace = preparation.workspace as ManagedWorkspaceSet | undefined;
+    } catch { /* a corrupt preparation is not a resumable pickup */ }
+    // A real pickup always plans and stores its workspace atomically with the
+    // preparation; a frame without one is foreign or corrupt and is left for
+    // the orphan detector rather than resumed.
+    if (workspace === undefined) continue;
+    return { delegationId, runId: `delta-${delegationId}`, frameDir, workspace };
+  }
+  return undefined;
+}
+
+/**
+ * Take over exactly the reservation an `owner_redelegate` terminal transferred
+ * to `continuationRunId`.  Every check fails before any side effect; the new
+ * frame and its preparation material (including the pickup source) are written
+ * first, and only then is the occupancy atomically compare-and-swapped into a
+ * normal preparing guard for the brand-new run.  The occupancy therefore never
+ * disappears, and a crash is safely resumable from either side of the swap.
+ */
+async function prepareContinuationPickup(
+  projectPath: string,
+  cardDir: string,
+  input: PrepareInput,
+  continuationRunId: string,
+): Promise<PrepareResult> {
+  const storyId = input.storyId;
+  const slDir = storyLeasesPath(projectPath);
+  const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
+  const current = (() => {
+    try { return readLeases(slDir)[storyId]; } catch { return undefined; }
+  })();
+
+  // Resume-after-swap: the occupancy is already the new run's normal guard.
+  // Only a preparation that durably records THIS pickup may resume — a retry
+  // must never borrow somebody else's active task.
+  if (current?.source === "host-delegation" && current.delegationId !== undefined) {
+    const continuation = persistedContinuation(join(cardDir, `delta-${current.delegationId}`, "preparation.json"));
+    if (continuation?.continuationRunId !== continuationRunId) {
+      throw new PrepareError(
+        "continuation_not_available",
+        `Story ${storyId}: no reservation was redelegated to '${continuationRunId}' and the current occupancy is not its pickup`,
+      );
+    }
+    // The recorded handoff must still exist: an unverifiable pickup identity
+    // is refused exactly like a fresh pickup.
+    if (findRedelegationTerminal(eventsPath, storyId, continuation.fromDelegationId, continuationRunId) === undefined) {
+      throw new PrepareError(
+        "continuation_not_verifiable",
+        `Story ${storyId}: the pickup for '${continuationRunId}' cannot be matched to a recorded redelegation`,
+      );
+    }
+    const resumed = await resumablePreparedResult(projectPath, cardDir, input);
+    if (resumed === undefined) {
+      throw new PrepareError(
+        "continuation_not_available",
+        `Story ${storyId}: the pickup for '${continuationRunId}' no longer holds a reservable occupancy`,
+      );
+    }
+    return { ...resumed, continuation };
+  }
+
+  if (current?.source !== "delivery-reservation"
+    || current.delegationId === undefined
+    || current.runId !== continuationRunId) {
+    throw new PrepareError(
+      "continuation_not_available",
+      `Story ${storyId}: no reservation was explicitly redelegated to '${continuationRunId}'`,
+    );
+  }
+
+  // The occupancy and the recorded redelegation must agree on the same card,
+  // the same source delegation, and the same successor name.
+  const fromDelegationId = current.delegationId;
+  const terminal = findRedelegationTerminal(eventsPath, storyId, fromDelegationId, continuationRunId);
+  if (terminal === undefined) {
+    throw new PrepareError(
+      "continuation_not_verifiable",
+      `Story ${storyId}: the reservation naming '${continuationRunId}' cannot be matched to a recorded redelegation`,
+    );
+  }
+  const fromRunId = typeof terminal.runId === "string" ? terminal.runId : `delta-${fromDelegationId}`;
+  const continuation: DeltaContinuationProvenance = { fromDelegationId, fromRunId, continuationRunId };
+
+  // Crash-before-swap resume: a frame that already durably recorded THIS
+  // pickup is the same new identity — re-run the swap, never fork a second.
+  const inFlight = findInFlightPickupFrame(cardDir, fromDelegationId, continuationRunId);
+  if (inFlight !== undefined) {
+    // The in-flight frame was planned with the SAME immutable inputs as a
+    // fresh pickup: a retry with different trigger/topology/profile/preset/
+    // resolution bytes must never silently swap the recorded plan for a new
+    // one (the normal resume path enforces the identical binding check).
+    let persistedBinding: unknown;
+    try {
+      const preparation = JSON.parse(readFileSync(join(inFlight.frameDir, "preparation.json"), "utf8")) as { retryBinding?: unknown };
+      persistedBinding = preparation.retryBinding;
+    } catch { /* a corrupt preparation is refused below via the binding check */ }
+    if (!sameRetryBinding(persistedBinding, retryBinding(input))) {
+      throw new PrepareError(
+        "recovery_required",
+        `Existing managed Delta must be retried with its immutable trigger, topology, profile, preset, and resolution provenance`,
+      );
+    }
+    if (!adoptContinuationReservation(slDir, storyId, fromDelegationId, continuationRunId, inFlight.delegationId, inFlight.runId)) {
+      throw new PrepareError(
+        "continuation_adoption_failed",
+        `Story ${storyId}: the reservation redelegated to '${continuationRunId}' changed while taking over; nothing was claimed`,
+      );
+    }
+    const operationId = managedWorkspaceOperationId(inFlight.runId, "prepare");
+    try {
+      await allocateManagedWorkspaceSet({ projectPath, eventsPath, workspace: inFlight.workspace, operationId });
+    } catch (error) {
+      throw new PrepareError("recovery_required", error instanceof Error ? error.message : String(error));
+    }
+    return {
+      delegationId: inFlight.delegationId,
+      runId: inFlight.runId,
+      frameDir: inFlight.frameDir,
+      resolutionPath: join(inFlight.frameDir, "role-artifacts", "delegation", "delegation-resolution.json"),
+      markerPath: join(inFlight.frameDir, "delegation-open.json"),
+      preparationPath: join(inFlight.frameDir, "preparation.json"),
+      eventsPath,
+      leasePath: slDir,
+      workspace: inFlight.workspace,
+      continuation,
+    };
+  }
+
+  let lastError: PrepareError | null = null;
+  for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
+    const delegationId = generateDelegationId();
+    const runId = runIdFromDelegationId(delegationId);
+    let workspace: ManagedWorkspaceSet;
+    try {
+      workspace = await planManagedPrimaryWorkspace({
+        projectPath,
+        storyId,
+        topology: input.topology,
+        delegationId,
+        runId,
+        targetSubmodule: hostTargetSubmodule(projectPath, cardDir),
+      });
+    } catch (error) {
+      throw new PrepareError("managed_workspace_required", error instanceof Error ? error.message : String(error));
+    }
+
+    // Write the new frame and its preparation material BEFORE touching the
+    // occupancy.  A collision retries with a fresh identity; the redelegated
+    // reservation is still untouched at this point.
+    const frameDir = join(cardDir, `delta-${delegationId}`);
+    try {
+      mkdirSync(frameDir);
+    } catch {
+      lastError = new PrepareError(
+        "builder_lease_conflict",
+        `Frame directory collision for ${delegationId} (attempt ${attempt + 1}/${MAX_COLLISION_RETRIES})`,
+      );
+      continue;
+    }
+    const markerPath = join(frameDir, "delegation-open.json");
+    atomicWriteJson(markerPath, {
+      schema: "roll-delta-delegation-open/v1",
+      delegationId,
+      storyId,
+      createdAt: new Date().toISOString(),
+    });
+    const resolutionPath = join(frameDir, "role-artifacts", "delegation", "delegation-resolution.json");
+    atomicWriteJson(resolutionPath, { ...input.resolutionTemplate, delegationId });
+    const preparationPath = join(frameDir, "preparation.json");
+    atomicWriteJson(preparationPath, {
+      schema: "roll-delta-preparation/v2",
+      delegationId,
+      runId,
+      storyId,
+      trigger: input.trigger,
+      topology: input.topology,
+      qualityProfile: input.qualityProfile,
+      presetId: input.presetId,
+      presetSha256: input.presetSha256,
+      retryBinding: retryBinding(input),
+      workspace,
+      continuation,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Atomic compare-and-swap: the reservation must still name exactly this
+    // successor from exactly this delegation.  The lease file never disappears
+    // during the swap; a concurrent change refuses and removes only our own
+    // freshly written frame.
+    if (!adoptContinuationReservation(slDir, storyId, fromDelegationId, continuationRunId, delegationId, runId)) {
+      try { rmSync(frameDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      throw new PrepareError(
+        "continuation_adoption_failed",
+        `Story ${storyId}: the reservation redelegated to '${continuationRunId}' changed while taking over; nothing was claimed`,
+      );
+    }
+
+    // From here the new run owns a normal preparing guard; the standard resume
+    // path completes any interrupted workspace allocation.
+    const operationId = managedWorkspaceOperationId(runId, "prepare");
+    try {
+      await allocateManagedWorkspaceSet({ projectPath, eventsPath, workspace, operationId });
+    } catch (error) {
+      throw new PrepareError("recovery_required", error instanceof Error ? error.message : String(error));
+    }
+
+    return {
+      delegationId,
+      runId,
+      frameDir,
+      resolutionPath,
+      markerPath,
+      preparationPath,
+      eventsPath,
+      leasePath: slDir,
+      workspace,
+      continuation,
+    };
+  }
+  throw lastError ?? new PrepareError(
+    "builder_lease_conflict",
+    `Story ${storyId}: frame directory collision after ${MAX_COLLISION_RETRIES} retries`,
   );
 }
 
