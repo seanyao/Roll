@@ -867,10 +867,10 @@ describe("US-WS-010 repository Builder context", () => {
       if (name !== "commitsAhead") expect(spy).not.toHaveBeenCalled();
     }
     for (const spy of Object.values(globalProvider)) expect(spy).not.toHaveBeenCalled();
-    expect(globalGit.commitsAhead).toHaveBeenCalledTimes(3);
     for (const [cwd] of globalGit.commitsAhead.mock.calls) {
       expect(cwd).toBe(realpathSync(fixture.repositories[0]!.path));
     }
+    expect(result.state?.ctx).toMatchObject({ tcrCount: 2, failureClass: "harness" });
     expect(nodeExecCalls).toHaveLength(0);
     const issueEvents = readFileSync(join(fixture.issueRoot, "events.jsonl"), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);

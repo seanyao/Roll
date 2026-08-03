@@ -499,6 +499,19 @@ defaults:
         kind: fixed
         agent: pi
 `);
+    const machineHome = join(f.root, "machine-home");
+    mkdirSync(machineHome, { recursive: true });
+    writeFileSync(join(machineHome, "agents.yaml"), `schema: roll-agents/v1
+scope: machine
+agents:
+  claude:
+    capabilities: [execute]
+  pi:
+    capabilities: [evaluate]
+  reasonix:
+    capabilities: [evaluate]
+roles: {}
+`);
     writeFileSync(join(f.root, ".roll", "agents.yaml"), `schema: roll-agents/v1
 scope: project
 defaults:
@@ -539,7 +552,15 @@ defaults:
       builderSessionId: "cycle-us-ws-012:build:claude:a1",
     };
 
-    const result = await executeCaptureFactsCommand({ kind: "capture_facts" }, ports, ctx);
+    const previousRollHome = process.env["ROLL_HOME"];
+    let result: Awaited<ReturnType<typeof executeCaptureFactsCommand>>;
+    try {
+      process.env["ROLL_HOME"] = machineHome;
+      result = await executeCaptureFactsCommand({ kind: "capture_facts" }, ports, ctx);
+    } finally {
+      if (previousRollHome === undefined) delete process.env["ROLL_HOME"];
+      else process.env["ROLL_HOME"] = previousRollHome;
+    }
 
     expect(result.event).toEqual({
       type: "facts_captured",
