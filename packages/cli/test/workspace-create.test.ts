@@ -188,7 +188,7 @@ describe("US-WS-006 roll workspace create", () => {
     const identityPath = join(f.rollHome, "repos", `${f.repoId}.json`);
     const firstIdentity = JSON.parse(readFileSync(identityPath, "utf8")) as Record<string, unknown>;
     expect(firstIdentity).toMatchObject({ repoId: f.repoId, remote: f.remoteUrl.replace(/\.git$/u, ""), cachePath });
-    expect(git(cachePath, ["remote", "get-url", "origin"])).toBe(f.remoteUrl.replace(/\.git$/u, ""));
+    expect(git(cachePath, ["remote", "get-url", "origin"])).toBe(f.remoteUrl);
 
     const second = await run(["workspace", "create", "ws-demo", "--config", f.config, "--json"], f);
     expect(second.status, second.stderr).toBe(0);

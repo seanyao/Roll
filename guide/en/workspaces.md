@@ -41,6 +41,10 @@ roll workspace create ws-payments --config /absolute/path/workspace-create.yaml 
 repository remotes, aliases, integration branches, cache decisions and existing
 content. Apply only the reviewed config:
 
+The repository URL protocol is the Git transport protocol: SSH/SCP remains SSH,
+and HTTPS remains HTTPS. The Workspace binding keeps normalized identity separate
+from the transport URL so cache and Issue setup do not switch protocols.
+
 ```bash
 roll workspace create ws-payments --config /absolute/path/workspace-create.yaml --json
 roll workspace activate ws-payments

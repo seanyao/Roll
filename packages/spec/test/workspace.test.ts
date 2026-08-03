@@ -308,6 +308,29 @@ describe("RepositoryBinding and WorkspaceManifest", () => {
     });
   });
 
+  it("round-trips canonical SSH identity while preserving the configured SSH transport", () => {
+    const input = {
+      ...repository("git@example.test:team/product.git"),
+      remote: "ssh://example.test/team/product",
+      transportRemote: "git@example.test:team/product.git",
+    };
+
+    expect(parseRepositoryBinding(input)).toEqual({
+      ok: true,
+      value: input,
+    });
+  });
+
+  it("rejects a transport URL whose protocol conflicts with the repository identity", () => {
+    expect(parseRepositoryBinding({
+      ...repository("https://example.test/team/product.git"),
+      transportRemote: "git@example.test:team/product.git",
+    })).toMatchObject({
+      ok: false,
+      errors: [expect.objectContaining({ path: "transportRemote" })],
+    });
+  });
+
   it("round-trips a valid Workspace manifest and enforces expected identity", () => {
     const parsed = parseWorkspaceManifest(JSON.parse(JSON.stringify(workspace())), {
       workspaceId: "ws-sot-platform",

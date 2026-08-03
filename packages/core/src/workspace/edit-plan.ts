@@ -263,6 +263,7 @@ function parseRepositories(value: unknown, errors: ContractError[]): readonly Wo
       repoId: repoId.value,
       alias: raw.alias,
       remote: remote.value,
+      transportRemote: raw.remote,
       integrationBranch: raw.integration_branch,
       provider: raw.provider,
       workflow: {
@@ -278,6 +279,7 @@ function parseRepositories(value: unknown, errors: ContractError[]): readonly Wo
       repoId: parsed.value.repoId,
       alias: parsed.value.alias,
       remote: parsed.value.remote,
+      transportRemote: parsed.value.transportRemote ?? raw.remote,
       provider: parsed.value.provider,
       integrationBranch: parsed.value.integrationBranch,
       branchPattern: parsed.value.workflow.branchPattern,
@@ -296,6 +298,7 @@ function parseRepositories(value: unknown, errors: ContractError[]): readonly Wo
   return repositories.slice().sort((left, right) => compareText(left.repoId, right.repoId)).map((repository) => ({
     alias: repository.alias,
     remote: repository.remote,
+    transportRemote: repository.transportRemote,
     provider: repository.provider,
     integrationBranch: repository.integrationBranch,
     branchPattern: repository.branchPattern,
@@ -374,6 +377,7 @@ function canonicalManifest(manifest: WorkspaceManifest): WorkspaceManifest {
     repoId: repository.repoId,
     alias: repository.alias,
     remote: repository.remote,
+    ...(repository.transportRemote === undefined ? {} : { transportRemote: repository.transportRemote }),
     integrationBranch: repository.integrationBranch,
     provider: repository.provider,
     workflow: {
@@ -440,6 +444,7 @@ function repositoryBindingFromEdit(repository: WorkspaceEditRepositoryInput): Re
     repoId: repoId.value,
     alias: repository.alias,
     remote: repository.remote,
+    transportRemote: repository.transportRemote ?? repository.remote,
     integrationBranch: repository.integrationBranch,
     provider: repository.provider,
     workflow: {
@@ -618,6 +623,18 @@ export function buildWorkspaceEditPlan(input: {
       const path = `repositories[${repository.repoId}].alias`;
       changes.push(change("repository_identity", path, "updated", references.length > 0 ? "blocked" : "safe", repository.alias, exact.alias));
       if (references.length > 0) blockers.push(blocker("metadata_referenced", path, references));
+    }
+    const beforeTransport = repository.transportRemote ?? repository.remote;
+    const afterTransport = exact.transportRemote ?? exact.remote;
+    if (beforeTransport !== afterTransport) {
+      changes.push(change(
+        "repository_transport",
+        `repositories[${repository.repoId}].transportRemote`,
+        "updated",
+        "safe",
+        beforeTransport,
+        afterTransport,
+      ));
     }
     const workflowFields: readonly {
       readonly name: "provider" | "integrationBranch" | "branchPattern" | "requiredChecks";

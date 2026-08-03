@@ -781,6 +781,8 @@ export interface RepositoryBinding {
   readonly repoId: string;
   readonly alias: string;
   readonly remote: string;
+  /** Exact configured Git transport URL. Defaults to remote for legacy manifests. */
+  readonly transportRemote?: string;
   readonly integrationBranch: string;
   readonly provider: string;
   readonly workflow: RepositoryWorkflowMetadata;
@@ -799,6 +801,7 @@ export interface WorkspaceManifest {
 export interface WorkspaceEditRepositoryInput {
   readonly alias: string;
   readonly remote: string;
+  readonly transportRemote?: string;
   readonly provider: string;
   readonly integrationBranch: string;
   readonly branchPattern: string;
@@ -847,6 +850,7 @@ export type WorkspaceEditChangeKind =
   | "display_name"
   | "requirement"
   | "repository_identity"
+  | "repository_transport"
   | "repository_workflow"
   | "repository";
 
@@ -1044,6 +1048,7 @@ export const repositoryBindingV1Schema: JsonSchema = objectSchema(
     repoId: stringSchema,
     alias: stringSchema,
     remote: stringSchema,
+    transportRemote: stringSchema,
     integrationBranch: stringSchema,
     provider: stringSchema,
     workflow: objectSchema(
@@ -1312,7 +1317,7 @@ function trimRepositorySuffix(pathname: string): string | null {
 
 const networkHostPattern = "(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\])";
 const httpsRemotePattern = new RegExp(`^https://(${networkHostPattern})(?::443)?/(.+)$`, "u");
-const sshRemotePattern = new RegExp(`^ssh://[A-Za-z0-9._~-]+@(${networkHostPattern})(?::22)?/(.+)$`, "u");
+const sshRemotePattern = new RegExp(`^ssh://(?:[A-Za-z0-9._~-]+@)?(${networkHostPattern})(?::22)?/(.+)$`, "u");
 
 function normalizeNetworkHost(host: string): string | null {
   if (!host.startsWith("[") && !host.split(".").every((label) =>
@@ -1757,7 +1762,7 @@ export function parseRepositoryBinding(value: unknown): ContractResult<Repositor
   if (!isRecord(value)) return fail("invalid_type", "repository", "repository binding must be an object");
   const errors = unknownFieldErrors(
     value,
-    ["schema", "repoId", "alias", "remote", "integrationBranch", "provider", "workflow"],
+    ["schema", "repoId", "alias", "remote", "transportRemote", "integrationBranch", "provider", "workflow"],
     "",
   );
   if (value["schema"] !== REPOSITORY_BINDING_V1) {
@@ -1767,9 +1772,14 @@ export function parseRepositoryBinding(value: unknown): ContractResult<Repositor
   const alias = requiredString(value, "alias", "", errors);
   const integrationBranch = requiredString(value, "integrationBranch", "", errors);
   const provider = requiredString(value, "provider", "", errors);
+  const transportRemote = optionalString(value, "transportRemote", "", errors);
   const workflow = parseWorkflow(value["workflow"], errors);
   const normalized = normalizeRepositoryRemote(value["remote"]);
   if (!normalized.ok) errors.push(...normalized.errors);
+  const normalizedTransport = transportRemote === undefined ? undefined : normalizeRepositoryRemote(transportRemote);
+  if (normalizedTransport !== undefined && !normalizedTransport.ok) {
+    errors.push(...normalizedTransport.errors.map((error) => ({ ...error, path: "transportRemote" })));
+  }
 
   if (alias !== undefined && !isSafeAlias(alias)) {
     errors.push({ code: "invalid_value", path: "alias", message: "repository alias must use lowercase letters, digits and hyphens" });
@@ -1781,6 +1791,9 @@ export function parseRepositoryBinding(value: unknown): ContractResult<Repositor
     if (repoId !== repositoryIdFromCanonicalRemote(normalized.value)) {
       errors.push({ code: "repo_id_mismatch", path: "repoId", message: "repoId does not match the canonical remote" });
     }
+  }
+  if (normalized.ok && normalizedTransport?.ok === true && normalizedTransport.value !== normalized.value) {
+    errors.push({ code: "invalid_value", path: "transportRemote", message: "transportRemote must resolve to the repository remote identity" });
   }
 
   if (
@@ -1796,6 +1809,7 @@ export function parseRepositoryBinding(value: unknown): ContractResult<Repositor
       repoId,
       alias,
       remote: normalized.value,
+      ...(transportRemote === undefined ? {} : { transportRemote }),
       integrationBranch,
       provider,
       workflow,

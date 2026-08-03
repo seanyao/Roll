@@ -54,6 +54,10 @@ repositories:
     integration_branch: main
 ```
 
+`source` determines both repository identity and the actual Git transport:
+SSH/SCP URLs use SSH, while HTTPS URLs use HTTPS. Roll preserves that transport
+URL instead of forcing every repository through one protocol.
+
 ```bash
 roll workspace create ws-demo --config /absolute/path/workspace-create.yaml --check
 roll workspace create ws-demo --config /absolute/path/workspace-create.yaml

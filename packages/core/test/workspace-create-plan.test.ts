@@ -35,6 +35,29 @@ function probe(overrides: Partial<WorkspaceCreateProbe> = {}): WorkspaceCreatePr
 }
 
 describe("US-WS-023 WorkspaceCreatePlan", () => {
+  it.each([
+    {
+      protocol: "SSH",
+      source: "git@example.test:team/product.git",
+      remote: "ssh://example.test/team/product",
+    },
+    {
+      protocol: "HTTPS",
+      source: "https://example.test/team/product.git",
+      remote: "https://example.test/team/product",
+    },
+  ])("preserves the configured $protocol repository URL as the Git transport", ({ source, remote }) => {
+    const parsed = parseWorkspaceCreateConfig(config.replace("file:///tmp/remotes/product.git", source), options);
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: {
+        manifest: {
+          repositories: [{ remote, transportRemote: source }],
+        },
+      },
+    });
+  });
+
   it("parses only the closed create/v1 config and emits create/v1 plan paths", () => {
     const parsed = parseWorkspaceCreateConfig(config, options);
     expect(parsed).toMatchObject({ ok: true, value: { schema: WORKSPACE_CREATE_CONFIG_V1, workspaceId: "ws-demo" } });

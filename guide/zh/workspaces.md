@@ -37,6 +37,9 @@ roll workspace create ws-payments --config /absolute/path/workspace-create.yaml 
 `--check` 只读校验身份、root、需求绑定、repository remote、alias、integration branch、
 cache 决策与已有内容。只应用审阅过的配置：
 
+Repository URL 的协议就是 Git 操作使用的协议：SSH/SCP 保持 SSH，HTTPS 保持 HTTPS。
+Workspace binding 会分别保存规范化身份和实际传输 URL，避免 cache 或 Issue 初始化时改走其他协议。
+
 ```bash
 roll workspace create ws-payments --config /absolute/path/workspace-create.yaml --json
 roll workspace activate ws-payments

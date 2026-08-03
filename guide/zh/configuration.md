@@ -52,6 +52,9 @@ repositories:
     integration_branch: main
 ```
 
+`source` 同时决定仓库身份与实际 Git 传输协议：SSH/SCP URL 使用 SSH，HTTPS URL 使用
+HTTPS。Roll 会保留该传输 URL，不会把所有仓库固定改写成另一种协议。
+
 ```bash
 roll workspace create ws-demo --config /absolute/path/workspace-create.yaml --check
 roll workspace create ws-demo --config /absolute/path/workspace-create.yaml

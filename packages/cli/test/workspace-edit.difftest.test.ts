@@ -77,6 +77,7 @@ function fixture() {
       repoId: repoId.value,
       alias: "product",
       remote,
+      transportRemote: `${remote}.git`,
       integrationBranch: "main",
       provider: "github",
       workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: ["test"] },

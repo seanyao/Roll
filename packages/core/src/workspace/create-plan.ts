@@ -292,6 +292,7 @@ function parseRepositories(value: unknown, errors: WorkspaceCreateParseError[]):
       repoId: repoId.value,
       alias: raw.alias,
       remote: raw.source,
+      transportRemote: raw.source,
       integrationBranch: raw.integration_branch,
       provider: nonEmptyString(raw.provider) ? raw.provider : "generic",
       workflow: {
