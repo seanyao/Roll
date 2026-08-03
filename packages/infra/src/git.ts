@@ -45,8 +45,9 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { promisify } from "node:util";
 import {
+  isImmutableGitObjectId,
+  isSafeGitRef,
   type ProjectIdentityInputs,
   projectSlug,
   type ToolDeclaration,
@@ -55,8 +56,6 @@ import {
 } from "@roll/spec";
 import { invokeInfraTool } from "./tools/delegation.js";
 import { configResolve, projectConfigPath } from "./config.js";
-
-const execFileAsync = promisify(execFile);
 
 /**
  * E1: the historical hardcoded integration branch. Kept as the default for every
@@ -210,33 +209,140 @@ export interface GitResult {
   code: number;
   stdout: string;
   stderr: string;
+  /** Present when Node terminated the process after the configured timeout. */
+  readonly timedOut?: boolean;
+  /** PID of a timed-out Git child, retained for termination evidence. */
+  readonly pid?: number;
+  /** Termination signal reported by Node for a failed Git child. */
+  readonly signal?: string;
 }
+
+/** Result of an argv-only raw Git invocation whose stdout must remain byte exact. */
+export interface GitBinaryResult {
+  /** Process exit code (0 = success). */
+  code: number;
+  stdout: Uint8Array;
+  stderr: string;
+  /** Present when Node terminated the process after the configured timeout. */
+  readonly timedOut?: boolean;
+  /** PID of a timed-out Git child, retained for termination evidence. */
+  readonly pid?: number;
+  /** Termination signal reported by Node for a failed Git child. */
+  readonly signal?: string;
+}
+
+export interface GitExecutionOptions {
+  /** Maximum wall-clock time before the Git child is terminated. */
+  readonly timeoutMs?: number;
+  /** Narrow environment overrides for one Git invocation. */
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+/** True only for a full, lowercase-hex Git object id — NEVER a ref name, a
+ *  short/abbreviated SHA, or any other rev-parse-able expression. This is the
+ *  ONE shared gate for every "immutable baseSha" this codebase persists or
+ *  trusts from a prior run: `git cat-file -e <value>^{commit}` alone is NOT
+ *  sufficient, because git happily RESOLVES a ref-like string (`HEAD`,
+ *  `refs/remotes/origin/main`, a branch name, even a short SHA) to a real
+ *  commit and reports success — it does not distinguish "you gave me an
+ *  immutable id" from "you gave me something I resolved for you". A pinned
+ *  base recorded as `HEAD` or a branch ref would silently drift out from
+ *  under an Issue every time that ref moves, defeating the entire pinning
+ *  contract. Checking the STRING shape first, independent of and prior to any
+ *  git call, is what actually enforces immutability. */
+export { isImmutableGitObjectId } from "@roll/spec";
 
 /**
  * Run `git <args>` in `cwd`. Never throws on non-zero exit — returns the code
  * + captured streams so callers can mirror bash's explicit exit-code handling
- * (`if git ...; then` / `|| true`). Throws only on spawn failure (git missing).
+ * (`if git ...; then` / `|| true`). A spawn failure is also represented as
+ * code 1, preserving the existing adapter contract for missing cwd/binary cases.
  */
-export async function rawGit(args: readonly string[], cwd?: string): Promise<GitResult> {
-  try {
-    const { stdout, stderr } = await execFileAsync("git", [...args], {
+export async function rawGit(
+  args: readonly string[],
+  cwd?: string,
+  options: GitExecutionOptions = {},
+): Promise<GitResult> {
+  return new Promise<GitResult>((resolveGit) => {
+    let pid: number | undefined;
+    const child = execFile("git", [...args], {
       cwd,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      timeout: options.timeoutMs,
+      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+    }, (error, stdout, stderr) => {
+      if (error === null) {
+        resolveGit({ code: 0, stdout, stderr });
+        return;
+      }
+      const err = error as NodeJS.ErrnoException & {
+        readonly killed?: boolean;
+        readonly signal?: string;
+        readonly stdout?: string;
+        readonly stderr?: string;
+      };
+      const timedOut = err.killed === true && err.signal === "SIGTERM";
+      const detail = {
+        ...(timedOut ? { timedOut: true as const } : {}),
+        ...(timedOut && pid !== undefined ? { pid } : {}),
+        ...(err.signal === undefined ? {} : { signal: err.signal }),
+      };
+      resolveGit({
+        code: typeof err.code === "number" ? err.code : 1,
+        stdout,
+        stderr,
+        ...detail,
+      });
     });
-    return { code: 0, stdout, stderr };
-  } catch (e) {
-    const err = e as { code?: number; stdout?: string; stderr?: string; errno?: string };
-    // execFile sets a numeric/string `code`; a non-process spawn error has no
-    // stdout/stderr captured. Distinguish "git ran and failed" from "no git".
-    if (typeof err.code === "number") {
-      return { code: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-    }
-    if (err.stdout !== undefined || err.stderr !== undefined) {
-      return { code: 1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-    }
-    throw e; // git binary not found / unspawnable
-  }
+    pid = child.pid;
+  });
+}
+
+/**
+ * Run `git <args>` without a shell and preserve stdout as the exact bytes Git
+ * emitted. This is intentionally separate from {@link rawGit}: blob consumers
+ * must validate UTF-8 before any decoding or digest/byte accounting occurs.
+ */
+export async function rawGitBinary(
+  args: readonly string[],
+  cwd?: string,
+  options: GitExecutionOptions = {},
+): Promise<GitBinaryResult> {
+  return new Promise<GitBinaryResult>((resolveGit) => {
+    let pid: number | undefined;
+    const child = execFile("git", [...args], {
+      cwd,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: options.timeoutMs,
+      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+    }, (error, stdout, stderr) => {
+      const stdoutBytes = new Uint8Array(stdout);
+      const stderrText = stderr.toString("utf8");
+      if (error === null) {
+        resolveGit({ code: 0, stdout: stdoutBytes, stderr: stderrText });
+        return;
+      }
+      const err = error as NodeJS.ErrnoException & {
+        readonly killed?: boolean;
+        readonly signal?: string;
+      };
+      const timedOut = err.killed === true && err.signal === "SIGTERM";
+      const detail = {
+        ...(timedOut ? { timedOut: true as const } : {}),
+        ...(timedOut && pid !== undefined ? { pid } : {}),
+        ...(err.signal === undefined ? {} : { signal: err.signal }),
+      };
+      resolveGit({
+        code: typeof err.code === "number" ? err.code : 1,
+        stdout: stdoutBytes,
+        stderr: stderrText,
+        ...detail,
+      });
+    });
+    pid = child.pid;
+  });
 }
 
 const GIT_RAW_DECLARATION: ToolDeclaration = {
@@ -273,11 +379,24 @@ const GIT_PUSH_DECLARATION: ToolDeclaration = {
  * old return shape while adding tool events for callers that set
  * ROLL_TOOL_EVENTS_PATH or ROLL_PROJECT_RUNTIME_DIR.
  */
-export async function git(args: readonly string[], cwd?: string): Promise<GitResult> {
+export async function git(
+  args: readonly string[],
+  cwd?: string,
+  options: GitExecutionOptions = {},
+): Promise<GitResult> {
   const result = await invokeInfraTool<GitRawInput, GitResult>({
     declaration: GIT_RAW_DECLARATION,
     input: { args: [...args], cwd },
-    run: async (invocation) => ok(invocation, await rawGit(invocation.input.args, invocation.input.cwd)),
+    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
+    scope: "machine_only",
+    ...(options.timeoutMs === undefined ? {} : { policy: { timeoutMs: options.timeoutMs } }),
+    run: async (invocation) => ok(
+      invocation,
+      await rawGit(invocation.input.args, invocation.input.cwd, {
+        timeoutMs: invocation.policy.timeoutMs,
+        ...(options.env === undefined ? {} : { env: options.env }),
+      }),
+    ),
   });
   if (result.ok) return result.output;
   throw new Error(result.error.message);
@@ -786,6 +905,8 @@ export async function commit(
   const result = await invokeInfraTool<GitCommitInput, GitResult>({
     declaration: GIT_COMMIT_DECLARATION,
     input: { cwd: repoCwd, message, allowEmpty: opts.allowEmpty },
+    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
+    scope: "machine_only",
     run: async (invocation) => {
       const args = ["commit", "-m", invocation.input.message];
       if (invocation.input.allowEmpty === true) args.splice(1, 0, "--allow-empty");
@@ -808,6 +929,8 @@ export async function push(
   const result = await invokeInfraTool<GitPushInput, GitResult>({
     declaration: GIT_PUSH_DECLARATION,
     input: { cwd: repoCwd, branch, remote: opts.remote, setUpstream: opts.setUpstream },
+    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
+    scope: "machine_only",
     run: async (invocation) => {
       const remote = invocation.input.remote ?? "origin";
       const args = invocation.input.setUpstream === true
@@ -853,6 +976,21 @@ export async function isAncestor(
   if (r.code === 0) return true;
   if (r.code === 1) return false;
   return undefined;
+}
+
+/**
+ * Proves that one immutable merge commit is contained by the configured
+ * integration branch. Ref-like or unsafe inputs fail closed without invoking
+ * Git, so diagnostics can report only the typed repo/SHA identity supplied by
+ * the caller and never echo remote URLs or credentials.
+ */
+export async function isCommitReachableFromIntegrationBranch(
+  repoCwd: string,
+  mergeCommit: string,
+  integrationBranch: string,
+): Promise<boolean | undefined> {
+  if (!isImmutableGitObjectId(mergeCommit) || !isSafeGitRef(integrationBranch)) return undefined;
+  return isAncestor(repoCwd, mergeCommit, integrationBranch);
 }
 
 /** A remote ref row from `git ls-remote`. */

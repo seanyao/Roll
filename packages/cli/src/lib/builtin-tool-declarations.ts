@@ -5,7 +5,7 @@ export function collectBuiltinToolDeclarations(projectRoot: string): ToolDeclara
   const tools: Array<{ declaration: ToolDeclaration }> = [
     new BashTool(),
     ...browserTools(),
-    ...fsTools(projectRoot),
+    ...fsTools(),
     ...gitTools(),
     ...githubTools(),
     ...mcpTools(projectRoot),

@@ -21,6 +21,13 @@ backlog is done, paused, or capped. `roll loop pause` stops cards from being
 picked and `roll loop resume` clears it; the owner asks `roll supervisor
 next/why` to decide what to drive.
 
+Workspace mode binds each session-driven runtime to an immutable Workspace ID.
+`roll loop go`, `roll loop pause`, and `roll loop resume` accept or derive
+exactly one Workspace target and keep runtime, events, locks, and failure state
+under that Workspace. Multiple active Workspaces can run independently;
+`roll loop status --all` is the read-only aggregate view and never mutates any
+Workspace.
+
 ## How It Works
 
 1. Reads `BACKLOG.md`, picks the highest-priority `📋 Todo` item.

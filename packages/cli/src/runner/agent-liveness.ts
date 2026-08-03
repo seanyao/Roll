@@ -35,7 +35,8 @@
  * echo (not arbitrary diff text), the broad CN/EN substrings cannot be tripped by
  * a diff that happens to mention "login" or "network".
  */
-import type { AgentSpawn } from "./agent-spawn.js";
+import type { RollEvent } from "@roll/spec";
+import { killLiveAgents, type AgentSpawn } from "./agent-spawn.js";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -313,4 +314,137 @@ export async function probeDueSuspendedRigs(opts: {
     opts.onProbe?.({ agent, recovered: false, entry: next, detail: reach.detail });
   }
   return state;
+}
+
+// ── FIX-1474: builder-child LIVENESS probe (the lost-child killer) ──────────
+
+/** Default poll cadence (ms) for the builder-child liveness probe. Cheap (one
+ *  `kill(pid, 0)` per tick). Overridable via ROLL_LIVENESS_POLL_MS for tests. */
+const LIVENESS_POLL_MS = 5_000;
+
+/** Consecutive DEAD observations required before a child is declared lost. One
+ *  tick can race the OS reap/`close` handshake (a just-exited child can read
+ *  as a zombie for a moment), so a single dead read is a blip, never a verdict. */
+const LIVENESS_CONFIRM_TICKS = 2;
+
+/** A live liveness-probe handle. `stop()` clears the timer and returns whether
+ *  the probe declared the child lost (so the caller can fold it into the
+ *  returned `agent_exited` event). */
+export interface BuilderLivenessProbe {
+  stop(): { lost: boolean };
+}
+
+/** Default liveness check: signal 0. ESRCH (no such process) ⇒ dead; EPERM
+ *  means the process EXISTS but is owned by someone else ⇒ alive. */
+function defaultIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as { code?: string }).code === "EPERM";
+  }
+}
+
+/**
+ * FIX-1474 — start the bounded liveness probe around a blocking builder spawn.
+ * The FIX-907 timeout watchdog covers a child that is ALIVE (hung / silent /
+ * thrashing); it CANNOT see a child that DIED out-of-band while the spawn
+ * await never settled (external SIGKILL of a process-tree member, PTY leader
+ * death, lost exit delivery) — the exact shape that hung supervised cycles
+ * forever with no terminal state.
+ *
+ * Each tick it reads the spawned child's pid (reported via the `onSpawn`
+ * spawn seam; `undefined` until the spawn starts — nothing to accuse yet) and
+ * asks the injected `isAlive`. After {@link LIVENESS_CONFIRM_TICKS} consecutive
+ * dead observations it declares the child LOST:
+ *   1. records the auditable `cycle:agent_lost` event FIRST (durable, so the
+ *      death is observable even if the kill races),
+ *   2. reaps the leftover process tree ({@link killLiveAgents} SIGKILL — a
+ *      no-op when the tree is already gone),
+ *   3. fires `onLost` so the caller can resolve its spawn race and converge
+ *      the cycle to the explicit `aborted` terminal.
+ *
+ * The probe stands down the moment the spawn settles (`spawnPending()` false)
+ * so a finished cycle is never accused. Best-effort throughout: a probe blip
+ * (a throwing `isAlive`) reads as ALIVE — never a death verdict. Injectable
+ * seams (`pid`, `spawnPending`, `isAlive`, `appendEvent`, `kill`, `onLost`,
+ * `pollMs`, `confirmTicks`) keep it unit-testable with no real process/timer.
+ */
+export function startBuilderLivenessProbe(opts: {
+  cycleId: string;
+  agent: string;
+  /** The spawned child's pid; `undefined` until the spawn reports it. */
+  pid: () => number | undefined;
+  /** True while the spawn await is unsettled; a settled spawn ⇒ inert probe. */
+  spawnPending: () => boolean;
+  /** Liveness check (default: `kill(pid, 0)`). A THROW is a blip ⇒ alive. */
+  isAlive?: (pid: number) => boolean;
+  /** Append the cycle:agent_lost event (best-effort). */
+  appendEvent: (ev: RollEvent) => void;
+  /** Reap the leftover agent process tree (returns count signalled). */
+  kill?: () => number;
+  /** Fired once when the child is declared lost (drives the spawn race). */
+  onLost?: (info: { pid: number }) => void;
+  /** Poll cadence ms (default {@link LIVENESS_POLL_MS}; tests pin a small value). */
+  pollMs?: number;
+  /** Consecutive dead observations before declaring lost (default
+   *  {@link LIVENESS_CONFIRM_TICKS}). */
+  confirmTicks?: number;
+}): BuilderLivenessProbe {
+  const { cycleId, agent, appendEvent } = opts;
+  const isAlive = opts.isAlive ?? defaultIsAlive;
+  const kill = opts.kill ?? ((): number => killLiveAgents("SIGKILL"));
+  const pollMs = opts.pollMs ?? (Number((process.env["ROLL_LIVENESS_POLL_MS"] ?? "").trim()) || LIVENESS_POLL_MS);
+  const confirmTicks = opts.confirmTicks ?? LIVENESS_CONFIRM_TICKS;
+  let lost = false;
+  let deadStreak = 0;
+
+  const tick = (): void => {
+    if (lost || !opts.spawnPending()) return;
+    const pid = opts.pid();
+    if (pid === undefined) {
+      deadStreak = 0;
+      return;
+    }
+    let alive = true;
+    try {
+      alive = isAlive(pid);
+    } catch {
+      /* a probe blip is NOT a death — skip */
+    }
+    if (alive) {
+      deadStreak = 0;
+      return;
+    }
+    deadStreak += 1;
+    if (deadStreak < confirmTicks) return;
+    lost = true;
+    clearInterval(timer);
+    // Record FIRST (durable), then reap + signal — the death must be
+    // observable even if the kill races the cycle's own teardown.
+    try {
+      appendEvent({ type: "cycle:agent_lost", cycleId, agent, pid, ts: Date.now() });
+    } catch {
+      /* event append is best-effort */
+    }
+    try {
+      kill();
+    } catch {
+      /* the tree may already be gone — the verdict stands */
+    }
+    try {
+      opts.onLost?.({ pid });
+    } catch {
+      /* the caller's race resolve must never crash the probe */
+    }
+  };
+
+  const timer = setInterval(tick, pollMs);
+  timer.unref?.();
+  return {
+    stop: () => {
+      clearInterval(timer);
+      return { lost };
+    },
+  };
 }

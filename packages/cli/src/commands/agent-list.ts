@@ -128,6 +128,12 @@ export function projectAgent(): string {
   return "claude";
 }
 
+/** Machine capability view; never consults repository-local casting policy. */
+export function machineAgent(): string {
+  const rollHome = process.env["ROLL_HOME"] ?? join(homedir(), ".roll");
+  return scopedSuperviseAgent(join(rollHome, "agents.yaml")) ?? "claude";
+}
+
 // ── Entry ────────────────────────────────────────────────────────────────────
 export const AGENT_ORDER = AGENT_REGISTRY_NAMES;
 
@@ -139,10 +145,9 @@ export function agentListCommand(_args: string[]): number {
   const NC = noColor ? "" : "\x1b[0m";
   const lang = currentLang();
 
-  // US-AGENT-050 — read disabled status from both scopes
+  // US-WS-017a — list is a machine capability view, independent of cwd.
   const rollHome = process.env["ROLL_HOME"] ?? join(homedir(), ".roll");
   const machineDisabled = new Set<string>();
-  const projectDisabled = new Set<string>();
   try {
     const machineText = readFileSync(join(rollHome, "agents.yaml"), "utf8");
     if (machineText.includes("roll-agents/v1")) {
@@ -153,23 +158,12 @@ export function agentListCommand(_args: string[]): number {
       }
     }
   } catch { /* file missing is fine */ }
-  try {
-    const projectText = readFileSync(".roll/agents.yaml", "utf8");
-    if (projectText.includes("roll-agents/v1")) {
-      for (const a of AGENT_REGISTRY_NAMES) {
-        if (readAgentDisabledFromText(projectText, a as AgentName).disabled) {
-          projectDisabled.add(a);
-        }
-      }
-    }
-  } catch { /* file missing is fine */ }
-
   const out: string[] = [];
   out.push("", `  ${t(v2Catalog, lang, "agent.available_agents")}`, "");
-  const current = canonicalAgentName(projectAgent());
+  const current = canonicalAgentName(machineAgent());
   for (const a of AGENT_ORDER) {
     const disp = agentDisplayName(a);
-    const disabledSource = projectDisabled.has(a) ? "project" : machineDisabled.has(a) ? "machine" : null;
+    const disabledSource = machineDisabled.has(a) ? "machine" : null;
     if (agentInstalledByName(a)) {
       const currentTag = a === current ? "  (current)" : "";
       if (disabledSource !== null) {

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendRowsToTable,
   dryRunPreview,
+  existingStoryIdForIssue,
   extractAcItems,
   filterIssuesByLabel,
   ghId,
@@ -19,6 +20,7 @@ import {
   readSyncConfig,
   renderAcSection,
   renderSyncBlock,
+  storyIdFromIssue,
   syncToBacklog,
   writeSyncBlock,
   type GhIssue,
@@ -36,15 +38,16 @@ describe("label/state/id/row mapping", () => {
     expect(mapLabelToType([])).toBe("US");
     expect(mapLabelToType([{ name: "wontfix" }])).toBe("US");
   });
-  it("mapStateToStatus: open→Todo, closed→Done, else Todo", () => {
+  it("mapStateToStatus: external state never decides planning completion", () => {
     expect(mapStateToStatus("open")).toBe("📋 Todo");
-    expect(mapStateToStatus("closed")).toBe("✅ Done");
+    expect(mapStateToStatus("closed")).toBe("📋 Todo");
     expect(mapStateToStatus("weird")).toBe("📋 Todo");
   });
-  it("ghId + issueToRow compose <TYPE>-GH-<n>", () => {
+  it("uses one canonical Story identity across id, link, and status projection", () => {
     expect(ghId(issue({ number: 13 }))).toBe("GH-13");
+    expect(storyIdFromIssue(issue({ number: 13, labels: [{ name: "bug" }] }))).toBe("FIX-GH-13");
     expect(issueToRow(issue({ number: 13, title: "do a thing", state: "open", labels: [{ name: "bug" }] }))).toBe(
-      "| FIX-GH-13 | do a thing | 📋 Todo |",
+      "| [FIX-GH-13](backlog-lifecycle/FIX-GH-13/spec.md) | do a thing | 📋 Todo |",
     );
   });
 });
@@ -55,6 +58,15 @@ describe("ghIdPresent boundary", () => {
     expect(ghIdPresent(content, "GH-13")).toBe(true);
     expect(ghIdPresent(content, "GH-1")).toBe(false);
     expect(ghIdPresent(content, "GH-3")).toBe(false);
+  });
+  it("recovers the durable Story ID when labels change", () => {
+    const content =
+      "| [US-GH-8](backlog-lifecycle/US-GH-8/spec.md) | mentions GH-7 in prose | 📋 Todo |\n" +
+      "| [US-GH-7](backlog-lifecycle/US-GH-7/spec.md) | imported | 📋 Todo |\n";
+    const relabeled = issue({ number: 7, labels: [{ name: "bug" }] });
+    expect(existingStoryIdForIssue(content, relabeled)).toBe("US-GH-7");
+    expect(dryRunPreview([relabeled], content).lines).toEqual(["= US-GH-7 [US] (skipped, already exists)"]);
+    expect(syncToBacklog([relabeled], content).skippedIds).toEqual(["US-GH-7"]);
   });
 });
 
@@ -109,15 +121,22 @@ describe("sync diff (idempotent)", () => {
     const p = dryRunPreview(issues, seed);
     expect(p.added).toBe(1);
     expect(p.skipped).toBe(1);
-    expect(p.lines).toContain("= GH-1 [US] (skipped, already exists)");
-    expect(p.lines).toContain("+ GH-2 [FIX] fresh bug");
+    expect(p.lines).toContain("= US-GH-1 [US] (skipped, already exists)");
+    expect(p.lines).toContain("+ FIX-GH-2 [FIX] fresh bug");
   });
   it("syncToBacklog appends only the new row, skips the present id", () => {
     const r = syncToBacklog(issues, seed);
     expect(r.added).toBe(1);
-    expect(r.skippedIds).toEqual(["GH-1"]);
-    expect(r.rows).toEqual(["| FIX-GH-2 | fresh bug | 📋 Todo |"]);
-    expect(r.content).toContain("| FIX-GH-2 | fresh bug | 📋 Todo |");
+    expect(r.skippedIds).toEqual(["US-GH-1"]);
+    expect(r.rows).toEqual(["| [FIX-GH-2](backlog-lifecycle/FIX-GH-2/spec.md) | fresh bug | 📋 Todo |"]);
+    expect(r.content).toContain("| [FIX-GH-2](backlog-lifecycle/FIX-GH-2/spec.md) | fresh bug | 📋 Todo |");
+  });
+  it("keeps an existing planning status when the external Issue is closed", () => {
+    const planning = "| ID | D | S |\n|----|---|---|\n| [US-GH-4](backlog-lifecycle/US-GH-4/spec.md) | active plan | 🔨 In Progress |\n";
+    const r = syncToBacklog([issue({ number: 4, title: "closed elsewhere", state: "closed" })], planning);
+    expect(r.added).toBe(0);
+    expect(r.skippedIds).toEqual(["US-GH-4"]);
+    expect(r.content).toBe(planning);
   });
 });
 

@@ -27,6 +27,11 @@ import type {
 } from "../src/index.js";
 
 describe("US-TOOL-001 tool type contracts", () => {
+  it("includes closed execution-context failure codes", () => {
+    const codes: ToolErrorCode[] = ["missing_execution_context", "invalid_execution_context"];
+    expect(codes).toEqual(["missing_execution_context", "invalid_execution_context"]);
+  });
+
   it("exports the complete tool type surface", () => {
     const source = readFileSync(resolve(import.meta.dirname, "../src/types/tool.ts"), "utf8");
     const exports = [...source.matchAll(/^export type (\w+)/gm)].map((match) => match[1]).sort();

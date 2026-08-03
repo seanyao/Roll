@@ -4,7 +4,7 @@
  * tests lock: ok when the auth-context dir exists, an actionable boundary when
  * it does not, and NO credential value ever printed (redaction).
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -90,5 +90,26 @@ describe("roll agent readiness (FIX-1056)", () => {
     const r = run(["readiness", "kimi"], homeWithoutAgy());
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("no headless auth-context probe for 'kimi'");
+  });
+
+  it("US-WS-017a: readiness is independent of cwd project casting", () => {
+    const home = homeWithAgy();
+    const first = mkdtempSync(join(tmpdir(), "roll-readiness-project-a-"));
+    const second = mkdtempSync(join(tmpdir(), "roll-readiness-project-b-"));
+    dirs.push(first, second);
+    for (const [cwd, agent] of [[first, "codex"], [second, "kimi"]] as const) {
+      mkdirSync(join(cwd, ".roll"), { recursive: true });
+      writeFileSync(join(cwd, ".roll", "agents.yaml"), `schema: roll-agents/v1\nscope: project\nroles:\n  supervise: { use: ${agent} }\n`);
+    }
+    const original = process.cwd();
+    try {
+      process.chdir(first);
+      const a = run(["readiness", "agy"], home, { GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined, GOOGLE_APPLICATION_CREDENTIALS: undefined });
+      process.chdir(second);
+      const b = run(["readiness", "agy"], home, { GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined, GOOGLE_APPLICATION_CREDENTIALS: undefined });
+      expect(b).toEqual(a);
+    } finally {
+      process.chdir(original);
+    }
   });
 });

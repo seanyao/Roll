@@ -6,16 +6,25 @@ import {
   normalizeAgentConfig,
   planAgentScopeMigration,
   readAgentDisabledFromText,
+  resolveAgentScopeRole,
+  resolveWorkspaceTarget,
   setAgentDisabledInText,
   type AgentEnv,
   type FileStore,
 } from "@roll/core";
-import type { AgentName, AgentScopeConfig, AgentScopeRole, AgentScopeRoleBinding } from "@roll/spec";
+import type { AgentName, AgentScopeConfig, AgentScopeKind, AgentScopeRole, AgentScopeRoleBinding } from "@roll/spec";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { t, v2Catalog, v3Catalog } from "@roll/spec";
+import { AGENT_SCOPE_ROLES, t, v2Catalog, v3Catalog } from "@roll/spec";
+import { WorkspaceRegistry } from "@roll/infra";
 import { agentListCommand, currentLang, realAgentEnv } from "./agent-list.js";
 import { AGY_AUTH_CONTEXT_ENV, agyAuthContext } from "../runner/agent-spawn.js";
+import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
+
+export type AgentWorkspaceResolution =
+  | { readonly ok: true; readonly workspaceId: string; readonly workspaceRoot: string }
+  | { readonly ok: false; readonly code: string };
 
 export interface AgentCommandDeps {
   env?: AgentEnv;
@@ -30,6 +39,7 @@ export interface AgentCommandDeps {
   /** US-V4-002 — seam for the GLOBAL machine default (`~/.roll/config.yaml`). */
   readDefaultAgent?: () => string | null;
   writeDefaultAgent?: (name: string) => void;
+  resolveWorkspace?: (selector: string) => AgentWorkspaceResolution;
 }
 
 function pal(): { RED: string; GREEN: string; YELLOW: string; NC: string } {
@@ -54,7 +64,7 @@ function m(key: string, ...args: string[]): string {
 
 function depsWithDefaults(
   deps: AgentCommandDeps,
-): Required<Omit<AgentCommandDeps, "readLine" | "readDefaultAgent" | "writeDefaultAgent">> &
+): Required<Omit<AgentCommandDeps, "readLine" | "readDefaultAgent" | "writeDefaultAgent" | "resolveWorkspace">> &
   Pick<AgentCommandDeps, "readLine" | "readDefaultAgent" | "writeDefaultAgent"> {
   return {
     env: deps.env ?? realAgentEnv(),
@@ -130,6 +140,136 @@ function viewCommand(deps: AgentCommandDeps): number {
   );
   process.stdout.write(out.join("\n") + "\n");
   return 0;
+}
+
+function resolveAgentWorkspace(selector: string, deps: AgentCommandDeps): AgentWorkspaceResolution {
+  if (deps.resolveWorkspace !== undefined) return deps.resolveWorkspace(selector);
+  try {
+    const entries = new WorkspaceRegistry({ rollHome: workspaceRollHome() }).inspect();
+    const decision = resolveWorkspaceTarget({
+      operation: "read",
+      registry: workspaceRegistryCandidates(entries),
+      explicit: workspaceTargetSelector(selector),
+    });
+    if (!decision.ok) return { ok: false, code: decision.error.code };
+    if (decision.target.kind !== "workspace") return { ok: false, code: "invalid_target" };
+    return {
+      ok: true,
+      workspaceId: decision.target.workspaceId,
+      workspaceRoot: decision.target.root,
+    };
+  } catch {
+    return { ok: false, code: "invalid_registry" };
+  }
+}
+
+interface WorkspaceBindingView {
+  readonly scope: AgentScopeKind;
+  readonly role: AgentScopeRole;
+}
+
+function workspaceBindingViews(config: AgentScopeConfig): WorkspaceBindingView[] {
+  const out: WorkspaceBindingView[] = [];
+  const scopes: readonly [AgentScopeKind, Readonly<Partial<Record<AgentScopeRole, AgentScopeRoleBinding>>>][] = [
+    ["workspace", config.roles],
+    ["story", config.defaults["story"]?.roles ?? {}],
+    ["skill", config.defaults["skill"]?.roles ?? {}],
+  ];
+  for (const [scope, roles] of scopes) {
+    for (const role of AGENT_SCOPE_ROLES) {
+      if (roles[role] !== undefined) out.push({ scope, role });
+    }
+  }
+  return out;
+}
+
+function localizedSkipReason(reason: string, zh: boolean): string {
+  if (!zh) return reason;
+  if (reason === "disabled") return "已禁用";
+  if (reason === "not-declared-in-machine") return "未在机器层声明";
+  if (reason === "no-consecutive-repeat") return "不可连续复用";
+  return reason;
+}
+
+function workspaceViewCommand(args: string[], deps: AgentCommandDeps): number {
+  if (args.length !== 2 || !isCanonicalWorkspaceSelectorToken(args[0]) || (args[1] ?? "").trim() === "") {
+    process.stdout.write("Usage: roll agent --workspace <id|path>\n");
+    return 1;
+  }
+  const target = resolveAgentWorkspace(args[1] as string, deps);
+  if (!target.ok) {
+    err(`agent workspace: ${target.code}`);
+    return 1;
+  }
+  const { reg, d } = registry(deps);
+  const rollHome = process.env["ROLL_HOME"] ?? join(d.env.home, ".roll");
+  const machine = loadScopeFile(d, join(rollHome, "agents.yaml"));
+  const workspace = loadScopeFile(d, join(target.workspaceRoot, "agents.yaml"));
+  if (machine.kind !== "valid" || machine.config.scope !== "machine") {
+    err("agent workspace: invalid or missing machine agent scope");
+    return 1;
+  }
+  if (workspace.kind !== "valid" || workspace.config.scope !== "workspace") {
+    err("agent workspace: invalid or missing Workspace agent scope");
+    if (workspace.kind === "invalid") {
+      for (const errorLine of workspace.errors) err(`  ${errorLine}`);
+    }
+    return 1;
+  }
+
+  const zh = currentLang() === "zh";
+  const labels = zh
+    ? { root: "根目录", machine: "机器配置", policy: "Workspace 策略", selected: "已选择", model: "模型", strategy: "策略", candidates: "候选", skipped: "跳过", trace: "来源链", error: "错误", none: "无", defaultModel: "默认", unresolved: "未解析" }
+    : { root: "root", machine: "machine", policy: "policy", selected: "selected", model: "model", strategy: "strategy", candidates: "candidates", skipped: "skipped", trace: "trace", error: "error", none: "none", defaultModel: "default", unresolved: "unresolved" };
+  const runtimeHealth = Object.fromEntries(
+    AGENT_REGISTRY_NAMES.map((agent) => [
+      agent,
+      reg.isInstalled(agent) ? { available: true } : { available: false, reason: "not-installed" },
+    ]),
+  ) as Partial<Record<AgentName, { available: boolean; reason?: string }>>;
+  const layers = [
+    { config: machine.config, path: machine.path },
+    { config: workspace.config, path: workspace.path },
+  ];
+  const lines = [
+    "",
+    `  Workspace agent casting — ${target.workspaceId}`,
+    `  ${labels.root}: ${target.workspaceRoot}`,
+    `  ${labels.machine}: ${machine.path}`,
+    `  ${labels.policy}: ${workspace.path}`,
+  ];
+  let failed = false;
+  for (const binding of workspaceBindingViews(workspace.config)) {
+    const resolution = resolveAgentScopeRole({
+      scope: binding.scope,
+      role: binding.role,
+      layers,
+      runtimeHealth,
+    });
+    lines.push("", `  ${binding.scope}.${binding.role}`);
+    if (resolution.ok) {
+      const resolved = resolution.resolved;
+      lines.push(`    ${labels.selected}: ${resolved.agent}`);
+      lines.push(`    ${labels.model}: ${resolved.model ?? labels.defaultModel}`);
+      lines.push(`    ${labels.strategy}: ${resolved.selectedStrategy}`);
+      lines.push(`    ${labels.candidates}: ${resolved.candidates.join(", ") || labels.none}`);
+      lines.push(`    ${labels.skipped}: ${resolved.skipped.length === 0 ? labels.none : resolved.skipped.map((row) => `${row.agent} (${localizedSkipReason(row.reason, zh)})`).join(", ")}`);
+      lines.push(`    ${labels.trace}: ${resolved.trace.map((row) => `${row.source} [${row.action}]`).join(" -> ")}`);
+      continue;
+    }
+    failed = true;
+    const failure = resolution.failure;
+    lines.push(`    ${labels.selected}: ${labels.unresolved}`);
+    lines.push(`    ${labels.model}: ${labels.defaultModel}`);
+    lines.push(`    ${labels.strategy}: none`);
+    lines.push(`    ${labels.candidates}: ${failure.candidates.join(", ") || labels.none}`);
+    lines.push(`    ${labels.skipped}: ${failure.skipped.length === 0 ? labels.none : failure.skipped.map((row) => `${row.agent} (${localizedSkipReason(row.reason, zh)})`).join(", ")}`);
+    lines.push(`    ${labels.trace}: ${failure.trace.map((row) => `${row.source} [${row.action}]`).join(" -> ") || labels.none}`);
+    lines.push(`    ${labels.error}: ${failure.errors.join("; ")}`);
+  }
+  lines.push("");
+  process.stdout.write(`${lines.join("\n")}\n`);
+  return failed ? 1 : 0;
 }
 
 function readIfExists(d: ReturnType<typeof depsWithDefaults>, path: string): string | undefined {
@@ -487,6 +627,7 @@ function enableCommand(args: string[], deps: AgentCommandDeps): number {
 }
 
 export function agentCommand(args: string[], deps: AgentCommandDeps = {}): number {
+  if (isCanonicalWorkspaceSelectorToken(args[0])) return workspaceViewCommand(args, deps);
   const [sub, ...rest] = args;
   if (sub === "list") return (deps.listCommand ?? agentListCommand)(rest);
   if (sub === "readiness") return readinessCommand(rest, deps);
@@ -498,6 +639,6 @@ export function agentCommand(args: string[], deps: AgentCommandDeps = {}): numbe
   if (sub === "use") return useCommand(rest, deps); // retired — fails loud with migration guidance
   if (sub === undefined || sub === "") return viewCommand(deps);
   err(`Unknown subcommand: ${sub}`);
-  process.stdout.write("Usage: roll agent [migrate [--dry-run]|list|readiness [agent]|disable <name> [--machine] [--force]|enable <name> [--machine]]\n");
+  process.stdout.write("Usage: roll agent [--workspace <id|path>|migrate [--dry-run]|list|readiness [agent]|disable <name> [--machine] [--force]|enable <name> [--machine]]\n");
   return 1;
 }

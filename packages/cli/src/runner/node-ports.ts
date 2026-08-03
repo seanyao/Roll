@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   BacklogStore,
@@ -15,13 +16,19 @@ import {
   queryStoryDelivery,
   resolveRoute,
   resolveRouteExcluding,
+  type CycleContext,
   type FreshnessPort,
   type ObservedCommit,
   type RouteDeps,
   type StoryDeliveryTruth,
   type Tier,
 } from "@roll/core";
-import { absent, present } from "@roll/spec";
+import {
+  absent,
+  present,
+  type CycleRepositoryExecutionContext,
+  type RepositoryExecutionContext,
+} from "@roll/spec";
 import {
   acquireLock,
   branchCleanlyRebasesOntoMain,
@@ -49,6 +56,11 @@ import {
   worktreeSubmoduleInit,
   writeHeartbeat,
   push as gitPush,
+  applyIssueInit,
+  IssueInitializationError,
+  readWorkspace,
+  resolveRequirementSourcesForStoryOnDisk,
+  resolveWorkspaceBacklogStoryContract,
 } from "@roll/infra";
 import { cardArchiveDir } from "../lib/archive.js";
 import { attestCommand } from "../commands/attest.js";
@@ -58,15 +70,182 @@ import { probeAgentReachable } from "./agent-liveness.js";
 import { readPendingPublish } from "./pending-publish.js";
 import { resolveScopedStoryExecute } from "./scoped-route.js";
 import { readSelfHeal } from "./selfheal-budget.js";
-import type { Ports, ProcessClock, RunnerPaths } from "./ports.js";
+import type {
+  BoundRepositoryPorts,
+  Ports,
+  ProcessClock,
+  RepositoryPortAdapters,
+  RepositoryPorts,
+  RunnerPaths,
+} from "./ports.js";
+import {
+  appendIssueExecutionEvent,
+  appendRepositoryExecutionEvent,
+  resolveRepositoryExecutionContext,
+} from "./repository-context.js";
+import { defaultRepositoryAdapters, productionRepositoryAdapters, repositoryHeadSha } from "./repository-adapters.js";
 import {
   bootstrapWorktreeSkills,
   commitRollMetadataRepo,
   readPrebuildDistEnabled,
 } from "./worktree-bootstrap.js";
 import { rescueLeakedMain } from "./sandbox-boundary.js";
+import { createNodeAgentCapacityPort } from "./capacity-port.js";
+import { createNodeContextStageHost } from "./context-stage-host.js";
 
 const execFileAsync = promisify(execFile);
+
+async function commitsAheadAt(worktreeCwd: string, baseRef = "origin/main"): Promise<number> {
+  const r = await execFileAsync("git", ["rev-list", "--count", `${baseRef}..HEAD`], {
+    cwd: worktreeCwd,
+    encoding: "utf8",
+  }).catch(() => ({ stdout: "0" }));
+  const n = Number((r.stdout ?? "0").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function tcrCountAt(worktreeCwd: string, baseRef = "origin/main"): Promise<number | undefined> {
+  const r = await execFileAsync("git", ["log", "--oneline", `${baseRef}..HEAD`], {
+    cwd: worktreeCwd,
+    encoding: "utf8",
+  }).catch(() => undefined);
+  if (r === undefined) return undefined;
+  return (r.stdout ?? "").split("\n").filter((line) => line.includes(" tcr:")).length;
+}
+
+async function recentCommitsAt(worktreeCwd: string, baseRef = "origin/main"): Promise<ObservedCommit[]> {
+  const r = await execFileAsync(
+    "git",
+    ["log", "--reverse", "--format=%H%x09%ct%x09%s", `${baseRef}..HEAD`],
+    { cwd: worktreeCwd, encoding: "utf8" },
+  ).catch(() => ({ stdout: "" }));
+  const out: ObservedCommit[] = [];
+  for (const line of (r.stdout ?? "").split("\n")) {
+    if (line.trim() === "") continue;
+    const [hash, ct, ...rest] = line.split("\t");
+    if (hash === undefined || hash === "") continue;
+    const tsSec = Number((ct ?? "0").trim());
+    out.push({
+      hash,
+      message: rest.join("\t"),
+      tsSec: Number.isFinite(tsSec) ? tsSec : 0,
+    });
+  }
+  return out;
+}
+
+export function createRepositoryPorts(
+  ctx: CycleContext,
+  adapters?: RepositoryPortAdapters,
+): BoundRepositoryPorts {
+  const execution = ctx.repositoryExecution;
+  if (execution === undefined) throw new Error("missing_repository_context");
+  const entries = Object.entries(execution.repositories);
+  const aliases = new Set<string>();
+  for (const [key, repository] of entries) {
+    if (key !== repository.repoId || aliases.has(repository.alias)) {
+      throw new Error("invalid_repository_map: keys must match unique repoId/alias identities");
+    }
+    aliases.add(repository.alias);
+  }
+  if (entries.length === 0) throw new Error("invalid_repository_map: at least one repository is required");
+  const defaults = defaultRepositoryAdapters();
+  const selectedAdapters = adapters ?? productionRepositoryAdapters(ctx);
+  const context = (repoId: string): RepositoryExecutionContext => {
+    const repository = execution.repositories[repoId];
+    if (repository === undefined) throw new Error(`unknown_repository: ${repoId}`);
+    return repository;
+  };
+  const writable = (repoId: string, operation: "publish" | "verify"): RepositoryExecutionContext => {
+    const repository = context(repoId);
+    if (repository.access === "read") {
+      throw new Error(`read_only_repository: ${repoId} cannot ${operation}`);
+    }
+    return repository;
+  };
+  return {
+    context,
+    git: {
+      commitsAhead: async (repoId) => selectedAdapters.git.commitsAhead(context(repoId)),
+      tcrCount: async (repoId) => selectedAdapters.git.tcrCount(context(repoId)),
+      recentCommits: async (repoId) => selectedAdapters.git.recentCommits(context(repoId)),
+      dirty: async (repoId) => selectedAdapters.git.dirty(context(repoId)),
+      headSha: async (repoId) => (selectedAdapters.git.headSha ?? defaults.git.headSha ?? repositoryHeadSha)(context(repoId)),
+      push: async (repoId, branch) => selectedAdapters.git.push(writable(repoId, "publish"), branch),
+    },
+    verification: {
+      runRepository: async (repoId, command, env = {}) =>
+        (selectedAdapters.verification ?? defaults.verification)?.runRepository(writable(repoId, "verify"), command, env)
+          ?? Promise.reject(new Error("missing_repository_verification_adapter")),
+      runIntegration: async (cwdRepoId, command, env = {}) =>
+        (selectedAdapters.verification ?? defaults.verification)?.runIntegration(execution, cwdRepoId, command, env)
+          ?? Promise.reject(new Error("missing_repository_verification_adapter")),
+    },
+    provider: {
+      repoSlug: async (repoId) => selectedAdapters.provider.repoSlug(context(repoId)),
+      prState: async (repoId, branch) => selectedAdapters.provider.prState(context(repoId), branch),
+      prMergeInfo: async (repoId, branch) => selectedAdapters.provider.prMergeInfo(context(repoId), branch),
+    },
+    events: {
+      append: (repoId, payload) => appendRepositoryExecutionEvent(ctx, repoId, payload),
+      appendIssue: (payload) => appendIssueExecutionEvent(ctx, payload),
+    },
+  };
+}
+
+function createWorkspaceRepositoryPorts(
+  workspaceRoot: string,
+  adapters?: RepositoryPortAdapters,
+): RepositoryPorts {
+  return {
+    async prepare(request) {
+      const issueRoot = join(workspaceRoot, "issues", request.storyId);
+      const journalPath = join(issueRoot, "issue-init.pending.json");
+      const repairJournal = (): string | null => existsSync(journalPath)
+        ? relative(workspaceRoot, journalPath)
+        : null;
+      try {
+        // A previously materialized Issue is the resumable source of truth. Do
+        // not refetch remotes or require the original backlog contract merely
+        // to resume its already validated manifest and worktrees. Any drift in
+        // those durable facts is still a typed setup failure so the caller can
+        // release the Story lease instead of leaking it through a thrown error.
+        const existing = existsSync(issueRoot)
+          ? await resolveRepositoryExecutionContext(workspaceRoot, request.storyId)
+          : undefined;
+        if (existing !== undefined) {
+          return { kind: "prepared", outcome: "reused" };
+        }
+        const workspace = readWorkspace(workspaceRoot);
+        const contract = resolveWorkspaceBacklogStoryContract(workspaceRoot, request.storyId);
+        if (!contract.ok) {
+          return {
+            kind: "failed",
+            code: contract.code === "symlink_escape" ? "symlink_escape" : "rejected",
+            repairJournal: null,
+          };
+        }
+        const result = await applyIssueInit({
+          workspaceId: workspace.workspaceId,
+          rollHome: process.env["ROLL_HOME"] ?? resolve(homedir(), ".roll"),
+          workspaceRoot,
+          issueRoot,
+          contract: contract.value,
+          bindings: workspace.repositories,
+          requirementManifests: resolveRequirementSourcesForStoryOnDisk(workspaceRoot, request.storyId),
+        });
+        return { kind: "prepared", outcome: result.outcome };
+      } catch (error) {
+        if (error instanceof IssueInitializationError) {
+          return { kind: "failed", code: error.code, repairJournal: repairJournal() };
+        }
+        return { kind: "failed", code: "unexpected", repairJournal: repairJournal() };
+      }
+    },
+    resolve: (storyId) => resolveRepositoryExecutionContext(workspaceRoot, storyId),
+    bind: (ctx) => createRepositoryPorts(ctx, adapters),
+  };
+}
 
 /**
  * FIX-1249 — config-rig model backstop for POOL-PICKED agents. A `select` role
@@ -88,8 +267,9 @@ export function configuredModelBackstop(repoCwd: string, agent: string): string 
 
 function scopedStoryExecuteRoute(
   repoCwd: string,
+  workspaceRoot?: string,
 ): { agent: string; model: string; excluded?: readonly string[]; rotationBlocked?: { previous: string } } | null {
-  const scoped = resolveScopedStoryExecute(repoCwd);
+  const scoped = resolveScopedStoryExecute(repoCwd, workspaceRoot === undefined ? {} : { workspaceRoot });
   if (scoped === null) return null;
   const { resolution, previousBuilder } = scoped;
   // FIX-1267 — the no-consecutive-repeat rotation excludes the previous builder.
@@ -132,12 +312,29 @@ export function nodePorts(opts: {
   paths: RunnerPaths;
   skillBody: string;
   routeDeps: RouteDeps;
+  backlogPath?: string;
   agentSpawn?: AgentSpawn;
   clock?: ProcessClock;
+  repositoryAdapters?: RepositoryPortAdapters;
+  capacityRoot?: string;
 }): Ports {
   const bus = new EventBus();
   const clock = opts.clock ?? systemClock;
   const spawn = opts.agentSpawn ?? realAgentSpawn;
+  const repositories = existsSync(join(opts.repoCwd, "workspace.yaml"))
+    ? createWorkspaceRepositoryPorts(opts.repoCwd, opts.repositoryAdapters)
+    : undefined;
+  const contextStage = repositories === undefined ? undefined : createNodeContextStageHost(opts.repoCwd);
+  const backlogPath = opts.backlogPath ?? (
+    repositories === undefined
+      ? join(opts.repoCwd, ".roll", "backlog.md")
+      : join(opts.repoCwd, "backlog", "index.md")
+  );
+  const capacity = createNodeAgentCapacityPort({
+    paths: opts.paths,
+    clock,
+    ...(opts.capacityRoot === undefined ? {} : { capacityRoot: opts.capacityRoot }),
+  });
 
   // FIX-906: the unified delivery-truth predicate. The structured projection
   // (`ensureDeliveriesFresh`, FIX-904/905) rebuilds deliveries.jsonl from BOTH
@@ -189,27 +386,33 @@ export function nodePorts(opts: {
     return deliveryTruthCache;
   };
   const mergedDelivery = (storyId: string): boolean => {
+    if (repositories !== undefined) return false;
     return deliveryTruth().get(storyId)?.delivered === true;
+  };
+  const pendingMergeDelivery = (storyId: string): { prNumber?: number } | undefined => {
+    if (repositories !== undefined) return undefined;
+    const truth = deliveryTruth().get(storyId);
+    if (truth === undefined) return undefined;
+    if (truth.lifecycleState !== "pending_merge" && truth.lifecycleState !== "ci_red") return undefined;
+    return truth.prNumber === undefined ? {} : { prNumber: truth.prNumber };
   };
 
   return {
     repoCwd: opts.repoCwd,
     paths: opts.paths,
     skillBody: opts.skillBody,
+    ...(repositories === undefined ? {} : { repositories }),
+    ...(contextStage === undefined ? {} : { contextStage }),
     clock,
     agentSpawn: spawn,
+    capacity,
     // FIX-906: unified delivery-truth predicate (structured projection over
     // runs + git merges on origin/main — recognizes external/manual merges).
     mergedDelivery,
     // FIX-1018: skip stories that already have locally-committed-but-unpublished
     // work from a prior cycle. The executor reads the runtime file at pick time.
     pendingPublish: (storyId) => readPendingPublish(dirname(opts.paths.eventsPath)).has(storyId),
-    pendingMergeDelivery: (storyId) => {
-      const truth = deliveryTruth().get(storyId);
-      if (truth === undefined) return undefined;
-      if (truth.lifecycleState !== "pending_merge" && truth.lifecycleState !== "ci_red") return undefined;
-      return truth.prNumber === undefined ? {} : { prNumber: truth.prNumber };
-    },
+    pendingMergeDelivery,
     // FIX-363: the real connectivity probe reuses the same spawn the reviews use.
     agentReachable: (agent) => probeAgentReachable(agent, spawn, { cwd: opts.repoCwd }),
     git: {
@@ -241,12 +444,7 @@ export function nodePorts(opts: {
         // E8: count ahead of the caller's integration branch (defaults to the
         // historical origin/main). A submodule cycle has no origin/main, so the
         // observer callers pass resolveIntegrationBranch(execRepoCwd) instead.
-        const r = await execFileAsync("git", ["rev-list", "--count", `${baseRef}..HEAD`], {
-          cwd: worktreeCwd,
-          encoding: "utf8",
-        }).catch(() => ({ stdout: "0" }));
-        const n = Number((r.stdout ?? "0").trim());
-        return Number.isFinite(n) ? n : 0;
+        return commitsAheadAt(worktreeCwd, baseRef);
       },
       async worktreeStatusSignature(worktreeCwd) {
         // FIX-1477: raw porcelain output IS the fingerprint (string compare in
@@ -278,38 +476,14 @@ export function nodePorts(opts: {
         // FIX-1244: a git failure (missing/stale ref, gone worktree) means the
         // count is UNKNOWN — return undefined so callers never misread it as a
         // real zero (the zero-TCR self-heal gate consumes this).
-        const r = await execFileAsync("git", ["log", "--oneline", `${baseRef}..HEAD`], {
-          cwd: worktreeCwd,
-          encoding: "utf8",
-        }).catch(() => undefined);
-        if (r === undefined) return undefined;
-        return (r.stdout ?? "")
-          .split("\n")
-          .filter((l) => l.includes(" tcr:")).length;
+        return tcrCountAt(worktreeCwd, baseRef);
       },
       async recentCommits(worktreeCwd, baseRef = "origin/main") {
         // The runner's OWN git observation — oldest-first so observeCommits()
         // appends events in chronological order. %ct = committer epoch seconds.
         // E8: baseRef defaults to origin/main; a submodule cycle passes the
         // submodule's integration branch so the observer sees the real commits.
-        const r = await execFileAsync(
-          "git",
-          ["log", "--reverse", "--format=%H%x09%ct%x09%s", `${baseRef}..HEAD`],
-          { cwd: worktreeCwd, encoding: "utf8" },
-        ).catch(() => ({ stdout: "" }));
-        const out: ObservedCommit[] = [];
-        for (const line of (r.stdout ?? "").split("\n")) {
-          if (line.trim() === "") continue;
-          const [hash, ct, ...rest] = line.split("\t");
-          if (hash === undefined || hash === "") continue;
-          const tsSec = Number((ct ?? "0").trim());
-          out.push({
-            hash,
-            message: rest.join("\t"),
-            tsSec: Number.isFinite(tsSec) ? tsSec : 0,
-          });
-        }
-        return out;
+        return recentCommitsAt(worktreeCwd, baseRef);
       },
       // RESUME-PRIOR-WORK probes (un-merged audit-branch reuse).
       async fetchRemoteBranch(repoCwd, branch) {
@@ -398,34 +572,26 @@ export function nodePorts(opts: {
       },
     },
     backlog: {
-      read(projectCwd) {
-        const p = join(projectCwd, ".roll", "backlog.md");
-        if (!existsSync(p)) return [];
-        return parseBacklog(readFileSync(p, "utf8"));
+      read(_projectCwd) {
+        if (!existsSync(backlogPath)) return [];
+        return parseBacklog(readFileSync(backlogPath, "utf8"));
       },
-      // FIX-198: the production binding was MISSING entirely (the optional
-      // chain made every In-Progress claim a silent no-op). ID-anchored mark
-      // under optimistic concurrency; best-effort — a conflict/IO failure must
-      // never kill the cycle, the reconcile pass is the safety net.
-      markStatus(projectCwd, id, status) {
+      markStatus(_projectCwd, id, status) {
         try {
-          const p = join(projectCwd, ".roll", "backlog.md");
-          if (!existsSync(p)) return;
+          if (!existsSync(backlogPath)) return;
           const store = new BacklogStore();
-          const snap = store.readBacklog(p);
+          const snap = store.readBacklog(backlogPath);
           // FIX-1475: EXACT id match. Every runner caller passes a concrete story
           // id (setup In Progress, terminal Done, resume, reconcile), so prefix
           // matching would wrongly flip `<id>-` descendant rows (completing
           // FIX-1475 must not mark FIX-1475-followup). The CLI `roll backlog`
           // pattern commands still use BacklogStore.mark directly.
-          store.markExact(p, snap.hash, id, status);
+          store.markExact(backlogPath, snap.hash, id, status);
         } catch {
           /* best-effort: reconcile owns the fallback */
         }
       },
     },
-    // FIX-306: the runner commits + pushes the `.roll` metadata repo. See the
-    // {@link MetadataPort} doc for WHY this is the runner's job, not the agent's.
     metadata: {
       async commit(projectCwd, message) {
         return commitRollMetadataRepo(projectCwd, message);
@@ -434,31 +600,16 @@ export function nodePorts(opts: {
     route: opts.routeDeps
       ? {
           resolve(storyId, estMin) {
-            const scoped = scopedStoryExecuteRoute(opts.repoCwd);
-            // FIX-1267: the scoped route already carries the rotation exclusion
-            // (excluded / rotationBlocked); return it verbatim so the handler can
-            // enforce the no-consecutive-repeat constraint.
+            const scoped = scopedStoryExecuteRoute(opts.repoCwd, repositories === undefined ? undefined : opts.repoCwd);
             if (scoped !== null) return scoped;
             const tier: Tier = classifyComplexity(estMin);
             const routeDeps = opts.routeDeps;
-            // Compatibility fallback for legacy tier slots. FIX-930: a story
-            // re-picked after a zero-TCR self-heal swap carries a tried-agent
-            // set; route the NEXT untried agent (resolveRouteExcluding) so the
-            // swap actually changes who builds. Empty set => plain resolveRoute.
-            // The store lives at the MAIN runtime dir (repoCwd is the main
-            // project; .roll is symlink-resolved either way).
             const rt = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() || join(opts.repoCwd, ".roll", "loop");
             const tried = storyId !== "" ? readSelfHeal(rt, storyId).triedAgents : [];
             const dec =
               tried.length > 0
                 ? (resolveRouteExcluding(tier, routeDeps, tried) ?? resolveRoute(tier, routeDeps))
                 : resolveRoute(tier, routeDeps);
-            // Thread the routed slot's native --model through to the spawn; absent => ""
-            // (the orchestrator's `ctx.model !== ""` guard then omits --model and
-            // the agent uses its own default). FIX-1249: when the slot supplied no
-            // model (nudge/firstInstalled hop, or an agent-only rig), backfill from
-            // config rigs so the agent still runs its CONFIGURED model rather than a
-            // source-baked default.
             const routedModel = dec.model ?? "";
             return {
               agent: dec.agent,
@@ -469,7 +620,10 @@ export function nodePorts(opts: {
       : { resolve: () => ({ agent: "claude", model: "" }) },
     evidence: {
       openFrame(projectCwd, storyId, runId) {
-        return openEvidenceFrame({ runDir: join(cardArchiveDir(projectCwd, storyId), runId) }).runDir;
+        const runDir = existsSync(join(projectCwd, "workspace.yaml"))
+          ? join(projectCwd, "issues", storyId, "evidence", runId)
+          : join(cardArchiveDir(projectCwd, storyId), runId);
+        return openEvidenceFrame({ runDir }).runDir;
       },
     },
     capture: {

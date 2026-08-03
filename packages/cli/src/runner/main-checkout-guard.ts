@@ -3,6 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, 
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { RollEvent } from "@roll/spec";
+import { resolveIntegrationBranch } from "@roll/infra";
 
 const execFileAsync = promisify(execFile);
 const PROTECTION_MARKER = "main-checkout-protection.json";
@@ -45,6 +46,16 @@ interface ProtectionMarker {
   repoCwd: string;
   cycleId: string;
   entries: ProtectionEntry[];
+  lockPaths?: string[];
+}
+
+export interface MainCheckoutGitPaths {
+  gitDir: string;
+  commonDir: string;
+  config: string;
+  index: string;
+  head: string;
+  branchRef?: string;
 }
 
 export type QuarantineReason = "dirty" | "ahead";
@@ -83,12 +94,17 @@ function markerPath(runtimeDir: string): string {
 }
 
 function git(repoCwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd: repoCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("git", args, {
+    cwd: repoCwd,
+    env: gitDiscoveryEnv(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function gitQuiet(repoCwd: string, args: string[]): boolean {
   try {
-    execFileSync("git", args, { cwd: repoCwd, stdio: "ignore" });
+    execFileSync("git", args, { cwd: repoCwd, env: gitDiscoveryEnv(), stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -121,9 +137,68 @@ function protectedPath(rel: string): boolean {
   return rel !== ".roll" && !rel.startsWith(".roll/") && rel !== "skills" && !rel.startsWith("skills/");
 }
 
+function gitDiscoveryEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_")) delete env[key];
+  }
+  return env;
+}
+
+function resolveGit(repoCwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: repoCwd,
+    env: gitDiscoveryEnv(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/**
+ * FIX-1473: resolve protected Git metadata through Git itself. A linked
+ * worktree's `.git` is a pointer file: index/HEAD live in its private gitdir,
+ * while config and branch refs live in the common dir.
+ */
+export function resolveMainCheckoutGitPaths(repoCwd: string): MainCheckoutGitPaths | undefined {
+  try {
+    const gitDir = resolveGit(repoCwd, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+    const commonDir = resolveGit(repoCwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const gitPath = (rel: string): string =>
+      resolveGit(repoCwd, ["rev-parse", "--path-format=absolute", "--git-path", rel]);
+    const symbolic = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
+      cwd: repoCwd,
+      env: gitDiscoveryEnv(),
+      encoding: "utf8",
+    });
+    const branch = symbolic.status === 0 ? symbolic.stdout.trim() : "";
+    return {
+      gitDir,
+      commonDir,
+      config: gitPath("config"),
+      index: gitPath("index"),
+      head: gitPath("HEAD"),
+      ...(branch !== "" ? { branchRef: gitPath(branch) } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function mainCheckoutGitLockPaths(repoCwd: string): string[] {
+  const paths = resolveMainCheckoutGitPaths(repoCwd);
+  if (paths === undefined) return [];
+  const targets = [paths.config, paths.index, paths.head, paths.branchRef].filter((path): path is string => path !== undefined);
+  return [...new Set(targets.map((path) => `${path}.lock`))];
+}
+
 function gitListFiles(repoCwd: string, args: string[]): string[] {
   try {
-    const out = execFileSync("git", args, { cwd: repoCwd, encoding: "buffer", stdio: ["ignore", "pipe", "pipe"] });
+    const out = execFileSync("git", args, {
+      cwd: repoCwd,
+      env: gitDiscoveryEnv(),
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     return out.toString("utf8").split("\0").filter((rel) => rel !== "");
   } catch {
     return [];
@@ -134,6 +209,7 @@ export async function checkMainDirty(repoCwd: string): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], {
       cwd: repoCwd,
+      env: { ...gitDiscoveryEnv(), GIT_OPTIONAL_LOCKS: "0" },
       encoding: "utf8",
     });
     const dirty: string[] = [];
@@ -289,8 +365,11 @@ function collectProtectionEntries(repoCwd: string): ProtectionEntry[] {
   for (const rel of gitListFiles(repoCwd, ["ls-files", "-z"])) addRel(rel);
   for (const rel of gitListFiles(repoCwd, ["ls-files", "-z", "-o", "--exclude-standard"])) addRel(rel);
   for (const rel of [...rels].sort()) add(join(repoCwd, rel));
-  for (const rel of [".git/index", ".git/packed-refs", ".git/HEAD", ".git/refs/heads/main", ".git/logs/refs/heads/main"]) {
-    add(join(repoCwd, rel));
+  const gitPaths = resolveMainCheckoutGitPaths(repoCwd);
+  if (gitPaths !== undefined) {
+    for (const path of [gitPaths.config, gitPaths.index, gitPaths.head, gitPaths.branchRef]) {
+      if (path !== undefined) add(path);
+    }
   }
   return entries;
 }
@@ -326,7 +405,14 @@ function parseProtectionMarker(raw: string): ProtectionMarker | undefined {
     if (entry === undefined) return undefined;
     entries.push(entry);
   }
-  return { repoCwd: record["repoCwd"], cycleId: record["cycleId"], entries };
+  const rawLockPaths = record["lockPaths"];
+  const lockPaths =
+    rawLockPaths === undefined
+      ? undefined
+      : Array.isArray(rawLockPaths) && rawLockPaths.every((value) => typeof value === "string")
+        ? rawLockPaths
+        : undefined;
+  return { repoCwd: record["repoCwd"], cycleId: record["cycleId"], entries, ...(lockPaths !== undefined ? { lockPaths } : {}) };
 }
 
 function restoreMarker(path: string): number {
@@ -345,6 +431,7 @@ function restoreMarker(path: string): number {
       /* best-effort; missing files should not wedge the next cycle */
     }
   }
+  removeGitLockSentinels(marker.lockPaths ?? []);
   rmSync(path, { force: true });
   return restored;
 }
@@ -361,23 +448,23 @@ function protectionEvent(opts: MainCheckoutGuardOptions, status: WriteProtection
   };
 }
 
-// ─── FIX-1210: config.lock sentinel ──────────────────────────────────────────
+// ─── FIX-1210 / FIX-1473: Git lock sentinels ─────────────────────────────────
 
 /**
- * The `.git/config.lock` sentinel prevents `git config --local` writes
- * (including nested `git init` that writes `core.worktree` to the shared
- * config) by occupying the lock file that git's atomic rename mechanism uses.
- * Normal read operations (commit, add, status) are unaffected because they
- * use refs/objects/index directly, not the config lock.
+ * Lock sentinels prevent config/index/HEAD/current-branch writes by occupying
+ * the paths Git's atomic update mechanisms use. Guard-owned status reads set
+ * GIT_OPTIONAL_LOCKS=0, so leak detection remains available while mutations
+ * fail loud.
  *
  * The sentinel is created as mode 0o444 (read-only for everyone) so that even
  * if a child process inherits our uid, the rename-to-target fails with EACCES.
  */
-const CONFIG_LOCK_REL = ".git/config.lock";
-const CONFIG_LOCK_SENTINEL_TEXT = "roll main-checkout config lock sentinel\n";
+const GIT_LOCK_SENTINEL_TEXT = "roll main-checkout git lock sentinel\n";
+const LEGACY_CONFIG_LOCK_SENTINEL_TEXT = "roll main-checkout config lock sentinel\n";
 
 function configLockPath(repoCwd: string): string {
-  return join(repoCwd, CONFIG_LOCK_REL);
+  const paths = resolveMainCheckoutGitPaths(repoCwd);
+  return paths !== undefined ? `${paths.config}.lock` : join(repoCwd, ".git", "config.lock");
 }
 
 /**
@@ -385,48 +472,50 @@ function configLockPath(repoCwd: string): string {
  * sentinel text (a roll sentinel orphaned by a hard-killed cycle — its release
  * never ran).  Anything else is a live foreign git lock and must be left alone.
  */
-function isReclaimableConfigLock(lockPath: string): boolean {
+function isReclaimableGitLock(lockPath: string): boolean {
   try {
     if (statSync(lockPath).size === 0) return true;
-    return readFileSync(lockPath, "utf8") === CONFIG_LOCK_SENTINEL_TEXT;
+    const contents = readFileSync(lockPath, "utf8");
+    return contents === GIT_LOCK_SENTINEL_TEXT || contents === LEGACY_CONFIG_LOCK_SENTINEL_TEXT;
   } catch {
     return false;
   }
 }
 
-function createConfigLockSentinel(repoCwd: string): void {
+function createGitLockSentinel(lockPath: string): void {
   try {
-    const lockPath = configLockPath(repoCwd);
     if (existsSync(lockPath)) {
-      if (!isReclaimableConfigLock(lockPath)) return;
+      if (!isReclaimableGitLock(lockPath)) return;
       chmodSync(lockPath, 0o644);
       rmSync(lockPath, { force: true });
     }
-    writeFileSync(lockPath, CONFIG_LOCK_SENTINEL_TEXT, "utf8");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, GIT_LOCK_SENTINEL_TEXT, "utf8");
     chmodSync(lockPath, 0o444);
   } catch {
     /* best-effort; the sentinel is a defense-in-depth measure */
   }
 }
 
-function removeConfigLockSentinel(repoCwd: string): void {
-  try {
-    const lockPath = configLockPath(repoCwd);
-    if (existsSync(lockPath) && isReclaimableConfigLock(lockPath)) {
-      // Restore write permission so we can delete it, then remove.  A foreign
-      // (non-sentinel, non-empty) lock belongs to a live git process — leave it.
-      chmodSync(lockPath, 0o644);
-      rmSync(lockPath, { force: true });
+function removeGitLockSentinels(lockPaths: readonly string[]): void {
+  for (const lockPath of lockPaths) {
+    try {
+      if (existsSync(lockPath) && isReclaimableGitLock(lockPath)) {
+        // Restore write permission so we can delete it, then remove. A foreign
+        // lock belongs to a live git process and is left untouched.
+        chmodSync(lockPath, 0o644);
+        rmSync(lockPath, { force: true });
+      }
+    } catch {
+      /* best-effort */
     }
-  } catch {
-    /* best-effort */
   }
 }
 
 export function detectMainCheckoutWriteProtectionResidue(repoCwd: string, runtimeDir: string): MainCheckoutWriteProtectionResidue {
   const lockPath = configLockPath(repoCwd);
   const configLockPresent = existsSync(lockPath);
-  const reclaimableConfigLock = configLockPresent && isReclaimableConfigLock(lockPath);
+  const reclaimableConfigLock = configLockPresent && isReclaimableGitLock(lockPath);
   return {
     markerPath: markerPath(runtimeDir),
     configLockPath: lockPath,
@@ -440,7 +529,7 @@ export function detectMainCheckoutWriteProtectionResidue(repoCwd: string, runtim
 export function recoverMainCheckoutWriteProtectionResidue(repoCwd: string, runtimeDir: string): MainCheckoutWriteProtectionRecovery {
   const before = detectMainCheckoutWriteProtectionResidue(repoCwd, runtimeDir);
   const restoredPaths = restoreMarker(before.markerPath);
-  if (before.reclaimableConfigLock) removeConfigLockSentinel(repoCwd);
+  removeGitLockSentinels(mainCheckoutGitLockPaths(repoCwd));
   const after = detectMainCheckoutWriteProtectionResidue(repoCwd, runtimeDir);
   return {
     ...after,
@@ -508,7 +597,8 @@ export function applyMainCheckoutWriteProtection(opts: MainCheckoutGuardOptions)
   if (recovered) restoreMarker(path);
 
   const entries = collectProtectionEntries(opts.repoCwd);
-  writeMarker(path, { repoCwd: opts.repoCwd, cycleId: opts.cycleId, entries });
+  const lockPaths = mainCheckoutGitLockPaths(opts.repoCwd);
+  writeMarker(path, { repoCwd: opts.repoCwd, cycleId: opts.cycleId, entries, lockPaths });
   for (const entry of entries) {
     try {
       const writeStripped = entry.mode & ~0o222;
@@ -517,15 +607,13 @@ export function applyMainCheckoutWriteProtection(opts: MainCheckoutGuardOptions)
       /* chmod failures are surfaced by the following write attempts/tests */
     }
   }
-  // FIX-1210: add .git/config.lock sentinel to block nested git init config writes
-  createConfigLockSentinel(opts.repoCwd);
+  for (const lockPath of lockPaths) createGitLockSentinel(lockPath);
   return protectionEvent(opts, recovered ? "recovered" : "applied", entries.length);
 }
 
 export function releaseMainCheckoutWriteProtection(opts: MainCheckoutGuardOptions): WriteProtectionResult {
   if (!existsSync(opts.repoCwd)) return protectionEvent(opts, "released", 0);
-  // FIX-1210: remove .git/config.lock sentinel
-  removeConfigLockSentinel(opts.repoCwd);
+  removeGitLockSentinels(mainCheckoutGitLockPaths(opts.repoCwd));
   const restored = restoreMarker(markerPath(opts.runtimeDir));
   return protectionEvent(opts, "released", restored);
 }
@@ -560,9 +648,9 @@ function writeManifest(path: string, manifest: Record<string, unknown>): void {
   renameSync(tmp, path);
 }
 
-function aheadCount(repoCwd: string): number {
+function aheadCount(repoCwd: string, integrationBranch: string): number {
   try {
-    const raw = git(repoCwd, ["rev-list", "--count", "origin/main..HEAD"]);
+    const raw = git(repoCwd, ["rev-list", "--count", `${integrationBranch}..HEAD`]);
     const n = Number(raw);
     return Number.isFinite(n) ? n : 0;
   } catch {
@@ -570,9 +658,9 @@ function aheadCount(repoCwd: string): number {
   }
 }
 
-function aheadFiles(repoCwd: string): string[] {
+function aheadFiles(repoCwd: string, integrationBranch: string): string[] {
   try {
-    return git(repoCwd, ["log", "--reverse", "--format=%s", "origin/main..HEAD"])
+    return git(repoCwd, ["log", "--reverse", "--format=%s", `${integrationBranch}..HEAD`])
       .split("\n")
       .filter((line) => line.trim() !== "")
       .map((line) => `<commit>:${line.trim()}`);
@@ -659,7 +747,8 @@ async function quarantineDirty(opts: QuarantineOptions, files: string[]): Promis
 }
 
 async function quarantineAhead(opts: QuarantineOptions): Promise<QuarantineResult | null> {
-  if (aheadCount(opts.repoCwd) === 0) return null;
+  const integrationBranch = resolveIntegrationBranch(opts.repoCwd);
+  if (aheadCount(opts.repoCwd, integrationBranch) === 0) return null;
   // FIX-1475: the supervised path NEVER moves the shared main ref. The cycle
   // worktree is created from the integration branch (origin/main), so ahead
   // commits on the shared checkout cannot leak into the cycle — resetting them
@@ -677,13 +766,13 @@ async function quarantineAhead(opts: QuarantineOptions): Promise<QuarantineResul
   if (baselineHead !== "" && head === baselineHead) return null;
   const id = quarantineId(opts, "ahead");
   const ref = refName(id);
-  const files = aheadFiles(opts.repoCwd);
+  const files = aheadFiles(opts.repoCwd, integrationBranch);
   // HEAD moved mid-cycle (or no baseline — legacy fallback): a genuine leak.
   // Bookmark the moved tip for audit and fail LOUD (event + manifest + the
   // caller's alert), but still NEVER reset — the shared ref stays exactly
   // where it is; recovery is an explicit human decision.
   if (!gitQuiet(opts.repoCwd, ["branch", ref, "HEAD"])) return null;
-  const restoreCommand = `# FIX-1475: main was NOT moved — the ahead commits remain on main (bookmarked at ${ref}); to drop them manually: git reset --hard origin/main`;
+  const restoreCommand = `# FIX-1475: main was NOT moved — the ahead commits remain on the shared checkout branch (bookmarked at ${ref}); to drop them manually: git reset --hard ${integrationBranch}`;
   const path = manifestPath(opts.runtimeDir, id);
   const ev = toEvent(opts, "ahead", ref, files, path, restoreCommand);
   writeManifest(path, {
@@ -726,22 +815,8 @@ export function quarantineEventToRollEvent(result: QuarantineResult): Extract<Ro
   };
 }
 
-// ─── FIX-1210: worktree env helper ──────────────────────────────────────────
+// ─── FIX-1473: worktree discovery ceiling helper ─────────────────────────────
 
-export function worktreeGitEnv(worktreePath: string, repoCwd: string): NodeJS.ProcessEnv {
-  try {
-    const gitDir = execFileSync("git", ["-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir"], {
-      encoding: "utf8",
-    }).trim();
-    return {
-      GIT_DIR: gitDir,
-      GIT_WORK_TREE: worktreePath,
-      GIT_CEILING_DIRECTORIES: dirname(repoCwd),
-    };
-  } catch {
-    return {
-      GIT_WORK_TREE: worktreePath,
-      GIT_CEILING_DIRECTORIES: dirname(repoCwd),
-    };
-  }
+export function worktreeGitDiscoveryEnv(worktreePath: string): NodeJS.ProcessEnv {
+  return { GIT_CEILING_DIRECTORIES: dirname(worktreePath) };
 }

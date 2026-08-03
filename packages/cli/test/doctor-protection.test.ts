@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ afterAll(() => {
 function tmpRepo(tag: string): string {
   const repo = mkdtempSync(join(tmpdir(), `roll-doctor-protection-${tag}-`));
   dirs.push(repo);
-  mkdirSync(join(repo, ".git"), { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
   mkdirSync(join(repo, ".roll", "loop"), { recursive: true });
   return repo;
 }

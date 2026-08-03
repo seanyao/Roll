@@ -1,0 +1,26 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-018 roll workspace doctor > reports a healthy Workspace from real registry, manifest and cache facts > healthy-terminal-en 1`] = `
+"Workspace ws-demo doctor: healthy
+Status	Finding	Evidence	Next action
+healthy	-	-	none
+Next: none
+"
+`;
+
+exports[`US-WS-018 roll workspace doctor > reports a missing recorded cache as repairable with one typed action > repairable-terminal-en 1`] = `
+"Workspace ws-demo doctor: repairable
+Status	Finding	Evidence	Next action
+repairable	cache_repairable	repos/<REPO_ID>.git	rebuild_cache:<REPO_ID>
+Next: roll workspace doctor ws-demo --repair rebuild_cache:<REPO_ID>
+"
+`;
+
+exports[`US-WS-018 roll workspace doctor > reports unsupported Issue and machine-policy schemas without echoing their contents > blocked-terminal-zh 1`] = `
+"工作区 ws-demo doctor：blocked
+状态	发现	证据	下一步
+blocked	issue_unsupported_schema	issues/US-BAD-SCHEMA/manifest.json	需要 owner 处理（issue_unsupported_schema）
+blocked	lease_unsupported_schema	agents.yaml	需要 owner 处理（lease_unsupported_schema）
+下一步：需要 owner 处理（issue_unsupported_schema）
+"
+`;

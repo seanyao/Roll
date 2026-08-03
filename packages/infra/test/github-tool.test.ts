@@ -13,6 +13,7 @@ import {
   type GitHubPrStatusOutput,
   type GitHubToolId,
 } from "../src/index.js";
+import { TOOL_TEST_REPO_ID, toolWorkspaceContext } from "./tool-workspace-context.js";
 
 const dirs: string[] = [];
 const originalPath = process.env["PATH"];
@@ -45,6 +46,8 @@ function invocation<I>(toolId: GitHubToolId, input: I): ToolInvocation<I> {
     caller: { cycleId: "cycle-1", storyId: "US-TOOL-007", agent: "codex" },
     policy: policy(),
     ts: 100,
+    context: toolWorkspaceContext("US-TOOL-007"),
+    repoId: TOOL_TEST_REPO_ID,
   };
 }
 

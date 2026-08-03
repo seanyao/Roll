@@ -101,12 +101,29 @@
  * state back in with the next observed event; the {@link CycleCommand}s name the
  * existing ports/plans so the adapter dispatches them 1:1.
  */
-import type { AgentId, BuilderFinalizationFacts, CycleCost, CyclePhase, ExecutionProfile, FailureClass, ModelId, TerminalOutcome } from "@roll/spec";
+import type {
+  AgentId,
+  AgentCapacityKey,
+  AgentCapacityLease,
+  BuilderFinalizationFacts,
+  CycleCost,
+  CyclePhase,
+  CycleRepositoryExecutionContext,
+  ExecutionProfile,
+  FailureClass,
+  ModelId,
+  RepositoryCycleIdentity,
+  RepositoryExecutionContext,
+  TerminalOutcome,
+  WorkspaceExecutionContextV1,
+  WorkspaceContextScope,
+} from "@roll/spec";
 import { cycleCurrency } from "../cost/tracker.js";
 import type { RollEvent } from "@roll/spec";
 import { builderFinalizationReady, finalizeBuilder, handoffKindFor } from "./builder-finalization.js";
 import { adversarialNextStep, adversarialDegradeDecision, type AdversarialFailure, type AdversarialRunSummary } from "./adversarial.js";
 import { nextWaitAction, type WaitAction } from "../delivery/pr.js";
+import type { ContextCycleStageStateV1 } from "../context/stage-handoff.js";
 
 // ── v2 terminal vocabulary (six-state model) ─────────────────────────────────
 
@@ -143,6 +160,7 @@ export type V2CycleStatus =
   | "local"
   | "needs_review"
   | "pending_rig_recovery"
+  | "waiting_capacity"
   | "failed"
   | "aborted"
   | "blocked"
@@ -207,6 +225,8 @@ export function mapV2Status(status: V2CycleStatus): TerminalOutcome {
       return "needs_review";
     case "pending_rig_recovery":
       return "idle_no_work";
+    case "waiting_capacity":
+      return "waiting_capacity";
     case "failed":
       return "failed";
     case "aborted":
@@ -266,6 +286,13 @@ export interface CapturedFacts {
   timedOut: boolean;
   /** Commits ahead of origin/main in the worktree (bin/roll:9139). */
   commitsAhead: number;
+  /** Workspace repository observations are real, but repository-scoped
+   * verification/publish is intentionally deferred to US-WS-012. This explicit
+   * seam blocks before legacy single-repository gates can consume the aggregate. */
+  repositoryVerificationPending?: boolean;
+  /** Repository-scoped verification passed and typed publish plans exist, but
+   * provider delivery is owned by the next Workspace delivery phase. */
+  repositoryPublishPending?: boolean;
   /** FIX-252: commits on local main that are not on origin/main. */
   mainAhead?: number;
   /** FIX-1037: main checkout has uncommitted/untracked product-code dirt. */
@@ -320,6 +347,8 @@ export interface CapturedFacts {
 export function classifyCaptured(facts: CapturedFacts): V2CycleStatus {
   if (facts.timedOut) return "blocked";
   if (!facts.usedWorktree) return "failed";
+  if (facts.repositoryVerificationPending === true) return "blocked";
+  if (facts.repositoryPublishPending === true) return "blocked";
   // FIX-1037: main checkout pollution is a sandbox/runner boundary breach. It
   // must fail before any "agent did real work" or "existing PR" branch can
   // publish, otherwise an escaped builder can both dirty main and still ship.
@@ -798,6 +827,8 @@ export type AdversarialRoleName = "test_author" | "implementer" | "attacker";
 export interface AdversarialPlan {
   testAuthor: AgentId;
   implementer: AgentId;
+  testAuthorModel?: ModelId;
+  implementerModel?: ModelId;
   maxRounds: number;
   dryRoundsToStop: number;
   totalTimeoutSec: number;
@@ -824,6 +855,21 @@ export interface AdversarialRuntime {
   implementedInitial: boolean;
 }
 
+export type PendingSpawnProcess =
+  | { readonly kind: "agent"; readonly agent: AgentId; readonly attempt: number }
+  | {
+      readonly kind: "role";
+      readonly role: AdversarialRoleName;
+      readonly agent: AgentId;
+      readonly round: number;
+    };
+
+export interface PendingCapacitySpawn {
+  readonly spawnId: string;
+  readonly key: AgentCapacityKey;
+  readonly process: PendingSpawnProcess;
+}
+
 // ── Cycle commands (the language the stepper emits) ───────────────────────────
 
 /**
@@ -838,8 +884,10 @@ export type CycleCommand =
   | { kind: "pick_story" } // backlog/picker pickStory.
   | { kind: "resume_worktree"; storyId: string } // RESUME-PRIOR-WORK re-point (post-pick).
   | { kind: "resolve_route"; storyId: string } // agent/router resolveRoute+Fallback.
+  | { kind: "acquire_capacity"; pending: PendingCapacitySpawn }
   | { kind: "spawn_agent"; agent: AgentId; attempt: number } // execute (TCR inside).
   | { kind: "spawn_role"; role: AdversarialRoleName; agent: AgentId; round: number } // US-LOOP-102 adversarial execute (verified/designed).
+  | { kind: "release_capacity"; leaseId: string; ownerToken: string }
   | { kind: "kill_agent"; graceSec: number } // watchdog teardown.
   | { kind: "sleep_backoff"; seconds: number } // retry backoff (adapter sleeps).
   | { kind: "capture_facts" } // git rev-list/log count (bin/roll:9127-9157).
@@ -896,6 +944,9 @@ export interface CycleContext {
    *  v4.0 only `standard` (builder-only) actually executes — verified/planned add
    *  evaluator/planner stages in later stories. Absent ⇒ not yet selected. */
   selectedProfile?: ExecutionProfile;
+  /** Exact Context stage state. Consuming stages must use this handoff rather
+   * than discovering a newer Snapshot from the durable store. */
+  contextStage?: ContextCycleStageStateV1;
   /** FIX-208: the real per-cycle cost folded from the agent's parsed usage
    *  (cost/tracker.ts), set by the executor after spawn_agent. Threaded into
    *  BOTH the cycle:end event and the runs row so they agree. Absent ⇒ no
@@ -946,6 +997,130 @@ export interface CycleContext {
    *  so the user's real submodule checkout sees the branch advance. Absent ⇒ the
    *  cycle runs entirely against the superproject (the existing path, unchanged). */
   targetSubmodule?: string;
+  /** US-WS-010: the only repository carrier for Workspace execution. A
+   * cardinality-one Workspace still has one map entry; no repoCwd/worktree
+   * compatibility fields are mirrored onto CycleContext. */
+  repositoryExecution?: CycleRepositoryExecutionContext;
+  /** US-WS-033: immutable Workspace/Issue authority snapshot resolved once at
+   * invocation start and carried through runner, recovery, watch and terminal
+   * handlers. Consumers must never rediscover authority from cwd. */
+  workspaceExecution?: WorkspaceExecutionContextV1;
+  /** Explicit policy classification for missing Workspace authority. */
+  workspaceContextScope?: WorkspaceContextScope;
+  /** Explicit repository selector; canonicalized to repoId before spawn. */
+  repositorySelector?: string;
+}
+
+export type RepositoryCommandOperation = "context" | "edit" | "test" | "tcr" | "publish";
+
+export interface RepositoryScopedCommand extends RepositoryCycleIdentity {
+  readonly operation: RepositoryCommandOperation;
+}
+
+export type RepositoryCommandPlan =
+  | { readonly ok: true; readonly commands: readonly RepositoryScopedCommand[] }
+  | {
+      readonly ok: false;
+      readonly code: "missing_repository_context" | "invalid_repository_map" | "unknown_repository";
+      readonly repoId?: string;
+    }
+  | {
+      readonly ok: false;
+      readonly code: "read_only_repository";
+      readonly repoId: string;
+      readonly operation: RepositoryCommandOperation;
+    };
+
+export type RepositoryEventIdentityResult =
+  | { readonly ok: true; readonly identity: RepositoryCycleIdentity }
+  | {
+      readonly ok: false;
+      readonly code: "missing_repository_context" | "invalid_repository_map" | "unknown_repository";
+      readonly repoId?: string;
+    };
+
+const REPOSITORY_MUTATIONS = new Set<RepositoryCommandOperation>(["edit", "tcr", "publish"]);
+type RepositoryEntry = readonly [string, RepositoryExecutionContext];
+
+function orderedRepositoryEntries(
+  ctx: CycleContext,
+):
+  | { readonly ok: true; readonly entries: RepositoryEntry[] }
+  | { readonly ok: false; readonly code: "missing_repository_context" | "invalid_repository_map" } {
+  if (ctx.storyId === undefined || ctx.repositoryExecution === undefined) {
+    return { ok: false, code: "missing_repository_context" };
+  }
+  const entries = Object.entries(ctx.repositoryExecution.repositories);
+  if (entries.length === 0) return { ok: false, code: "invalid_repository_map" };
+  const aliases = new Set<string>();
+  for (const [key, repository] of entries) {
+    if (key !== repository.repoId || aliases.has(repository.alias)) {
+      return { ok: false, code: "invalid_repository_map" };
+    }
+    aliases.add(repository.alias);
+  }
+  entries.sort(([, left], [, right]) => left.repoId.localeCompare(right.repoId));
+  return { ok: true, entries };
+}
+
+/** Pure repository command planner. It selects by stable repoId, never by cwd,
+ * path basename or agent output; explicit read-only mutations fail loud. */
+export function planRepositoryCommands(
+  ctx: CycleContext,
+  operation: RepositoryCommandOperation,
+  repoIds?: readonly string[],
+): RepositoryCommandPlan {
+  const ordered = orderedRepositoryEntries(ctx);
+  if (!ordered.ok) return ordered;
+  const selected: RepositoryEntry[] = [];
+  if (repoIds === undefined) {
+    selected.push(...ordered.entries.filter(([, repository]) =>
+      !REPOSITORY_MUTATIONS.has(operation) || repository.access === "write"));
+  } else {
+    for (const repoId of repoIds) {
+      const found = ordered.entries.find(([key]) => key === repoId);
+      if (found === undefined) return { ok: false, code: "unknown_repository", repoId };
+      selected.push(found);
+    }
+  }
+  for (const [, repository] of selected) {
+    if (REPOSITORY_MUTATIONS.has(operation) && repository.access === "read") {
+      return { ok: false, code: "read_only_repository", repoId: repository.repoId, operation };
+    }
+  }
+  const execution = ctx.repositoryExecution;
+  const storyId = ctx.storyId;
+  if (execution === undefined || storyId === undefined) {
+    return { ok: false, code: "missing_repository_context" };
+  }
+  return {
+    ok: true,
+    commands: selected.map(([, repository]) => ({
+      operation,
+      workspaceId: execution.workspaceId,
+      storyId,
+      cycleId: ctx.cycleId,
+      repoId: repository.repoId,
+    })),
+  };
+}
+
+/** Build the mandatory identity envelope for a repository-specific event. */
+export function repositoryEventIdentity(
+  ctx: CycleContext,
+  repoId: string,
+): RepositoryEventIdentityResult {
+  const plan = planRepositoryCommands(ctx, "context", [repoId]);
+  if (!plan.ok) {
+    if (plan.code === "read_only_repository") {
+      return { ok: false, code: "invalid_repository_map", repoId };
+    }
+    return plan;
+  }
+  const command = plan.commands[0];
+  if (command === undefined) return { ok: false, code: "unknown_repository", repoId };
+  const { operation: _operation, ...identity } = command;
+  return { ok: true, identity };
 }
 
 /** Minimal context for building a terminal cycle:end event + runs row. */
@@ -977,6 +1152,10 @@ export interface CycleState {
    *  only for verified/designed cycles whose route_resolved carried a plan; a
    *  standard cycle leaves it undefined and follows the single-spawn path. */
   adversarial?: AdversarialRuntime;
+  /** Process selected by routing but forbidden to start until capacity is acquired. */
+  pendingSpawn?: PendingCapacitySpawn;
+  /** Exact machine lease currently authorizing one running agent process. */
+  activeCapacity?: AgentCapacityLease;
   /** Captured post-agent facts (set entering reconcile). */
   captured?: CapturedFacts;
   /** Terminal status once decided. */
@@ -994,10 +1173,25 @@ export type CycleEvent =
   | { type: "preflight_done" }
   | { type: "worktree_created" }
   | { type: "worktree_failed" } // isolation failed → failed terminal (bin/roll:9000).
-  | { type: "story_picked"; storyId: string }
+  | {
+      type: "story_picked";
+      storyId: string;
+      repositoryExecution?: CycleRepositoryExecutionContext;
+      workspaceExecution?: WorkspaceExecutionContextV1;
+      repositorySelector?: string;
+    }
+  | { type: "repository_setup_failed"; storyId: string }
   | { type: "no_story" } // picker returned nothing → idle (bin/roll:9180-class).
   | { type: "route_resolved"; agent: AgentId; model: ModelId; adversarial?: AdversarialPlan; adversarialDegraded?: { cause: string; from?: "verified" | "designed" } }
   | { type: "route_pending"; reason: string }
+  | { type: "capacity_acquired"; spawnId: string; lease: AgentCapacityLease }
+  | {
+      type: "waiting_capacity";
+      spawnId: string;
+      retryAtMs: number;
+      contenders: readonly { readonly agent: AgentId; readonly cycleId: string }[];
+      suspect: boolean;
+    }
   | { type: "agent_exited"; exit: number; timedOut: boolean; lost?: boolean }
   // US-LOOP-102: an adversarial role spawn (test_author/implementer/attacker)
   // exited. `newHole`/`attackTest` are meaningful only for attacker rounds;
@@ -1026,9 +1220,12 @@ const EVENT_VALID_PHASES: Record<Exclude<CycleEvent["type"], "start">, CyclePhas
   worktree_created: ["worktree"],
   worktree_failed: ["worktree"],
   story_picked: ["pick"],
+  repository_setup_failed: ["pick"],
   no_story: ["pick"],
   route_resolved: ["route"],
   route_pending: ["route"],
+  capacity_acquired: ["execute"],
+  waiting_capacity: ["execute"],
   agent_exited: ["execute"],
   role_exited: ["execute"],
   facts_captured: ["reconcile"],
@@ -1118,6 +1315,67 @@ function terminate(
   };
 }
 
+function pendingSpawn(
+  state: CycleState,
+  process: PendingSpawnProcess,
+  model: ModelId,
+): PendingCapacitySpawn {
+  const suffix = process.kind === "agent"
+    ? `agent:${process.attempt}`
+    : `role:${process.role}:${process.round}`;
+  return {
+    spawnId: `${state.ctx.cycleId}:${suffix}`,
+    key: {
+      agent: process.agent,
+      model,
+      contextKey: `${process.agent}:default`,
+    },
+    process,
+  };
+}
+
+function acquirePending(
+  state: CycleState,
+  process: PendingSpawnProcess,
+  model: ModelId,
+  before: CycleCommand[] = [],
+): StepResult {
+  const pending = pendingSpawn(state, process, model);
+  return {
+    state: { ...state, pendingSpawn: pending, activeCapacity: undefined },
+    commands: [...before, { kind: "acquire_capacity", pending }],
+  };
+}
+
+function releaseActiveCapacity(state: CycleState): { state: CycleState; commands: CycleCommand[] } {
+  const lease = state.activeCapacity;
+  if (lease === undefined) return { state, commands: [] };
+  return {
+    state: { ...state, activeCapacity: undefined },
+    commands: [{
+      kind: "release_capacity",
+      leaseId: lease.owner.leaseId,
+      ownerToken: lease.owner.ownerToken,
+    }, {
+      kind: "emit_event",
+      event: {
+        type: "workspace:capacity_released",
+        workspaceId: lease.owner.workspaceId,
+        storyId: lease.owner.storyId,
+        cycleId: lease.owner.cycleId,
+        spawnId: lease.owner.spawnId,
+        agent: lease.key.agent,
+        model: lease.key.model,
+        ts: 0,
+      },
+    }],
+  };
+}
+
+function capacityEventMatches(state: CycleState, spawnId: string): boolean {
+  return state.pendingSpawn !== undefined && state.pendingSpawn.spawnId === spawnId;
+}
+
 /**
  * The pure cycle stepper — `(state, event) → { state, commands }`. Walks the
  * {@link CyclePhase} ladder in the v2 order (pick→route→worktree→execute→publish→
@@ -1149,7 +1407,7 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
     // Disambiguate the two `pick`-phase events: `preflight_done` only PRE-worktree,
     // `story_picked`/`no_story` only POST-worktree (the pick runs inside it).
     if (event.type === "preflight_done" && state.worktreeReady === true) return { state, commands: [] };
-    if ((event.type === "story_picked" || event.type === "no_story") && state.worktreeReady !== true) {
+    if ((event.type === "story_picked" || event.type === "repository_setup_failed" || event.type === "no_story") && state.worktreeReady !== true) {
       return { state, commands: [] };
     }
   }
@@ -1203,12 +1461,38 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
       // the worktree carries the resume tree by the time the agent spawns. When no
       // resume branch exists it is a clean no-op (worktree stays on origin/main).
       return {
-        state: { ...state, phase: "route", ctx: { ...state.ctx, storyId: event.storyId } },
+        state: {
+          ...state,
+          phase: "route",
+          ctx: {
+            ...state.ctx,
+            storyId: event.storyId,
+            ...(event.repositoryExecution === undefined
+              ? {}
+              : { repositoryExecution: event.repositoryExecution }),
+            ...(event.workspaceExecution === undefined
+              ? {}
+              : { workspaceExecution: event.workspaceExecution }),
+            ...(event.repositorySelector === undefined
+              ? {}
+              : { repositorySelector: event.repositorySelector }),
+          },
+        },
         commands: [
           { kind: "resume_worktree", storyId: event.storyId },
           { kind: "resolve_route", storyId: event.storyId },
         ],
       };
+
+    case "repository_setup_failed":
+      return terminate({
+        ...state,
+        phase: "worktree",
+        ctx: { ...state.ctx, storyId: event.storyId },
+      }, "failed", [
+        { kind: "cleanup_environment" },
+        { kind: "cleanup_worktree", branch: state.ctx.branch },
+      ]);
 
     case "route_resolved": {
       // The cost/budget gate is REMOVED — the loop no longer stops on a dollar
@@ -1225,8 +1509,7 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
       // spawn_agent path below — ZERO behaviour change.
       if (event.adversarial !== undefined) {
         const plan = event.adversarial;
-        return {
-          state: {
+        const nextState: CycleState = {
             ...state,
             phase: "execute",
             attempt: 1,
@@ -1240,9 +1523,13 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
               inFlight: "test_author",
               implementedInitial: false,
             },
-          },
-          commands: [startCmd, { kind: "spawn_role", role: "test_author", agent: plan.testAuthor, round: 0 }],
         };
+        return acquirePending(
+          nextState,
+          { kind: "role", role: "test_author", agent: plan.testAuthor, round: 0 },
+          plan.testAuthorModel ?? "",
+          [startCmd],
+        );
       }
       // US-LOOP-106: a verified/designed cycle whose executor could NOT form a
       // heterogeneous test_author≠implementer pair degrades to standard — but NOT
@@ -1252,15 +1539,18 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
         event.adversarialDegraded !== undefined
           ? [adversarialDegradedCmd(execCtx.cycleId, execCtx.storyId ?? "", event.adversarialDegraded.cause, event.adversarialDegraded.from ?? "adversarial")]
           : [];
-      return {
-        state: {
+      const nextState: CycleState = {
           ...state,
           phase: "execute",
           attempt: 1,
           ctx: execCtx,
-        },
-        commands: [startCmd, ...degradeCmds, { kind: "spawn_agent", agent: event.agent, attempt: 1 }],
       };
+      return acquirePending(
+        nextState,
+        { kind: "agent", agent: event.agent, attempt: 1 },
+        event.model,
+        [startCmd, ...degradeCmds],
+      );
     }
 
     case "route_pending":
@@ -1268,7 +1558,95 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
         { kind: "cleanup_environment" }, { kind: "cleanup_worktree", branch: state.ctx.branch },
       ]);
 
+    case "capacity_acquired": {
+      if (!capacityEventMatches(state, event.spawnId)) {
+        return terminate(state, "failed", [{
+          kind: "append_alert",
+          message: `cycle ${state.ctx.cycleId}: capacity acquisition correlation mismatch`,
+        }]);
+      }
+      const pending = state.pendingSpawn as PendingCapacitySpawn;
+      const lease = event.lease;
+      const exact = lease.owner.cycleId === state.ctx.cycleId &&
+        lease.owner.spawnId === pending.spawnId &&
+        lease.key.agent === pending.key.agent &&
+        lease.key.model === pending.key.model &&
+        lease.key.contextKey === pending.key.contextKey;
+      if (!exact) {
+        return terminate(state, "failed", [{
+          kind: "append_alert",
+          message: `cycle ${state.ctx.cycleId}: capacity lease ownership mismatch`,
+        }]);
+      }
+      const process = pending.process;
+      const command: CycleCommand = process.kind === "agent"
+        ? { kind: "spawn_agent", agent: process.agent, attempt: process.attempt }
+        : { kind: "spawn_role", role: process.role, agent: process.agent, round: process.round };
+      const workspaceId = state.ctx.repositoryExecution?.workspaceId ?? "";
+      return {
+        state: { ...state, pendingSpawn: undefined, activeCapacity: lease },
+        commands: [
+          {
+            kind: "emit_event",
+            event: {
+              type: "workspace:capacity_acquired",
+              workspaceId,
+              storyId: state.ctx.storyId ?? "",
+              cycleId: state.ctx.cycleId,
+              spawnId: pending.spawnId,
+              agent: pending.key.agent,
+              model: pending.key.model,
+              ts: 0,
+            },
+          },
+          command,
+        ],
+      };
+    }
+
+    case "waiting_capacity": {
+      if (!capacityEventMatches(state, event.spawnId)) {
+        return terminate(state, "failed", [{
+          kind: "append_alert",
+          message: `cycle ${state.ctx.cycleId}: capacity waiting correlation mismatch`,
+        }]);
+      }
+      const pending = state.pendingSpawn as PendingCapacitySpawn;
+      return terminate(
+        { ...state, pendingSpawn: undefined },
+        "waiting_capacity",
+        [
+          {
+            kind: "emit_event",
+            event: {
+              type: "workspace:waiting_capacity",
+              workspaceId: state.ctx.repositoryExecution?.workspaceId ?? "",
+              storyId: state.ctx.storyId ?? "",
+              cycleId: state.ctx.cycleId,
+              spawnId: pending.spawnId,
+              agent: pending.key.agent,
+              model: pending.key.model,
+              retryAt: event.retryAtMs,
+              contenders: [...new Set(event.contenders.map((contender) => contender.agent))].sort(),
+              suspect: event.suspect,
+              ts: 0,
+            },
+          },
+          { kind: "cleanup_environment" },
+          { kind: "cleanup_worktree", branch: state.ctx.branch },
+        ],
+        "waiting_capacity",
+      );
+    }
+
     case "agent_exited": {
+      if (state.activeCapacity === undefined) {
+        return terminate(state, "failed", [{
+          kind: "append_alert",
+          message: `cycle ${state.ctx.cycleId}: agent exited without active capacity ownership`,
+        }]);
+      }
+      const released = releaseActiveCapacity(state);
       // FIX-1474 — a LOST builder child (killed out-of-band; detected by the
       // runner's liveness probe, surfaced via cycle:agent_lost) converges to
       // the explicit `aborted` terminal: no retry (the death is environmental,
@@ -1276,30 +1654,30 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
       // over the retry plan.
       if (event.lost === true) {
         return {
-          state: { ...state, phase: "execute", terminal: "aborted", done: true, ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut } },
-          commands: abortedTeardownCommands(terminalCtx(state)),
+          state: { ...released.state, phase: "execute", terminal: "aborted", done: true, ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut } },
+          commands: [...released.commands, ...abortedTeardownCommands(terminalCtx(state))],
         };
       }
       const plan = retryPlan({ attempt: state.attempt, exit: event.exit, timedOut: event.timedOut });
       if (plan.action === "abort_timeout") {
         // Watchdog breach → clean teardown (worktree PRESERVED, bin/roll:9122).
         return {
-          state: { ...state, phase: "execute", terminal: "blocked", done: true, ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut } },
-          commands: timeoutTeardownCommands(terminalCtx(state)),
+          state: { ...released.state, phase: "execute", terminal: "blocked", done: true, ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut } },
+          commands: [...released.commands, ...timeoutTeardownCommands(terminalCtx(state))],
         };
       }
       if (plan.action === "retry") {
-        return {
-          state: { ...state, phase: "execute", attempt: plan.nextAttempt },
-          commands: [
-            { kind: "sleep_backoff", seconds: plan.backoffSec },
-            { kind: "spawn_agent", agent: state.ctx.agent ?? "", attempt: plan.nextAttempt },
-          ],
-        };
+        const nextState = { ...released.state, phase: "execute" as const, attempt: plan.nextAttempt };
+        return acquirePending(
+          nextState,
+          { kind: "agent", agent: state.ctx.agent ?? "", attempt: plan.nextAttempt },
+          state.ctx.model ?? "",
+          [...released.commands, { kind: "sleep_backoff", seconds: plan.backoffSec }],
+        );
       }
       if (plan.action === "exhausted") {
         // Retry budget spent → failed (NEVER agent-swap, I6).
-        return terminate({ ...state, phase: "execute", ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut } }, "failed", [
+        return terminate({ ...released.state, phase: "execute", ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut } }, "failed", [...released.commands,
           { kind: "append_alert", message: `cycle ${state.ctx.cycleId}: agent exited ${event.exit} after retries; worktree preserved` },
         ]);
       }
@@ -1308,15 +1686,22 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
       // and failure-attribution can detect zero-output vendor stalls (FIX-1213).
       return {
         state: {
-          ...state,
+          ...released.state,
           phase: "reconcile",
           ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut },
         },
-        commands: [{ kind: "capture_facts" }],
+        commands: [...released.commands, { kind: "capture_facts" }],
       };
     }
 
     case "role_exited": {
+      if (state.activeCapacity === undefined) {
+        return terminate(state, "failed", [{
+          kind: "append_alert",
+          message: `cycle ${state.ctx.cycleId}: role exited without active capacity ownership`,
+        }]);
+      }
+      const released = releaseActiveCapacity(state);
       // US-LOOP-102 — the adversarial subsequence stepper. Purely sequences the
       // roles; the DECISION to keep attacking / fix / stop is delegated to the
       // pure {@link adversarialNextStep} (US-LOOP-100), so "never hangs" is a
@@ -1326,7 +1711,7 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
         // A role event with no adversarial runtime is a stale/replayed adapter
         // event — ignore it (state unchanged, no command). The phase guard
         // already blocks it outside execute.
-        return { state, commands: [] };
+        return { state: released.state, commands: released.commands };
       }
       const cid = state.ctx.cycleId;
       const sid = state.ctx.storyId ?? "";
@@ -1346,19 +1731,21 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
           : { kind: "agent_unavailable", role: adv.inFlight };
         const decision = adversarialDegradeDecision(failure);
         const routedAgent = state.ctx.agent ?? adv.plan.implementer;
-        return {
-          state: {
-            ...state,
+        const nextState: CycleState = {
+            ...released.state,
             phase: "execute",
             attempt: 1,
             adversarial: undefined,
             ctx: { ...state.ctx, agentExitCode: event.exit, agentTimedOut: event.timedOut },
-          },
-          commands: [
-            adversarialDegradedCmd(cid, sid, decision.cause),
-            { kind: "spawn_agent", agent: routedAgent, attempt: 1 },
-          ],
         };
+        return acquirePending(
+          nextState,
+          { kind: "agent", agent: routedAgent, attempt: 1 },
+          state.ctx.model ?? "",
+          [...released.commands,
+            adversarialDegradedCmd(cid, sid, decision.cause),
+          ],
+        );
       }
       const cfg = {
         maxRounds: adv.plan.maxRounds,
@@ -1373,13 +1760,15 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
 
       if (adv.inFlight === "test_author") {
         // Red tests written → hand to the (heterogeneous) implementer, round 0.
-        return {
-          state: { ...state, adversarial: { ...adv, inFlight: "implementer" } },
-          commands: [
+        const nextState = { ...released.state, adversarial: { ...adv, inFlight: "implementer" as const } };
+        return acquirePending(
+          nextState,
+          { kind: "role", role: "implementer", agent: adv.plan.implementer, round: adv.round },
+          adv.plan.implementerModel ?? state.ctx.model ?? "",
+          [...released.commands,
             { kind: "emit_event", event: { type: "adversarial:test-authored", cycleId: cid, storyId: sid, agent: adv.plan.testAuthor, ts: 0 } },
-            { kind: "spawn_role", role: "implementer", agent: adv.plan.implementer, round: adv.round },
           ],
-        };
+        );
       }
 
       if (adv.inFlight === "implementer") {
@@ -1399,11 +1788,18 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
         if (step.kind === "stop") {
           cmds.push(terminatedCmd(step.reason, adv.round, adv.holesFound));
           cmds.push({ kind: "capture_facts" });
-          return { state: { ...state, phase: "reconcile", adversarial: { ...adv, implementedInitial: true } }, commands: cmds };
+          return {
+            state: { ...released.state, phase: "reconcile", adversarial: { ...adv, implementedInitial: true } },
+            commands: [...released.commands, ...cmds],
+          };
         }
         const nextRound = adv.round + 1;
-        cmds.push({ kind: "spawn_role", role: "attacker", agent: adv.plan.testAuthor, round: nextRound });
-        return { state: { ...state, adversarial: { ...adv, round: nextRound, inFlight: "attacker", implementedInitial: true } }, commands: cmds };
+        return acquirePending(
+          { ...released.state, adversarial: { ...adv, round: nextRound, inFlight: "attacker", implementedInitial: true } },
+          { kind: "role", role: "attacker", agent: adv.plan.testAuthor, round: nextRound },
+          adv.plan.testAuthorModel ?? "",
+          [...released.commands, ...cmds],
+        );
       }
 
       // inFlight === "attacker": a breaking test was added. newHole ⇒ a real
@@ -1423,22 +1819,26 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
       };
       const step = adversarialNextStep({ round: adv.round, dryStreak: adv.dryStreak }, { newHole }, cfg);
       if (step.kind === "fix") {
-        return {
-          state: { ...state, adversarial: { ...adv, dryStreak: 0, holesFound, attackTests, inFlight: "implementer" } },
-          commands: [attackEvent, { kind: "spawn_role", role: "implementer", agent: adv.plan.implementer, round: adv.round }],
-        };
+        return acquirePending(
+          { ...released.state, adversarial: { ...adv, dryStreak: 0, holesFound, attackTests, inFlight: "implementer" } },
+          { kind: "role", role: "implementer", agent: adv.plan.implementer, round: adv.round },
+          adv.plan.implementerModel ?? state.ctx.model ?? "",
+          [...released.commands, attackEvent],
+        );
       }
       if (step.kind === "attack") {
         const nextRound = adv.round + 1;
-        return {
-          state: { ...state, adversarial: { ...adv, round: nextRound, dryStreak: reportedDryStreak, holesFound, attackTests, inFlight: "attacker" } },
-          commands: [attackEvent, { kind: "spawn_role", role: "attacker", agent: adv.plan.testAuthor, round: nextRound }],
-        };
+        return acquirePending(
+          { ...released.state, adversarial: { ...adv, round: nextRound, dryStreak: reportedDryStreak, holesFound, attackTests, inFlight: "attacker" } },
+          { kind: "role", role: "attacker", agent: adv.plan.testAuthor, round: nextRound },
+          adv.plan.testAuthorModel ?? "",
+          [...released.commands, attackEvent],
+        );
       }
       // stop (dry / max_rounds / timeout) — deliver the accumulated green state.
       return {
-        state: { ...state, phase: "reconcile", adversarial: { ...adv, dryStreak: reportedDryStreak, holesFound, attackTests } },
-        commands: [attackEvent, terminatedCmd(step.reason, adv.round, holesFound), { kind: "capture_facts" }],
+        state: { ...released.state, phase: "reconcile", adversarial: { ...adv, dryStreak: reportedDryStreak, holesFound, attackTests } },
+        commands: [...released.commands, attackEvent, terminatedCmd(step.reason, adv.round, holesFound), { kind: "capture_facts" }],
       };
     }
 

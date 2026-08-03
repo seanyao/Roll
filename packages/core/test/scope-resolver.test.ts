@@ -48,7 +48,148 @@ defaults:
         agent: pi
 `, ".roll/agents.yaml");
 
+const WORKSPACE = cfg(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+roles:
+  supervise:
+    kind: inherit
+defaults:
+  story:
+    roles:
+      execute:
+        kind: select
+        from: [kimi, codex]
+        strategy: first-available
+  skill:
+    roles:
+      evaluate:
+        kind: fixed
+        agent: pi
+`, "/workspaces/payments/agents.yaml");
+
 describe("resolveAgentScopeRole — US-V4-016", () => {
+  it("resolves machine -> workspace -> story -> skill and excludes project policy", () => {
+    const project = cfg(`schema: roll-agents/v1
+scope: project
+roles:
+  supervise:
+    kind: fixed
+    agent: kimi
+defaults:
+  story:
+    roles:
+      execute:
+        kind: fixed
+        agent: codex
+`, ".roll/agents.yaml");
+
+    const supervise = resolveAgentScopeRole({
+      scope: "workspace",
+      role: "supervise",
+      layers: [MACHINE, project, WORKSPACE],
+    });
+    expect(supervise.ok).toBe(true);
+    if (supervise.ok) {
+      expect(supervise.resolved.agent).toBe("codex");
+      expect(supervise.resolved.trace).toEqual([
+        { source: "/workspaces/payments/agents.yaml:roles.supervise", bindingKind: "inherit", action: "inherit" },
+        { source: "~/.roll/agents.yaml:roles.supervise", bindingKind: "fixed", action: "resolve" },
+      ]);
+    }
+
+    const story = resolveAgentScopeRole({
+      scope: "story",
+      role: "execute",
+      layers: [MACHINE, project, WORKSPACE],
+    });
+    expect(story.ok).toBe(true);
+    if (story.ok) {
+      expect(story.resolved.agent).toBe("kimi");
+      expect(story.resolved.source).toBe("/workspaces/payments/agents.yaml:defaults.story.roles.execute");
+      expect(story.resolved.candidates).toEqual(["kimi", "codex"]);
+    }
+
+    const skill = resolveAgentScopeRole({
+      scope: "skill",
+      role: "evaluate",
+      layers: [MACHINE, project, WORKSPACE],
+    });
+    expect(skill.ok).toBe(true);
+    if (skill.ok) expect(skill.resolved.source).toBe("/workspaces/payments/agents.yaml:defaults.skill.roles.evaluate");
+  });
+
+  it("fails workspace fixed bindings that are absent or inapplicable in machine scope", () => {
+    const machine = cfg(`schema: roll-agents/v1
+scope: machine
+agents:
+  codex:
+    capabilities: [execute]
+    models: [gpt-5.5]
+`, "~/.roll/agents.yaml");
+    const undeclared = cfg(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+roles:
+  execute: { use: kimi }
+`, "/workspaces/payments/agents.yaml");
+    const wrongCapability = cfg(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+roles:
+  evaluate: { use: codex }
+`, "/workspaces/payments/agents.yaml");
+    const wrongModel = cfg(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+roles:
+  execute:
+    kind: fixed
+    agent: codex
+    model: gpt-6
+`, "/workspaces/payments/agents.yaml");
+
+    for (const [role, layer, error] of [
+      ["execute", undeclared, "fixed agent 'kimi' is not declared in machine scope"],
+      ["evaluate", wrongCapability, "fixed agent 'codex' lacks role capability 'evaluate'"],
+      ["execute", wrongModel, "fixed model 'gpt-6' is not declared for machine agent 'codex'"],
+    ] as const) {
+      const resolved = resolveAgentScopeRole({ scope: "workspace", role, layers: [machine, layer] });
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) expect(resolved.failure.errors[0]).toContain(error);
+    }
+  });
+
+  it("keeps undeclared and role-incompatible workspace select candidates visible as skipped", () => {
+    const machine = cfg(`schema: roll-agents/v1
+scope: machine
+agents:
+  codex:
+    capabilities: [execute]
+  pi:
+    capabilities: [evaluate]
+`, "~/.roll/agents.yaml");
+    const workspace = cfg(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+defaults:
+  story:
+    roles:
+      execute:
+        kind: select
+        from: [kimi, pi, codex]
+`, "/workspaces/payments/agents.yaml");
+    const resolved = resolveAgentScopeRole({ scope: "story", role: "execute", layers: [machine, workspace] });
+
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.resolved.agent).toBe("codex");
+      expect(resolved.resolved.skipped).toEqual([
+        { agent: "kimi", reason: "not-declared-in-machine" },
+        { agent: "pi", reason: "missing-role-capability: execute" },
+      ]);
+    }
+  });
   it("resolves machine -> project inheritance and direct story override", () => {
     const projectSupervise = resolveAgentScopeRole({
       scope: "project",

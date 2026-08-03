@@ -1,13 +1,30 @@
 /** Ported-command registry — one line per migrated subcommand. */
-import { resolveLang } from "@roll/spec";
+import { join } from "node:path";
+import { deriveWorkspaceExecutionAuthorities } from "@roll/core";
+import { resolveLang, t, v3Catalog } from "@roll/spec";
 import { registerPorted, usage } from "../bridge.js";
 import { renderState } from "../render.js";
 import { renderLoopHelp } from "../lib/loop-help.js";
+import {
+  canonicalWorkspaceSelectorIndex,
+  containsCanonicalWorkspaceSelector,
+  isCanonicalWorkspaceSelectorToken,
+  withWorkspaceSelector,
+  workspaceSelectorArgs,
+} from "../lib/workspace-selector.js";
+import {
+  cliMatchedOperation,
+  cliMatchedSelectorOperation,
+  cliOperation,
+  cliPositionalOperation,
+  cliSelectorOperation,
+} from "../lib/command-surface.js";
 import { agentCommand } from "./agent.js";
 import { agentListCommand } from "./agent-list.js";
 import { alertCommand } from "./alert.js";
 import { attestCommand } from "./attest.js";
 import { backlogCommand } from "./backlog.js";
+import { emitBacklogTargetError, resolveBacklogCommandTarget } from "./backlog-target.js";
 import {
   backlogClaimCommand,
   backlogLintCommand,
@@ -21,13 +38,15 @@ import {
   loopHotfixHeadContextCommand,
   loopNotifyCommand,
   loopPrecheckCiCommand,
+  loopUnknownSubcommandText,
   loopUnknownSubcommand,
 } from "./loop-cycle-gates.js";
 // US-DOSSIER-037: `roll cast` (routing view) + `roll doc --lang` (Charter/guide viewer).
 import { castCommand } from "./cast.js";
 import { DOC_USAGE, docCommand } from "./doc.js";
 import { ciCommand, ciWaitCommand } from "./ci.js";
-import { configCommand } from "./config.js";
+import { configCommand, configWorkspaceContextOperation } from "./config.js";
+import { contextCommand, contextUsage } from "./context.js";
 import { cycleCommand } from "./cycle.js";
 import { cyclesCommand } from "./cycles.js";
 import { SUPERVISOR_USAGE, supervisorCommand } from "./supervisor.js";
@@ -51,7 +70,9 @@ import { storyValidateCommand } from "./story-validate.js";
 import { initCommand } from "./init.js";
 import { NEXT_USAGE, nextCommand } from "./next.js";
 import { northCommand } from "./north.js";
-import { designCommand } from "./design.js";
+import { designCommand, designRequirementHint } from "./design.js";
+import { loadWorkspaceExecutionContext } from "./workspace-execution-context.js";
+import { deliveryCommand, deliveryUsage } from "./delivery.js";
 // REFACTOR-049: `roll lang` retired → use `roll config lang <zh|en|--reset>`.
 // The lang module's write/clear/read surfaces are consumed by config.ts.
 import { loopFmtCommand } from "./loop-fmt.js";
@@ -62,13 +83,17 @@ import {
   loopResetCommand,
   loopUnmuteCommand,
 } from "./loop-maint.js";
-import { loopReconcileCommand } from "./loop-reconcile.js";
+import { loopDeliveryReconcileCommand, loopReconcileCommand } from "./loop-reconcile.js";
 import { loopReconcilePendingCommand } from "./loop-reconcile-pending.js";
 import { loopReviewResizeCommand } from "./loop-review-resize.js";
 import { loopExhaustionSplitCommand } from "./loop-exhaustion-split.js";
 import { loopRunOnceCommand } from "./loop-run-once.js";
 import { loopSelfDowngradeCommand } from "./loop-self-downgrade.js";
-import { loopPauseCommand, loopResumeCommand } from "./loop-state.js";
+import {
+  loopPauseCommand,
+  loopResumeCommand,
+  loopWorkspaceStatusCommand,
+} from "./loop-state.js";
 import { offboardCommand } from "./offboard.js";
 import { pricesCommand } from "./prices.js";
 import { pulseCommand } from "./pulse.js";
@@ -86,6 +111,11 @@ import { updateCommand } from "./update.js";
 import { versionCommand } from "./version.js";
 import { worktreeAuditCommand } from "./worktree-audit.js";
 import { worktreeCleanupCommand } from "./worktree-cleanup.js";
+import {
+  workspaceWorktreeAuditCommand,
+  workspaceWorktreeCleanupCommand,
+} from "./workspace-worktree-lifecycle.js";
+import { workspaceCommand, workspaceUsage } from "./workspace.js";
 import { deltaCommand } from "./delta.js";
 
 let registered = false;
@@ -102,6 +132,20 @@ function currentHelpLang() {
     lcAll: process.env["LC_ALL"],
     lang: process.env["LANG"],
   });
+}
+
+function backlogUsage(): string {
+  return currentHelpLang() === "zh"
+    ? "用法：roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]\n" +
+        "      roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]\n" +
+        "  读取时可显式启用/禁用 Workspace 澄清；--all 只允许只读聚合，变更命令会拒绝。\n"
+    : "Usage: roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]\n" +
+        "       roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]\n" +
+        "  Reads may explicitly enable/disable Workspace clarification; --all is read-only and mutations are rejected.\n";
+}
+
+function agentUsage(): string {
+  return t(v3Catalog, currentHelpLang(), "agent.usage");
 }
 
 const DOCTOR_TOOLS_USAGE =
@@ -123,6 +167,38 @@ function removedTopLevel(command: string) {
   return (): number => unknownTopLevel(command);
 }
 
+function workspaceProjectRoot(args: readonly string[], operation: "read" | "mutation"): string | number {
+  const target = resolveBacklogCommandTarget(args, operation);
+  if (!target.ok) return emitBacklogTargetError(target);
+  if ("aggregate" in target) {
+    process.stderr.write("roll: --all is not valid for this Workspace-scoped operation\n");
+    return 1;
+  }
+  return target.workspaceRoot;
+}
+
+function removeWorkspaceSelector(args: readonly string[]): string[] {
+  const remaining: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (isCanonicalWorkspaceSelectorToken(args[index])) {
+      index += 1;
+      continue;
+    }
+    const arg = args[index];
+    if (arg !== undefined) remaining.push(arg);
+  }
+  return remaining;
+}
+
+function explicitWorkspaceSelector(args: readonly string[]): string | undefined {
+  const index = canonicalWorkspaceSelectorIndex(args);
+  return index < 0 ? undefined : args[index + 1];
+}
+
+function hasWorkspaceSelectorArg(args: readonly string[]): boolean {
+  return containsCanonicalWorkspaceSelector(args);
+}
+
 function isHelp(arg: string | undefined): boolean {
   return arg === "help" || arg === "--help" || arg === "-h";
 }
@@ -136,7 +212,7 @@ export function registerAll(): void {
       return 0;
     }
     return docCommand(args);
-  }, { help: HELP_USAGE });
+  }, { help: HELP_USAGE, operations: [cliPositionalOperation("help", "read")] });
   registerPorted("status", (args) => {
     if (args[0] === "ci") {
       const rest = args.slice(1);
@@ -149,7 +225,86 @@ export function registerAll(): void {
     }
     if (args[0] === "pulse") return pulseCommand(args.slice(1));
     return statusCommand(args);
-  }, { help: "Usage: roll status [ci|pulse]\n  Project health snapshot, CI status, or delivery pulse.\n项目健康、CI 状态或交付脉搏速览。" });
+  }, {
+    help: "Usage: roll status [ci|pulse]\n  Project health snapshot, CI status, or delivery pulse.\n项目健康、CI 状态或交付脉搏速览。",
+    operations: [
+      cliOperation("status", "read"),
+      cliOperation("status", "ci", ["ci"]),
+      cliOperation("status", "pulse", ["pulse"]),
+    ],
+  });
+  registerPorted("workspace", workspaceCommand, {
+    help: workspaceUsage,
+    operations: [
+      cliMatchedOperation("workspace", "usage", [], [], (args) => args.length === 0),
+      cliOperation("workspace", "create", ["create"]),
+      cliMatchedSelectorOperation(
+        "workspace",
+        "handoff",
+        ["handoff"],
+        withWorkspaceSelector(["handoff", "--skill", "roll-design", "--operation", "design", "--requirement", "Improve backlog", "--json"], "roll"),
+        (args) => args[0] === "handoff",
+      ),
+      cliMatchedSelectorOperation(
+        "workspace",
+        "issue.init",
+        ["issue", "init"],
+        withWorkspaceSelector(["issue", "init", "US-WS-022"], "roll"),
+        (args) => args[0] === "issue" && (args[1] === "init" || isHelp(args[1])),
+      ),
+      cliMatchedSelectorOperation(
+        "workspace",
+        "issue.create",
+        ["issue", "create"],
+        withWorkspaceSelector(["issue", "create", "Fix checkout", "--type", "fix", "--repository", "primary:write"], "roll"),
+        (args) => args[0] === "issue" && args[1] === "create",
+      ),
+      cliMatchedSelectorOperation(
+        "workspace",
+        "requirement.add",
+        ["requirement", "add"],
+        withWorkspaceSelector(["requirement", "add"], "roll"),
+        (args) => args[0] === "requirement" && (args[1] === "add" || isHelp(args[1])),
+      ),
+      cliMatchedOperation(
+        "workspace",
+        "doctor.read",
+        ["doctor"],
+        ["doctor", "roll"],
+        (args) => args[0] === "doctor" && !args.slice(1).includes("--repair"),
+      ),
+      cliMatchedOperation(
+        "workspace",
+        "doctor.repair",
+        ["doctor"],
+        ["doctor", "roll", "--repair", "rebuild_cache:product"],
+        (args) => args[0] === "doctor" && args.slice(1).includes("--repair"),
+      ),
+      cliSelectorOperation("workspace", "migrate", ["migrate"], withWorkspaceSelector(["migrate"], "roll")),
+      cliOperation("workspace", "edit", ["edit"]),
+      cliOperation("workspace", "list", ["list"]),
+      cliSelectorOperation("workspace", "show", ["show"], withWorkspaceSelector(["show"], "roll")),
+      cliOperation("workspace", "register", ["register"]),
+      ...["activate", "pause", "archive"].map((name) =>
+        cliSelectorOperation("workspace", name, [name], withWorkspaceSelector([name], "roll"))),
+    ],
+  });
+  registerPorted("context", contextCommand, {
+    help: contextUsage,
+    operations: [
+      cliOperation("context", "usage"),
+      cliSelectorOperation("context", "status", ["status"], withWorkspaceSelector(["status"], "roll")),
+      cliSelectorOperation("context", "read", ["read"], withWorkspaceSelector(["read", "--stage", "build"], "roll")),
+    ],
+  });
+  registerPorted("delivery", deliveryCommand, {
+    help: deliveryUsage,
+    operations: [
+      cliMatchedOperation("delivery", "usage", [], [], (args) => args.length === 0),
+      ...["list", "show", "reconcile"].map((name) =>
+        cliSelectorOperation("delivery", name, [name], withWorkspaceSelector([name], "roll"))),
+    ],
+  });
   // REFACTOR-049: `roll lang` retired → use `roll config lang <zh|en|--reset>`.
   // REFACTOR-052: machine-only surfaces stay callable but leave the main usage.
   // Collected top-level verbs print a one-line redirect instead of behaving as
@@ -185,7 +340,11 @@ export function registerAll(): void {
       return doctorPardonCommand(args.slice(1));
     }
     return doctorCommand(args);
-  }, { help: doctorUsage });
+  }, {
+    help: doctorUsage,
+    operations: ["diagnose", "skills", "tools", "language", "pardon", "repair-protection"].map((name) =>
+      cliOperation("doctor", name, name === "diagnose" ? [] : [name])),
+  });
   // US-BROW-003: `browser` — DevTools dependency preflight + browser doctor.
   // setup --dry-run never writes; doctor reports managed/interactive/capture readiness.
   // US-BROW-010: `browser update` — check and approve DevTools transport updates.
@@ -196,17 +355,46 @@ export function registerAll(): void {
   // US-EVID-032: `capture` — capture-policy migration (best_effort, capability
   // gated + reversible), evidence-only repair (never reopens the build), and
   // readiness status (v2 gateway + renderer + effective policy).
-  registerPorted("capture", (args) => captureCommand(args), {
+  registerPorted("capture", (args) => {
+    const sub = args[0];
+    if (sub === undefined || isHelp(sub) || sub === "refresh") return captureCommand(args);
+    const root = workspaceProjectRoot(args, sub === "status" ? "read" : "mutation");
+    if (typeof root === "number") return root;
+    return captureCommand(removeWorkspaceSelector(args), {
+      projectPath: root,
+      authorities: deriveWorkspaceExecutionAuthorities(root),
+    });
+  }, {
     help:
-      "Usage: roll capture <status|migrate|repair|local-window>\n" +
-      "  status  [--project <path>] [--json]                 gateway/renderer readiness + effective capture policy\n" +
-      "  migrate [--project <path>] [--revert] [--dry-run] [--json]  enable best_effort when capabilities are ready; reversible\n" +
-      "  repair  <story-id> [--project <path>] [--health <path>] [--json]  evidence-only repair; never reopens the build\n" +
-      "  local-window --story <ID> --url <loopback-url> [--prepare <json>] [--run <id>] [--project <path>] [--json]  isolated local synthetic page only\n",
+      "Usage: roll capture <status|migrate|repair|local-window> [--workspace <id|path>]\n" +
+      "  status  [--json]                 gateway/renderer readiness + effective capture policy\n" +
+      "  migrate [--revert] [--dry-run] [--json]  enable best_effort when capabilities are ready; reversible\n" +
+      "  repair  <story-id> [--health <path>] [--json]  evidence-only repair; never reopens the build\n" +
+      "  local-window --story <ID> --url <loopback-url> [--prepare <json>] [--run <id>] [--json]  isolated local synthetic page only\n",
+    operations: [
+      cliSelectorOperation("capture", "status", ["status"], withWorkspaceSelector(["status"], "roll")),
+      cliSelectorOperation("capture", "migrate", ["migrate"], withWorkspaceSelector(["migrate"], "roll")),
+      cliSelectorOperation("capture", "repair", ["repair"], withWorkspaceSelector(["repair", "US-DEMO-1"], "roll")),
+      cliSelectorOperation("capture", "local-window", ["local-window"], withWorkspaceSelector(["local-window", "--story", "US-DEMO-1", "--url", "http://127.0.0.1:3000"], "roll")),
+      cliOperation("capture", "refresh", ["refresh"]),
+    ],
   });
   // `attest`: the acceptance-evidence report (US-ATTEST-006) — v3-native, no
   // bash counterpart (additive; the evidence chain is new product surface).
-  registerPorted("attest", attestCommand, { hidden: true });
+  registerPorted("attest", async (args) => {
+    if (args.includes("--help") || args.includes("-h") || args.includes("help")) {
+      return attestCommand(args);
+    }
+    const root = workspaceProjectRoot(args, args[0] === "audit" ? "read" : "mutation");
+    if (typeof root === "number") return root;
+    return attestCommand(args, { projectPath: root });
+  }, {
+    hidden: true,
+    operations: [
+      cliSelectorOperation("attest", "audit", ["audit"], withWorkspaceSelector(["audit"], "roll")),
+      cliOperation("attest", "render", [], true, withWorkspaceSelector(["US-DEMO-1"], "roll"), true),
+    ],
+  });
   // `cycles`: the cycle ledger as a first-class command (US-CLI-012) — same
   // aggregation + verdict vocabulary as the web ledger; failures never swallowed.
   registerPorted("cycles", removedTopLevel("cycles"));
@@ -220,7 +408,15 @@ export function registerAll(): void {
   // solely by a fresh-session peer Reviewer (runScorePairing). The only writer of
   // a score note is that Reviewer path, which always sets `scoring: 'pair'`.
   // `index`: regenerate the backlog-derived ID→epic map (US-META-001). v3-native.
-  registerPorted("index", (args) => (args[0] === "--rebuild" ? indexCommand(args) : unknownTopLevel("index")), { hidden: true });
+  registerPorted("index", (args) => {
+    if (args[0] !== "--rebuild") return unknownTopLevel("index");
+    const root = workspaceProjectRoot(args, "mutation");
+    if (typeof root === "number") return root;
+    return indexCommand(removeWorkspaceSelector(args), { projectPath: root, authorityMode: "workspace" });
+  }, {
+    hidden: true,
+    operations: [cliSelectorOperation("index", "rebuild", ["--rebuild"], withWorkspaceSelector(["--rebuild"], "roll"))],
+  });
   // `ls`: the cross-project registry listing (US-DOSSIER-028) — name·tag·verdict·path
   // from ~/.roll/projects.json; --json echoes the file verbatim. ONE registry, two
   // faces (this + the web switcher); missing/stale rows flagged, never dropped.
@@ -229,15 +425,24 @@ export function registerAll(): void {
   // REFACTOR-050: `roll idea` is now the one user-facing card-capture entry;
   // `story new` is retained for agents/skills that need explicit ID+epic control.
   registerPorted("story", (args) => {
-    if (args[0] === "new") return storyNewCommand(args.slice(1));
+    if (args[0] === "new") return storyNewCommand(args.slice(1), { resolveTarget: resolveBacklogCommandTarget });
     // FIX-339 (AC7): `story validate <ID>` — must-declare + visual-evidence-AC
     // self-check, the command-side of the AC6 hard闸 (roll-design prefills it).
-    if (args[0] === "validate") return storyValidateCommand(args.slice(1));
+    if (args[0] === "validate") {
+      const root = workspaceProjectRoot(args.slice(1), "read");
+      if (typeof root === "number") return root;
+      return storyValidateCommand(args.slice(1), { projectPath: root });
+    }
     process.stdout.write(
       "Usage: roll story new <ID> --title <text> [--epic <epic>] [--note <text>]\n" +
         "       roll story validate <ID>\n",
     );
     return args[0] === undefined || args[0] === "--help" || args[0] === "-h" ? 0 : 1;
+  }, {
+    operations: [
+      cliSelectorOperation("story", "new", ["new"], withWorkspaceSelector(["new", "US-DEMO-1", "--title", "Demo"], "roll")),
+      cliSelectorOperation("story", "validate", ["validate"], withWorkspaceSelector(["validate", "US-DEMO-1"], "roll")),
+    ],
   });
   // `gc`: age out old surplus attest runs across the archive layout (US-META-001).
   registerPorted("gc", removedTopLevel("gc"), { hidden: true });
@@ -253,7 +458,21 @@ export function registerAll(): void {
   registerPorted("agent", (args) => {
     if (args[0] === "cast") return castCommand(args.slice(1));
     return agentCommand(args);
-  }, { help: "Usage: roll agent [migrate [--dry-run]|list|cast]\n  View Agent Scope roles, migrate legacy config, list installed agents, or print role casting.\n查看 Agent Scope 角色、迁移旧配置、列出 installed agent，或打印角色分工。" });
+  }, {
+    help: agentUsage,
+    operations: [
+      cliMatchedSelectorOperation(
+        "agent",
+        "workspace",
+        [],
+        workspaceSelectorArgs("roll"),
+        hasWorkspaceSelectorArg,
+      ),
+      cliMatchedOperation("agent", "view", [], [], (args) => args.length === 0),
+      ...["cast", "list", "readiness", "disable", "enable", "default", "set", "migrate", "use"].map((name) =>
+        cliOperation("agent", name, [name])),
+    ],
+  });
   registerPorted("agents", agentListCommand, { hidden: true }); // US-AGENT-048: bash-oracle `roll agents` alias for `roll agent list`
   // `pair`: v3-native Cross-Agent Pairing (US-PAIR-001). `pair init` scaffolds
   // legacy pairing compatibility commands. No bash fallback
@@ -276,7 +495,14 @@ export function registerAll(): void {
     if (sub === "unstick") return backlogUnstickCommand(args.slice(1));
     if (sub === "sync") return backlogSyncCommand(args.slice(1));
     return backlogCommand(args);
-  }, { help: "Usage: roll backlog\n  Render the backlog board.\n渲染任务板。" });
+  }, {
+    help: backlogUsage,
+    operations: [
+      cliSelectorOperation("backlog", "read", [], workspaceSelectorArgs("roll")),
+      ...["show", "block", "defer", "unblock", "promote", "claim", "lint", "unstick", "sync"].map((name) =>
+        cliSelectorOperation("backlog", name, [name], withWorkspaceSelector([name], "roll"))),
+    ],
+  });
   // FIX-356a: `roll brief` retired — US-PORT-002 was an immature owner digest.
   // The absent-command convention (standard unknown-command error from the bridge)
   // is the chosen retired-surface behaviour.
@@ -297,7 +523,19 @@ export function registerAll(): void {
   // appends through BacklogStore's optimistic atomic write (与 backlog 存取同源).
   // A lint violation reports and refuses — no bad card is ever written.
   // No bash fallback: v2 had no `roll idea` command (capture was skill-only).
-  registerPorted("idea", ideaCommand);
+  registerPorted("idea", (args) => {
+    const root = workspaceProjectRoot(args, "mutation");
+    if (typeof root === "number") return root;
+    return ideaCommand(args, {
+      projectPath: root,
+      backlogPath: join(root, "backlog", "index.md"),
+      featuresDir: join(root, "features"),
+      canonical: true,
+      remoteBacklogIds: () => [],
+    });
+  }, {
+    operations: [cliOperation("idea", "capture", [], true, withWorkspaceSelector(["Improve backlog"], "roll"), true)],
+  });
   // `release`: v3-native read-only release guidance (US-PORT-004). Computes the
   // next calver version from package.json + today, surfaces changelog readiness,
   // and prints the PR/tag flow + the CI consistency-gate note. It NEVER bumps,
@@ -312,6 +550,17 @@ export function registerAll(): void {
   registerPorted("release", (args) => {
     if (args[0] === "showcase") return showcaseCommand(args.slice(1));
     return releaseCommand(args);
+  }, {
+    operations: [
+      cliOperation("release", "release"),
+      cliOperation("release", "showcase", ["showcase"]),
+      cliOperation("release", "consistency", ["consistency"]),
+      cliOperation("release", "verify", ["verify"]),
+    ],
+    rejectedRoutes: ["ship", "waiver", "changelog", "tag", "publish"].map((route) => ({
+      route: [route],
+      message: `[roll] roll release ${route} was removed — the release surface is one command: roll release (see roll release --help)`,
+    })),
   });
   // US-SHOW-001: `roll showcase` — the golden-path standard E2E. Resets the
   // target card in a throwaway sandbox, casts an explicit strict-diversity real-agent trio
@@ -339,6 +588,13 @@ export function registerAll(): void {
     if (args[0] === "prices") return pricesCommand(args.slice(1));
     if (args[0] === "tune") return tuneCommand(args.slice(1));
     return configCommand(args);
+  }, {
+    operations: [
+      cliMatchedOperation("config", "read", [], ["lang"], (args) => configWorkspaceContextOperation(args) === "read"),
+      cliMatchedOperation("config", "write", [], ["lang", "en"], (args) => configWorkspaceContextOperation(args) === "write"),
+      cliOperation("config", "prices", ["prices"]),
+      cliOperation("config", "tune", ["tune"]),
+    ],
   });
   // `changelog`: fully TS, deterministic-canonical (US-PORT-005). The v2 default
   // `generate` shelled the configured agent to AI-restyle the draft (and the
@@ -352,9 +608,10 @@ export function registerAll(): void {
   // `init`: full surface TS (fresh/re-init scaffold, existing-codebase onboard
   // launcher, --apply plan consumption, unknown flags, and no-template guard).
   // No sub-paths on bash.
-  registerPorted("init", initCommand, { help: "Usage: roll init [--auto|--repair|--apply] [--yes|--then design]\n  Diagnose this project and route to scaffold, PRD design, existing-codebase onboard, repair, migration, or roll status.\n  --auto: apply deterministic fresh-project scaffolding in non-interactive runs.\n  --repair: repair partial Roll markers only.\n  --apply: validate and apply a reviewed existing-codebase onboard plan.\n  --yes / --then design: after scaffolding a PRD project, continue straight into `roll design` (skips the confirm prompt).\n诊断项目并路由到骨架、PRD 设计、已有代码库接入、修复、迁移或 roll status。\n  --apply：校验并应用已审阅的已有代码库接入计划。\n  --yes / --then design：脚手架搭好后直接续跑 `roll design`（跳过确认）。" });
-  registerPorted("next", nextCommand, { help: NEXT_USAGE });
+  registerPorted("init", initCommand, { help: "Usage: roll init [--auto|--repair|--apply] [--yes|--then design]\n  Diagnose this project and route to scaffold, PRD design, existing-codebase onboard, repair, migration, or roll status.\n  --auto: apply deterministic fresh-project scaffolding in non-interactive runs.\n  --repair: repair partial Roll markers only.\n  --apply: validate and apply a reviewed existing-codebase onboard plan.\n  --yes / --then design: after scaffolding a PRD project, continue straight into `roll design` (skips the confirm prompt).\n诊断项目并路由到骨架、PRD 设计、已有代码库接入、修复、迁移或 roll status。\n  --apply：校验并应用已审阅的已有代码库接入计划。\n  --yes / --then design：脚手架搭好后直接续跑 `roll design`（跳过确认）。", operations: [cliOperation("init", "onboard")] });
+  registerPorted("next", nextCommand, { help: NEXT_USAGE, operations: [cliOperation("next", "read")] });
   registerPorted("north", northCommand, {
+    operations: [cliOperation("north", "read")],
     help: () =>
       currentHelpLang() === "zh"
         ? "用法：roll north [--json] [--no-color]\n  渲染北极星终端面板，或输出原始 roll.north.v1 指标 JSON。\n  四项指标：自主运行时长、交付率、修复税、归因错误；显示当前值、目标、14 天趋势条、趋势箭头和状态。\n  null 表示暂无数据，面板会给出原因。\n"
@@ -363,7 +620,32 @@ export function registerAll(): void {
   // `design`: explicit thin entry point for the $roll-design skill
   // (US-ONBOARD-NUDGE-004). Loads the skill and launches the selected agent;
   // all design logic lives in the skill, not here.
-  registerPorted("design", designCommand, { help: "Usage: roll design [--from-file <path> | \"<requirement>\"] [--agent <name>] [--verbose|--raw]\n  Launch $roll-design interactively with bounded live progress, card-created events, quiet heartbeats, and final handoff; when new Todo cards are created, offer `roll loop go --review auto` after showing agent-pool health.\n交互式启动 $roll-design；默认实时显示有界进展、建卡事件、静默心跳和最终交付；产出新 Todo 卡时会显示 agent 池健康概况，并提议启动 `roll loop go --review auto`。" });
+  registerPorted("design", (args) => {
+    const invocationCwd = process.cwd();
+    const designArgs = removeWorkspaceSelector(args);
+    const loaded = loadWorkspaceExecutionContext({
+      cwd: invocationCwd,
+      operation: "mutation",
+      scope: "workspace_required_mutation",
+      ...(explicitWorkspaceSelector(args) === undefined
+        ? {}
+        : { explicitWorkspace: explicitWorkspaceSelector(args) }),
+      requirement: designRequirementHint(designArgs, invocationCwd),
+    });
+    if (!loaded.ok) {
+      process.stderr.write(`roll design: ${loaded.route === undefined ? "" : `${loaded.route}:`}${loaded.code}\n`);
+      return 1;
+    }
+    return designCommand(designArgs, {
+      cwd: loaded.context.workspace.canonicalRoot,
+      invocationCwd,
+      workspaceExecution: loaded.context,
+      workspaceContextScope: "workspace_required_mutation",
+    });
+  }, {
+    help: "Usage: roll design [--from-file <path> | \"<requirement>\"] [--agent <name>] [--verbose|--raw]\n  Launch $roll-design interactively with bounded live progress, card-created events, quiet heartbeats, and final handoff; when new Todo cards are created, offer `roll loop go --review auto` after showing agent-pool health.\n交互式启动 $roll-design；默认实时显示有界进展、建卡事件、静默心跳和最终交付；产出新 Todo 卡时会显示 agent 池健康概况，并提议启动 `roll loop go --review auto`。",
+    operations: [cliOperation("design", "design", [], true, withWorkspaceSelector(["Improve backlog"], "roll"), true)],
+  });
   // REFACTOR-048: `migrate-features` (card-skeleton backfill for pre-card-era
   // stories, US-META-007) retired — that one-time backfill completed; new cards
   // are minted via `roll story new`.
@@ -382,7 +664,14 @@ export function registerAll(): void {
     }
     if (args[0] === "offboard") return offboardCommand(args.slice(1));
     return setupCommand(args);
-  }, { help: "Usage: roll setup [-f|--force] [--reselect] [--no-capture-install]\n       roll setup skills [args...]\n       roll setup offboard [args...]\n  Install or re-sync Roll conventions/templates for this machine; use -f to force refresh; --no-capture-install skips Roll Capture.app repair.\n本机安装或重新同步 Roll 模板与约定；-f 强制刷新；--no-capture-install 跳过 Roll Capture.app 修复。" });
+  }, {
+    help: "Usage: roll setup [-f|--force] [--reselect] [--no-capture-install]\n       roll setup skills [args...]\n       roll setup offboard [args...]\n  Install or re-sync Roll conventions/templates for this machine; use -f to force refresh; --no-capture-install skips Roll Capture.app repair.\n本机安装或重新同步 Roll 模板与约定；-f 强制刷新；--no-capture-install 跳过 Roll Capture.app 修复。",
+    operations: [
+      cliOperation("setup", "setup"),
+      cliOperation("setup", "skills", ["skills"]),
+      cliOperation("setup", "offboard", ["offboard"]),
+    ],
+  });
   // `ci`: the READ surface is TS (no-flag / `--timeout=N` status report:
   // gh-absent warn, not-a-git-repo err, gh-run-list failure, no-runs note, and
   // the per-run "<name>: <status>/<conclusion>" listing). The `--wait` CI gate
@@ -396,12 +685,29 @@ export function registerAll(): void {
   // suite on the host via a forwarded `npm test`; any other configured type
   // (incl. a stale `tart` — lane removed by REFACTOR-046) errors non-zero WITHOUT a
   // silent host fallback (US-ISO-003). No sub-paths on bash.
-  registerPorted("test", testCommand);
+  registerPorted("test", testCommand, { operations: [cliPositionalOperation("test", "run")] });
   registerPorted("tool", removedTopLevel("tool"));
   // `truth`: deterministic delivery-truth query (US-TRUTH-016). Pure read-only
   // — reads deliveries.jsonl, runs queryStoryDelivery, prints the verdict.
   // Zero markdown parse. `--json` emits the StoryDeliveryTruth verbatim.
-  registerPorted("truth", truthCommand, { help: TRUTH_USAGE, hidden: true });
+  registerPorted("truth", (args) => {
+    if (args[0] === undefined || isHelp(args[0])) return truthCommand(args);
+    const root = workspaceProjectRoot(args, "read");
+    if (typeof root === "number") return root;
+    const authorities = deriveWorkspaceExecutionAuthorities(root);
+    return truthCommand(removeWorkspaceSelector(args), {
+      projectPath: root,
+      backlogPath: authorities.backlog,
+      runtimeRoot: authorities.runtime,
+    });
+  }, {
+    help: TRUTH_USAGE,
+    hidden: true,
+    operations: [
+      cliSelectorOperation("truth", "query", ["query"], withWorkspaceSelector(["query", "US-DEMO-1"], "roll")),
+      cliSelectorOperation("truth", "audit", ["audit"], withWorkspaceSelector(["audit"], "roll")),
+    ],
+  });
   // `tune`: v3-native US-EVID-015 second-order control loop, READ-ONLY. Aggregates
   // four trend signals (review-score notes / runs.jsonl pass rate / events.ndjson
   // misjudgments / runs result_eval.dims rubric relevance) into the pure
@@ -413,7 +719,7 @@ export function registerAll(): void {
   // post-update `roll setup` chain, changelog). The real install is driven via
   // spawned npm/curl/tar; the curl atomic dir-swap is the one whitelisted gap.
   // No sub-paths on bash.
-  registerPorted("update", updateCommand, { help: "Usage: roll update\n  Upgrade the global roll to the latest release (network + global writes).\n升级全局 roll——有副作用,--help 永不触发。" });
+  registerPorted("update", updateCommand, { help: "Usage: roll update\n  Upgrade the global roll to the latest release (network + global writes).\n升级全局 roll——有副作用,--help 永不触发。", operations: [cliOperation("update", "apply")] });
   // `version` / `--version` / `-v`: TS-native (FIX-202). Reads the install
   // tree's package.json (single source of truth), so it no longer reports the
   // fossil bin/roll VERSION= literal. No bash fallback for these.
@@ -424,8 +730,20 @@ export function registerAll(): void {
   // FIX-1273: `worktree cleanup` — safe, audit-derived recovery for canary pressure
   registerPorted("delta", deltaCommand, { hidden: true });
   registerPorted("worktree", (args): number | Promise<number> => {
-    if (args[0] === "audit") return worktreeAuditCommand(args.slice(1));
-    if (args[0] === "cleanup") return worktreeCleanupCommand(args.slice(1));
+    if (args[0] === "audit") {
+      const rest = args.slice(1);
+      if (hasWorkspaceSelectorArg(rest) || (process.env["ROLL_WORKSPACE"] ?? "") !== "") {
+        return workspaceWorktreeAuditCommand(rest);
+      }
+      return worktreeAuditCommand(rest);
+    }
+    if (args[0] === "cleanup") {
+      const rest = args.slice(1);
+      if (hasWorkspaceSelectorArg(rest) || (process.env["ROLL_WORKSPACE"] ?? "") !== "") {
+        return workspaceWorktreeCleanupCommand(rest);
+      }
+      return worktreeCleanupCommand(rest);
+    }
     process.stderr.write("roll worktree: unknown subcommand. Try 'roll worktree audit' or 'roll worktree cleanup'.\n");
     return 1;
   }, { help: "Usage: roll worktree <audit|cleanup> [options]\n  audit    Read-only audit of all git worktrees: ownership, dirt, merge evidence, disposition.\n  cleanup  Safe, audit-derived recovery for branch/worktree canary pressure (--dry-run first, then --apply, then roll loop resume).\n只读审计所有 git worktree,并对 canary 压力提供仅基于审计的安全清理(先 --dry-run,再 --apply,最后 roll loop resume)。" });
@@ -439,6 +757,9 @@ export function registerAll(): void {
     // default `loop status` dashboard output is unchanged.
     if ((args[0] === undefined || args[0] === "status") && args.includes("--capture")) {
       return captureCommand(["status", ...args.slice(1).filter((a) => a !== "--capture")]);
+    }
+    if (args[0] === "status" && (hasWorkspaceSelectorArg(args) || args.includes("--all"))) {
+      return loopWorkspaceStatusCommand(args.slice(1));
     }
     if (args[0] === undefined || args[0] === "status") return dashboardCommand(args.slice(1));
     // `loop eval` / `loop story`: read-face commands (US-PORT-007) — thin TS
@@ -467,10 +788,6 @@ export function registerAll(): void {
     if (args[0] === "log") return loopLogCommand(args.slice(1));
     if (args[0] === "events") return loopEventsCommand(args.slice(1));
     if (args[0] === "alert") return alertCommand(args.slice(1));
-    // `loop monitor` / `loop attach`: retired aliases are gone from dispatch;
-    // the tested stub helpers stay only as historical format fixtures.
-    if (args[0] === "monitor") return loopUnknownSubcommand(args[0]);
-    if (args[0] === "attach") return loopUnknownSubcommand(args[0]);
     if (args[0] === "run-once") return loopRunOnceCommand(args.slice(1));
     // `loop self-downgrade <story> <reason> [subs]`: park a too-big story at
     // 🚫 Hold + append its sub-stories (US-AGENT-042). The roll-build/roll-fix
@@ -492,9 +809,10 @@ export function registerAll(): void {
     // US-LOOP-077 renderer. Never writes/signals the loop; not network-gated
     // (local file tail only — see networkNeeds). `--attach` = tmux attach -r.
     if (args[0] === "watch") return loopWatchCommand(args.slice(1));
-    // `loop reconcile`: US-DELIV-002 layered reconcile-from-main — probes
-    // awaiting cycles against main (PR state + patch-id), emits delivery:reconciled.
-    if (args[0] === "reconcile") return loopReconcileCommand(args.slice(1));
+    // `loop reconcile`: US-WS-015 Workspace-scoped alias of `delivery reconcile`.
+    // The legacy reconcile-from-main engine remains internal to runner ticks;
+    // the public alias never revives repository-local operation.
+    if (args[0] === "reconcile") return loopDeliveryReconcileCommand(args.slice(1));
     // `loop reconcile-pending`: FIX-1052 bounded PR polling reconciler — polls
     // pending-merge PRs, fetches origin/main on merge, and updates delivery truth.
     if (args[0] === "reconcile-pending") return loopReconcilePendingCommand(args.slice(1));
@@ -528,11 +846,31 @@ export function registerAll(): void {
     if (args[0] === "precheck-ci") return loopPrecheckCiCommand(args.slice(1));
     if (args[0] === "hotfix-head-context") return loopHotfixHeadContextCommand(args.slice(1));
     if (args[0] === "agent-routes") return loopAgentRoutesCommand(args.slice(1));
-    if (args[0] === "test-quality-check") return loopUnknownSubcommand(args[0]);
     // Anything else is an unknown loop subcommand — print the v2 usage, exit 1
     // (no bash fallback remains; bin/roll is being retired in US-PORT-021).
     return loopUnknownSubcommand(args[0]);
   }, {
+    operations: [
+      ...[
+        "eval", "story", "runs", "cycles", "cycle", "goal", "recover", "pardon-skip-list", "signals", "adversarial",
+        "log", "events", "alert", "self-downgrade", "review-resize", "exhaustion-split", "fmt", "watch", "reconcile-pending",
+        "reset", "mute", "unmute", "gc", "notify", "enforce-tcr", "precheck-ci",
+        "hotfix-head-context", "agent-routes",
+      ].map((name) => cliOperation("loop", name, [name])),
+      cliMatchedSelectorOperation(
+        "loop",
+        "status",
+        ["status"],
+        withWorkspaceSelector(["status"], "roll"),
+        (args) => args[0] === undefined || args[0] === "status",
+      ),
+      ...["go", "run-once", "reconcile", "pause", "resume"].map((name) =>
+        cliSelectorOperation("loop", name, [name], withWorkspaceSelector([name], "roll"))),
+    ],
+    rejectedRoutes: ["monitor", "attach", "branches", "test-quality-check", "on", "off", "now", "fallback", "test"].map((route) => ({
+      route: [route],
+      message: loopUnknownSubcommandText(route),
+    })),
     // US-DOSSIER-035: a help PROVIDER (not a static string) so `roll loop --help`
     // renders the grouped (control/observe/alerts/maintain) bands locale-resolved
     // — single-language per resolved locale — while still routing through the

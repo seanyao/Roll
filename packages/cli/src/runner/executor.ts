@@ -148,11 +148,39 @@ export async function executeCommand(
     case "resume_worktree":
     case "resolve_route":
       return executeSetupCommand(cmd, ports, ctx);
+    case "acquire_capacity": {
+      const result = ports.capacity.acquire(cmd.pending, ctx);
+      if (result.kind === "waiting") {
+        return {
+          event: {
+            type: "waiting_capacity",
+            spawnId: cmd.pending.spawnId,
+            retryAtMs: result.retryAtMs,
+            contenders: result.contenders,
+            suspect: result.suspect,
+          },
+        };
+      }
+      return {
+        event: {
+          type: "capacity_acquired",
+          spawnId: cmd.pending.spawnId,
+          lease: result.lease,
+        },
+      };
+    }
     case "spawn_agent":
       return executeSpawnAgentCommand(cmd, ports, ctx);
     // US-LOOP-102: adversarial role spawn (test_author/implementer/attacker).
     case "spawn_role":
       return executeSpawnRoleCommand(cmd, ports, ctx);
+    case "release_capacity": {
+      const released = ports.capacity.release(cmd.leaseId, cmd.ownerToken);
+      if (released.kind === "ownership_lost") {
+        throw new Error(`agent_capacity_ownership_lost:${released.reason}`);
+      }
+      return { capacityReleased: true };
+    }
     // layer). No feedback event (the orchestrator already transitioned).
     case "kill_agent":
       return {};

@@ -27,11 +27,17 @@
  * event STILL written, lock released, and a fresh runCycleOnce takes over cleanly.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { RouteDeps } from "@roll/core";
+import { deriveWorkspaceExecutionAuthorities, type CycleContext, type RouteDeps } from "@roll/core";
+import {
+  REPOSITORY_BINDING_V1,
+  WORKSPACE_EXECUTION_CONTEXT_V1,
+  repositoryIdFromRemote,
+  type WorkspaceExecutionContextV1,
+} from "@roll/spec";
 import {
   type AgentSpawn,
   type AgentSpawnResult,
@@ -184,8 +190,78 @@ function paths(rt: string, cycleId: string): RunnerPaths {
   };
 }
 
+function fixtureCycleContext(
+  rt: string,
+  runnerPaths: RunnerPaths,
+  cycleId: string,
+  storyId = "US-RUN-001",
+): CycleContext {
+  const workspaceRoot = join(rt, "workspace-fixture");
+  const issueRoot = join(workspaceRoot, "issues", storyId);
+  const workspaceWorktreePath = join(issueRoot, "product");
+  mkdirSync(issueRoot, { recursive: true });
+  if (lstatSync(workspaceWorktreePath, { throwIfNoEntry: false }) !== undefined) {
+    unlinkSync(workspaceWorktreePath);
+  }
+  symlinkSync(runnerPaths.worktreePath, workspaceWorktreePath, "dir");
+  const remote = "git@github.com:fixture/runner.git";
+  const identity = repositoryIdFromRemote(remote);
+  if (!identity.ok) throw new Error("runner fixture remote must be canonical");
+  const binding = {
+    schema: REPOSITORY_BINDING_V1,
+    repoId: identity.value,
+    alias: "product",
+    remote,
+    integrationBranch: "main",
+    provider: "github" as const,
+    workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
+  };
+  const execution = {
+    workspaceId: "runner-fixture",
+    issueRoot,
+    repositories: {
+      [identity.value]: {
+        repoId: identity.value,
+        alias: binding.alias,
+        access: "write" as const,
+        requiredDelivery: true,
+        noChangePolicy: "changes_required" as const,
+        workBranch: `roll/runner-fixture/${storyId}/product`,
+        worktreePath: workspaceWorktreePath,
+        baseSha: "1".repeat(40),
+        headSha: "2".repeat(40),
+        commands: { test: [], integration: [] },
+      },
+    },
+  };
+  const workspaceExecution: WorkspaceExecutionContextV1 = {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: {
+      workspaceId: execution.workspaceId,
+      root: workspaceRoot,
+      canonicalRoot: workspaceRoot,
+      lifecycle: "active",
+    },
+    resolution: { source: "explicit", evidence: [] },
+    bindings: [binding],
+    issue: {
+      storyId,
+      manifestPath: join(issueRoot, "manifest.json"),
+      execution,
+    },
+    authorities: deriveWorkspaceExecutionAuthorities(workspaceRoot),
+  };
+  return {
+    cycleId,
+    branch: `loop/cycle-${cycleId}`,
+    loop: "ci" as never,
+    workspaceExecution,
+    workspaceContextScope: "issue_required",
+  };
+}
+
 const routeDeps: RouteDeps = {
-  readSlot: () => "claude",
+  readSlot: () => ({ agent: "claude" }),
   firstInstalled: () => "claude",
 };
 
@@ -319,6 +395,147 @@ function fixedClock(start: number): { clock: () => number; set: (v: number) => v
 }
 
 describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
+  it("US-WS-017b capacity exhaustion emits a neutral zero-spawn terminal and restores Todo", async () => {
+    const { repo } = makeFixture("capacity-wait");
+    const rt = tmp("capacity-wait-rt");
+    const cycleId = "20260722-230000-1701";
+    const p = paths(rt, cycleId);
+    let spawnCount = 0;
+    const base = nodePorts({
+      repoCwd: repo,
+      paths: p,
+      skillBody: "deliver",
+      routeDeps,
+      capacityRoot: tmp("capacity-wait-broker"),
+    });
+    const ports: Ports = {
+      ...base,
+      github: fakeGithub(0),
+      agentSpawn: async () => {
+        spawnCount += 1;
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      },
+      capacity: {
+        ...base.capacity,
+        acquire: () => ({
+          kind: "waiting",
+          retryAtMs: 1_800_000_000,
+          contenders: [{ agent: "claude", cycleId: "private-contender-cycle" }],
+          suspect: false,
+        }),
+      },
+    };
+
+    const result = await runCycleOnce({
+      ports,
+      ctx: fixtureCycleContext(rt, p, cycleId),
+    });
+
+    expect(result.terminal).toBe("waiting_capacity");
+    expect(spawnCount).toBe(0);
+    expect(readFileSync(join(repo, ".roll", "backlog.md"), "utf8")).toContain("| US-RUN-001 | Runner adapter smoke story est_min:5 | 📋 Todo |");
+    const events = readFileSync(p.eventsPath, "utf8");
+    expect(events).toContain('"type":"workspace:waiting_capacity"');
+    expect(events).toContain('"contenders":["claude"]');
+    expect(events).not.toContain("private-contender-cycle");
+    const row = JSON.parse(readFileSync(p.runsPath, "utf8").trim()) as Record<string, unknown>;
+    expect(row).toMatchObject({ status: "waiting_capacity", outcome: "waiting_capacity" });
+  });
+
+  it("US-WS-017b unexpected agent throw releases the residual exact-owned capacity lease", async () => {
+    const { repo } = makeFixture("capacity-throw");
+    const rt = tmp("capacity-throw-rt");
+    const cycleId = "20260722-230000-1702";
+    const p = paths(rt, cycleId);
+    const base = nodePorts({
+      repoCwd: repo,
+      paths: p,
+      skillBody: "deliver",
+      routeDeps,
+      capacityRoot: tmp("capacity-throw-broker"),
+    });
+    let releases = 0;
+    const ports: Ports = {
+      ...base,
+      github: fakeGithub(0),
+      agentSpawn: async () => {
+        throw new Error("fixture agent exploded");
+      },
+      capacity: {
+        ...base.capacity,
+        release(leaseId, ownerToken) {
+          releases += 1;
+          return base.capacity.release(leaseId, ownerToken);
+        },
+      },
+    };
+
+    await expect(runCycleOnce({
+      ports,
+      ctx: fixtureCycleContext(rt, p, cycleId),
+    })).rejects.toThrow("fixture agent exploded");
+
+    expect(releases).toBe(1);
+    expect(readFileSync(p.eventsPath, "utf8")).toContain('"outcome":"aborted_no_delivery"');
+  });
+
+  it("US-WS-017b heartbeat ownership loss kills the live agent before failing loud", async () => {
+    const { repo } = makeFixture("capacity-heartbeat-loss");
+    const rt = tmp("capacity-heartbeat-loss-rt");
+    const cycleId = "20260722-230000-1703";
+    const p = paths(rt, cycleId);
+    const base = nodePorts({
+      repoCwd: repo,
+      paths: p,
+      skillBody: "deliver",
+      routeDeps,
+      capacityRoot: tmp("capacity-heartbeat-loss-broker"),
+    });
+    let heartbeatCalls = 0;
+    let releaseCalls = 0;
+    let killCalls = 0;
+    let finishSpawn!: () => void;
+    const spawnFinished = new Promise<void>((resolve) => {
+      finishSpawn = resolve;
+    });
+    const ports: Ports = {
+      ...base,
+      github: fakeGithub(0),
+      agentSpawn: async () => {
+        await spawnFinished;
+        return { stdout: "", stderr: "", exitCode: 137, timedOut: false };
+      },
+      capacity: {
+        ...base.capacity,
+        heartbeatIntervalMs: 5,
+        heartbeat(leaseId, ownerToken) {
+          heartbeatCalls += 1;
+          if (heartbeatCalls === 1) return base.capacity.heartbeat(leaseId, ownerToken);
+          return { kind: "ownership_lost", reason: "lease_missing_or_unreadable" };
+        },
+        release(leaseId, ownerToken) {
+          releaseCalls += 1;
+          return base.capacity.release(leaseId, ownerToken);
+        },
+      },
+    };
+
+    await expect(runCycleOnce({
+      ports,
+      ctx: fixtureCycleContext(rt, p, cycleId),
+      killAgents: () => {
+        killCalls += 1;
+        finishSpawn();
+        return 1;
+      },
+    })).rejects.toThrow("agent_capacity_ownership_lost:lease_missing_or_unreadable");
+
+    expect(killCalls).toBe(1);
+    expect(releaseCalls).toBe(1);
+    expect(readFileSync(p.alertsPath, "utf8")).toContain("killed live agent process");
+    expect(readFileSync(p.eventsPath, "utf8")).toContain('"outcome":"aborted_no_delivery"');
+  });
+
   it("US-LOOP-098 proves detached cycle branch governance against real git refs", async () => {
     const { repo, remote } = makeGitignoredFixture("branch-gov");
     // CI runners carry no global git identity; the cycle's own commits (worktree
@@ -415,7 +632,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.ran).toBe(true);
@@ -458,15 +675,47 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // so the shim's claude wire-format stdout is parsed (the pool agents pi/kimi
     // do not emit claude stream-json).
     const claudeStreamRoute: RouteDeps = {
-      readSlot: () => "claude-stream",
+      readSlot: () => ({ agent: "claude-stream" }),
       firstInstalled: () => "claude-stream",
     };
     const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps: claudeStreamRoute });
-    const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+    const ports: Ports = {
+      ...base,
+      agentSpawn: shim,
+      github: fakeGithub(0),
+      capacity: {
+        ...base.capacity,
+        acquire(pending, ctx) {
+          return {
+            kind: "acquired",
+            lease: {
+              schema: "roll-agent-capacity-lease/v1",
+              key: pending.key,
+              owner: {
+                leaseId: `lease:${pending.spawnId}`,
+                ownerToken: `token:${pending.spawnId}`,
+                workspaceId: "legacy-cost-fixture",
+                storyId: ctx.storyId ?? "",
+                cycleId: ctx.cycleId,
+                spawnId: pending.spawnId,
+                host: "fixture",
+                pid: process.pid,
+                processStartedAtMs: 1,
+              },
+              acquiredAtMs: 1,
+              heartbeatAtMs: 1,
+            },
+          };
+        },
+        heartbeat: () => ({ kind: "updated" }),
+        release: () => ({ kind: "released" }),
+        releaseCurrent: () => ({ kind: "already_released" }),
+      },
+    };
 
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     // Terminal: published → done.
@@ -575,7 +824,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -620,7 +869,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
       timeoutSec: 2700,
     });
 
@@ -657,7 +906,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     const ports2: Ports = { ...base2, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result2 = await runCycleOnce({
       ports: ports2,
-      ctx: { cycleId: cycleId2, branch: `loop/cycle-${cycleId2}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p2, cycleId2),
     });
     expect(result2.ran).toBe(true);
     expect(result2.terminal).toBe("published"); // FIX-244
@@ -695,7 +944,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
       timeoutSec: 2700,
     });
 
@@ -767,7 +1016,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       const startedWallMs = Date.now();
       const result = await runCycleOnce({
         ports,
-        ctx: { cycleId, branch, loop: "ci" as never },
+        ctx: fixtureCycleContext(rt, p, cycleId),
       });
       const elapsedWallMs = Date.now() - startedWallMs;
 
@@ -848,7 +1097,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       const startedWallMs = Date.now();
       const result = await runCycleOnce({
         ports,
-        ctx: { cycleId, branch, loop: "ci" as never },
+        ctx: fixtureCycleContext(rt, p, cycleId),
       });
       const elapsedWallMs = Date.now() - startedWallMs;
 
@@ -901,7 +1150,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
     expect(result.ran).toBe(false);
     expect(result.heldByPid).toBe(process.pid);
@@ -934,7 +1183,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
     // idle folds to the `built` spec outcome but the v2 terminal status is idle.
     expect(result.terminal).toBe("idle");
@@ -1084,7 +1333,7 @@ describe("FIX-206 — a partial-fossil .roll is relinked so the backlog is visib
     const ports: Ports = { ...base, agentSpawn: shim, github: selfPublishedGithub };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1119,7 +1368,7 @@ describe("FIX-198 status flips on the gitignored-.roll layout", () => {
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1141,7 +1390,7 @@ describe("FIX-198 status flips on the gitignored-.roll layout", () => {
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending // recycled → re-picked → delivered
@@ -1169,7 +1418,7 @@ describe("FIX-211 — Done ≡ merged: no publish-time 抢跑 on the gitignored 
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0, "OPEN") };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     // Cycle still lands `done` (published, handed to the async PR loop) and the
@@ -1192,7 +1441,7 @@ describe("FIX-211 — Done ≡ merged: no publish-time 抢跑 on the gitignored 
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0, "MERGED") };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1233,7 +1482,7 @@ describe("FIX-304 — enforce done ≡ merged: a non-merged cycle leaves no prem
     const ports: Ports = { ...base, agentSpawn: shimFlipsDone, github: fakeGithub(0, "OPEN") };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published");
@@ -1255,7 +1504,7 @@ describe("FIX-304 — enforce done ≡ merged: a non-merged cycle leaves no prem
     const ports: Ports = { ...base, agentSpawn: shimFlipsDone, github: fakeGithub(0, "MERGED") };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published");
@@ -1345,7 +1594,7 @@ describe("FIX-211 — preflight reconcile 补翻: async PR-loop merge flips a st
     };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1377,7 +1626,7 @@ describe("FIX-211 — preflight reconcile 补翻: async PR-loop merge flips a st
     };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1405,7 +1654,7 @@ describe("FIX-211 — preflight reconcile 补翻: async PR-loop merge flips a st
     };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId, "US-PRIOR"),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1434,7 +1683,7 @@ describe("US-PORT-011 — live.log streams the agent transcript", () => {
     };
     const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
     const ports: Ports = { ...base, agentSpawn: streamingShim, github: fakeGithub(0) };
-    const result = await runCycleOnce({ ports, ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never } });
+    const result = await runCycleOnce({ ports, ctx: fixtureCycleContext(rt, p, cycleId) });
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
     const live = readFileSync(join(rt, "live.log"), "utf8");
     expect(live).toContain(`── cycle ${cycleId}`);
@@ -1465,7 +1714,7 @@ describe("FIX-204B — the executor pins the picked story into the agent spawn",
     const ports: Ports = { ...base, agentSpawn: pinProbe, github: fakeGithub(0), installedAgents: () => ["claude"] };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
     expect(seenStoryId).toBe("US-RUN-001");
@@ -1498,7 +1747,7 @@ describe("FIX-204C — worktree sees the main .roll via symlink", () => {
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1527,7 +1776,7 @@ describe("FIX-204C — worktree sees the main .roll via symlink", () => {
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
     expect(isLink).toBe(false);
@@ -1564,7 +1813,7 @@ describe("FIX-209 — cycle baseline freshness: preflight fetches the remote mer
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1616,7 +1865,7 @@ describe("FIX-284 — RESUME-PRIOR-WORK engages POST-pick (the storyId-timing wi
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.ran).toBe(true);
@@ -1646,7 +1895,7 @@ describe("FIX-284 — RESUME-PRIOR-WORK engages POST-pick (the storyId-timing wi
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      ctx: fixtureCycleContext(rt, p, cycleId),
     });
 
     expect(result.ran).toBe(true);

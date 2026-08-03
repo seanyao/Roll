@@ -11,7 +11,7 @@
  * error scrubs the random fixture path so the frozen value stays portable.
  */
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -30,8 +30,8 @@ function mkProj(backlogContent: string | null): string {
   const proj = mkdtempSync(join(tmpdir(), "roll-bl-proj-"));
   dirs.push(proj);
   if (backlogContent !== null) {
-    mkdirSync(join(proj, ".roll"), { recursive: true });
-    writeFileSync(join(proj, ".roll", "backlog.md"), backlogContent);
+    mkdirSync(join(proj, "backlog"), { recursive: true });
+    writeFileSync(join(proj, "backlog", "index.md"), backlogContent);
   }
   return proj;
 }
@@ -52,7 +52,18 @@ function tsBacklog(proj: string): { status: number; stdout: string; stderr: stri
   process.stderr.write = (x: string | Uint8Array): boolean => (errC.push(String(x)), true);
   let status: number;
   try {
-    status = backlogCommand([]);
+    status = backlogCommand([], {
+      resolveTarget: () => ({
+        ok: true,
+        workspaceId: "ws-test",
+        workspaceRoot: proj,
+        canonicalRoot: realpathSync(proj),
+        backlogPath: join(proj, "backlog", "index.md"),
+        storyRoot: join(proj, "backlog"),
+        runtimeRoot: join(proj, "runtime"),
+        configPath: join(proj, "runtime", "backlog-sync.yaml"),
+      }),
+    });
   } finally {
     process.stdout.write = rOut;
     process.stderr.write = rErr;
@@ -62,7 +73,11 @@ function tsBacklog(proj: string): { status: number; stdout: string; stderr: stri
       else process.env[k] = v;
     }
   }
-  return { status, stdout: outC.join(""), stderr: errC.join("") };
+  return {
+    status,
+    stdout: outC.join("").split(realpathSync(proj)).join("<WS>"),
+    stderr: errC.join("").split(realpathSync(proj)).join("<WS>"),
+  };
 }
 
 const RICH = `# Project Backlog
@@ -87,7 +102,8 @@ describe("frozen: roll backlog render", () => {
       {
         "status": 0,
         "stderr": "",
-        "stdout": "
+        "stdout": "Backlog ws-test (<WS>)
+
         BACKLOG  ·  待处理任务                                                          6 Pending · 3 Hold
 
         ⏵ US-200  currently being built
@@ -131,7 +147,8 @@ describe("frozen: roll backlog render", () => {
       {
         "status": 0,
         "stderr": "",
-        "stdout": "
+        "stdout": "Backlog ws-test (<WS>)
+
         BACKLOG  ·  待处理任务                                                          1 Pending · 2 Hold
 
         Bug Fixes  ·  缺陷修复  (1)
@@ -153,7 +170,8 @@ describe("frozen: roll backlog render", () => {
       {
         "status": 0,
         "stderr": "",
-        "stdout": "
+        "stdout": "Backlog ws-test (<WS>)
+
         BACKLOG  ·  待处理任务                                                                   0 Pending
 
         ✓ Nothing pending — backlog is clear  暂无待处理任务
@@ -170,7 +188,8 @@ describe("frozen: roll backlog render", () => {
       {
         "status": 0,
         "stderr": "",
-        "stdout": "
+        "stdout": "Backlog ws-test (<WS>)
+
         BACKLOG  ·  待处理任务                                                                   0 Pending
 
         ✓ Nothing pending — backlog is clear  暂无待处理任务
@@ -191,7 +210,7 @@ describe("frozen: roll backlog render", () => {
     expect({ status: t.status, stderr }).toMatchInlineSnapshot(`
       {
         "status": 1,
-        "stderr": "[roll] .roll/backlog.md not found — run 'roll init' first
+        "stderr": "backlog: target_missing — Provide one registered Workspace ID or path
       ",
       }
     `);

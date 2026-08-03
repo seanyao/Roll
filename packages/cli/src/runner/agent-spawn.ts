@@ -40,9 +40,14 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Rig } from "@roll/spec";
+import type { Rig, WorkspaceExecutionContextV1 } from "@roll/spec";
+import {
+  prepareRegisteredWorkspaceSkillHandoff,
+  workspaceSkillHandoffEnvironment,
+} from "./workspace-skill-handoff.js";
 import { getAgentSpec } from "@roll/core";
-import { worktreeGitEnv } from "./main-checkout-guard.js";
+import { worktreeGitDiscoveryEnv } from "./main-checkout-guard.js";
+import { workspaceSelectorArgs } from "../lib/workspace-selector.js";
 
 /**
  * FIX-204D — live-children registry. The signal teardown must kill an
@@ -459,8 +464,7 @@ const AGENT_PROFILES: Readonly<Record<string, AgentProfile>> = {
         "--print",
         "--trust",
         "--force",
-        "--workspace",
-        opts.cwd,
+        ...workspaceSelectorArgs(opts.cwd),
         "--output-format",
         "text",
         agentPrompt(opts),
@@ -529,6 +533,21 @@ export function missingAgentSecretEnv(
 
 export type AgentSpawnPurpose = "builder" | "pick_ranking" | "test_author" | "implementer" | "attacker";
 
+export interface WorkspaceSkillInvocation {
+  readonly skillName: string;
+  readonly operation: string;
+  readonly expectedWorkspaceId?: string;
+  readonly expectedStoryId?: string;
+  readonly repositorySelector?: string;
+  readonly machineCwd?: string;
+  readonly legacyProjectRoot?: string;
+}
+
+const REGISTERED_WORKSPACE_SKILL_ENV: unique symbol = Symbol("registeredWorkspaceSkillEnv");
+type RegisteredWorkspaceSkillSpawnOptions = AgentSpawnOptions & {
+  readonly [REGISTERED_WORKSPACE_SKILL_ENV]?: NodeJS.ProcessEnv;
+};
+
 export function adversarialRolePrompt(role: "test_author" | "implementer" | "attacker"): string {
   switch (role) {
     case "test_author":
@@ -557,6 +576,13 @@ export interface AgentSpawnOptions {
   skillBody: string;
   /** FIX-204B: the executor-picked story id, pinned into the prompt. */
   storyId?: string;
+  /** US-WS-033: the frozen invocation authority. The child receives this exact
+   * serializable snapshot; it must not rediscover Workspace/Issue from cwd. */
+  workspaceExecution?: WorkspaceExecutionContextV1;
+  /** US-WS-038: operation identity for a supporting-skill spawn. The real
+   * spawn resolves its authority policy from the shipped registry; callers
+   * cannot self-report scope/access/effect target. */
+  workspaceSkillInvocation?: WorkspaceSkillInvocation;
   /** Hard wall-clock kill after this many ms (the watchdog also enforces this at
    *  the orchestrator layer; this is the spawn-local belt-and-braces). */
   timeoutMs?: number;
@@ -801,23 +827,40 @@ function evidenceFrameEnv(runDir: string): NodeJS.ProcessEnv {
   };
 }
 
-function childEnv(opts: AgentSpawnOptions, profile?: AgentProfile): NodeJS.ProcessEnv {
+/** Stable child-process envelope for a frozen Workspace cycle. */
+export function workspaceExecutionEnvironment(
+  context: WorkspaceExecutionContextV1 | undefined,
+): NodeJS.ProcessEnv {
+  return workspaceSkillHandoffEnvironment(context);
+}
+
+function childEnv(opts: AgentSpawnOptions): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
-  // FIX-1237: strip ALL inherited GIT_* env vars for EVERY spawned agent
-  // (not just codex), so no agent can poison the shared config via
-  // inherited git environment variables. Non-isolated agents then receive the
-  // runner-computed worktree git env so `git -C main` still lands in the cycle
-  // worktree instead of the shared checkout (FIX-1073).
+  // FIX-1473: strip ALL inherited GIT_* variables for EVERY spawned agent.
+  // Repository binding must come from each command's cwd, never a scheduler-
+  // injected GIT_DIR/GIT_WORK_TREE pair: fixed bindings make nested/temp/clone
+  // repositories write config, index, hooks and refs into the cycle repo.
   for (const key of Object.keys(env)) {
     if (key.startsWith("GIT_")) delete env[key];
   }
-  if (profile?.isolateGit) {
-    env["GIT_CEILING_DIRECTORIES"] = dirname(opts.cwd);
-  } else {
-    Object.assign(env, worktreeGitEnv(opts.cwd, opts.cwd));
+  for (const key of [
+    "ROLL_WORKSPACE_EXECUTION_CONTEXT",
+    "ROLL_WORKSPACE",
+    "ROLL_WORKSPACE_LOCK",
+    "ROLL_STORY_ID",
+    "ROLL_REPOSITORY_ID",
+    "ROLL_REPOSITORY_ALIAS",
+  ]) {
+    delete env[key];
   }
+  // The cycle worktree itself remains discoverable from cwd. The ceiling only
+  // prevents an invalid/missing worktree from walking upward into the product
+  // checkout that physically contains `.roll/loop/worktrees`.
+  Object.assign(env, worktreeGitDiscoveryEnv(opts.cwd));
   env.PWD = opts.cwd;
   delete env.OLDPWD;
+  Object.assign(env, workspaceExecutionEnvironment(opts.workspaceExecution));
+  Object.assign(env, (opts as RegisteredWorkspaceSkillSpawnOptions)[REGISTERED_WORKSPACE_SKILL_ENV] ?? {});
   return opts.runDir !== undefined && opts.runDir !== "" ? { ...env, ...evidenceFrameEnv(opts.runDir) } : env;
 }
 
@@ -832,7 +875,7 @@ function withAgentProfileEnv(agent: string, opts: AgentSpawnOptions): AgentSpawn
   };
 }
 
-function spawnAndWait(bin: string, args: string[], opts: AgentSpawnOptions, pty = false, profile?: AgentProfile): Promise<AgentSpawnResult> {
+function spawnAndWait(bin: string, args: string[], opts: AgentSpawnOptions, pty = false): Promise<AgentSpawnResult> {
   // Operational trace (v2 logs its agent cmd too): goes to the runner's stderr,
   // which leg/cycle logs capture — argv mismatches become diagnosable.
   process.stderr.write(`[runner] spawn ${bin} argv=${JSON.stringify(args.map((a) => (a.length > 80 ? `${a.slice(0, 77)}...` : a)))}\n`);
@@ -846,7 +889,7 @@ function spawnAndWait(bin: string, args: string[], opts: AgentSpawnOptions, pty 
   return new Promise<AgentSpawnResult>((resolve) => {
     const child = spawn(bin, args, {
       cwd: opts.cwd,
-      env: childEnv(opts, profile),
+      env: childEnv(opts),
       stdio: ["ignore", "pipe", "pipe"],
       // FIX-224: the PTY-wrapped `script` leads its own process group so the
       // timeout/teardown can reap script AND the agent under it (killHard).
@@ -916,11 +959,31 @@ function spawnAndWait(bin: string, args: string[], opts: AgentSpawnOptions, pty 
   });
 }
 
-export const realAgentSpawn: AgentSpawn = (agent, opts) => {
-  const profile = agentProfile(agent);
+function prepareRegisteredSkillSpawnOptions(opts: AgentSpawnOptions): AgentSpawnOptions {
+  const invocation = opts.workspaceSkillInvocation;
+  if (invocation === undefined) return opts;
+  const prepared = prepareRegisteredWorkspaceSkillHandoff({
+    ...invocation,
+    context: opts.workspaceExecution,
+    skillBody: opts.skillBody,
+  });
+  if (!prepared.ok) {
+    throw new Error(`workspace_skill_handoff:${prepared.code}`);
+  }
+  return {
+    ...opts,
+    cwd: prepared.cwd,
+    skillBody: prepared.skillBody,
+    [REGISTERED_WORKSPACE_SKILL_ENV]: prepared.env,
+    ...(prepared.context === undefined ? { workspaceExecution: undefined } : { workspaceExecution: prepared.context }),
+  } as RegisteredWorkspaceSkillSpawnOptions;
+}
+
+export const realAgentSpawn: AgentSpawn = (agent, rawOpts) => {
+  const opts = prepareRegisteredSkillSpawnOptions(rawOpts);
   // FIX-1482: route through the exported buildSpawnCommand so the readOnly
   // enforcement gate (assertReadOnlyEnforceable) fires before any child spawns.
   const { bin, args, pty } = withPtyWrap(buildSpawnCommand(agent, opts), agent);
-  return spawnAndWait(bin, args, withAgentProfileEnv(agent, opts), pty, profile);
+  return spawnAndWait(bin, args, withAgentProfileEnv(agent, opts), pty);
 };
 realAgentSpawn.supportedPurposes = ["pick_ranking"];

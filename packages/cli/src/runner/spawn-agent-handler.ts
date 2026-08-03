@@ -1,18 +1,18 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { extractUsage, getAgentSpec, toCycleCost, type AgentInternalFailure, type CycleCommand, type CycleContext, type RunKillReason } from "@roll/core";
+import { advanceContextCycleStageState, extractUsage, getAgentSpec, toCycleCost, type AgentInternalFailure, type ContextCycleStageStateV1, type CycleCommand, type CycleContext, type RunKillReason } from "@roll/core";
 import type { CycleCost } from "@roll/spec";
-import { agentSpawnEnvironment } from "./agent-spawn.js";
+import { agentSpawnEnvironment, workspaceExecutionEnvironment } from "./agent-spawn.js";
 import { classifyBlockSignature, suspendRig } from "./agent-liveness.js";
-import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination, worktreeGitEnv } from "./main-checkout-guard.js";
+import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination } from "./main-checkout-guard.js";
 import { recoverKimiUsage, recoverPiUsage } from "./usage-recovery.js";
 import { blockIfAgentCredentialsMissing, detectAgyInternalFailure } from "./agent-routing.js";
 import { buildLowScoreFixForwardPrompt, maybeInjectProjectMap } from "./project-map.js";
 import { buildRepairRoundBriefing } from "./repair-briefing-handler.js";
 import { readProjectMapEnabled } from "./runner-policy.js";
 import { appendWriteProtectionEvent, quarantineMainCheckoutForCycle, startMainCheckoutLeakWatchdog } from "./sandbox-boundary.js";
-import { ActivitySignalRecorder, createCaptureMarkerSink, readCycleTimeoutThresholds, readStallThreshold, startBuilderLivenessProbe, startCycleObserver, startSpawnTimeoutWatchdog, startStallDetector } from "./spawn-observers.js";
-import { persistWorktreeAlerts, submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
+import { ActivitySignalRecorder, createCaptureMarkerSink, readCycleTimeoutThresholds, readStallThreshold, startBuilderLivenessProbe, startCycleObserver, startRepositoryCycleObserver, startSpawnTimeoutWatchdog, startStallDetector } from "./spawn-observers.js";
+import { persistWorktreeAlerts, repositoryAgentWritableRoots, submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
 import { runDesignerStage } from "./execution-profile.js";
 import { eventTs, guardRuntimeDir } from "./runner-time.js";
 import { readSkillBody } from "./skill-body.js";
@@ -20,8 +20,70 @@ import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktr
 import { resolveIntegrationBranch } from "@roll/infra";
 import { readGateMode, recordSpawnRound } from "./round-journal-emit.js";
 import type { ExecuteResult, Ports } from "./ports.js";
+import { invalidContextHandoff, type ContextStageHandoffV1 } from "./context-handoff.js";
+import type { ContextStageHostReadInputV1 } from "./context-stage-host.js";
+import {
+  RepositoryObservationError,
+  observeWritableRepositoryCommitCount,
+} from "./repository-observation.js";
+import {
+  prepareWorkspaceBuilderSkillBody,
+  resolveWorkspaceSpawnIdentity,
+} from "./workspace-builder-context.js";
+
+export {
+  applyRepositoryBuilderContext,
+  prepareWorkspaceBuilderSkillBody,
+  resolveWorkspaceSpawnIdentity,
+  type WorkspaceBuilderSkillBodyResult,
+  type WorkspaceSpawnIdentityResult,
+} from "./workspace-builder-context.js";
 
 type SpawnAgentCommand = Extract<CycleCommand, { kind: "spawn_agent" }>;
+
+export type ContextBuilderSkillBodyResult =
+  | {
+      readonly status: "ready";
+      readonly skillBody: string;
+      readonly handoff?: ContextStageHandoffV1;
+    }
+  | {
+      readonly status: "blocked";
+      readonly diagnostic: ReturnType<typeof invalidContextHandoff>;
+    };
+
+/** The production prompt boundary for Context-aware Builder stages. */
+export async function prepareContextBuilderSkillBody(
+  ports: Pick<Ports, "contextStage">,
+  storyId: string | undefined,
+  skillBody: string,
+  contextInput: Omit<ContextStageHostReadInputV1, "storyId" | "stage"> = { refs: [] },
+): Promise<ContextBuilderSkillBodyResult> {
+  if (ports.contextStage === undefined || storyId === undefined || storyId === "") {
+    return { status: "ready", skillBody };
+  }
+  let result: Awaited<ReturnType<NonNullable<Ports["contextStage"]>["readForStage"]>>;
+  try {
+    result = await ports.contextStage.readForStage({
+      storyId,
+      stage: storyId.startsWith("FIX-") || storyId.startsWith("BUG-") ? "fix" : "build",
+      ...contextInput,
+    });
+  } catch {
+    return { status: "blocked", diagnostic: invalidContextHandoff() };
+  }
+  if (result.status === "ready") {
+    return {
+      status: "ready",
+      skillBody: `${skillBody}\n\n${result.encodedEnvelope}`,
+      handoff: result.handoff,
+    };
+  }
+  return {
+    status: "blocked",
+    diagnostic: result.status === "blocked" ? result.diagnostic : invalidContextHandoff(),
+  };
+}
 
 function executionSkillBody(ports: Ports, storyId: string | undefined): string {
   if (!ports.skillBody.startsWith("# Roll Loop")) return ports.skillBody;
@@ -36,6 +98,14 @@ export async function executeSpawnAgentCommand(
 ): Promise<ExecuteResult> {
   switch (cmd.kind) {
     case "spawn_agent": {
+      const spawnIdentity = resolveWorkspaceSpawnIdentity(ctx);
+      if (!spawnIdentity.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace spawn identity blocked for ${ctx.storyId ?? "?"}: ${spawnIdentity.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return { event: { type: "agent_exited", exit: 1, timedOut: false } };
+      }
       // FIX-343 (step ①): mint the BUILDER's unique session id ONCE, here at the
       // working-agent spawn, and reuse it across retries (a non-empty
       // ctx.builderSessionId means a prior attempt already minted it). The attest
@@ -53,8 +123,11 @@ export async function executeSpawnAgentCommand(
       // submodule cycle worktree, where its edits/build/test/commits land and E2's
       // landing reads the HEAD. No targetSubmodule ⇒ ports.paths.worktreePath
       // (execRepoCwd ⇒ ports.repoCwd), byte-identical to today.
-      const execCwd = resolveExecutionCwd(ports, ctx);
-      const execRepoCwd = resolveExecutionRepoCwd(ports, ctx);
+      const legacyExecCwd = resolveExecutionCwd(ports, ctx);
+      const execCwd = spawnIdentity.selectedRepository?.worktreePath ?? legacyExecCwd;
+      const execRepoCwd = ctx.repositoryExecution === undefined
+        ? resolveExecutionRepoCwd(ports, ctx)
+        : undefined;
       // E8: the cycle observer and the timeout watchdog's commit probe count the
       // builder's commits against the EXECUTION repo's integration branch (the
       // submodule's own working branch), NOT the hardwired origin/main. A submodule
@@ -63,8 +136,10 @@ export async function executeSpawnAgentCommand(
       // commits (no cycle:tcr events) and the watchdog's commitCount read 0. The
       // baseline is resolved from execRepoCwd, never the detached worktree. No
       // targetSubmodule ⇒ resolveIntegrationBranch(repoCwd) → origin/main default.
-      const observeBase = resolveIntegrationBranch(execRepoCwd);
-      await quarantineMainCheckoutForCycle(ports, ctx, "pre-spawn");
+      const observeBase = execRepoCwd === undefined ? undefined : resolveIntegrationBranch(execRepoCwd);
+      if (ctx.repositoryExecution === undefined) {
+        await quarantineMainCheckoutForCycle(ports, ctx, "pre-spawn");
+      }
       const credentialBlock = blockIfAgentCredentialsMissing(cmd.agent, "build", ports, ctx);
       if (credentialBlock !== null) {
         const suspended = suspendRig(guardRuntimeDir(ports), cmd.agent, "auth", credentialBlock, eventTs(ports));
@@ -88,21 +163,99 @@ export async function executeSpawnAgentCommand(
       // FAIL CLOSED — the Builder never starts — when no valid `design` binding
       // resolves OR the Designer publishes no valid contract. No-op for
       // standard/verified.
+      let contextStage: ContextCycleStageStateV1 | undefined = ctx.contextStage;
       if (ctx.selectedProfile === "designed") {
         const design = await runDesignerStage(ports, ctx);
+        contextStage = design.contextStage ?? contextStage;
         if (!design.ok) {
           ports.events.appendAlert(
             ports.paths.alertsPath,
             `designer stage failed closed for ${ctx.storyId ?? "?"}: ${design.reasons.join("; ")} — Builder not started (cycle ${ctx.cycleId ?? "?"})`,
           );
-          return { event: { type: "agent_exited", exit: 1, timedOut: false }, ctxPatch: { builderSessionId } };
+          return {
+            event: { type: "agent_exited", exit: 1, timedOut: false },
+            ctxPatch: {
+              builderSessionId,
+              ...(contextStage === undefined ? {} : { contextStage }),
+            },
+          };
         }
       }
+      // Context must be resolved before any observer/watchdog starts. A missing
+      // or invalid handoff blocks the consuming stage without spawning an agent
+      // and without leaving background timers behind.
+      const skillBodyForSpawn = maybeInjectProjectMap(
+        executionSkillBody(ports, ctx.storyId),
+        execCwd,
+        readProjectMapEnabled(ports.repoCwd),
+        ctx.storyId,
+      );
+      const lowScoreFeedback = ctx.storyId !== undefined && ctx.storyId !== ""
+        ? buildLowScoreFixForwardPrompt(ports.repoCwd, ctx.storyId)
+        : "";
+      // US-CYCLE-007: on a repair round, lead with the checksummed briefing;
+      // otherwise retain the plain low-score fix-forward prompt.
+      let repairBriefingLead = "";
+      if (lowScoreFeedback !== "" && execRepoCwd !== undefined) {
+        try {
+          const briefing = await buildRepairRoundBriefing(ports, ctx, execCwd, execRepoCwd);
+          if (briefing !== null && briefing.leadText !== "") repairBriefingLead = briefing.leadText;
+        } catch {
+          /* briefing is a warm-start aid; fall back to lowScoreFeedback */
+        }
+      }
+      const preContextSkillBody =
+        repairBriefingLead !== ""
+          ? `${repairBriefingLead}\n\n${skillBodyForSpawn}`
+          : lowScoreFeedback !== ""
+          ? `${lowScoreFeedback}\n\n${skillBodyForSpawn}`
+          : skillBodyForSpawn;
+      const contextSkillBody = await prepareContextBuilderSkillBody(
+        ports,
+        ctx.storyId,
+        preContextSkillBody,
+        contextStage ?? { refs: [] },
+      );
+      if (contextSkillBody.status === "blocked") {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `context stage blocked for ${ctx.storyId ?? "?"}: ${contextSkillBody.diagnostic.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return {
+          event: { type: "agent_exited", exit: 1, timedOut: false },
+          ctxPatch: {
+            builderSessionId,
+            ...(contextStage === undefined ? {} : { contextStage }),
+          },
+        };
+      }
+      const workspaceSkillBody = prepareWorkspaceBuilderSkillBody(ctx, contextSkillBody.skillBody);
+      if (!workspaceSkillBody.ok) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `Workspace skill handoff blocked for ${ctx.storyId ?? "?"}: ${workspaceSkillBody.code} (cycle ${ctx.cycleId ?? "?"})`,
+        );
+        return {
+          event: { type: "agent_exited", exit: 1, timedOut: false },
+          ctxPatch: {
+            builderSessionId,
+            ...(contextStage === undefined ? {} : { contextStage }),
+          },
+        };
+      }
+      const finalSkillBody = workspaceSkillBody.skillBody;
+      const nextContextStage: ContextCycleStageStateV1 | undefined = contextSkillBody.handoff === undefined
+        ? contextStage
+        : advanceContextCycleStageState(
+            contextStage,
+            contextSkillBody.handoff,
+            ctx.storyId?.startsWith("FIX-") || ctx.storyId?.startsWith("BUG-") ? "fix" : "build",
+          );
       // US-PORT-011: the live observation file — one stable path per project,
       // truncated at each agent start, fed every chunk in real time. The popup
       // (runner template) and any `tail -f` watcher read THIS, not buffers.
       const livePath = join(dirname(ports.paths.eventsPath), "live.log");
-      const liveBanner = `── cycle ${ctx.cycleId ?? "?"} · ${ctx.storyId ?? "?"} · agent ${cmd.agent} · build-session ${builderSessionId} ──`;
+      const liveBanner = `── cycle ${ctx.cycleId ?? "?"} · workspace ${ctx.workspaceExecution?.workspace.workspaceId ?? ctx.repositoryExecution?.workspaceId ?? "legacy"} · story ${ctx.storyId ?? "?"} · agent ${cmd.agent} · build-session ${builderSessionId} ──`;
       try {
         writeFileSync(livePath, `${liveBanner}\n`);
       } catch {
@@ -127,7 +280,9 @@ export async function executeSpawnAgentCommand(
       // git commits on the worktree branch + the wall clock — and DERIVES standard
       // cycle:tcr / cycle:phase / build-heartbeat events into events.ndjson. It
       // never parses the agent's stdout, so a single path serves EVERY agent.
-      const observer = await startCycleObserver(ports, ctx.cycleId ?? "", execCwd, observeBase);
+      const observer = ctx.repositoryExecution === undefined
+        ? await startCycleObserver(ports, ctx.cycleId ?? "", legacyExecCwd, observeBase)
+        : await startRepositoryCycleObserver(ports, ctx);
       // FIX-907 — the HUNG-BUILDER KILLER. The agentSpawn below is a single
       // blocking await, so the orchestrator's between-step watchdog can NEVER
       // fire while a builder hangs (process alive, 0% CPU, no commits/output) —
@@ -154,66 +309,54 @@ export async function executeSpawnAgentCommand(
         appendEvent: (ev) => ports.events.appendEvent(ports.paths.eventsPath, ev),
         thresholdSec: readStallThreshold(ports.repoCwd).thresholdSec,
       });
+      const repositoryPorts = ctx.repositoryExecution === undefined
+        ? undefined
+        : ports.repositories?.bind(ctx);
+      if (ctx.repositoryExecution !== undefined && repositoryPorts === undefined) {
+        throw new Error("missing_repository_ports");
+      }
+      const reportedCommitProbeFailures = new Set<string>();
       // FIX-1477: the dirty-state probe rides the same git port (optional — a
-      // port without it runs the state fuse on commits only).
+      // port without it runs the state fuse on commits only). A repository
+      // cycle's Issue root is not itself a git worktree, so the state fuse
+      // stays commit-only there until a per-leg signature exists.
       const statusSignature = ports.git.worktreeStatusSignature;
       const timeoutWatchdog = startSpawnTimeoutWatchdog({
         cycleId: ctx.cycleId ?? "",
         thresholds: readCycleTimeoutThresholds(ports.repoCwd),
         clock: ports.clock,
-        // US-CYCLE-001: observe the run's OWN work dir (worktree/submodule),
-        // not the main checkout. observeCwd=execCwd is LOAD-BEARING — the
-        // watchdog hands it to the probes, which observe exactly that cwd.
         observeCwd: execCwd,
-        commitCount: (cwd) => ports.git.commitsAhead(cwd, observeBase),
-        ...(statusSignature !== undefined ? { stateSignature: (cwd) => statusSignature(cwd) } : {}),
+        commitCount: async (cwd) => {
+          try {
+            return repositoryPorts === undefined
+              ? await ports.git.commitsAhead(cwd, observeBase)
+              : await observeWritableRepositoryCommitCount(ctx, repositoryPorts);
+          } catch (error) {
+            const failure = error instanceof RepositoryObservationError ? error : undefined;
+            const key = failure === undefined ? "unknown" : `${failure.repoId}:${failure.operation}`;
+            if (!reportedCommitProbeFailures.has(key)) {
+              reportedCommitProbeFailures.add(key);
+              if (failure !== undefined) {
+                repositoryPorts?.events.append(failure.repoId, {
+                  type: "repository:observation_failed",
+                  operation: failure.operation,
+                  detail: failure.cause instanceof Error ? failure.cause.message : String(failure.cause ?? "unknown"),
+                  ts: Date.now(),
+                });
+              }
+              ports.events.appendAlert(
+                ports.paths.alertsPath,
+                `repository_observation_failed: ${failure?.repoId ?? "unknown"}: ${failure?.operation ?? "commits_ahead"} (cycle ${ctx.cycleId ?? ""})`,
+              );
+            }
+            throw error;
+          }
+        },
+        ...(repositoryPorts === undefined && statusSignature !== undefined
+          ? { stateSignature: (cwd: string) => statusSignature(cwd) }
+          : {}),
         appendEvent: (ev) => ports.events.appendEvent(ports.paths.eventsPath, ev),
       });
-      // FIX-338 (Phase B 杠杆2): when `loop_safety.project_map: true`, PREPEND a
-      // concise, bounded project map into the working agent's initial context so it
-      // doesn't burn execute time on sed/rg exploration. Agent-agnostic (one prompt
-      // body all shapes consume) + bounded (hard char cap). DEFAULT-OFF — a no-op
-      // until flipped on, in which case `ports.skillBody` is sent unchanged.
-      const skillBodyForSpawn = maybeInjectProjectMap(
-        executionSkillBody(ports, ctx.storyId),
-        // E4: map the tree the builder actually works in (the submodule for a
-        // submodule cycle), not the superproject shell.
-        execCwd,
-        readProjectMapEnabled(ports.repoCwd),
-        ctx.storyId,
-      );
-      // FIX-386: when the story was re-picked after a low peer review score,
-      // inject the reviewer's findings as a fix-forward task so the builder
-      // fixes on the same resumed branch instead of starting fresh.
-      const lowScoreFeedback = ctx.storyId !== undefined && ctx.storyId !== ""
-        ? buildLowScoreFixForwardPrompt(ports.repoCwd, ctx.storyId)
-        : "";
-      // US-CYCLE-007: a non-empty lowScoreFeedback means THIS is a REPAIR round
-      // (a re-dispatch after evaluator findings). Package the repair inputs as a
-      // checksummed BRIEFING artifact (findings + git diff --stat + involved
-      // files:lines + design-contract refs) and LEAD the skill body with it — the
-      // fresh session's SOLE context entry point, prefixed with "start from these
-      // findings; do NOT re-explore the whole repository". The briefing SUPERSEDES
-      // the plain fix-forward prompt (it already carries the findings + the
-      // branch-discipline instructions), so we never prepend both (no context
-      // bloat). GUARDRAIL: this whole block only runs on a repair round — a
-      // first/normal cycle has lowScoreFeedback === "" and finalSkillBody stays
-      // byte-identical to skillBodyForSpawn.
-      let repairBriefingLead = "";
-      if (lowScoreFeedback !== "") {
-        try {
-          const briefing = await buildRepairRoundBriefing(ports, ctx, execCwd, execRepoCwd);
-          if (briefing !== null && briefing.leadText !== "") repairBriefingLead = briefing.leadText;
-        } catch {
-          /* briefing is a warm-start AID — never fail the spawn; fall back below */
-        }
-      }
-      const finalSkillBody =
-        repairBriefingLead !== ""
-          ? `${repairBriefingLead}\n\n${skillBodyForSpawn}`
-          : lowScoreFeedback !== ""
-            ? `${lowScoreFeedback}\n\n${skillBodyForSpawn}`
-            : skillBodyForSpawn;
       // lever-4 (cross-card warm-context): after the pool was narrowed to
       // 国产/开源 agents (kimi/pi/reasonix), NO current engine declares a
       // warm-reuse capability — every cycle runs COLD. The resume-resolution +
@@ -254,31 +397,49 @@ export async function executeSpawnAgentCommand(
       // US-CYCLE-004: wall-clock start for the round-journal builder turn.
       const roundStart = Date.now();
       try {
-        appendWriteProtectionEvent(
-          ports,
-          applyMainCheckoutWriteProtection({
-            repoCwd: ports.repoCwd,
-            runtimeDir: guardRuntimeDir(ports),
-            cycleId: ctx.cycleId ?? "",
-            nowMs: () => eventTs(ports),
-          }),
-        );
-        mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
+        if (ctx.repositoryExecution === undefined) {
+          appendWriteProtectionEvent(
+            ports,
+            applyMainCheckoutWriteProtection({
+              repoCwd: ports.repoCwd,
+              runtimeDir: guardRuntimeDir(ports),
+              cycleId: ctx.cycleId ?? "",
+              nowMs: () => eventTs(ports),
+            }),
+          );
+          mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
+        }
         res = await Promise.race([
           ports.agentSpawn(cmd.agent, {
           purpose: "builder",
           // E4: the builder runs in the submodule cycle worktree for a submodule
           // story (execCwd); its git env + writable roots target the submodule's
           // own repo/object store so its commits actually land there.
-          cwd: execCwd,
+          cwd: workspaceSkillBody.selectedRepository?.worktreePath ?? execCwd,
           skillBody: finalSkillBody,
           ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
-          writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath),
+          ...(ctx.repositoryExecution !== undefined && workspaceSkillBody.selectedRepository !== undefined
+            ? {
+                writableRoots: repositoryAgentWritableRoots({
+                  ...ctx.repositoryExecution,
+                  repositories: {
+                    [workspaceSkillBody.selectedRepository.repoId]: workspaceSkillBody.selectedRepository,
+                  },
+                }),
+              }
+            : execRepoCwd === undefined
+              ? {}
+              : { writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath) }),
           ...(ctx.model !== undefined && ctx.model !== "" ? { model: ctx.model } : {}),
+          ...(ctx.workspaceExecution === undefined ? {} : { workspaceExecution: ctx.workspaceExecution }),
           env: {
             ...process.env,
             ROLL_LOOP_ALERT: ports.paths.alertsPath,
-            ...worktreeGitEnv(execCwd, ports.repoCwd),
+            ...workspaceExecutionEnvironment(ctx.workspaceExecution),
+            ...(workspaceSkillBody.selectedRepository === undefined ? {} : {
+              ROLL_REPOSITORY_ID: workspaceSkillBody.selectedRepository.repoId,
+              ROLL_REPOSITORY_ALIAS: workspaceSkillBody.selectedRepository.alias,
+            }),
             ...agentSpawnEnvironment(cmd.agent),
           },
           // FIX-204B: pin the executor-picked story into the agent prompt — the
@@ -317,15 +478,17 @@ export async function executeSpawnAgentCommand(
         if (mainLeakWatchdog !== undefined) {
           activeMainLeak = await mainLeakWatchdog.stop();
         }
-        appendWriteProtectionEvent(
-          ports,
-          releaseMainCheckoutWriteProtection({
-            repoCwd: ports.repoCwd,
-            runtimeDir: guardRuntimeDir(ports),
-            cycleId: ctx.cycleId ?? "",
-            nowMs: () => eventTs(ports),
-          }),
-        );
+        if (ctx.repositoryExecution === undefined) {
+          appendWriteProtectionEvent(
+            ports,
+            releaseMainCheckoutWriteProtection({
+              repoCwd: ports.repoCwd,
+              runtimeDir: guardRuntimeDir(ports),
+              cycleId: ctx.cycleId ?? "",
+              nowMs: () => eventTs(ports),
+            }),
+          );
+        }
         signalRecorder.flush();
         // Stop the timer AND take one final synchronous-await snapshot so the LAST
         // TCR commits (landed between the last tick and agent exit) are not lost.
@@ -343,11 +506,13 @@ export async function executeSpawnAgentCommand(
       // E4: scoop ALERT*.md the builder dropped in its OWN cwd (the submodule
       // cycle worktree for a submodule story).
       persistWorktreeAlerts(execCwd, ports.paths.alertsPath, ports.events);
-      if (activeMainLeak.detected) {
-        await quarantineMainCheckoutForCycle(ports, ctx, "active-spawn");
-        res = { ...res, exitCode: res.exitCode === 0 ? 1 : res.exitCode, timedOut: true };
-      } else {
-        await quarantineMainCheckoutForCycle(ports, ctx, "post-spawn");
+      if (ctx.repositoryExecution === undefined) {
+        if (activeMainLeak.detected) {
+          await quarantineMainCheckoutForCycle(ports, ctx, "active-spawn");
+          res = { ...res, exitCode: res.exitCode === 0 ? 1 : res.exitCode, timedOut: true };
+        } else {
+          await quarantineMainCheckoutForCycle(ports, ctx, "post-spawn");
+        }
       }
 
       // US-CYCLE-004: record this builder turn in the per-card round-journal.
@@ -369,7 +534,7 @@ export async function executeSpawnAgentCommand(
       // immediately after EVERY agent spawn completes, not just at pre-init
       // and terminal.  Catches any poisoning the agent did during its run so
       // sibling worktrees never see a poisoned config before the next step.
-      {
+      if (ctx.repositoryExecution === undefined) {
         const repair = repairCoreWorktreeContamination(ports.repoCwd);
         if (repair.healed) {
           ports.events.appendEvent(ports.paths.eventsPath, {
@@ -590,6 +755,7 @@ export async function executeSpawnAgentCommand(
         // traceable to a recorded build-session id, not asserted).
         ctxPatch: {
           builderSessionId,
+          ...(nextContextStage === undefined ? {} : { contextStage: nextContextStage }),
           ...(costPatch !== undefined ? { cost: costPatch } : {}),
           ...(usageUnknownReason !== undefined ? { usageUnknownReason } : {}),
           ...(agentInternalFailure !== undefined ? { agentInternalFailure } : {}),

@@ -31,10 +31,6 @@ const LABEL_TYPE_MAP: Record<string, string> = {
 export const DEFAULT_TYPE = "US";
 
 // Single-source markers (FIX-300): consume @roll/spec, never re-spell a literal.
-const STATE_STATUS_MAP: Record<string, string> = {
-  open: STATUS_MARKER.todo,
-  closed: STATUS_MARKER.done,
-};
 export const DEFAULT_STATUS = STATUS_MARKER.todo;
 
 function labelName(label: { name?: string } | string): string {
@@ -50,9 +46,9 @@ export function mapLabelToType(labels: GhIssue["labels"]): string {
   return DEFAULT_TYPE;
 }
 
-/** Map a GitHub state (open/closed) to a backlog status. */
-export function mapStateToStatus(state: string | undefined): string {
-  return STATE_STATUS_MAP[(state ?? "").trim().toLowerCase()] ?? DEFAULT_STATUS;
+/** External Issue state never decides planning completion. */
+export function mapStateToStatus(_state: string | undefined): string {
+  return DEFAULT_STATUS;
 }
 
 /** Canonical, type-independent GitHub id token, e.g. `GH-13` (idempotency key). */
@@ -60,12 +56,17 @@ export function ghId(issue: GhIssue): string {
   return `GH-${issue.number}`;
 }
 
+/** Canonical planning identity for an imported GitHub issue. */
+export function storyIdFromIssue(issue: GhIssue): string {
+  return `${mapLabelToType(issue.labels)}-${ghId(issue)}`;
+}
+
 /** Render one issue as a backlog table row `| <TYPE>-GH-<n> | <title> | <status> |`. */
-export function issueToRow(issue: GhIssue): string {
+export function issueToRow(issue: GhIssue, epic = "backlog-lifecycle"): string {
   const title = (issue.title ?? "").trim();
-  const typePrefix = mapLabelToType(issue.labels);
+  const storyId = storyIdFromIssue(issue);
   const status = mapStateToStatus(issue.state);
-  return `| ${typePrefix}-${ghId(issue)} | ${title} | ${status} |`;
+  return `| [${storyId}](${epic}/${storyId}/spec.md) | ${title} | ${status} |`;
 }
 
 /**
@@ -102,6 +103,20 @@ export function appendRowsToTable(content: string, rows: string[]): string {
 export function ghIdPresent(content: string, ident: string): boolean {
   const esc = ident.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?<![0-9A-Za-z])${esc}(?![0-9A-Za-z-])`).test(content);
+}
+
+/** Recover the durable planning ID already bound to this external Issue. */
+export function existingStoryIdForIssue(content: string, issue: GhIssue): string | undefined {
+  const externalId = ghId(issue);
+  for (const line of content.split("\n")) {
+    if (!line.trimStart().startsWith("|")) continue;
+    const idCell = line.split("|")[1]?.trim() ?? "";
+    if (!ghIdPresent(idCell, externalId)) continue;
+    const linked = /^\[([^\]]+)\]/.exec(idCell)?.[1];
+    const candidate = linked ?? idCell;
+    if (/^[A-Z]+-GH-[0-9]+$/.test(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 /** Parse a `--label` value (comma-separated) into a normalized, deduped list. */
@@ -155,7 +170,7 @@ export function renderAcSection(issue: GhIssue): string {
 
 /** The body of a fresh feature stub for an issue (heading + AC). */
 export function featureStubContent(issue: GhIssue): string {
-  const ident = ghId(issue);
+  const ident = storyIdFromIssue(issue);
   const title = (issue.title ?? "").trim();
   const typePrefix = mapLabelToType(issue.labels);
   const ac = renderAcSection(issue);
@@ -173,9 +188,9 @@ export function featureStubContent(issue: GhIssue): string {
 }
 
 /** `--dry-run` preview line for one issue (US-SYNC-004). */
-export function dryRunLine(issue: GhIssue, skipped: boolean): string {
-  const ident = ghId(issue);
-  const typePrefix = mapLabelToType(issue.labels);
+export function dryRunLine(issue: GhIssue, skipped: boolean, existingStoryId?: string): string {
+  const ident = existingStoryId ?? storyIdFromIssue(issue);
+  const typePrefix = existingStoryId?.split("-GH-", 1)[0] ?? mapLabelToType(issue.labels);
   if (skipped) return `= ${ident} [${typePrefix}] (skipped, already exists)`;
   return `+ ${ident} [${typePrefix}] ${(issue.title ?? "").trim()}`;
 }
@@ -193,10 +208,11 @@ export function dryRunPreview(issues: GhIssue[], content: string): SyncPreview {
   let added = 0;
   let skipped = 0;
   for (const issue of issues) {
-    const isSkip = ghIdPresent(content, ghId(issue));
+    const existingStoryId = existingStoryIdForIssue(content, issue);
+    const isSkip = existingStoryId !== undefined;
     if (isSkip) skipped++;
     else added++;
-    lines.push(dryRunLine(issue, isSkip));
+    lines.push(dryRunLine(issue, isSkip, existingStoryId));
   }
   return { added, skipped, total: issues.length, lines };
 }
@@ -216,8 +232,8 @@ export function syncToBacklog(issues: GhIssue[], content: string): SyncResult {
   const rows: string[] = [];
   const skippedIds: string[] = [];
   for (const issue of issues) {
-    const ident = ghId(issue);
-    if (ghIdPresent(content, ident)) skippedIds.push(ident);
+    const existingStoryId = existingStoryIdForIssue(content, issue);
+    if (existingStoryId !== undefined) skippedIds.push(existingStoryId);
     else rows.push(issueToRow(issue));
   }
   return {

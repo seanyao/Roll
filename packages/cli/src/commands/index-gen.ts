@@ -7,13 +7,13 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { CHROME_CONTROLS, CHROME_CSS, CHROME_SCRIPT, bi } from "@roll/core";
 import { parseEventLine } from "@roll/spec";
 import { buildTruthSnapshot } from "@roll/core";
 import { collectDossierState, type CollectorDeps } from "@roll/core";
 import { serializeTruthSnapshot, type TruthSnapshotPanelSlot } from "@roll/spec";
-import { collectDossier, generateIndex } from "../lib/archive.js";
+import { collectDossier, generateIndex, projectDataPath, projectRuntimePath, type ProjectDataAuthorityMode } from "../lib/archive.js";
 import { SPINE_STAGES, countLegacyStories, deriveDeliveryLadder, storySpectrumState, type TruthBoardInput, type TruthBoardVerdict } from "../lib/dossier-index.js";
 import type { TruthSnapshotStoryEntry } from "@roll/spec";
 import { renderTruthConsole, renderMachineStubPage, type BacklogEpicVM, type BacklogVM, type LoopLiveFeedVM } from "../lib/truth-console.js";
@@ -45,13 +45,14 @@ import { buildDossierRunCache, collectStoryDossierInput, renderStoryDossier, sta
 import { renderMarkdown } from "../lib/markdown.js";
 import { renderState, stripAnsi } from "../render.js";
 import type { CharterVM } from "../lib/page-charter.js";
+import { requireWorkspaceAuthorities } from "../lib/workspace-project-authority.js";
 
 function iso(sec: number): string {
   return new Date(sec * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function writeCycleSignalFiles(cwd: string, rows: readonly CycleLedgerRow[]): void {
-  const loopDir = join(cwd, ".roll", "loop");
+  const loopDir = projectRuntimePath(cwd);
   if (!existsSync(loopDir)) return;
   for (const row of rows) {
     const signals = row.signals ?? [];
@@ -82,7 +83,7 @@ function str(v: unknown): string | undefined {
 }
 
 function latestConsistencyAudit(projectPath: string): TruthBoardInput["audit"] | undefined {
-  const dir = join(projectPath, ".roll", "reports", "consistency");
+  const dir = projectDataPath(projectPath, "reports", "consistency");
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
@@ -125,7 +126,7 @@ function latestConsistencyAudit(projectPath: string): TruthBoardInput["audit"] |
  * not "unknown").
  */
 function cycleTruthBoard(projectPath: string, cycleRows: readonly CycleLedgerRow[], nowSec: number): TruthBoardInput["cycle"] | undefined {
-  if (!existsSync(join(projectPath, ".roll", "loop", "runs.jsonl"))) return undefined;
+  if (!existsSync(projectRuntimePath(projectPath, "runs.jsonl"))) return undefined;
   const board = cyclesCycleBoard([...cycleRows], nowSec);
   return {
     cycles3d: board.cycles3d,
@@ -149,7 +150,7 @@ function releaseTruthBoard(projectPath: string, nowSec: number): TruthBoardInput
   // `release:gate` event cache that the current release flow no longer refreshes.
   const reconciled = reconcileReleaseForProject(projectPath);
 
-  const path = join(projectPath, ".roll", "loop", "events.ndjson");
+  const path = projectRuntimePath(projectPath, "events.ndjson");
   let content = "";
   try {
     content = readFileSync(path, "utf8");
@@ -211,7 +212,7 @@ function maxCollectedAt(parts: Array<string | undefined>): string | undefined {
 
 function runtimeDir(projectPath: string): string {
   const env = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim();
-  return env !== "" ? env : join(projectPath, ".roll", "loop");
+  return env !== "" ? env : projectRuntimePath(projectPath);
 }
 
 function tailNonEmptyLines(text: string, limit: number): string[] {
@@ -416,11 +417,14 @@ function renderSpecHtml(storyDir: string, id: string): string | null {
 
 /** `roll index` — regenerate the backlog-derived ID→epic index + static archive
  *  layers (front page → epic pages → story pages, US-DOSSIER-001d). */
-export function indexCommand(args: string[]): number {
+export function indexCommand(
+  args: string[],
+  deps: { readonly projectPath?: string; readonly authorityMode?: ProjectDataAuthorityMode } = {},
+): number {
   if (args.includes("--help") || args.includes("-h")) {
     process.stdout.write(
       "Usage: roll index [--rebuild]\n" +
-        "  Regenerate .roll/index.json + the static archive (front page, every epic page).\n" +
+        "  Regenerate the selected Workspace index.json + static archive (legacy projects use .roll/index.json).\n" +
         "  Story archive pages are living mount boards: each lifecycle node mounts its own\n" +
         "  facts onto the existing page, so by default an existing story page is left intact.\n" +
         "  --rebuild  force a full re-render of every story page from source (reconciliation:\n" +
@@ -432,12 +436,20 @@ export function indexCommand(args: string[]): number {
   // the hot path — by default we never overwrite an existing story page (its
   // incremental mounts would be lost when source can't reconstruct them).
   const rebuild = args.includes("--rebuild");
-  const cwd = process.cwd();
-  const stories = generateIndex(cwd);
+  const cwd = deps.projectPath ?? process.cwd();
+  if (deps.authorityMode === "workspace") {
+    const required = [
+      { path: join(cwd, "backlog", "index.md"), kind: "file" as const },
+      { path: join(cwd, "features"), kind: "directory" as const },
+    ];
+    if (!requireWorkspaceAuthorities("roll index", required)) return 1;
+  }
+  const stories = generateIndex(cwd, deps.authorityMode);
   const n = Object.keys(stories).length;
-  process.stdout.write(`index.json regenerated\n索引已重建\n  ${n} stories mapped to epics (.roll/index.json)\n`);
+  const indexPath = relative(cwd, projectDataPath(cwd, "index.json")) || "index.json";
+  process.stdout.write(`index.json regenerated\n索引已重建\n  ${n} stories mapped to epics (${indexPath})\n`);
 
-  if (existsSync(join(cwd, ".roll", "features"))) {
+  if (existsSync(projectDataPath(cwd, "features"))) {
     const pages = generateDossierPages(cwd, rebuild);
     process.stdout.write(`Static archive regenerated (${pages} pages)\n静态归档已重建（${pages} 页）\n`);
   }
@@ -479,7 +491,7 @@ function backlogViewModel(epics: ReturnType<typeof collectDossier>): BacklogVM {
  * best-effort; returns the page count.
  */
 export function generateDossierPages(cwd: string, rebuild: boolean): number {
-  const featuresDir = join(cwd, ".roll", "features");
+  const featuresDir = projectDataPath(cwd, "features");
   if (!existsSync(featuresDir)) return 0;
   refreshDossierMergeBaseline(cwd);
   // FIX-275: ONE shared facts build for the whole run — git log snapshot,

@@ -45,8 +45,14 @@ export interface CleanupCandidate {
   path: string;
   cycleId?: string;
   branch?: string;
+  workspaceId?: string;
+  repoId?: string;
+  repositoryAlias?: string;
+  cachePath?: string;
   /** HEAD the audit observed; `--apply` refuses if the fresh head differs. */
   expectedHead: string;
+  /** Exact path-specific orphan material proof observed while planning. */
+  expectedOrphanFingerprint?: string;
   reason: "disposable_candidate" | "orphan_reclaimable";
   /**
    * FIX-1460 (#1468): how this path is reclaimed. `git_worktree` (default) uses
@@ -65,6 +71,9 @@ export interface CleanupCandidate {
  */
 export interface CleanupBranchCandidate {
   branch: string;
+  workspaceId?: string;
+  repoId?: string;
+  cachePath?: string;
   /** Ref SHA the plan observed; `--apply` refuses if the fresh ref differs. */
   expectedSha: string;
   /**
@@ -113,6 +122,10 @@ export interface CleanupRemoval {
   expectedHead: string;
   branch?: string;
   cycleId?: string;
+  workspaceId?: string;
+  repoId?: string;
+  repositoryAlias?: string;
+  cachePath?: string;
   /** FIX-1460: how the path was reclaimed (git worktree remove vs bounded rm). */
   reclaim?: "git_worktree" | "rm_dir";
 }
@@ -127,6 +140,9 @@ export interface BranchRemoval {
   branch: string;
   expectedSha: string;
   mergeKind: "ancestor" | "patch_equivalent" | "final_tree";
+  workspaceId?: string;
+  repoId?: string;
+  cachePath?: string;
 }
 
 export interface WorktreeCleanupResult {
@@ -148,6 +164,21 @@ const MERGED_KINDS = new Set(["ancestor", "patch_equivalent", "final_tree"]);
 
 /** True iff `rec` satisfies EVERY safe-removal invariant on a fresh audit. */
 export function isSafelyDisposable(rec: WorktreeAuditRecord): boolean {
+  if (rec.owner === "workspace") {
+    return (
+      rec.active === false &&
+      rec.dirtyTracked === false &&
+      rec.dirtyUntracked === false &&
+      rec.disposition === "disposable_candidate" &&
+      rec.ownershipState === "verified" &&
+      (rec.deliveryProof === "delivered" || rec.deliveryProof === "abandoned") &&
+      typeof rec.workspaceId === "string" && rec.workspaceId !== "" &&
+      typeof rec.repoId === "string" && rec.repoId !== "" &&
+      typeof rec.repositoryAlias === "string" && rec.repositoryAlias !== "" &&
+      typeof rec.cachePath === "string" && rec.cachePath !== "" &&
+      typeof rec.head === "string" && rec.head.length > 0
+    );
+  }
   return (
     rec.owner === "loop" &&
     rec.active === false &&
@@ -165,7 +196,15 @@ export function isSafelyDisposable(rec: WorktreeAuditRecord): boolean {
  * is no registered worktree, so it is reclaimed by a bounded directory delete.
  */
 export function isReclaimableOrphan(rec: WorktreeAuditRecord): boolean {
-  return rec.owner === "loop" && rec.active === false && rec.disposition === "orphan_reclaimable";
+  const proof = rec.orphanRecoveryProof;
+  return (
+    rec.owner === "loop" &&
+    rec.active === false &&
+    rec.disposition === "orphan_reclaimable" &&
+    (proof?.state === "empty" || proof?.state === "trusted_generated") &&
+    typeof proof.fingerprint === "string" &&
+    proof.fingerprint.length > 0
+  );
 }
 
 /**
@@ -248,16 +287,24 @@ export function planWorktreeCleanup(
   audit: WorktreeAuditOutput,
   threshold: number,
   standaloneMergedBranches: readonly CleanupBranchCandidate[] = [],
+  scope?: { readonly workspaceId: string },
 ): WorktreeCleanupPlan {
-  const loopWorktrees = audit.records.filter((r) => r.owner === "loop");
-  const canaryTotal = audit.ephemeralBranches.length + loopWorktrees.length;
+  const managedWorktrees = scope === undefined
+    ? audit.records.filter((record) => record.owner === "loop")
+    : audit.records.filter((record) => record.owner === "workspace");
+  const canaryTotal = audit.ephemeralBranches.length + managedWorktrees.length;
   const excess = canaryTotal - threshold;
 
   // The removable pool: audit-proven safe candidates, deterministically ordered.
   // FIX-1460: includes reclaimable ORPHAN dirs (deregistered from git) alongside
   // disposable registered worktrees — each removal drops the canary total by one.
   const pool = audit.records
-    .filter((r) => isSafelyDisposable(r) || isReclaimableOrphan(r))
+    .filter((record) => {
+      if (scope !== undefined) {
+        return record.owner === "workspace" && record.workspaceId === scope.workspaceId && isSafelyDisposable(record);
+      }
+      return isSafelyDisposable(record) || isReclaimableOrphan(record);
+    })
     .sort((a, b) => a.path.localeCompare(b.path));
 
   const branchPool = [...standaloneMergedBranches].sort((a, b) => a.branch.localeCompare(b.branch));
@@ -278,8 +325,13 @@ export function planWorktreeCleanup(
       path: r.path,
       ...(r.cycleId ? { cycleId: r.cycleId } : {}),
       ...(r.branch ? { branch: r.branch } : {}),
+      ...(r.workspaceId ? { workspaceId: r.workspaceId } : {}),
+      ...(r.repoId ? { repoId: r.repoId } : {}),
+      ...(r.repositoryAlias ? { repositoryAlias: r.repositoryAlias } : {}),
+      ...(r.cachePath ? { cachePath: r.cachePath } : {}),
       // An orphan has no registered HEAD; apply skips the head check for rm_dir.
       expectedHead: orphan ? "" : (r.head as string),
+      ...(orphan ? { expectedOrphanFingerprint: r.orphanRecoveryProof?.fingerprint as string } : {}),
       reason: orphan ? ("orphan_reclaimable" as const) : ("disposable_candidate" as const),
       reclaim: orphan ? ("rm_dir" as const) : ("git_worktree" as const),
     };
@@ -291,7 +343,7 @@ export function planWorktreeCleanup(
     .filter((r) => !chosenPaths.has(r.path))
     .map((r) => ({ path: r.path, disposition: r.disposition, reason: r.reason }));
 
-  const countedWorktrees = loopWorktrees.map((r) => ({
+  const countedWorktrees = managedWorktrees.map((r) => ({
     path: r.path,
     disposition: r.disposition,
   }));
@@ -325,7 +377,11 @@ export interface ApplyCleanupOptions {
   /** Remove one worktree via git + prune registration. Injectable for tests. */
   removeWorktree?: (repositoryRoot: string, path: string) => { ok: boolean; detail: string };
   /** FIX-1460: reclaim one orphan loop dir via a bounded rm. Injectable for tests. */
-  reclaimOrphanDir?: (repositoryRoot: string, path: string) => { ok: boolean; detail: string };
+  reclaimOrphanDir?: (
+    repositoryRoot: string,
+    path: string,
+    expectedFingerprint: string,
+  ) => { ok: boolean; detail: string };
   /**
    * FIX-1454: fresh standalone-branch probes, called immediately before EVERY
    * branch deletion so a ref/merge/attach change between plan and apply is caught.
@@ -423,12 +479,26 @@ function defaultRemoveWorktree(repositoryRoot: string, path: string): { ok: bool
  * directory — but only after asserting it is a direct child of
  * `.roll/loop/worktrees`. Any path outside that boundary is a fail-loud refusal.
  */
-function defaultReclaimOrphanDir(repositoryRoot: string, path: string): { ok: boolean; detail: string } {
+function defaultReclaimOrphanDir(
+  repositoryRoot: string,
+  path: string,
+  expectedFingerprint: string,
+): { ok: boolean; detail: string } {
   if (!isBoundedLoopWorktreeDir(repositoryRoot, path)) {
     return { ok: false, detail: `refused: ${path} is outside .roll/loop/worktrees` };
   }
-  if (!existsSync(path)) {
-    return { ok: false, detail: "missing: orphan dir already gone" };
+  const finalAudit = auditWorktrees({ repoRoot: repositoryRoot, home: homedir() });
+  const record = finalAudit.records.find((candidate) => resolve(candidate.path) === resolve(path));
+  if (!record) {
+    return { ok: false, detail: "missing: orphan dir no longer appears in the final audit" };
+  }
+  if (!isReclaimableOrphan(record) || record.orphanRecoveryProof?.fingerprint !== expectedFingerprint) {
+    return {
+      ok: false,
+      detail:
+        `changed-proof: expected ${expectedFingerprint}, found ` +
+        `${record.orphanRecoveryProof?.fingerprint ?? record.disposition}`,
+    };
   }
   try {
     rmSync(path, { recursive: true, force: true });
@@ -493,6 +563,21 @@ export async function applyWorktreeCleanup(
       continue;
     }
 
+    if (
+      candidate.workspaceId !== undefined &&
+      (
+        rec.owner !== "workspace" ||
+        rec.workspaceId !== candidate.workspaceId ||
+        rec.repoId !== candidate.repoId ||
+        rec.repositoryAlias !== candidate.repositoryAlias ||
+        rec.cachePath !== candidate.cachePath ||
+        rec.ownershipState !== "verified"
+      )
+    ) {
+      refuse("identity: fresh audit no longer matches the planned Workspace/repository ownership");
+      continue;
+    }
+
     // FIX-1460 (#1468): ORPHAN reclaim path. A deregistered dir has no git
     // metadata, so head/dirty checks do not apply — safety is the fresh audit
     // STILL classifying it `orphan_reclaimable` (owning cycle provably delivered).
@@ -500,6 +585,18 @@ export async function applyWorktreeCleanup(
     if (candidate.reclaim === "rm_dir") {
       if (!isReclaimableOrphan(rec)) {
         refuse(`disposition: fresh audit reports '${rec.disposition}' (orphan no longer provably delivered)`);
+        continue;
+      }
+      const freshFingerprint = rec.orphanRecoveryProof?.fingerprint;
+      if (
+        typeof candidate.expectedOrphanFingerprint !== "string" ||
+        candidate.expectedOrphanFingerprint.length === 0 ||
+        freshFingerprint !== candidate.expectedOrphanFingerprint
+      ) {
+        refuse(
+          `changed-proof: expected ${candidate.expectedOrphanFingerprint ?? "none"}, ` +
+          `found ${freshFingerprint ?? "none"}`,
+        );
         continue;
       }
       const removal: CleanupRemoval = {
@@ -512,7 +609,7 @@ export async function applyWorktreeCleanup(
         removed.push(removal);
         continue;
       }
-      const result = reclaimOrphanFn(repositoryRoot, rec.path);
+      const result = reclaimOrphanFn(repositoryRoot, rec.path, freshFingerprint);
       if (!result.ok) {
         refuse(`reclaim-failed: ${result.detail}`);
         continue;
@@ -552,6 +649,10 @@ export async function applyWorktreeCleanup(
       reclaim: "git_worktree",
       ...(rec.branch ? { branch: rec.branch } : {}),
       ...(rec.cycleId ? { cycleId: rec.cycleId } : {}),
+      ...(rec.workspaceId ? { workspaceId: rec.workspaceId } : {}),
+      ...(rec.repoId ? { repoId: rec.repoId } : {}),
+      ...(rec.repositoryAlias ? { repositoryAlias: rec.repositoryAlias } : {}),
+      ...(rec.cachePath ? { cachePath: rec.cachePath } : {}),
     };
 
     if (options.dryRun) {
@@ -600,7 +701,14 @@ export async function applyWorktreeCleanup(
       const mk = bd.branchMerge(bc.branch, sha);
       if (mk === null) { refuseB("not-merged: fresh check no longer proves a merge"); continue; }
 
-      const removalB: BranchRemoval = { branch: bc.branch, expectedSha: bc.expectedSha, mergeKind: mk };
+      const removalB: BranchRemoval = {
+        branch: bc.branch,
+        expectedSha: bc.expectedSha,
+        mergeKind: mk,
+        ...(bc.workspaceId === undefined ? {} : { workspaceId: bc.workspaceId }),
+        ...(bc.repoId === undefined ? {} : { repoId: bc.repoId }),
+        ...(bc.cachePath === undefined ? {} : { cachePath: bc.cachePath }),
+      };
       if (options.dryRun) { branchesRemoved.push(removalB); continue; }
       // Atomic compare-and-delete against the observed sha — a ref that advanced
       // between this check and the delete makes update-ref fail, so we refuse.
@@ -681,14 +789,20 @@ function rel(p: string): string {
   return p;
 }
 
-function renderPlanHuman(plan: WorktreeCleanupPlan, mode: "dry-run" | "apply"): string {
+export function renderPlanHuman(
+  plan: WorktreeCleanupPlan,
+  mode: "dry-run" | "apply",
+  scope: "loop" | "workspace" = "loop",
+): string {
   const lines: string[] = [];
+  const worktreeLabel = scope === "workspace" ? "Workspace Issue worktree(s)" : "loop worktree(s)";
+  const worktreeHeading = scope === "workspace" ? "counted Workspace Issue worktrees" : "counted loop worktrees";
   lines.push(`Worktree cleanup (${mode})`);
   lines.push("");
   lines.push(`  canary count: ${plan.canaryTotal} (threshold ${plan.threshold})`);
   lines.push(
     `  counted: ${plan.countedBranches.length} ephemeral branch(es) + ` +
-      `${plan.countedWorktrees.length} loop worktree(s)`,
+      `${plan.countedWorktrees.length} ${worktreeLabel}`,
   );
   lines.push("");
 
@@ -697,7 +811,7 @@ function renderPlanHuman(plan: WorktreeCleanupPlan, mode: "dry-run" | "apply"): 
   for (const b of plan.countedBranches) lines.push(`  ${b}`);
   lines.push("");
 
-  lines.push("counted loop worktrees");
+  lines.push(worktreeHeading);
   if (plan.countedWorktrees.length === 0) lines.push("  (none)");
   for (const w of plan.countedWorktrees) lines.push(`  ${rel(w.path)}  [${w.disposition}]`);
   lines.push("");
@@ -729,14 +843,14 @@ function renderPlanHuman(plan: WorktreeCleanupPlan, mode: "dry-run" | "apply"): 
   }
   lines.push("");
 
-  // FIX-1460 (#1468): surface preserved orphan dirs (deregistered, delivery not
-  // provable). They are counted + visible but NEVER auto-deleted — the operator
-  // reclaims one explicitly after review.
+  // Preserved orphan dirs remain counted + visible. Cleanup offers no review-only
+  // override: the operator must rescue or remove untrusted material first, then
+  // rerun audit so a complete path-specific proof can authorize the exact path.
   const preservedOrphans = plan.preserved.filter((p) => p.disposition === "preserved_orphan");
   if (preservedOrphans.length > 0) {
     lines.push(`preserved orphan dirs (${preservedOrphans.length}) — visible + counted, never auto-deleted`);
     for (const p of preservedOrphans) lines.push(`  ${rel(p.path)}  — ${p.reason}`);
-    lines.push("  Reclaim one after review with: roll worktree cleanup --reclaim-orphan <path>");
+    lines.push("  Resolve or rescue the reported material, then rerun audit; preserved proof cannot be overridden.");
     lines.push("");
   }
 
@@ -748,7 +862,7 @@ function renderPlanHuman(plan: WorktreeCleanupPlan, mode: "dry-run" | "apply"): 
   return lines.join("\n").trimEnd() + "\n";
 }
 
-function renderResultHuman(result: WorktreeCleanupResult): string {
+export function renderResultHuman(result: WorktreeCleanupResult): string {
   const lines: string[] = [];
   lines.push("Worktree cleanup (apply)");
   lines.push("");
@@ -782,10 +896,10 @@ function renderResultHuman(result: WorktreeCleanupResult): string {
 // ─── CLI command ─────────────────────────────────────────────────────────────
 
 export const CLEANUP_USAGE =
-  "Usage: roll worktree cleanup [--dry-run | --apply] [--json] [--repo <path>]\n" +
+  "Usage: roll worktree cleanup [--dry-run | --apply] [--json] [--workspace <id|path> | --repo <path>]\n" +
   "  Safely recover from branch/worktree canary pressure using the worktree\n" +
-  "  audit as the SOLE authority. Removes ONLY inactive, merged, clean\n" +
-  "  `disposable_candidate` loop worktrees, plus (FIX-1454) standalone ephemeral\n" +
+  "  audit as the SOLE authority. Removes ONLY revalidated `disposable_candidate`\n" +
+  "  legacy loop or Workspace Issue worktrees, plus standalone ephemeral\n" +
   "  branches that are verifiably delivered and attached to no worktree. Delivery\n" +
   "  is PROVEN by one of: every commit is an ancestor of the integration branch;\n" +
   "  `git cherry` shows every commit already has an equivalent patch upstream; or\n" +
@@ -805,12 +919,15 @@ export const CLEANUP_USAGE =
   "             head / new dirt / missing path / concurrent activation fails\n" +
   "             closed (no substitution). Then resume explicitly: roll loop resume\n" +
   "  --json     emit the schema-1 plan (dry-run) or result (apply) as JSON\n" +
-  "  --repo     override the project root (default: current directory)\n" +
-  "  --reclaim-orphan <path>  (FIX-1460) bounded-rm ONE named orphan loop dir\n" +
-  "             (deregistered from git; delivery not auto-provable) after you\n" +
-  "             review it. Fails closed unless it is an inactive loop orphan\n" +
-  "             inside .roll/loop/worktrees. Auto-reclaim of provably-delivered\n" +
-  "             orphans happens under --apply.\n" +
+  "  --workspace resolve Issue ownership through the Workspace registry; every\n" +
+  "             mutation holds the machine repository lock and requires exact\n" +
+  "             Workspace/Story/repository identity plus delivery proof\n" +
+  "  --repo     explicit historical repo-local/migration input (default: current directory)\n" +
+  "  --reclaim-orphan <path>  legacy --repo mode only: bounded-rm ONE named orphan loop dir\n" +
+  "             only when the fresh audit supplies the same complete path-specific proof\n" +
+  "             required by --apply: delivered + inactive, no Git ownership metadata,\n" +
+  "             trusted generated residue only, and an unchanged material fingerprint.\n" +
+  "             Preserved or ambiguous orphans can never be overridden.\n" +
   "\n" +
   "  安全清理:仅移除审计判定为已合并、干净、非活跃的 disposable_candidate;\n" +
   "  先跑 --dry-run,再 --apply,最后手动 roll loop resume。";
@@ -949,7 +1066,7 @@ export function buildStandaloneBranchDeps(
 ): StandaloneBranchDeps {
   const attachedBranches = new Set(
     audit.records
-      .filter((r) => r.owner === "loop" && typeof r.branch === "string" && r.branch !== "")
+      .filter((r) => (r.owner === "loop" || r.owner === "workspace") && typeof r.branch === "string" && r.branch !== "")
       .map((r) => (r.branch as string).replace(/^refs\/heads\//, "")),
   );
   let currentBranch: string | null = null;
@@ -1077,7 +1194,11 @@ export async function worktreeCleanupCommand(
   args: string[],
   deps?: Partial<WorktreeAuditDeps> & {
     removeWorktree?: (repositoryRoot: string, path: string) => { ok: boolean; detail: string };
-    reclaimOrphanDir?: (repositoryRoot: string, path: string) => { ok: boolean; detail: string };
+    reclaimOrphanDir?: (
+      repositoryRoot: string,
+      path: string,
+      expectedFingerprint: string,
+    ) => { ok: boolean; detail: string };
     emit?: (event: RollEvent) => void;
     nowMs?: () => number;
   },
@@ -1103,16 +1224,14 @@ export async function worktreeCleanupCommand(
     git: deps?.git,
     readFile: deps?.readFile,
     readDir: deps?.readDir,
+    inspectOrphanDir: deps?.inspectOrphanDir,
     nowISO: deps?.nowISO,
     nowSec: deps?.nowSec,
     integrationBranch: deps?.integrationBranch,
   };
 
-  // FIX-1460 (#1468): explicit operator reclaim of ONE preserved orphan dir whose
-  // delivery could not be auto-proven. The operator names the exact path (having
-  // reviewed it); we still fail-closed on: not-in-audit, not loop-owned, active,
-  // a registered/other worktree (must use --apply), or a path outside the bounded
-  // `.roll/loop/worktrees` scratch dir. Never a broad or substituted delete.
+  // Legacy exact-path route. It is NOT a manual override: the same complete
+  // path-specific proof required by --apply must be fresh and reclaimable.
   const reclaimIdx = args.indexOf("--reclaim-orphan");
   if (reclaimIdx >= 0) {
     const named = args[reclaimIdx + 1];
@@ -1135,8 +1254,8 @@ export async function worktreeCleanupCommand(
       process.stderr.write(`refused: ${named} has an active cycle lock.\n`);
       return 2;
     }
-    if (rec.disposition !== "orphan_reclaimable" && rec.disposition !== "preserved_orphan") {
-      process.stderr.write(`refused: ${named} audits as '${rec.disposition}', not an orphan dir — use --apply for registered worktrees.\n`);
+    if (!isReclaimableOrphan(rec)) {
+      process.stderr.write(`refused: ${named} lacks a complete reclaimable orphan proof (${rec.disposition}).\n`);
       return 2;
     }
     if (!isBoundedLoopWorktreeDir(repoRoot, rec.path)) {
@@ -1144,7 +1263,7 @@ export async function worktreeCleanupCommand(
       return 2;
     }
     const reclaimFn = deps?.reclaimOrphanDir ?? defaultReclaimOrphanDir;
-    const r = reclaimFn(repoRoot, rec.path);
+    const r = reclaimFn(repoRoot, rec.path, rec.orphanRecoveryProof?.fingerprint as string);
     if (!r.ok) {
       process.stderr.write(`reclaim-failed: ${r.detail}\n`);
       return 1;
@@ -1197,6 +1316,7 @@ export async function worktreeCleanupCommand(
       return buildStandaloneBranchDeps(repoRoot, fresh, integrationBranch);
     },
     ...(deps?.removeWorktree ? { removeWorktree: deps.removeWorktree } : {}),
+    ...(deps?.reclaimOrphanDir ? { reclaimOrphanDir: deps.reclaimOrphanDir } : {}),
     emit,
     ...(deps?.nowMs ? { nowMs: deps.nowMs } : {}),
   });

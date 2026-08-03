@@ -1,0 +1,112 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-021 Workspace-first documentation contract > freezes Workspace-aware command help in one visible language per locale 1`] = `
+{
+  "en": {
+    "agent": "Usage: roll agent [--workspace <id|path>|migrate [--dry-run]|list|readiness|cast]
+  Inspect machine Agent Scope, readiness and role casting; --workspace resolves one read-only Workspace casting trace.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
+",
+    "backlog": "Usage: roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]
+       roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]
+  Reads may explicitly enable/disable Workspace clarification; --all is read-only and mutations are rejected.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
+",
+    "delivery": "Usage: roll delivery <list|show|reconcile> [options]
+  \`list [--workspace <id|path> | --all] [--interactive|--no-input] [--json]\`
+  \`show <story-id> [--workspace <id|path>] [--interactive|--no-input] [--json]\`
+  \`reconcile [<story-id>] --workspace <id|path> [--dry-run] [--json]\`
+  Interaction capability is independent from --json; prompts use the controlling TTY, never stdout. Delivery is an Issue fact view; --all is read-only and reconciliation never reads backlog Markdown as completion truth.
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
+",
+    "loop": "Usage: roll loop <subcommand>
+The autonomous delivery loop — grouped control / observe / alerts / maintain.
+
+control   go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>
+observe   watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle
+alerts    alert list · alert ack · alert resolve · alert log
+maintain  gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
+internal  run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
+
+states    ACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)
+drive     open an agent session and run roll loop go — nothing advances on its own
+
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
+",
+    "workspace": "Usage: roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
+  \`create <id> --config <file> [--authorization <file>] [--check] [--json]\`
+  \`edit <id|path> --config <file> [--check] [--json]\`
+  \`handoff --skill <id> --operation <op> --requirement <text> [--workspace <id>] [--story <id>] [--repository <id|alias>] [--json]\`
+  \`issue init <story-id> --workspace <id> [--check] [--json]\`
+  \`requirement add --provider <provider> --ref <ref> --revision <revision> --body-file <file> --story <id> [options]\`
+  \`doctor <id> [--json] [--repair <typed-action>] [--path <absolute-path>]\`
+  \`migrate --from <repo> --check [--workspace <id>] [--json]\`
+  \`migrate --from <repo> --workspace <id> --plan <file> [--rollback] [--json]\`
+  \`list [--json] [--all]\`
+  \`show <id|path> [--json]\`
+  \`register <id> <path> [--json]\`
+  \`activate|pause|archive <id|path> [--json]\`
+  Create/edit/issue/migrate --check and doctor diagnosis are read-only; migrate apply/rollback, typed doctor repairs and lifecycle mutations require one explicit target; --all is read-only.
+
+Alias: roll ws ... (canonical: roll workspace ...)
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
+",
+  },
+  "zh": {
+    "agent": "用法：roll agent [--workspace <ID|路径>|migrate [--dry-run]|list|readiness|cast]
+  查看机器 Agent Scope、就绪状态与角色分工；--workspace 只读解析一个工作区的 casting trace。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
+",
+    "backlog": "用法：roll backlog [show <story-id>] [--workspace <id|path>] [--interactive|--no-input] [--all]
+      roll backlog <block|defer|unblock|promote|claim|lint|unstick|sync> ... [--workspace <id|path>]
+  读取时可显式启用/禁用 Workspace 澄清；--all 只允许只读聚合，变更命令会拒绝。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
+",
+    "delivery": "用法：roll delivery <list|show|reconcile> [选项]
+  \`list [--workspace <ID|路径> | --all] [--interactive|--no-input] [--json]\`
+  \`show <Story ID> [--workspace <ID|路径>] [--interactive|--no-input] [--json]\`
+  \`reconcile [<Story ID>] --workspace <ID|路径> [--dry-run] [--json]\`
+  交互能力与 --json 相互独立；prompt 只写控制终端，绝不写 stdout。Delivery 是 Issue 事实视图；--all 仅限只读，对账绝不把 backlog Markdown 当作完成真相。
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
+",
+    "loop": "用法：roll loop <子命令>
+自治交付循环——按作动/传感/告警/维护分组。
+
+作动      go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>
+传感      watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle
+告警      alert list · alert ack · alert resolve · alert log
+维护      gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
+内部      run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
+
+状态      ACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)
+驱动      开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进
+
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
+",
+    "workspace": "用法：roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
+  \`create <ID> --config <文件> [--authorization <文件>] [--check] [--json]\`
+  \`edit <ID|路径> --config <文件> [--check] [--json]\`
+  \`handoff --skill <ID> --operation <操作> --requirement <文本> [--workspace <ID>] [--story <ID>] [--repository <ID|别名>] [--json]\`
+  \`issue init <Story ID> --workspace <ID> [--check] [--json]\`
+  \`requirement add --provider <来源> --ref <引用> --revision <修订> --body-file <文件> --story <ID> [选项]\`
+  \`doctor <ID> [--json] [--repair <类型化动作>] [--path <绝对路径>]\`
+  \`migrate --from <仓库> --check [--workspace <ID>] [--json]\`
+  \`migrate --from <仓库> --workspace <ID> --plan <文件> [--rollback] [--json]\`
+  \`list [--json] [--all]\`
+  \`show <ID|路径> [--json]\`
+  \`register <ID> <路径> [--json]\`
+  \`activate|pause|archive <ID|路径> [--json]\`
+  create/edit/issue/migrate --check 和 doctor 诊断只读；migrate apply/rollback、doctor 类型化修复和生命周期变更必须显式指定一个目标；--all 仅限只读。
+
+别名：roll ws ...（canonical：roll workspace ...）
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
+",
+  },
+}
+`;

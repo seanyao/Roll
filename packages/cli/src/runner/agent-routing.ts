@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AGENT_REGISTRY_NAMES, type AgentInternalFailure, type CycleContext } from "@roll/core";
@@ -150,7 +150,7 @@ function scopedEvaluateAllowedAgents(layers: readonly { config: AgentScopeConfig
  * `roll-agents/v1` story.evaluate bindings are the sole project allowlist.
  */
 export function projectAllowedAgents(repoCwd: string): Set<string> | undefined {
-  const path = join(repoCwd, ".roll", "agents.yaml");
+  const path = scopedAgentPolicyPath(repoCwd);
   const machinePath = join(process.env["ROLL_HOME"] ?? join(homedir(), ".roll"), "agents.yaml");
   const scopedLayers = [readScopedAgentLayer(machinePath), readScopedAgentLayer(path)].filter(
     (layer): layer is { config: AgentScopeConfig; path: string } => layer !== null,
@@ -161,6 +161,14 @@ export function projectAllowedAgents(repoCwd: string): Set<string> | undefined {
   }
 
   return undefined;
+}
+
+/** Workspace runtime policy is owned by `<workspace>/agents.yaml`; repository-
+ * local project policy is migration input only and must never become a fallback. */
+export function scopedAgentPolicyPath(root: string): string {
+  return existsSync(join(root, "workspace.yaml"))
+    ? join(root, "agents.yaml")
+    : join(root, ".roll", "agents.yaml");
 }
 
 type AgentBlockedStage = Extract<RollEvent, { type: "agent:blocked" }>["stage"];

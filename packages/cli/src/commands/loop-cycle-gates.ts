@@ -376,6 +376,11 @@ export function loopTestQualityCheckRetired(): number {
 // maintaining a second, drift-prone verb list.
 const LOOP_USAGE = "Usage: roll loop <subcommand>  ·  see `roll loop --help` for the full list\n";
 
+/** Stable unknown-route text reused by bridge-level rejected route guards. */
+export function loopUnknownSubcommandText(sub: string): string {
+  return `[roll] unknown loop subcommand: ${sub}\n${LOOP_USAGE}`;
+}
+
 /**
  * An unrecognised `roll loop <x>` — the final dispatch arm. With bin/roll
  * retired there is no bash fallback; print the usage and exit 1 (mirrors the
@@ -383,8 +388,9 @@ const LOOP_USAGE = "Usage: roll loop <subcommand>  ·  see `roll loop --help` fo
  */
 export function loopUnknownSubcommand(sub: string | undefined): number {
   if (sub !== undefined && sub !== "" && sub !== "-h" && sub !== "--help") {
-    process.stderr.write(`[roll] unknown loop subcommand: ${sub}\n`);
+    process.stderr.write(loopUnknownSubcommandText(sub));
+    return 1;
   }
   process.stderr.write(LOOP_USAGE);
-  return sub === undefined || sub === "" || sub === "-h" || sub === "--help" ? 0 : 1;
+  return 0;
 }

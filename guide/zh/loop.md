@@ -17,6 +17,12 @@
 backlog 做完、被暂停或达到上限。`roll loop pause` 让卡不再被摘取，
 `roll loop resume` 解除；owner 通过 `roll supervisor next/why` 判断该驱动什么。
 
+Workspace 模式把每个会话驱动的 runtime 绑定到不可变 Workspace ID。
+`roll loop go`、`roll loop pause`、`roll loop resume` 会接收或推导唯一一个
+Workspace 目标，并把 runtime、事件、锁与失败状态保存在该 Workspace 下。多个
+active Workspace 可以独立运行；`roll loop status --all` 仅提供只读聚合视图，
+不会修改任何 Workspace。
+
 ## 工作原理
 
 1. 读取 `BACKLOG.md`，摘取优先级最高的 `📋 Todo` 条目。

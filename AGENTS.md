@@ -34,7 +34,7 @@ CLI 全 TypeScript：`packages/cli/bin/roll.js` → `dispatch()`，未知命令�
 2. **能力域分层 = 每个能力域一个家**：Orchestration / Sandboxing / Tool Use / Context Engineering / Observability / Evals / Guardrails。新代码先问"它属哪个域"，进那个域的包（6 包：spec/core/infra/daemon/cli/web），别又摊回多载体。
 3. **守黑盒边界（外层 harness）**：token 级压缩、工具 schema 强制、单次 ReAct 委派内层 agent。
 4. **event-driven，不中央编排**：多 loop 独立、经 artifact 协调，单 loop 故障不塌全局。
-5. **主干即真相**：Done ≡ 已合进 `main` 分支；退出码不算数，事后对账。
+5. **主干即真相**：默认 Done ≡ 已合进 `main` 分支；退出码不算数，事后对账。唯一窄例外是 Requirement 显式持久化 `deliveryTarget: { terminal: campaign_branch, branch: <exact>, mainMerge: forbidden }`：该 campaign 的终态以目标 branch 的强证据对账，禁止把它再解释为必须 merge `main`。不得从 Workspace 默认值或 cwd 推断此例外。
 6. **失败要响（fail-loud）**：连续失败 → PAUSE + 记录 + 问 owner；不做静默自愈/自动 fallback 链。
 7. **持久优先**：状态从不可变事件流重建，不存独立缓存；写在前、原子 append。
 8. **有界且可逆**：一 cycle 一小故事、fresh 上下文、TCR green-or-revert、feature 可整体回退。
@@ -62,11 +62,11 @@ skills 是 markdown + shell，在独立仓 `seanyao/roll-skills`（submodule 挂
 
 ## 7. 与 `.roll/`（嵌套私有仓 roll-meta）
 
-`.roll/` 是独立私有 git 仓（`seanyao/roll-meta`），**非 submodule**。roll-meta 与本仓同步翻车：它的 `main` 现在是实时 backlog——backlog/features/notes 改动 `cd .roll` 后 commit+push 到 **main**。
+`.roll/` 是独立私有 git 仓（`seanyao/roll-meta`），**非 submodule**。默认情况下 roll-meta 的 `main` 是实时 backlog——backlog/features/notes 改动 `cd .roll` 后 commit+push 到 **main**。若且仅若当前 Requirement 显式声明 `campaign_branch` terminal 且 `mainMerge: forbidden`，对应 metadata 也必须留在该 exact campaign branch，不得 push/merge `main`。
 
 ## 8. 完成 = 上线
 
-完成 ≡ 已合进 `main`。`main` 是 PR-protected（PR + 2 checks），`@seanyao/roll` 从这里发版。退出码、自我声明都不算数——事后按主干对账才算。发布永远人点头（见 §3.9 的 human-on-the-loop）。
+默认完成 ≡ 已合进 `main`。`main` 是 PR-protected（PR + 2 checks），`@seanyao/roll` 从这里发版。退出码、自我声明都不算数——事后按主干对账才算。发布永远人点头（见 §3.9 的 human-on-the-loop）。显式 Requirement campaign terminal 是唯一例外：`mainMerge: forbidden` 时以声明的 exact campaign branch evidence 为完成真相，并持续禁止 main merge；普通 Story 不继承该例外。
 
 ## 9. Where to Look
 

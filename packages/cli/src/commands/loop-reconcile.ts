@@ -61,6 +61,12 @@ import {
 // the SAME facts (one truth engine, no parallel probes).
 import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRepoSlug } from "../lib/delivery-facts.js";
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
+import { markDoneGuarded } from "../runner/done-guard.js";
+import {
+  deliveryLoopReconcileUsage,
+  reconcileWorkspaceDeliveries,
+  type DeliveryCommandDeps,
+} from "./delivery.js";
 import { settleDeliveredCycle, gitPlaneVerifier, hasMergeConfirmedEvent } from "./loop-reconcile-merge.js";
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
@@ -86,6 +92,23 @@ const RECONCILE_USAGE_ZH = [
   "  --dry-run    只报告判定，不写事件、不合入。",
   "",
 ].join("\n");
+
+/**
+ * US-WS-015: the public `roll loop reconcile` surface is now a Workspace-scoped
+ * alias of `roll delivery reconcile`. The legacy cycle reconciler below remains
+ * the runner's internal delivery engine, but the user-facing alias must fold
+ * Issue facts through the exact same path as the delivery command.
+ */
+export function loopDeliveryReconcileCommand(
+  args: string[],
+  deps: DeliveryCommandDeps = {},
+): number {
+  if (args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
+    process.stdout.write(deliveryLoopReconcileUsage());
+    return 0;
+  }
+  return reconcileWorkspaceDeliveries(args, deps.resolveTarget);
+}
 
 // ── Ports ─────────────────────────────────────────────────────────────────────
 

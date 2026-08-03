@@ -28,6 +28,7 @@ export function createCapturePeerHelpers(params: {
   ctx: CycleContext;
   commitsAhead: number;
   tcrCount: number;
+  reviewCwd?: string;
 }): {
   attributeBlockCause: (
     peer: string,
@@ -175,7 +176,7 @@ export function createCapturePeerHelpers(params: {
       // timeoutMs. Whichever loses, the cycle is never stalled.
       // E4: the reviewer inspects the committed delivery, so it runs in the
       // execution worktree (submodule cycle worktree for a submodule story).
-      const reviewCwd = resolveExecutionCwd(ports, ctx);
+      const reviewCwd = params.reviewCwd ?? resolveExecutionCwd(ports, ctx);
       // US-CYCLE-002: the peer-review sub-spawn is watchdog-wrapped (evaluator
       // role) for uniform accounting + no bypass; its own short `timeoutMs` race
       // stays the primary cap for this quick read-only consult.
@@ -190,6 +191,14 @@ export function createCapturePeerHelpers(params: {
             ports.agentSpawn(peer, {
               cwd: reviewCwd,
               skillBody: prompt,
+              workspaceExecution: ctx.workspaceExecution,
+              workspaceSkillInvocation: {
+                skillName: "roll-peer",
+                operation: "review",
+                expectedWorkspaceId: ctx.workspaceExecution?.workspace.workspaceId,
+                expectedStoryId: ctx.storyId,
+                repositorySelector: ctx.repositorySelector,
+              },
               timeoutMs,
               bare: true, // FIX-319: review-only framing, no worker autorun directive
               ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),

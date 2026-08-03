@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run --passWithNoTests",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit && tsc -p tsconfig.type-tests.json"
   },
   "devDependencies": {
     "@types/node": "^25.9.1"

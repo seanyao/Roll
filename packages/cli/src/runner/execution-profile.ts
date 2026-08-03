@@ -3,6 +3,8 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   applyExecutionPolicy,
+  advanceContextCycleStageState,
+  canonicalAgentName,
   classifyStoryRisk,
   explainExecutionProfile,
   normalizeAgentConfig,
@@ -10,10 +12,11 @@ import {
   validateAuthoredEvalReport,
   validateDesignArtifact,
   validateRoleAccess,
+  type ContextCycleStageStateV1,
   type CycleContext,
 } from "@roll/core";
 import type { AdversarialPlan } from "@roll/core";
-import type { ArtifactManifest, DeltaArtifactManifest, ExecutionProfile, ResolutionSource, Rig } from "@roll/spec";
+import type { AgentName, ArtifactManifest, DeltaArtifactManifest, ExecutionProfile, ResolutionSource, Rig } from "@roll/spec";
 import { resolveScopedCastRole } from "./scoped-route.js";
 import { storySpecPath } from "./attest-gate.js";
 import { resolveExecutionCwd } from "./submodule-worktree.js";
@@ -190,8 +193,15 @@ export interface DesignerStageDeps {
  * (`null`), a non-`design` scope role, or an unresolved `design` binding all
  * surface as fail-closed (no fallback to the Builder's `execute` agent).
  */
-function defaultResolveDesigner(repoCwd: string): DesignerResolution | null {
-  const route = resolveScopedCastRole(repoCwd, "designer");
+function defaultResolveDesigner(repoCwd: string, installed?: ReadonlySet<AgentName>): DesignerResolution | null {
+  const route = resolveScopedCastRole(
+    repoCwd,
+    "designer",
+    {
+      ...(existsSync(join(repoCwd, "workspace.yaml")) ? { workspaceRoot: repoCwd } : {}),
+      ...(installed !== undefined ? { installed } : {}),
+    },
+  );
   if (route === null) return null;
   if (route.scopeRole !== "design") {
     return {
@@ -234,7 +244,14 @@ export async function runDesignerStage(
   ports: Ports,
   ctx: CycleContext,
   deps: DesignerStageDeps = {},
-): Promise<{ ran: boolean; ok: boolean; reasons: readonly string[]; designerAgent?: string; designerSessionId?: string }> {
+): Promise<{
+  ran: boolean;
+  ok: boolean;
+  reasons: readonly string[];
+  designerAgent?: string;
+  designerSessionId?: string;
+  contextStage?: ContextCycleStageStateV1;
+}> {
   if (ctx.selectedProfile !== "designed") return { ran: false, ok: true, reasons: [] };
   const storyId = ctx.storyId ?? "";
   const runDir = ctx.evidenceRunDir ?? "";
@@ -244,7 +261,11 @@ export async function runDesignerStage(
   // scoped config, a non-`design` scope role, or an unresolved `design` binding
   // all fail closed here — the Builder is NEVER reused as the Designer and there
   // is NO quiet fallback to `execute`.
-  const resolveDesigner = deps.resolveDesigner ?? defaultResolveDesigner;
+  const installed = ports.installedAgents?.();
+  const installedSet = installed === undefined
+    ? undefined
+    : new Set(installed.map((agent) => canonicalAgentName(agent) as AgentName));
+  const resolveDesigner = deps.resolveDesigner ?? ((repoCwd: string) => defaultResolveDesigner(repoCwd, installedSet));
   const resolved = resolveDesigner(ports.repoCwd);
   if (resolved === null) {
     return {
@@ -273,6 +294,40 @@ export async function runDesignerStage(
   // will run (submodule cycle worktree for a submodule story). No targetSubmodule
   // ⇒ ports.paths.worktreePath, unchanged.
   const execCwd = resolveExecutionCwd(ports, ctx);
+  let contextStage = ctx.contextStage;
+  let contextEnvelope = "";
+  if (ports.contextStage !== undefined) {
+    const requested = contextStage ?? { refs: [] };
+    let contextResult: Awaited<ReturnType<NonNullable<Ports["contextStage"]>["readForStage"]>>;
+    try {
+      contextResult = await ports.contextStage.readForStage({
+        storyId,
+        stage: "design",
+        ...requested,
+        readMode: "fresh",
+      });
+    } catch {
+      return { ran: true, ok: false, reasons: ["invalid_context_snapshot: Context host failed closed"] };
+    }
+    if (contextResult.status !== "ready") {
+      const reason = contextResult.status === "blocked"
+        ? `${contextResult.diagnostic.code}: ${contextResult.diagnostic.message}`
+        : "context revision needs reconciliation";
+      return { ran: true, ok: false, reasons: [reason] };
+    }
+    contextStage = advanceContextCycleStageState(requested, contextResult.handoff, "design");
+    contextEnvelope = contextResult.encodedEnvelope;
+  }
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (contextStage !== undefined) {
+      writeFileSync(join(dir, "context-stage-handoff.json"), `${JSON.stringify(contextStage, null, 2)}\n`);
+    }
+  } catch {
+    if (contextStage !== undefined) {
+      return { ran: true, ok: false, reasons: ["Context handoff artifact could not be persisted"] };
+    }
+  }
 
   // AC3: record SEPARATE role-resolution and role-start facts for the Designer
   // BEFORE the design stage runs, so the independent cast is auditable. These are
@@ -342,7 +397,9 @@ export async function runDesignerStage(
           // (spawn-agent-handler) is ever granted product worktree write roots.
           ports.agentSpawn(designerAgent, {
             cwd: execCwd,
-            skillBody: buildDesignerPrompt(storyId, contractPath),
+            skillBody: contextEnvelope === ""
+              ? buildDesignerPrompt(storyId, contractPath)
+              : `${buildDesignerPrompt(storyId, contractPath)}\n\n${contextEnvelope}`,
             storyId,
             runDir: dir,
             readOnly: true,
@@ -373,7 +430,14 @@ export async function runDesignerStage(
   }
   const contractMd = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : null;
   const v = validateDesignArtifact({ manifest, contractMd, storyId });
-  return { ran: true, ok: v.ok, reasons: v.reasons, designerAgent, designerSessionId };
+  return {
+    ran: true,
+    ok: v.ok,
+    reasons: v.reasons,
+    designerAgent,
+    designerSessionId,
+    ...(contextStage === undefined ? {} : { contextStage }),
+  };
 }
 
 function buildEvaluatorPrompt(storyId: string, reportAbsPath: string): string {
@@ -422,8 +486,15 @@ export interface EvaluatorStageDeps {
  * config (`null`), a non-`evaluate` scope role, or an unresolved `evaluate`
  * binding all surface as fail-closed (no fallback to the Builder's agent).
  */
-function defaultResolveEvaluator(repoCwd: string): EvaluatorResolution | null {
-  const route = resolveScopedCastRole(repoCwd, "evaluator");
+function defaultResolveEvaluator(repoCwd: string, installed?: ReadonlySet<AgentName>): EvaluatorResolution | null {
+  const route = resolveScopedCastRole(
+    repoCwd,
+    "evaluator",
+    {
+      ...(existsSync(join(repoCwd, "workspace.yaml")) ? { workspaceRoot: repoCwd } : {}),
+      ...(installed !== undefined ? { installed } : {}),
+    },
+  );
   if (route === null) return null;
   if (route.scopeRole !== "evaluate") {
     return {
@@ -493,7 +564,11 @@ export async function runEvaluatorStage(
   // AC3: resolve the Evaluator INDEPENDENTLY (scope role `evaluate`). A missing
   // scoped config, a non-`evaluate` scope role, or an unresolved binding all fail
   // closed here — the Builder is NEVER reused as the Evaluator.
-  const resolveEvaluator = deps.resolveEvaluator ?? defaultResolveEvaluator;
+  const installed = ports.installedAgents?.();
+  const installedSet = installed === undefined
+    ? undefined
+    : new Set(installed.map((agent) => canonicalAgentName(agent) as AgentName));
+  const resolveEvaluator = deps.resolveEvaluator ?? ((repoCwd: string) => defaultResolveEvaluator(repoCwd, installedSet));
   const resolved = resolveEvaluator(ports.repoCwd);
   if (resolved === null) {
     return {

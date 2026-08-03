@@ -1,0 +1,17 @@
+用法：roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
+  `create <ID> --config <文件> [--authorization <文件>] [--check] [--json]`
+  `edit <ID|路径> --config <文件> [--check] [--json]`
+  `handoff --skill <ID> --operation <操作> --requirement <文本> [--workspace <ID>] [--story <ID>] [--repository <ID|别名>] [--json]`
+  `issue init <Story ID> --workspace <ID> [--check] [--json]`
+  `requirement add --provider <来源> --ref <引用> --revision <修订> --body-file <文件> --story <ID> [选项]`
+  `doctor <ID> [--json] [--repair <类型化动作>] [--path <绝对路径>]`
+  `migrate --from <仓库> --check [--workspace <ID>] [--json]`
+  `migrate --from <仓库> --workspace <ID> --plan <文件> [--rollback] [--json]`
+  `list [--json] [--all]`
+  `show <ID|路径> [--json]`
+  `register <ID> <路径> [--json]`
+  `activate|pause|archive <ID|路径> [--json]`
+  create/edit/issue/migrate --check 和 doctor 诊断只读；migrate apply/rollback、doctor 类型化修复和生命周期变更必须显式指定一个目标；--all 仅限只读。
+
+别名：roll ws ...（canonical：roll workspace ...）
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）

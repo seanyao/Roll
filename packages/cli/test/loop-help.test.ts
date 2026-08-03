@@ -74,10 +74,21 @@ describe("roll loop --help groups — US-DOSSIER-035", () => {
 
   it("AC5: the design verbs sit in their assigned band", () => {
     const out = help("en");
-    expect(out).toMatch(/control\s+go · goal · pause · resume · reset · recover · reconcile/);
-    expect(out).toMatch(/observe\s+watch · status · runs · log · events · signals · eval · cycles · cycle/);
+    expect(out).toMatch(/control\s+go --workspace <id\|path> · goal · pause --workspace <id\|path> · resume --workspace <id\|path> · reset · recover · reconcile --workspace <id\|path>/);
+    expect(out).toMatch(/observe\s+watch · status \[--workspace <id\|path>\|--all\] · runs · log · events · signals · eval · cycles · cycle/);
     expect(out).toMatch(/alerts\s+alert list · alert ack · alert resolve · alert log/);
     expect(out).toMatch(/maintain\s+gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list/);
+  });
+
+  it("US-WS-016: surviving controls expose Workspace targeting without reviving scheduler verbs", () => {
+    const out = help("en");
+    expect(out).toContain("pause --workspace <id|path>");
+    expect(out).toContain("resume --workspace <id|path>");
+    expect(out).toContain("go --workspace <id|path>");
+    expect(out).toContain("reconcile --workspace <id|path>");
+    expect(out).toContain("status [--workspace <id|path>|--all]");
+    const advertised = new Set(advertisedVerbs(out));
+    for (const retired of RETIRED_SUBCOMMANDS) expect(advertised.has(retired)).toBe(false);
   });
 
   it("AC5: no live loop subcommand is dropped — each appears somewhere in the help", () => {

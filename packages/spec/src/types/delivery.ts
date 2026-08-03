@@ -15,6 +15,7 @@
  * Lifecycle is DERIVED from TerminalOutcome + PR state via lifecycleFromFacts(),
  * never hand-set — no second vocabulary.
  */
+import { createHash } from "node:crypto";
 import type { HistoricalTerminalOutcome } from "./terminal.js";
 import type { FactOr } from "./terminal.js";
 
@@ -143,6 +144,113 @@ export interface DeliveryRecord {
   mergeCommit: FactOr<string>;
   /** When this record was written (epoch ms). */
   recordedAt: number;
+}
+
+// ── Workspace Issue completion evidence (US-WS-013) ────────────────────────
+
+export const ISSUE_COMPLETION_STATES = [
+  "planned",
+  "building",
+  "awaiting_repo_merges",
+  "partial_delivery",
+  "integration_pending",
+  "delivered",
+  "blocked",
+  "abandoned",
+] as const;
+export type IssueCompletionState = (typeof ISSUE_COMPLETION_STATES)[number];
+
+export type RepositoryMergeAuthority = "provider" | "integration_branch" | "projection";
+export type RepositoryProviderPrState = "OPEN" | "MERGED" | "CLOSED" | "UNKNOWN";
+export type RepositoryProviderCiState = "green" | "red" | "pending" | "unknown";
+
+const IMMUTABLE_GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+
+export function isImmutableGitObjectId(value: string): boolean {
+  return IMMUTABLE_GIT_OBJECT_ID.test(value);
+}
+
+interface RepositoryMergeEvidenceIdentity {
+  readonly workspaceId: string;
+  readonly storyId: string;
+  readonly repoId: string;
+  readonly cycleId: string;
+  readonly recordedAt: number;
+}
+
+export type RepositoryMergeEvidence =
+  | (RepositoryMergeEvidenceIdentity & {
+      readonly authority: "provider";
+      readonly prNumber?: number;
+      readonly prUrl?: string;
+      readonly prState: RepositoryProviderPrState;
+      readonly ci: RepositoryProviderCiState;
+      readonly mergeCommit?: string;
+      readonly mergedAt?: number;
+    })
+  | (RepositoryMergeEvidenceIdentity & {
+      readonly authority: "integration_branch";
+      readonly reachable: boolean;
+      readonly mergeCommit?: string;
+    })
+  | (RepositoryMergeEvidenceIdentity & {
+      readonly authority: "projection";
+      readonly state: "building" | "awaiting_merge" | "merged" | "blocked" | "abandoned";
+      readonly mergeCommit?: string;
+    });
+
+export const REPOSITORY_MERGE_EVIDENCE_RECORDED = "issue:repository_merge_evidence_recorded" as const;
+export type RepositoryMergeEvidenceRecordedEvent = RepositoryMergeEvidence & {
+  readonly type: typeof REPOSITORY_MERGE_EVIDENCE_RECORDED;
+  readonly ts: number;
+};
+
+export interface IssueIntegrationAcceptanceEvidence {
+  readonly workspaceId: string;
+  readonly storyId: string;
+  readonly inputMergeCommits: Readonly<Record<string, string>>;
+  readonly commandDigest: string;
+  readonly profile: string;
+  readonly verdict: "pass" | "fail";
+  readonly artifactPath: string;
+  readonly recordedAt: number;
+}
+
+export function integrationAcceptanceCommandDigest(command: readonly string[]): string {
+  return createHash("sha256").update(JSON.stringify(command)).digest("hex");
+}
+
+export function isSafeIssueEvidencePath(value: string): boolean {
+  const segments = value.split("/");
+  return segments[0] === "evidence" && segments.length > 1 &&
+    segments.every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(segment));
+}
+
+export const ISSUE_INTEGRATION_ACCEPTANCE_EVIDENCE_RECORDED = "issue:integration_acceptance_evidence_recorded" as const;
+export type IssueIntegrationAcceptanceEvidenceRecordedEvent = IssueIntegrationAcceptanceEvidence & {
+  readonly type: typeof ISSUE_INTEGRATION_ACCEPTANCE_EVIDENCE_RECORDED;
+  readonly ts: number;
+};
+
+export interface IssueRepositoryCompletion {
+  readonly repoId: string;
+  readonly status: "none" | "building" | "awaiting_merge" | "merged" | "blocked" | "abandoned";
+  readonly authority?: RepositoryMergeAuthority;
+  readonly mergeCommit?: string;
+}
+
+export interface IssueCompletionConflict {
+  readonly repoId: string;
+  readonly code: "conflicting_merge_commit" | "strong_fact_conflict" | "invalid_merge_evidence";
+}
+
+export interface IssueCompletionProjection {
+  readonly workspaceId: string;
+  readonly storyId: string;
+  readonly state: IssueCompletionState;
+  readonly repositories: readonly IssueRepositoryCompletion[];
+  readonly mergeCommits: Readonly<Record<string, string>>;
+  readonly conflicts: readonly IssueCompletionConflict[];
 }
 
 // ── lifecycleFromFacts (AC3) ─────────────────────────────────────────────────

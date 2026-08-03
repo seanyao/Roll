@@ -10,11 +10,11 @@ roll 的可靠性不靠「线上没出事」来证明，靠可执行、可证伪
 |---|-----------|---------|
 | I1 | Cycle 跑到一半 kill agent 进程 | ≤watchdog 阈值内落 failed，无僵尸 running |
 | I2 | spawn 后立即 SIGKILL 整个进程组 | 重入检测孤儿（锁龄/心跳/PID）→ 安全接管，无脏锁，无丢提交 |
-| I3 | 并发两个 Cycle 选同一 Story | 只产生 1 个 PR；已有 open PR 的 Story 不再新建 |
+| I3 | 并发 Cycle 处理同一多仓 Story | 同一 Issue 的每个 repository target 只产生 1 个 governed PR；不同 required target 可各有一个 PR |
 | I4 | 标 Done 但 PR 不 merge | Cycle 末对账 → 自动退回 |
 | I5 | 注入一个永远失败的 Story | 其他 Story 照常交付；毒 Story 连败 N 次 → 进暂缓，不再被选取 |
 | I6 | primary agent 连败 3 次 | PAUSE + ALERT + 通知均发生；不自动换 agent 重试 |
-| I7 | 两个名字重叠的项目并行跑 | 状态互不污染（路径即身份） |
+| I7 | 两个 ID 相近的 Workspace 并行运行并共享同一 remote cache | registry/runtime/Issue/evidence 互不污染；只复用一个可重建 bare cache，cache 重建不改变交付事实 |
 | I8 | 写 cycle_end 前杀进程 | 仅凭事件流重建出正确终态；trap 补写 |
 | I9 | 两个 loop 同时写 Backlog | 乐观锁重试，不丢更新；精确匹配不误伤 depends-on 行 |
 | I10 | 角色候选 agent 不可用 | 当前 resolution 记录 skipped runtime health；无可用候选则 PAUSE + ALERT，不静默改写静态池 |
@@ -72,6 +72,11 @@ diff <(v2.0-bash <cmd>) <(v3-ts <cmd>)
 - **索引**：归档重建 从 `backlog.md` 生成 `.roll/index.json`（ID→epic，确定性、幂等）。attest 先查索引定位 epic，查不到回落 `features/uncategorized/<ID>/`；验收收尾会尽力刷新 story 交付段与 `.roll/index.json`。
 - **回收**：`roll loop gc` 按阈值清理陈旧 run（保最近 N 次 + M 天内，二者满足其一即留；只删「又旧又超额」的尾部）。阈值 `--keep-latest`（默认 10）/`--keep-days`（默认 30），`--dry-run` 预演。
 - **读取兼容**：迁移窗口内旧布局 `.roll/verification/<ID>/` 仍可读（attest gate、ac-map、报告解析都先查卡夹再回落旧树）；存量迁移与兼容代码移除由 US-META-002 收尾。
+
+Workspace 模式不写上述 legacy 卡夹：每个 cycle 的证据框固定落在
+`issues/<story>/evidence/<cycle>/`。其中 `ac-map.json` 逐条引用 Workspace backlog 的真实 Story AC，
+repository 与 integration verification 只提供 exact-cycle 证据绑定；AC 是否真正满足由独立
+Evaluator 结合 Story AC、evaluation contract 与多仓 diff 判断。
 
 ## 证据可见性模型（US-PHYSICAL-008）
 

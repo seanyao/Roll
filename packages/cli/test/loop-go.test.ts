@@ -157,6 +157,8 @@ describe("US-GOAL-002 — roll loop go", () => {
     const r = await capture(() => loopGoCommand(["--help"], completeGoalDeps(p)));
     expect(r.code).toBe(0);
     expect(r.out).toContain("Usage: roll loop go");
+    expect(r.out).toContain("--workspace <id|path>");
+    expect(r.out).toContain("one Workspace runtime and backlog");
     expect(r.out).toContain("--for <duration>");
     expect(r.out).toContain("--max-cycles <n>");
     // The cost/usage CONTROL flags are gone — the loop stops on NO PROGRESS.
@@ -1150,6 +1152,45 @@ updatedAt: 2026-06-11T12:00:00Z
 // (reset), appends a no-delivery row (increment → STOP at K), or appends no row
 // at all (the no-cycle-terminal backstop breaks). GOAL_NO_PROGRESS_STOP === 3.
 describe("US-GOAL-005 — dead-loop breaker is airtight (no spin-hole)", () => {
+  it("US-WS-017b: capacity waiting stops this session without progress penalties or pausing the goal", async () => {
+    const p = project();
+    writeBacklog(p, [
+      "| [US-CAPACITY](.roll/features/goal-mode/US-CAPACITY/spec.md) | waits for agent capacity | 📋 Todo |",
+    ]);
+    let calls = 0;
+    const deps: LoopGoDeps = {
+      identity: () => Promise.resolve({ path: p, slug: "proj-abc123" }),
+      pid: () => 12345,
+      nowSec: () => 1_780_008_000 + calls,
+      nowIso: () => `2026-06-11T12:45:${String(calls).padStart(2, "0")}Z`,
+      hasTmux: () => false,
+      startTmux: () => false,
+      runOnce: async ({ projectPath }) => {
+        calls += 1;
+        writeFileSync(
+          join(projectPath, ".roll", "loop", "runs.jsonl"),
+          `${JSON.stringify({ story_id: "US-CAPACITY", cycle_id: `capacity-${calls}`, status: "waiting_capacity", outcome: "waiting_capacity", tcr_count: 0 })}\n`,
+          { flag: "a" },
+        );
+        return 0;
+      },
+    };
+
+    const result = await capture(() => loopGoCommand(["--worker", "--cards", "US-CAPACITY", "--max-cycles", "4"], deps));
+
+    expect(result.code).toBe(0);
+    expect(calls).toBe(1);
+    const goal = parseGoalYaml(readFileSync(join(p, ".roll", "loop", "goal.yaml"), "utf8"));
+    expect(goal.status).toBe("active");
+    expect(goal.progress).toBeUndefined();
+    expect(readEvents(p)).toContainEqual(expect.objectContaining({
+      type: "goal:session_end",
+      reason: "waiting_capacity",
+      status: "active",
+    }));
+    expect(readEvents(p).some((event) => event.type === "goal:gate_tripped" && event.reason === "no_progress_breaker")).toBe(false);
+  });
+
   it("FIX-1268b: screen-locked wait cycles do not advance the no-progress breaker", async () => {
     const p = project();
     writeBacklog(p, [

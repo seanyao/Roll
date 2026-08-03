@@ -1,0 +1,300 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-005 roll workspace lifecycle surface > freezes fail-loud ambiguity, --all mutation, stale path and ID mismatch errors 1`] = `
+{
+  "all": {
+    "status": 1,
+    "stderr": "{
+  "schema": "roll.workspace-error/v1",
+  "error": {
+    "code": "all_requires_readonly",
+    "message": "--all is read-only and cannot be used for lifecycle mutations",
+    "candidates": [
+      {
+        "workspaceId": "ws-alpha",
+        "path": "<WS_1>"
+      },
+      {
+        "workspaceId": "ws-beta",
+        "path": "<WS_2>"
+      }
+    ]
+  }
+}
+",
+    "stdout": "",
+  },
+  "ambiguous": {
+    "status": 1,
+    "stderr": "{
+  "schema": "roll.workspace-error/v1",
+  "error": {
+    "code": "target_missing",
+    "message": "Provide one registered Workspace ID or path",
+    "candidates": [
+      {
+        "workspaceId": "ws-alpha",
+        "path": "<WS_1>"
+      },
+      {
+        "workspaceId": "ws-beta",
+        "path": "<WS_2>"
+      }
+    ]
+  }
+}
+",
+    "stdout": "",
+  },
+  "mismatch": {
+    "status": 1,
+    "stderr": "{
+  "schema": "roll.workspace-error/v1",
+  "error": {
+    "code": "identity_mismatch",
+    "message": "Workspace registry and manifest IDs do not match",
+    "candidates": [
+      {
+        "workspaceId": "ws-beta",
+        "path": "<WS_2>"
+      }
+    ]
+  }
+}
+",
+    "stdout": "",
+  },
+  "stale": {
+    "status": 1,
+    "stderr": "{
+  "schema": "roll.workspace-error/v1",
+  "error": {
+    "code": "stale_registry",
+    "message": "Workspace path is stale; repair the registry path first",
+    "candidates": [
+      {
+        "workspaceId": "ws-alpha",
+        "path": "<WS_1>"
+      }
+    ]
+  }
+}
+",
+    "stdout": "",
+  },
+}
+`;
+
+exports[`US-WS-005 roll workspace lifecycle surface > freezes locale-specific help without adjacent bilingual copy 1`] = `
+{
+  "en": "Usage: roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
+  \`create <id> --config <file> [--authorization <file>] [--check] [--json]\`
+  \`edit <id|path> --config <file> [--check] [--json]\`
+  \`handoff --skill <id> --operation <op> --requirement <text> [--workspace <id>] [--story <id>] [--repository <id|alias>] [--json]\`
+  \`issue init <story-id> --workspace <id> [--check] [--json]\`
+  \`requirement add --provider <provider> --ref <ref> --revision <revision> --body-file <file> --story <id> [options]\`
+  \`doctor <id> [--json] [--repair <typed-action>] [--path <absolute-path>]\`
+  \`migrate --from <repo> --check [--workspace <id>] [--json]\`
+  \`migrate --from <repo> --workspace <id> --plan <file> [--rollback] [--json]\`
+  \`list [--json] [--all]\`
+  \`show <id|path> [--json]\`
+  \`register <id> <path> [--json]\`
+  \`activate|pause|archive <id|path> [--json]\`
+  Create/edit/issue/migrate --check and doctor diagnosis are read-only; migrate apply/rollback, typed doctor repairs and lifecycle mutations require one explicit target; --all is read-only.
+
+Alias: roll ws ... (canonical: roll workspace ...)
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
+",
+  "zh": "用法：roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [选项]
+  \`create <ID> --config <文件> [--authorization <文件>] [--check] [--json]\`
+  \`edit <ID|路径> --config <文件> [--check] [--json]\`
+  \`handoff --skill <ID> --operation <操作> --requirement <文本> [--workspace <ID>] [--story <ID>] [--repository <ID|别名>] [--json]\`
+  \`issue init <Story ID> --workspace <ID> [--check] [--json]\`
+  \`requirement add --provider <来源> --ref <引用> --revision <修订> --body-file <文件> --story <ID> [选项]\`
+  \`doctor <ID> [--json] [--repair <类型化动作>] [--path <绝对路径>]\`
+  \`migrate --from <仓库> --check [--workspace <ID>] [--json]\`
+  \`migrate --from <仓库> --workspace <ID> --plan <文件> [--rollback] [--json]\`
+  \`list [--json] [--all]\`
+  \`show <ID|路径> [--json]\`
+  \`register <ID> <路径> [--json]\`
+  \`activate|pause|archive <ID|路径> [--json]\`
+  create/edit/issue/migrate --check 和 doctor 诊断只读；migrate apply/rollback、doctor 类型化修复和生命周期变更必须显式指定一个目标；--all 仅限只读。
+
+别名：roll ws ...（canonical：roll workspace ...）
+Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
+",
+}
+`;
+
+exports[`US-WS-005 roll workspace lifecycle surface > freezes stable list/show JSON contracts with honest runtime health 1`] = `
+{
+  "list": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "{
+  "schema": "roll.workspace-list/v1",
+  "workspaces": [
+    {
+      "workspaceId": "ws-alpha",
+      "path": "<WS_1>",
+      "canonicalPath": "<WS_1>",
+      "lifecycle": "active",
+      "manifest": {
+        "workspaceId": "ws-alpha",
+        "consistency": "consistent"
+      },
+      "runtimeHealth": {
+        "status": "unknown",
+        "reason": "scheduler_not_available"
+      }
+    },
+    {
+      "workspaceId": "ws-beta",
+      "path": "<WS_2>",
+      "canonicalPath": "<WS_2>",
+      "lifecycle": "active",
+      "manifest": {
+        "workspaceId": "ws-beta",
+        "consistency": "consistent"
+      },
+      "runtimeHealth": {
+        "status": "unknown",
+        "reason": "scheduler_not_available"
+      }
+    }
+  ]
+}
+",
+  },
+  "show": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "{
+  "schema": "roll.workspace-view/v1",
+  "workspace": {
+    "workspaceId": "ws-alpha",
+    "path": "<WS_1>",
+    "canonicalPath": "<WS_1>",
+    "lifecycle": "active",
+    "manifest": {
+      "workspaceId": "ws-alpha",
+      "consistency": "consistent"
+    },
+    "runtimeHealth": {
+      "status": "unknown",
+      "reason": "scheduler_not_available"
+    }
+  }
+}
+",
+  },
+}
+`;
+
+exports[`US-WS-005 roll workspace lifecycle surface > freezes two-active human list output in one locale at a time 1`] = `
+{
+  "en": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "Workspaces (2)
+ID	Lifecycle	Runtime	Consistency	Path
+ws-alpha	active	unknown	consistent	<WS_1>
+ws-beta	active	unknown	consistent	<WS_2>
+",
+  },
+  "zh": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "工作区（2）
+ID	生命周期	运行状态	一致性	路径
+ws-alpha	活跃	未知	一致	<WS_1>
+ws-beta	活跃	未知	一致	<WS_2>
+",
+  },
+}
+`;
+
+exports[`US-WS-005 roll workspace lifecycle surface > pauses one explicit path without changing another active Workspace 1`] = `
+{
+  "list": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "{
+  "schema": "roll.workspace-list/v1",
+  "workspaces": [
+    {
+      "workspaceId": "ws-alpha",
+      "path": "<WS_1>",
+      "canonicalPath": "<WS_1>",
+      "lifecycle": "paused",
+      "manifest": {
+        "workspaceId": "ws-alpha",
+        "consistency": "consistent"
+      },
+      "runtimeHealth": {
+        "status": "unknown",
+        "reason": "scheduler_not_available"
+      }
+    },
+    {
+      "workspaceId": "ws-beta",
+      "path": "<WS_2>",
+      "canonicalPath": "<WS_2>",
+      "lifecycle": "active",
+      "manifest": {
+        "workspaceId": "ws-beta",
+        "consistency": "consistent"
+      },
+      "runtimeHealth": {
+        "status": "unknown",
+        "reason": "scheduler_not_available"
+      }
+    }
+  ]
+}
+",
+  },
+  "pause": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "{
+  "schema": "roll.workspace-mutation/v1",
+  "operation": "pause",
+  "workspace": {
+    "workspaceId": "ws-alpha",
+    "path": "<WS_1>",
+    "canonicalPath": "<WS_1>",
+    "lifecycle": "paused",
+    "manifest": {
+      "workspaceId": "ws-alpha",
+      "consistency": "consistent"
+    },
+    "runtimeHealth": {
+      "status": "unknown",
+      "reason": "scheduler_not_available"
+    }
+  }
+}
+",
+  },
+}
+`;
+
+exports[`US-WS-005 roll workspace lifecycle surface > rejects archived pause in both locales without changing the event stream 1`] = `
+{
+  "en": {
+    "status": 1,
+    "stderr": "workspace: invalid_target — Workspace target is invalid
+Candidates: ws-alpha=<WS_1>
+",
+    "stdout": "",
+  },
+  "zh": {
+    "status": 1,
+    "stderr": "工作区：invalid_target — 工作区目标无效
+候选目标：ws-alpha=<WS_1>
+",
+    "stdout": "",
+  },
+}
+`;

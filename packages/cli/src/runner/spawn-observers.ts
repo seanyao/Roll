@@ -16,6 +16,7 @@ import {
   stallVerdict,
   type ActivitySignal,
   type AgentActivityNormalizer,
+  type CycleContext,
   type CycleObserverState,
   type NormalizerState,
   type RunKillReason,
@@ -27,6 +28,11 @@ import { killLiveAgents } from "./agent-spawn.js";
 import type { CapturePort, Ports } from "./ports.js";
 import { epochMs } from "./runner-time.js";
 import { parsePolicy } from "@roll/core";
+import {
+  RepositoryObservationError,
+  observeRepositoryRecentCommits,
+  writableRepositoryIds,
+} from "./repository-observation.js";
 
 export class ActivitySignalRecorder {
   private buffered = "";
@@ -149,6 +155,103 @@ export async function startCycleObserver(
       clearInterval(timer);
       // One final synchronous snapshot — captures the TCR commits that landed
       // between the last tick and the agent exiting.
+      await tick();
+    },
+  };
+}
+
+/** Observe a Workspace cycle through repository-bound ports rather than treating
+ * the Issue coordination root as a Git checkout. */
+export async function startRepositoryCycleObserver(
+  ports: Ports,
+  ctx: CycleContext,
+): Promise<{ stop(): Promise<void> }> {
+  const cycleId = ctx.cycleId ?? "";
+  if (cycleId === "") return { stop: async () => {} };
+  const repositories = ports.repositories?.bind(ctx);
+  if (repositories === undefined) throw new Error("missing_repository_ports");
+  const repoIds = writableRepositoryIds(ctx);
+  const states = new Map<string, CycleObserverState>();
+  for (const repoId of repoIds) {
+    const state = newCycleObserverState(cycleId);
+    baselineCommits(await observeRepositoryRecentCommits(repoId, repositories), state);
+    states.set(repoId, state);
+  }
+
+  const storyState = newCycleObserverState(cycleId);
+  for (const event of observeBuildStart(storyState, Date.now())) {
+    ports.events.appendEvent(ports.paths.eventsPath, event);
+  }
+  const reportedFailures = new Set<string>();
+  const reportFailure = (error: unknown): void => {
+    const failure = error instanceof RepositoryObservationError
+      ? error
+      : new RepositoryObservationError("unknown", "recent_commits", { cause: error });
+    const key = `${failure.repoId}:${failure.operation}`;
+    if (reportedFailures.has(key)) return;
+    reportedFailures.add(key);
+    try {
+      repositories.events.append(failure.repoId, {
+        type: "repository:observation_failed",
+        operation: failure.operation,
+        detail: failure.cause instanceof Error ? failure.cause.message : String(failure.cause ?? "unknown"),
+        ts: Date.now(),
+      });
+    } catch {
+      /* the global alert below remains the fail-loud projection */
+    }
+    ports.events.appendAlert(
+      ports.paths.alertsPath,
+      `repository_observation_failed: ${failure.repoId}: ${failure.operation} (cycle ${cycleId})`,
+    );
+  };
+
+  const pollGapMs = Number((process.env["ROLL_OBSERVE_POLL_MS"] ?? "").trim()) || OBSERVE_POLL_MS;
+  let running = false;
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      const nowMs = Date.now();
+      for (const repoId of repoIds) {
+        const state = states.get(repoId);
+        if (state === undefined) throw new Error(`missing repository observer state: ${repoId}`);
+        try {
+          const commits = await observeRepositoryRecentCommits(repoId, repositories);
+          for (const event of observeCommits(commits, state, nowMs)) {
+            if (event.type !== "cycle:tcr" && event.type !== "cycle:first_edit") continue;
+            repositories.events.append(repoId, event);
+            if (event.type === "cycle:tcr") {
+              const storyEvents = observeCommits([{
+                hash: `${repoId}:${event.commitHash}`,
+                message: event.message,
+                tsSec: event.commitTs === undefined ? 0 : event.commitTs / 1_000,
+              }], storyState, nowMs);
+              for (const storyEvent of storyEvents) {
+                if (storyEvent.type !== "cycle:first_edit") continue;
+                ports.events.appendEvent(ports.paths.eventsPath, {
+                  ...storyEvent,
+                  commitHash: event.commitHash,
+                });
+              }
+            }
+          }
+        } catch (error) {
+          reportFailure(error);
+        }
+      }
+      for (const event of maybeBuildHeartbeat(storyState, nowMs)) {
+        ports.events.appendEvent(ports.paths.eventsPath, event);
+      }
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), pollGapMs);
+  timer.unref?.();
+  return {
+    stop: async () => {
+      clearInterval(timer);
       await tick();
     },
   };
@@ -288,6 +391,9 @@ export function startSpawnTimeoutWatchdog(opts: {
    *  worktree — so the observation point is chosen by the watchdog, never baked
    *  into the closure against the main checkout. */
   commitCount: (cwd: string) => Promise<number>;
+  /** Surface commit-probe failures while preserving the shared watchdog's
+   *  fail-soft behavior (the failed tick is still skipped). */
+  onCommitProbeError?: (error: unknown) => void;
   /** FIX-1477 — fingerprint the DIRTY state of the observed cwd (e.g. raw
    *  `git status --porcelain` output); a CHANGE is progress. Optional: without
    *  it the state fuse tracks commits only. A thrown error is a blip — skipped,
@@ -316,7 +422,17 @@ export function startSpawnTimeoutWatchdog(opts: {
     cwd: opts.observeCwd ?? "",
     clock,
     thresholds,
-    progressSignals: { commitCount, ...(stateSignature !== undefined ? { stateSignature } : {}) },
+    progressSignals: {
+      commitCount: async (cwd) => {
+        try {
+          return await commitCount(cwd);
+        } catch (error) {
+          opts.onCommitProbeError?.(error);
+          throw error;
+        }
+      },
+      ...(stateSignature !== undefined ? { stateSignature } : {}),
+    },
     onTimeout: (info) => {
       // Record FIRST (durable), then kill — so the trip is observable even if
       // the kill races the process exiting on its own.

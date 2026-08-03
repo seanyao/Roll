@@ -31,6 +31,14 @@ function project(): string {
   return p;
 }
 
+function workspace(): string {
+  const p = mkdtempSync(join(tmpdir(), "roll-reviewscore-workspace-"));
+  dirs.push(p);
+  writeFileSync(join(p, "workspace.yaml"), "schema: roll.workspace/v1\n");
+  mkdirSync(join(p, "issues", "FIX-900"), { recursive: true });
+  return p;
+}
+
 function withCard(p: string, epic: string, id: string): void {
   mkdirSync(join(p, ".roll", "features", epic, id), { recursive: true });
   writeFileSync(join(p, ".roll", "features", epic, id, "spec.md"), `# ${id}\n`);
@@ -49,6 +57,22 @@ const PAYLOAD = {
 };
 
 describe("writeReviewScoreNote", () => {
+  it("writes and reads a canonical Workspace Issue score without a legacy .roll directory", () => {
+    const p = workspace();
+    const res = writeReviewScoreNote(p, {
+      ...PAYLOAD,
+      sessionId: "cycle-workspace:score:pi:a1",
+    });
+
+    expect(res.path).toContain(join("issues", "FIX-900", "notes"));
+    expect(existsSync(join(p, ".roll"))).toBe(false);
+    expect(readLatestStoryReviewScore(p, "FIX-900")).toMatchObject({
+      score: 9,
+      scoredBy: "pi",
+      sessionId: "cycle-workspace:score:pi:a1",
+    });
+  });
+
   it("writes a card-local note that existing readers parse back", () => {
     const p = project();
     withCard(p, "goal-mode", "FIX-900");

@@ -1,0 +1,4 @@
+physical=false
+taken=false
+reason=headless_terminal_capture_unavailable
+No screenshot file exists for this run.

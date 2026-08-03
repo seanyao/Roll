@@ -1,10 +1,11 @@
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { git as gitRun, commit as gitCommit, push as gitPush, checkImageEvidenceAllowed, imageEvidencePathsInWorkingTree } from "@roll/infra";
 import { parsePolicy } from "@roll/core";
 import type { DepsExec, EventsPort, MetadataCommitResult } from "./ports.js";
+import type { CycleRepositoryExecutionContext } from "@roll/spec";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,6 +78,42 @@ export function submoduleAgentWritableRoots(repoCwd: string, execRepoCwd: string
   } catch {
     /* best-effort: same fail-loud posture as agentWritableRoots — a probe miss
        lets the agent's submodule commit fail visibly rather than masking it. */
+  }
+  return roots;
+}
+
+/** Workspace Builder sandbox boundary. The Issue root itself is deliberately
+ * not writable: only write-access repository worktrees, the git common dirs
+ * needed for their commits, and the three Issue-owned output directories are
+ * granted. Read-only repository legs remain visible through the Issue cwd but
+ * are excluded from writable roots. */
+export function repositoryAgentWritableRoots(execution: CycleRepositoryExecutionContext): string[] {
+  const roots: string[] = [];
+  const add = (path: string): void => {
+    const canonical = realpathSync(path);
+    if (!roots.includes(canonical)) roots.push(canonical);
+  };
+  const issueRoot = realpathSync(execution.issueRoot);
+  for (const name of ["artifacts", "evidence", "runtime"] as const) {
+    const path = join(issueRoot, name);
+    mkdirSync(path, { recursive: true });
+    const canonical = realpathSync(path);
+    const rel = relative(issueRoot, canonical);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(`issue_writable_root_escape: ${name}`);
+    }
+    add(canonical);
+  }
+  for (const repository of Object.values(execution.repositories)) {
+    if (repository.access !== "write") continue;
+    add(repository.worktreePath);
+    const common = execFileSync(
+      "git",
+      ["-C", repository.worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      { encoding: "utf8" },
+    ).trim();
+    if (common === "") throw new Error(`missing_git_common_dir: ${repository.alias}`);
+    add(common);
   }
   return roots;
 }

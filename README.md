@@ -190,9 +190,75 @@ defaults:
         strategy: health-aware
 ```
 
+Machine Scope also owns the closed process-capacity policy shared by every
+registered Workspace:
+
+```yaml
+schema: roll-agents/v1
+scope: machine
+agents:
+  codex:
+    capabilities: [supervise, execute, evaluate]
+  kimi:
+    capabilities: [execute, evaluate]
+capacity:
+  global: auto
+  default_per_agent: 1
+  agents:
+    codex: 2
+  heartbeat_seconds: 30
+  stale_after_seconds: 120
+```
+
+When `capacity` is absent, each enabled machine agent gets one slot and the
+global limit is their sum. Every Builder and adversarial role process acquires
+one exact-owned lease before spawn. Exhaustion is a neutral wait: no agent is
+spawned, the Story returns to Todo, and `roll loop status --all` shows the
+agent/model/retry state without exposing credentials or provider health.
+
 Runtime availability is explicit: if a candidate is not callable on the current
 machine because of auth, network, VPN, or account state, the current resolution
 records that limitation instead of rewriting the static pool.
+Workspace execution uses a separate `machine -> workspace -> story -> skill`
+chain. `<workspace>/agents.yaml` may only cast roles and refine Story/skill
+defaults; machine declarations, models, disabled state, and readiness remain
+machine-owned. Repository-local Project Scope is migration input only for a
+Workspace run. Inspect the read-only effective trace with
+`roll agent --workspace <id|path>`; `roll agent list` and `roll agent readiness`
+always remain machine views.
+
+Before moving a historical repository-local Roll project into Workspace Scope,
+run the read-only migration check:
+
+```bash
+roll workspace migrate --from . --check
+roll workspace migrate --from . --workspace ws-team --check --json > workspace-migration-plan.json
+roll workspace migrate --from . --workspace ws-team --plan workspace-migration-plan.json
+```
+
+The command reads product Git, linked worktrees, recursive submodules, runtime
+leases, `.roll` ownership/inventory, shared cache and registry facts. It never
+fetches, prunes, updates refs, or writes source/cache/registry/destination state.
+The second example is an explicit shell redirection by the owner; the command
+itself never creates a plan file. Exit `0` means the plan is ready or needs an
+explicit product cutover/manual metadata handoff; exit `2` means safety facts
+block migration.
+
+Apply consumes that exact owner-saved plan and re-collects the source facts
+before any write. It prepares a durable journal and staging manifest, creates or
+reuses only the machine cache under `~/.roll/repos/`, verifies every mapped
+digest, then registers and activates the Workspace last. Re-running the same
+command resumes an interrupted transaction or reports `reused`; before
+registration, `--rollback` restores atomically moved source files and removes
+the non-active staging Workspace. Ordinary/product-tracked metadata is relocated
+and leaves `.roll/RELOCATED.json`; an independent roll-meta repository is copied
+without any link, commit, or push and keeps a manual handoff.
+
+The complete Workspace-first path — deterministic creation, explicit target
+resolution, multiple active Workspaces, Requirement/Issue layout, shared
+machine cache, multi-repository Story execution and exact-SHA delivery — is in
+the [Workspace guide](guide/en/workspaces.md).
+
 For open role casting, `strategy: health-aware` keeps the installed pool visible
 and ranks candidates by capability, recent health, successful deliveries, recent
 use, and cost band. Inspect a cast with
@@ -227,6 +293,11 @@ roll loop go
 
 Roll diagnoses the repository without destructive migration, writes or updates Roll metadata only after review, and then lets the Supervisor reason over existing backlog, docs, context, open PRs, and scoped role bindings. Current state is visible through CLI-first observability: `roll status`, `roll loop watch`, `roll loop runs`, `roll loop cycle <id>`, `roll loop alert`, and story reports.
 
+This path is for an existing codebase without current Roll markers. If the
+repository already contains a historical repository-local `.roll/`, use
+`roll workspace migrate --from . --check` first instead of grafting a second
+Roll layout onto it.
+
 ## Quick start for new projects
 
 A new project needs a remote before the loop can push branches and open PRs:
@@ -246,25 +317,31 @@ unreachable, so it never burns agent tokens against a broken push target.  If
 you need to stop the loop, `roll loop pause` persists a pause marker; resume
 with `roll loop resume` when ready.
 
+Exception: a campaign explicitly configured with `publish_mode: local` stays on
+its local integration branch and does not push or open a PR until the owner
+opens the remote publication gate after local acceptance.
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `roll agent [migrate\|list\|cast]` | Agent Scope, installed-agent inventory, and role casting |
-| `roll backlog [sync\|block\|defer\|lint\|…]` | View, manage, lint, and sync pending tasks |
+| `roll agent [--workspace <id\|path>\|migrate\|list\|readiness]` | Agent Scope, machine inventory/readiness, and read-only Workspace casting |
+| `roll backlog [show\|sync\|block\|defer\|lint\|…] [--workspace <id\|path>]` | View and manage one Workspace backlog; `--all` is read-only |
 | `roll config [lang\|prices\|tune\|…]` | Read/write configuration, model prices, and suggest-only tuning |
-| `roll design [--from-file <path>] [--agent <name>] [--verbose\|--raw]` | Launch `$roll-design` with bounded live progress, handoff, and an optional `roll loop go --review auto` continuation when new Todo cards are created |
+| `roll delivery <list\|show\|reconcile> [--workspace <id\|path>]` | Inspect Issue repository PR/CI/merge facts and exact-SHA integration acceptance; `list --all` is read-only |
+| `roll design [--from-file <path>] [--agent <name>] [--workspace <id\|path>] [--verbose\|--raw]` | Launch `$roll-design` against one Workspace authority, with bounded live progress and handoff |
 | `roll doctor [skills\|tools\|language\|repair-protection]` | Diagnose install health, skills, tools, permissions, language drift, and stale main-checkout write protection |
 | `roll help [--lang en\|zh] [name]` | View built-in Charter / guide docs; `roll --help` prints CLI usage |
-| `roll idea "<one-sentence description>"` | Capture and classify a new backlog card |
+| `roll idea "<one-sentence description>" --workspace <id\|path>` | Capture and classify a new card in one Workspace backlog |
 | `roll init` | Diagnose this directory and route setup/onboarding |
-| `roll loop <on\|off [--all]\|go\|watch\|runs\|cycles\|cycle\|alert\|…>` | Run, observe, stop, and maintain the autonomous executor |
+| `roll loop <on\|go\|pause\|resume> --workspace <id\|path>` / `roll loop status --all` | Run or mutate one Workspace scheduler; aggregate status is read-only |
 | `roll next` | Continue init/onboard with one best next command |
 | `roll north [--json] [--no-color]` | North-star terminal panel for autonomy, delivery rate, fix tax, and attribution errors |
 | `roll release [--dry-run\|--showcase]` | Release planning/flow plus golden-path showcase support |
 | `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup skills\|offboard` | Install/sync conventions, repair Roll Capture.app readiness, or remove Roll-owned project artifacts |
 | `roll status [ci\|pulse] [--json]` | Project health, CI state, and delivery pulse |
 | `roll test [--where] [--reset]` | Run tests through the isolation adapter |
+| `roll workspace <create\|edit\|issue\|requirement\|doctor\|migrate\|list\|show\|register\|activate\|pause\|archive>` / `roll ws ...` | Create, edit and target a Workspace; `roll ws` aliases the complete subtree, and public `--workspace` selectors also accept `--ws` |
 | `roll update` | Upgrade the global Roll install and re-sync conventions |
 | `roll --version` / `roll -v` | Print installed roll version |
 
@@ -273,6 +350,13 @@ Retained support surfaces live under their owners: `roll config prices`, `roll c
 `roll loop cycles`, `roll loop cycle`, `roll release showcase`, and `roll setup offboard`.
 Historical top-level aliases for those capabilities now return the standard
 unknown-command response.
+
+Direct skill handoffs never acquire Workspace authority from requirement
+keywords. When owner text mentions exactly one registered Workspace ID, Roll
+presents it as a soft suggestion and waits for confirmation. Partial matches,
+multiple mentions, or no safe suggestion present the available Workspaces for
+the owner to choose. Only an explicit selector or an already resolved authority
+continues into the skill context.
 
 ## Observability Now
 
@@ -369,12 +453,12 @@ Published as a single npm package `@bipo-ape/roll`: `dist/` (the CLI bundled to 
 
 | | |
 |---|---|
-| **Start here** | [Getting started](guide/en/getting-started.md) · [Overview & architecture](guide/en/overview.md) · [Engineering methodology](guide/en/methodology.md) |
-| **Daily driving** | [The loop (autonomous executor)](guide/en/loop.md) · [Tools & policy](guide/en/tools.md) · [Browser operations (managed + interactive lanes; optional diagnostics are opt-in only)](guide/en/browser-operations.md) · [Configuration](guide/en/configuration.md) · [Pricing & cost](guide/en/pricing.md) · [FAQ](guide/en/faq.md) |
+| **Start here** | [Getting started](guide/en/getting-started.md) · [Workspace-first delivery](guide/en/workspaces.md) · [Workspace-first 交付](guide/zh/workspaces.md) · [Workspace context compatibility matrix](docs/generated/workspace-context-compatibility-matrix.json) · [Workspace context validation cases](docs/generated/workspace-context-validation-cases.json) · [Overview & architecture](guide/en/overview.md) · [Engineering methodology](guide/en/methodology.md) |
+| **Daily driving** | [The loop (autonomous executor)](guide/en/loop.md) · [Context Engineering](guide/en/context.md) · [APE Context migration](guide/en/context-ape-migration.md) · [Workspace doctor](guide/en/workspace-doctor.md) · [Tools & policy](guide/en/tools.md) · [Browser operations (managed + interactive lanes; optional diagnostics are opt-in only)](guide/en/browser-operations.md) · [Configuration](guide/en/configuration.md) · [Pricing & cost](guide/en/pricing.md) · [FAQ](guide/en/faq.md) |
 | **Quality machinery** | [Acceptance evidence (`roll attest`)](guide/en/acceptance-evidence.md) · [Evidence lifecycle](guide/en/acceptance-evidence.md#lifecycle-in-three-stages) · [Consistency & release gate](guide/en/consistency.md) · [Cross-agent pairing](guide/en/pairing.md) · [Peer review](guide/en/peer.md) · [Test isolation](guide/en/test-isolation.md) |
 | **Under the hood** | [Architecture: layers · domain · invariants](docs/architecture.md) · [Verification system](docs/verification.md) · [Manifesto](docs/manifesto.md) |
 
-Full guide index: [guide/en/](guide/en/) — agents, peer review, feedback, backlog sync, adoption patterns, and more.
+Full guide index: [guide/en/README.md](guide/en/README.md) — agents, peer review, feedback, backlog sync, adoption patterns, and more.
 
 ## Contributing
 

@@ -17,6 +17,64 @@
 
 本页讲 **graft**。关于 seed / replant，见 [接入模式文档](https://github.com/seanyao/roll-meta)（维护者私有仓，README 有公开摘要）。
 
+## 已经有 repository-local `.roll/`？
+
+这属于历史 Roll 项目迁移，不是 graft。不要在现有元数据上再跑一套 onboarding。
+先停止仍在活动的 loop/cycle，确认产品改动已提交并推送，然后运行：
+
+```bash
+roll workspace migrate --from . --check
+```
+
+如需完整、可移植、可保存审阅的计划文档：
+
+```bash
+roll workspace migrate --from . --workspace ws-team --check --json > workspace-migration-plan.json
+```
+
+这里的 `>` 是 owner 显式执行的 shell 写入；`migrate --check` 自身不会创建
+plan、缓存、registry 条目、Workspace 目标或源变更。它读取 Git 时禁用 optional
+lock，可以用 `ls-remote` 验证权威远端事实，但绝不 fetch、prune 或更新 tracking ref。
+
+任何 apply 之前，先按结果处理：
+
+| 结果 | 含义 |
+|------|------|
+| `ready`（退出 `0`） | 当前事实已生成闭合迁移计划。 |
+| `repository_cutover_required`（退出 `0`） | `.roll` 被产品仓库跟踪；先保存这份计划，再通过正常受审 TCR/PR/push 流程只从产品 index 移除计划内路径。 |
+| `manual_metadata_handoff`（退出 `0`） | `.roll` 是独立 Git 仓库；Roll 会报告 status/HEAD/branch/upstream/remote，但不会 link、commit 或 push。 |
+| `migration_blocked`（退出 `2`） | 必须先解决 dirty/unpushed/in-flight Git、不安全 worktree/submodule、活动 runtime、symlink、不可验证远端事实或 cache/registry 冲突。 |
+
+不传 `--workspace` 时会提出确定性的 `ws-<repo hash>`；传入
+`--workspace <ID>` 可把显式目标 ID 固定进计划。
+
+审阅已保存计划后，应用这份精确文档：
+
+```bash
+roll workspace migrate --from . --workspace ws-team --plan workspace-migration-plan.json
+```
+
+任何写入前，apply 都会重新采集事实。普通或独立元数据必须逐字节重现已保存计划；
+产品仓库跟踪场景则要求原 source HEAD 仍是当前 HEAD 的 ancestor，并且远端可达历史中
+恰好存在一个专用 commit，其 parent diff 只删除计划内 `.roll` 路径，同时工作区文件
+仍与保存的 digest 一致。Roll 不会创建或 push 这个 cutover commit。
+
+事务先写 durable journal 和 staging manifest，再创建或复用
+`~/.roll/repos/<repoId>.git`，完成内容映射与 digest 校验，最后才注册并激活 Workspace。
+Workspace 内没有常驻产品 checkout；后续代码只出现在 Issue worktree。
+
+apply 中断后，重跑同一命令即可从 journal 续跑，不会重复文件、事件或 cache 条目。
+仅在注册前，也可以恢复已原子移动的源文件并删除 staging：
+
+```bash
+roll workspace migrate --from . --workspace ws-team --plan workspace-migration-plan.json --rollback
+```
+
+普通和产品仓库跟踪来源完成后会留下 `.roll/RELOCATED.json`，旧路径不再执行
+repository-local Roll。旧 runtime、lock、heartbeat、cache 与 generated projection
+只按 inactive/archive 导入。如果 `.roll` 是独立 roll-meta Git 仓库，Roll 只复制映射
+表层，保持该仓库逐字节不变，并输出手工 link/commit/push 移交说明。
+
 ## Graft 做了什么
 
 - **读**你的项目，理解类型、领域、关键模块

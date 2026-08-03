@@ -1,0 +1,17 @@
+Usage: roll workspace <create|edit|handoff|issue|requirement|doctor|migrate|list|show|register|activate|pause|archive> [options]
+  `create <id> --config <file> [--authorization <file>] [--check] [--json]`
+  `edit <id|path> --config <file> [--check] [--json]`
+  `handoff --skill <id> --operation <op> --requirement <text> [--workspace <id>] [--story <id>] [--repository <id|alias>] [--json]`
+  `issue init <story-id> --workspace <id> [--check] [--json]`
+  `requirement add --provider <provider> --ref <ref> --revision <revision> --body-file <file> --story <id> [options]`
+  `doctor <id> [--json] [--repair <typed-action>] [--path <absolute-path>]`
+  `migrate --from <repo> --check [--workspace <id>] [--json]`
+  `migrate --from <repo> --workspace <id> --plan <file> [--rollback] [--json]`
+  `list [--json] [--all]`
+  `show <id|path> [--json]`
+  `register <id> <path> [--json]`
+  `activate|pause|archive <id|path> [--json]`
+  Create/edit/issue/migrate --check and doctor diagnosis are read-only; migrate apply/rollback, typed doctor repairs and lifecycle mutations require one explicit target; --all is read-only.
+
+Alias: roll ws ... (canonical: roll workspace ...)
+Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)

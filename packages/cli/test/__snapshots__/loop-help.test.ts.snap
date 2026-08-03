@@ -4,8 +4,8 @@ exports[`roll loop --help groups — US-DOSSIER-035 > AC6: EN/中 snapshots (sin
 "Usage: roll loop <subcommand>
 The autonomous delivery loop — grouped control / observe / alerts / maintain.
 
-control   go · goal · pause · resume · reset · recover · reconcile
-observe   watch · status · runs · log · events · signals · eval · cycles · cycle
+control   go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>
+observe   watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle
 alerts    alert list · alert ack · alert resolve · alert log
 maintain  gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
 internal  run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
@@ -19,8 +19,8 @@ exports[`roll loop --help groups — US-DOSSIER-035 > AC6: EN/中 snapshots (sin
 "用法：roll loop <子命令>
 自治交付循环——按作动/传感/告警/维护分组。
 
-作动      go · goal · pause · resume · reset · recover · reconcile
-传感      watch · status · runs · log · events · signals · eval · cycles · cycle
+作动      go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>
+传感      watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle
 告警      alert list · alert ack · alert resolve · alert log
 维护      gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
 内部      run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split

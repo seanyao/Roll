@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAgentConfig } from "../src/agent/config-v4.js";
+import { normalizeAgentCapacityPolicy } from "../src/agent/capacity.js";
 import { normalizeAgentScopeConfig } from "../src/agent/scope-config.js";
 
 const MACHINE = `schema: roll-agents/v1
@@ -59,6 +60,84 @@ defaults:
 `;
 
 describe("normalizeAgentScopeConfig — roll-agents/v1", () => {
+  it("parses the closed machine capacity policy", () => {
+    const { config, errors } = normalizeAgentScopeConfig(`${MACHINE}
+capacity:
+  global: auto
+  default_per_agent: 2
+  agents:
+    codex: 3
+    reasonix: 1
+  heartbeat_seconds: 20
+  stale_after_seconds: 90
+`);
+
+    expect(errors).toEqual([]);
+    expect(config?.capacity).toEqual({
+      global: "auto",
+      defaultPerAgent: 2,
+      agents: { codex: 3, reasonix: 1 },
+      heartbeatSeconds: 20,
+      staleAfterSeconds: 90,
+    });
+  });
+
+  it("derives one slot per enabled machine agent when capacity is absent", () => {
+    const { config, errors } = normalizeAgentScopeConfig(`${MACHINE}
+agents:
+  codex:
+    adapter: codex
+    capabilities: [execute]
+  reasonix:
+    adapter: reasonix
+    capabilities: [execute]
+    disabled: true
+  kimi:
+    adapter: kimi
+    capabilities: [execute]
+`);
+
+    expect(errors).toEqual([]);
+    expect(config).not.toBeNull();
+    expect(normalizeAgentCapacityPolicy(config!)).toEqual({
+      global: 2,
+      perAgent: { codex: 1, kimi: 1 },
+      heartbeatSeconds: 30,
+      staleAfterSeconds: 120,
+    });
+  });
+
+  it("rejects capacity outside machine scope and invalid closed policy values", () => {
+    const lower = normalizeAgentScopeConfig(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+capacity:
+  global: 1
+`);
+    expect(lower.errors).toContain("workspace: key 'capacity' is not allowed");
+
+    const invalid = normalizeAgentScopeConfig(`${MACHINE}
+capacity:
+  global: 1
+  default_per_agent: 0
+  agents:
+    codex: 2
+    openai: 1
+    unknown: 1
+  heartbeat_seconds: 60
+  stale_after_seconds: 30
+  surprise: true
+`);
+    expect(invalid.errors).toEqual([
+      "capacity.surprise: unknown key",
+      "capacity.default_per_agent: expected a positive integer",
+      "capacity.agents.openai: duplicate canonical agent 'codex' (already declared as 'codex')",
+      "capacity.agents.unknown: unknown agent",
+      "capacity.stale_after_seconds: must be greater than heartbeat_seconds",
+      "capacity.global: must be at least the largest per-agent limit (2)",
+    ]);
+  });
+
   it("parses machine scope agents, models, and supervise binding", () => {
     const { config, errors } = normalizeAgentScopeConfig(MACHINE);
     expect(errors).toEqual([]);
@@ -231,5 +310,118 @@ defaults:
       strategy: "first-available",
     });
     expect(errors).toEqual(["defaults.story.roles.execute: unknown strategy 'roulette'"]);
+  });
+
+  it("parses the closed workspace casting schema", () => {
+    const { config, errors } = normalizeAgentScopeConfig(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+roles:
+  supervise:
+    kind: fixed
+    agent: codex
+defaults:
+  story:
+    roles:
+      execute:
+        kind: select
+        from: [codex, kimi]
+        require: [execute]
+  skill:
+    roles:
+      evaluate:
+        kind: fixed
+        agent: kimi
+`);
+
+    expect(errors).toEqual([]);
+    expect(config).toEqual({
+      schema: "roll-agents/v1",
+      scope: "workspace",
+      inherits: "machine",
+      agents: {},
+      models: {},
+      roles: { supervise: { kind: "fixed", agent: "codex" } },
+      defaults: {
+        story: {
+          roles: {
+            execute: {
+              kind: "select",
+              from: ["codex", "kimi"],
+              require: ["execute"],
+              avoid: [],
+              strategy: "first-available",
+            },
+          },
+        },
+        skill: { roles: { evaluate: { kind: "fixed", agent: "kimi" } } },
+      },
+    });
+  });
+
+  it("rejects workspace declarations, machine policy, and unknown top-level fields", () => {
+    const { config, errors } = normalizeAgentScopeConfig(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+agents:
+  codex:
+    capabilities: [execute]
+models:
+  gpt-5.5:
+    provider: openai
+disabled: [kimi]
+capacity: 2
+repositories: [app]
+`);
+
+    expect(config?.scope).toBe("workspace");
+    expect(config?.agents).toEqual({});
+    expect(config?.models).toEqual({});
+    expect(errors).toEqual([
+      "workspace: key 'agents' is not allowed",
+      "workspace: key 'models' is not allowed",
+      "workspace: key 'disabled' is not allowed",
+      "workspace: key 'capacity' is not allowed",
+      "workspace: key 'repositories' is not allowed",
+    ]);
+  });
+
+  it("requires machine inheritance and only story or skill workspace defaults", () => {
+    const { errors } = normalizeAgentScopeConfig(`schema: roll-agents/v1
+scope: workspace
+inherits: project
+defaults:
+  workspace:
+    roles:
+      execute: { use: codex }
+  project:
+    roles:
+      execute: { use: kimi }
+  story:
+    roles: {}
+    agents: {}
+`);
+
+    expect(errors).toEqual([
+      "workspace.inherits: expected 'machine'",
+      "workspace.defaults.workspace: unknown default scope",
+      "workspace.defaults.project: unknown default scope",
+      "workspace.defaults.story.agents: unknown key",
+    ]);
+  });
+
+  it("fails loud for malformed workspace defaults containers", () => {
+    expect(normalizeAgentScopeConfig(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+defaults: nope
+`).errors).toEqual(["workspace.defaults: malformed defaults block (expected a map)"]);
+
+    expect(normalizeAgentScopeConfig(`schema: roll-agents/v1
+scope: workspace
+inherits: machine
+defaults:
+  story: nope
+`).errors).toEqual(["workspace.defaults.story: malformed default block (expected a map)"]);
   });
 });

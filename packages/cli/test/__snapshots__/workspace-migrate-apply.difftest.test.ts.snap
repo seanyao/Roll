@@ -1,0 +1,94 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-019a migration apply CLI contract > emits one stable JSON result without progress chatter 1`] = `
+{
+  "status": 0,
+  "stderr": "",
+  "stdout": "{
+  "schema": "roll.workspace-migration-result/v1",
+  "operation": "apply",
+  "outcome": "reused",
+  "workspaceId": "ws-demo",
+  "workspaceRoot": "/fixture/roll-home/workspaces/ws-demo",
+  "cachePath": "/fixture/roll-home/repos/repo-ab12cd34ef56.git",
+  "planId": "f9635455e8e3cfa1e7ef408258cd36fbfc5409fffbf54dea1c7a2dd4548fd19d"
+}
+",
+}
+`;
+
+exports[`US-WS-019a migration apply CLI contract > freezes English and Chinese progress plus final topology 1`] = `
+{
+  "en": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "Migration phase: journal and manifest prepared
+Migration phase: shared cache ready
+Migration phase: mapped content verified
+Migration phase: Workspace staging activated on disk
+Migration phase: Workspace registered
+Migration phase: Workspace active
+Migration phase: source cleanup complete
+Historical migration apply: migrated
+Workspace: ws-demo (/fixture/roll-home/workspaces/ws-demo)
+Shared cache: /fixture/roll-home/repos/repo-ab12cd34ef56.git
+Plan ID: f9635455e8e3cfa1e7ef408258cd36fbfc5409fffbf54dea1c7a2dd4548fd19d
+",
+  },
+  "zh": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "迁移阶段：journal 与 manifest 已准备
+迁移阶段：共享缓存已就绪
+迁移阶段：映射内容已校验
+迁移阶段：工作区 staging 已在磁盘激活
+迁移阶段：工作区已注册
+迁移阶段：工作区已激活
+迁移阶段：源端清理完成
+历史迁移应用：已迁移
+工作区：ws-demo（/fixture/roll-home/workspaces/ws-demo）
+共享缓存：/fixture/roll-home/repos/repo-ab12cd34ef56.git
+计划 ID：f9635455e8e3cfa1e7ef408258cd36fbfc5409fffbf54dea1c7a2dd4548fd19d
+",
+  },
+}
+`;
+
+exports[`US-WS-019a migration apply CLI contract > rejects malformed plans and Workspace identity mismatches before apply 1`] = `
+{
+  "malformed": {
+    "status": 1,
+    "stderr": "workspace migrate: invalid_plan — Saved migration plan is malformed or not approved
+",
+    "stdout": "",
+  },
+  "mismatch": {
+    "status": 1,
+    "stderr": "workspace migrate: workspace_mismatch — Command Workspace ID does not match the saved plan
+",
+    "stdout": "",
+  },
+}
+`;
+
+exports[`US-WS-019a migration apply CLI contract > renders explicit rollback and independent metadata handoff 1`] = `
+{
+  "handoff": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "历史迁移应用：已迁移
+工作区：ws-demo（/fixture/roll-home/workspaces/ws-demo）
+共享缓存：/fixture/roll-home/repos/repo-ab12cd34ef56.git
+计划 ID：f9635455e8e3cfa1e7ef408258cd36fbfc5409fffbf54dea1c7a2dd4548fd19d
+未对独立 roll-meta 执行 Git 修改。
+请通过原有 owner 审批流程手工审阅、link、commit 与 push roll-meta。
+",
+  },
+  "rolledBack": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "Historical migration rollback: rolled back (ws-demo)
+",
+  },
+}
+`;

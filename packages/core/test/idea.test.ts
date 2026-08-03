@@ -149,6 +149,16 @@ describe("appendIdea", () => {
     expect(r.content).toContain("| ID | Description | Status |");
     expect(r.content).toContain("| IDEA-001 | first idea | 📋 Todo |");
   });
+
+  it("writes a canonical linked row when the Workspace authority is explicit", () => {
+    const r = appendIdea("# Backlog\n", "IDEA-001", "idea", "linked idea", {
+      epic: "planning",
+      linkPrefix: "../features",
+    });
+    expect(r.content).toContain(
+      "| [IDEA-001](../features/planning/IDEA-001/spec.md) | linked idea | 📋 Todo |",
+    );
+  });
 });
 
 // REFACTOR-050: epic inference from natural-language description.

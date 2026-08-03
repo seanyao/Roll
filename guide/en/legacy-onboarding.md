@@ -17,6 +17,72 @@ If you have a real project that's been alive for a while — code, tests, histor
 
 This page covers **graft**. For seed vs. replant, see [adoption patterns](https://github.com/seanyao/roll-meta) (maintainer-only repo, public summary in the README).
 
+## Already have a repository-local `.roll/`?
+
+That is a historical Roll migration, not a graft. Do not run onboarding over
+the existing metadata. First stop any active loop/cycle, make sure product work
+is committed and pushed, then run:
+
+```bash
+roll workspace migrate --from . --check
+```
+
+For a complete portable plan document that you can review and save:
+
+```bash
+roll workspace migrate --from . --workspace ws-team --check --json > workspace-migration-plan.json
+```
+
+The `>` redirection is your explicit shell write; `migrate --check` itself does
+not create a plan, cache, registry entry, Workspace destination, or source
+change. It reads Git with optional locks disabled, may use `ls-remote` for
+authoritative remote truth, and never fetches, prunes, or updates tracking refs.
+
+Interpret the result before any apply step:
+
+| Result | Meaning |
+|--------|---------|
+| `ready` (exit `0`) | The facts produce a closed migration plan. |
+| `repository_cutover_required` (exit `0`) | `.roll` is tracked by the product repository; save this plan, then remove exactly those paths from the product index through the normal reviewed TCR/PR/push flow. |
+| `manual_metadata_handoff` (exit `0`) | `.roll` is an independent Git repository; Roll reports its status/HEAD/branch/upstream/remote but will not link, commit, or push it. |
+| `migration_blocked` (exit `2`) | Dirty/unpushed/in-flight Git, unsafe worktrees/submodules, active runtime, symlinks, unverifiable remote truth, or cache/registry conflicts must be resolved first. |
+
+Omit `--workspace` to get the deterministic `ws-<repo hash>` proposal, or pass
+`--workspace <id>` to freeze an explicit target ID in the plan.
+
+After reviewing the saved plan, apply that exact document:
+
+```bash
+roll workspace migrate --from . --workspace ws-team --plan workspace-migration-plan.json
+```
+
+Apply re-collects facts before any write. For ordinary or independent metadata,
+the current facts must reproduce the saved plan byte-for-byte. For a
+product-tracked plan, the original source HEAD must remain an ancestor and the
+remote-reachable history must contain exactly one dedicated commit whose parent
+diff removes only the planned `.roll` paths; their working-tree bytes must still
+match the saved digests. Roll never creates or pushes that cutover commit.
+
+The transaction writes its durable journal and staging manifest first, then
+creates or reuses only `~/.roll/repos/<repoId>.git`, maps and verifies content,
+and registers/activates the Workspace last. There is no persistent product
+checkout in the Workspace; future code appears only in Issue worktrees.
+
+If apply stops, rerun the same command. It resumes from the journal without
+duplicating mappings, events, or cache entries. Before registration only, you
+may instead restore moved source files and remove staging:
+
+```bash
+roll workspace migrate --from . --workspace ws-team --plan workspace-migration-plan.json --rollback
+```
+
+Ordinary and product-tracked sources finish with `.roll/RELOCATED.json` and no
+repository-local Roll operation. Old runtime, locks, heartbeats, caches, and
+generated projections are imported only as inactive/archive material. If
+`.roll` is an independent roll-meta Git repository, Roll copies the mapped
+surface, leaves that repository byte-for-byte untouched, and prints the manual
+link/commit/push handoff.
+
 ## What graft does
 
 - **Reads** your project to understand type, domains, and key modules

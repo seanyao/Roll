@@ -1,0 +1,34 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-014 Requirement exact-SHA attestation projection > deterministically passes only when every linked Story is delivered with Issue-owned evidence 1`] = `
+"# Requirement jira:SOT-15499 attestation
+
+> Generated exact-SHA projection. Issue-owned evidence remains authoritative; rebuilding this file cannot change Issue truth.
+
+Final verdict: PASS
+Revision: 42
+Archive status: healthy
+
+Linked Stories:
+- US-A: delivered
+- US-B: delivered
+
+## US-A
+
+- State: delivered
+- Exact merge commits:
+  - repo-aaaaaaaaaaaa@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+- Issue evidence:
+  - [evidence/integration/result.txt](../../../issues/US-A/evidence/integration/result.txt)
+  - [evidence/repositories/merge.json](../../../issues/US-A/evidence/repositories/merge.json)
+
+## US-B
+
+- State: delivered
+- Exact merge commits:
+  - repo-bbbbbbbbbbbb@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+- Issue evidence:
+  - [evidence/integration/result.txt](../../../issues/US-B/evidence/integration/result.txt)
+  - [evidence/repositories/merge.json](../../../issues/US-B/evidence/repositories/merge.json)
+"
+`;

@@ -15,6 +15,7 @@ import {
   lintBacklogContent,
   statusFor,
 } from "../src/commands/backlog-mgmt.js";
+import type { ResolvedBacklogTarget } from "../src/commands/backlog-target.js";
 import { stripAnsi } from "../src/render.js";
 
 let cwd0: string;
@@ -28,7 +29,7 @@ beforeEach(() => {
   cwd0 = process.cwd();
   dir = mkdtempSync(join(tmpdir(), "backlog-mgmt-"));
   process.chdir(dir);
-  mkdirSync(".roll", { recursive: true });
+  mkdirSync("backlog", { recursive: true });
   setEnv("ROLL_LANG", "en");
   setEnv("NO_COLOR", "1");
 });
@@ -60,16 +61,43 @@ function capture(fn: () => number): { status: number; out: string; err: string }
 
 const HEADER = "| ID | Description | Status |\n|----|----|----|\n";
 function seedBacklog(rows: string): void {
-  writeFileSync(join(".roll", "backlog.md"), HEADER + rows);
+  writeFileSync(join("backlog", "index.md"), HEADER + rows);
 }
 function statusOf(id: string): string {
-  for (const line of readFileSync(join(".roll", "backlog.md"), "utf8").split("\n")) {
+  for (const line of readFileSync(join("backlog", "index.md"), "utf8").split("\n")) {
     if (line.startsWith("|") && line.includes(id)) {
       const parts = line.split("|");
       return (parts[parts.length - 2] ?? "").trim();
     }
   }
   return "";
+}
+
+function target(): ResolvedBacklogTarget {
+  return {
+    ok: true,
+    workspaceId: "ws-test",
+    workspaceRoot: dir,
+    canonicalRoot: dir,
+    backlogPath: join(dir, "backlog", "index.md"),
+    storyRoot: join(dir, "backlog"),
+    runtimeRoot: join(dir, "runtime"),
+    configPath: join(dir, "runtime", "backlog-sync.yaml"),
+  };
+}
+
+const resolveTarget = (): ResolvedBacklogTarget => target();
+
+function setStatus(subcmd: string, args: string[]): number {
+  return backlogSetStatusCommand(subcmd, args, undefined, { resolveTarget });
+}
+
+function claim(args: string[], nowMs = 1_700_000_000_000): number {
+  return backlogClaimCommand(args, { nowMs: () => nowMs, resolveTarget });
+}
+
+function lint(args: string[]): number {
+  return backlogLintCommand(args, { resolveTarget });
 }
 
 describe("statusFor — US-PORT-019", () => {
@@ -86,7 +114,7 @@ describe("statusFor — US-PORT-019", () => {
 describe("backlog block/defer/unblock/promote — US-PORT-019", () => {
   it("block sets 🔒 Blocked [reason] and reports the count", () => {
     seedBacklog("| [FIX-001](x) | fix a thing | 📋 Todo |\n");
-    const r = capture(() => backlogSetStatusCommand("block", ["FIX-001", "waiting upstream"]));
+    const r = capture(() => setStatus("block", ["FIX-001", "waiting upstream"]));
     expect(r.status).toBe(0);
     expect(statusOf("FIX-001")).toBe("🔒 Blocked [waiting upstream]");
     expect(r.out).toContain("Updated 1 item");
@@ -94,35 +122,35 @@ describe("backlog block/defer/unblock/promote — US-PORT-019", () => {
 
   it("defer then unblock round-trips a row back to Todo", () => {
     seedBacklog("| [US-002](x) | a story | 📋 Todo |\n");
-    capture(() => backlogSetStatusCommand("defer", ["US-002", "next quarter"]));
+    capture(() => setStatus("defer", ["US-002", "next quarter"]));
     expect(statusOf("US-002")).toBe("⏸ Deferred [next quarter]");
-    capture(() => backlogSetStatusCommand("unblock", ["US-002"]));
+    capture(() => setStatus("unblock", ["US-002"]));
     expect(statusOf("US-002")).toBe("📋 Todo");
   });
 
   it("US-V4-001: a status flip is backlog-only and does NOT refresh the global dossier front page", () => {
     seedBacklog("| [FIX-001](x) | fix a thing | 📋 Todo |\n");
-    mkdirSync(join(".roll", "features", "alpha", "FIX-001"), { recursive: true });
-    writeFileSync(join(".roll", "features", "alpha", "FIX-001", "spec.md"), "# FIX-001 — fix a thing\n");
-    capture(() => backlogSetStatusCommand("block", ["FIX-001", "waiting"]));
+    mkdirSync(join("backlog", "alpha", "FIX-001"), { recursive: true });
+    writeFileSync(join("backlog", "alpha", "FIX-001", "spec.md"), "# FIX-001 — fix a thing\n");
+    capture(() => setStatus("block", ["FIX-001", "waiting"]));
     // The status change lands in backlog.md; the global dossier page is NOT a
     // delivery side effect — it is rendered on demand by `roll index`.
     expect(statusOf("FIX-001")).toContain("🔒 Blocked");
-    expect(existsSync(join(".roll", "features", "index.html"))).toBe(false);
+    expect(existsSync(join("backlog", "index.html"))).toBe(false);
   });
 
   it("no match → 'No items matched', exit 0, file unchanged", () => {
     seedBacklog("| [FIX-001](x) | fix a thing | 📋 Todo |\n");
-    const before = readFileSync(join(".roll", "backlog.md"), "utf8");
-    const r = capture(() => backlogSetStatusCommand("block", ["NOPE-999"]));
+    const before = readFileSync(join("backlog", "index.md"), "utf8");
+    const r = capture(() => setStatus("block", ["NOPE-999"]));
     expect(r.status).toBe(0);
     expect(r.out).toContain("No items matched: NOPE-999");
-    expect(readFileSync(join(".roll", "backlog.md"), "utf8")).toBe(before);
+    expect(readFileSync(join("backlog", "index.md"), "utf8")).toBe(before);
   });
 
   it("missing pattern → usage on stderr, exit 1", () => {
     seedBacklog("| [FIX-001](x) | x | 📋 Todo |\n");
-    const r = capture(() => backlogSetStatusCommand("block", []));
+    const r = capture(() => setStatus("block", []));
     expect(r.status).toBe(1);
     expect(r.err).toContain("Usage: roll backlog block");
   });
@@ -131,20 +159,20 @@ describe("backlog block/defer/unblock/promote — US-PORT-019", () => {
 describe("backlog claim — FIX-1211", () => {
   it("marks the card In Progress and writes a human lease by default", () => {
     seedBacklog("| [FIX-1211](x) | lease aware | 📋 Todo |\n");
-    const r = capture(() => backlogClaimCommand(["FIX-1211"], { nowMs: () => 1_700_000_000_000 }));
+    const r = capture(() => claim(["FIX-1211"]));
     expect(r.status).toBe(0);
     expect(statusOf("FIX-1211")).toBe("🔨 In Progress");
     expect(r.out).toContain("claimed FIX-1211");
-    const leaseDir = join(".roll", "loop", "leases");
+    const leaseDir = join("runtime", "locks", "leases");
     const lease = JSON.parse(readFileSync(join(leaseDir, "FIX-1211.lease"), "utf8"));
     expect(lease).toEqual({ source: "human", claimedAt: 1_700_000_000_000 });
   });
 
   it("can write a supervisor lease", () => {
     seedBacklog("| [FIX-1211](x) | lease aware | 📋 Todo |\n");
-    const r = capture(() => backlogClaimCommand(["FIX-1211", "--source", "supervisor"], { nowMs: () => 1_700_000_000_000 }));
+    const r = capture(() => claim(["FIX-1211", "--source", "supervisor"]));
     expect(r.status).toBe(0);
-    const leaseDir = join(".roll", "loop", "leases");
+    const leaseDir = join("runtime", "locks", "leases");
     expect(JSON.parse(readFileSync(join(leaseDir, "FIX-1211.lease"), "utf8"))).toEqual({
       source: "supervisor",
       claimedAt: 1_700_000_000_000,
@@ -175,17 +203,17 @@ describe("backlog lint — US-PORT-019", () => {
 
   it("clean backlog → no violations, exit 0", () => {
     seedBacklog("| [US-001](x) | a clean one line human description | 📋 Todo |\n");
-    const r = capture(() => backlogLintCommand([]));
+    const r = capture(() => lint([]));
     expect(r.status).toBe(0);
     expect(r.out).toContain("No violations");
   });
 
   it("--gate flips a violation to exit 1", () => {
     seedBacklog("| [US-002](x) | uses `code` in the description | 📋 Todo |\n");
-    const warn = capture(() => backlogLintCommand([]));
+    const warn = capture(() => lint([]));
     expect(warn.status).toBe(0);
     expect(warn.out).toContain("warn-only");
-    const gated = capture(() => backlogLintCommand(["--gate"]));
+    const gated = capture(() => lint(["--gate"]));
     expect(gated.status).toBe(1);
     expect(gated.out).toContain("exiting 1");
   });
@@ -193,19 +221,18 @@ describe("backlog lint — US-PORT-019", () => {
 
 describe("backlog unstick — US-PORT-019 (FIX-112)", () => {
   const NOW = Date.parse("2026-06-09T12:00:00Z");
-  const SLUG = "t-aaa111";
-  let loopDir: string;
+  let alertPath: string;
 
   function ev(stage: string, extra: Record<string, unknown>): string {
     return JSON.stringify({ stage, ...extra });
   }
   /** Seed events ndjson + return deps pointing the shared root at the sandbox. */
   function setup(events: string[]): UnstickDeps {
-    const shared = join(dir, "shared");
-    loopDir = join(shared, "loop");
-    mkdirSync(loopDir, { recursive: true });
-    writeFileSync(join(loopDir, `events-${SLUG}.ndjson`), events.join("\n") + "\n");
-    return { slug: () => SLUG, sharedRoot: () => shared, nowMs: () => NOW };
+    const runtime = join(dir, "runtime");
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(join(runtime, "events.ndjson"), events.join("\n") + "\n");
+    alertPath = join(runtime, "alerts", "unstick.md");
+    return { nowMs: () => NOW, resolveTarget };
   }
   function iso(hoursAgo: number): string {
     return new Date(NOW - hoursAgo * 3600_000).toISOString();
@@ -231,7 +258,7 @@ describe("backlog unstick — US-PORT-019 (FIX-112)", () => {
     expect(statusOf("US-101")).toBe("🔨 In Progress");
     expect(statusOf("US-102")).toBe("🔨 In Progress");
     // ALERT note appended
-    const alert = readFileSync(join(loopDir, `ALERT-${SLUG}.md`), "utf8");
+    const alert = readFileSync(alertPath, "utf8");
     expect(alert).toContain("unstick: reverted US-100");
   });
 
@@ -252,6 +279,6 @@ describe("backlog unstick — US-PORT-019 (FIX-112)", () => {
     seedBacklog("| [US-200](x) | running | 🔨 In Progress |\n");
     const r = capture(() => backlogUnstickCommand([], deps));
     expect(r.status).toBe(0);
-    expect(r.out.trim()).toBe("");
+    expect(r.out).toContain("Backlog ws-test");
   });
 });

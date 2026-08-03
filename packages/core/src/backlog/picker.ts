@@ -587,7 +587,3 @@ export function assessBacklog(
   // No todo, no in_progress/hold → everything visible is Done (or cut).
   return { hasWork: false, reason: "all_done" };
 }
-
-// ─── US-LOOP-079k: dormancy suppression ──────────────────────────────────────
-
-

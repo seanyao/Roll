@@ -1,11 +1,13 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { CycleRepositoryExecutionContext } from "@roll/spec";
 import { readLatestStoryReviewScore, REVIEW_SCORE_LOW_THRESHOLD, type ReviewScoreEntry } from "../lib/review-score.js";
 
 /** Hard char cap on the injected project map — the FIX-338 prompt is already lean
  *  (~2.3KB hub); the map must stay a CONCISE orientation aid, never context bloat.
  *  Anything over this is truncated with an explicit elision marker. */
 export const PROJECT_MAP_MAX_CHARS = 1800;
+export const REPOSITORY_CONTEXT_MAX_CHARS = 4096;
 
 /** How many top-level entries to list (shallow), and how deep into a key container
  *  dir (`packages/`) to descend — one level, so it stays a map not a file dump. */
@@ -147,6 +149,49 @@ export function maybeInjectProjectMap(
   const map = buildProjectMap(worktreePath, storyId);
   if (map === "") return skillBody;
   return `${map}\n\n${skillBody}`;
+}
+
+/** Render the complete Workspace repository contract for one Builder prompt.
+ * The map is deterministic, contains no filesystem inspection, and fails loud
+ * rather than truncating away a repository identity or access boundary. */
+export function buildRepositoryContextMap(
+  execution: CycleRepositoryExecutionContext,
+): string {
+  const entries = Object.entries(execution.repositories)
+    .sort(([, left], [, right]) => left.repoId.localeCompare(right.repoId));
+  if (entries.length === 0) throw new Error("invalid_repository_map: at least one repository is required");
+  const aliases = new Set<string>();
+  for (const [key, repository] of entries) {
+    if (key !== repository.repoId || aliases.has(repository.alias)) {
+      throw new Error("invalid_repository_map: keys must match unique repoId/alias identities");
+    }
+    aliases.add(repository.alias);
+  }
+  const payload = {
+    workspaceId: execution.workspaceId,
+    builderCwd: execution.issueRoot,
+    repositories: entries.map(([, repository]) => repository),
+  };
+  const rendered = [
+    "[Workspace repository execution context]",
+    "Builder cwd is the Issue root. The repository map is authoritative; do not infer identity from paths.",
+    "read-only repositories are context-only and MUST NOT be edited, used for TCR commits, or published.",
+    JSON.stringify(payload, null, 2),
+  ].join("\n");
+  if (rendered.length > REPOSITORY_CONTEXT_MAX_CHARS) {
+    throw new Error(
+      `repository_context_too_large: ${rendered.length} > ${REPOSITORY_CONTEXT_MAX_CHARS}`,
+    );
+  }
+  return rendered;
+}
+
+/** Prepend the authoritative repository map to a Builder prompt. */
+export function injectRepositoryContext(
+  skillBody: string,
+  execution: CycleRepositoryExecutionContext,
+): string {
+  return `${buildRepositoryContextMap(execution)}\n\n${skillBody}`;
 }
 
 // ── FIX-386: low peer review score fix-forward context injection ────────────

@@ -120,7 +120,18 @@ import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
-import { cardArchiveDir, epicFromFeaturePath, findFeatureFile, findFeatureFiles, reportFileName, reviewFileName } from "../lib/archive.js";
+import {
+  cardArchiveDir,
+  epicFromFeaturePath,
+  findFeatureFile,
+  findFeatureFiles,
+  projectBacklogPath,
+  projectDataPath,
+  projectOperationalPath,
+  projectRuntimePath,
+  reportFileName,
+  reviewFileName,
+} from "../lib/archive.js";
 import { currentLang } from "./agent-list.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
 import { collectRollCaptureReadiness, type RollCaptureReadiness } from "../lib/roll-capture-readiness.js";
@@ -128,6 +139,7 @@ import { designContractDeliveredEvidence } from "../runner/attest-gate.js";
 import { resolveCardDeliveryRecord } from "../lib/delivery-record.js";
 import { readReviewScoreTrend, readStoryReviewScores } from "../lib/review-score.js";
 import { collectToolEvidenceFromEventsPath, formatToolCostSummary } from "../lib/tool-display.js";
+import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 import { attestAuditCommand } from "./attest-audit.js";
 import { runOutwardSmoke, smokeResultsFromReport } from "../attest/outward-smoke-runner.js";
 import { parseEvaluationContract } from "../lib/evaluation-contract.js";
@@ -136,6 +148,8 @@ import { parseEvaluationContract } from "../lib/evaluation-contract.js";
 export { findFeatureFile } from "../lib/archive.js";
 
 export interface AttestDeps {
+  /** Explicit project-data authority root; canonical Workspace or legacy project. */
+  projectPath?: string;
   now?: () => Date;
   run?: EvidenceRun;
   ghProbe?: () => Promise<boolean>;
@@ -186,7 +200,7 @@ export interface ProcessReaders {
 
 /** Default readers over `<runtimeDir>/{runs.jsonl,events.ndjson,cycle-logs/}`. */
 function defaultProcessReaders(projectPath: string, env: Record<string, string | undefined>): ProcessReaders {
-  const rt = (env.ROLL_PROJECT_RUNTIME_DIR ?? "").trim() || join(projectPath, ".roll", "loop");
+  const rt = (env.ROLL_PROJECT_RUNTIME_DIR ?? "").trim() || projectRuntimePath(projectPath);
   // Reuse the event bus's read side — it already parses runs.jsonl / events.ndjson
   // and returns [] for a missing file (readText → "" on absence), no throw.
   const bus = new EventBus();
@@ -1006,7 +1020,7 @@ function recordAttestCaptureBridgeLink(projectPath: string, request: RollCapture
     );
     if (link === null) return;
     new BrowserOperationLedger().recordCaptureLink(
-      join(projectPath, ".roll", "browser-operations", "events.ndjson"),
+      projectOperationalPath(projectPath, "browser-operations", "events.ndjson"),
       link,
     );
   } catch (error) {
@@ -1145,7 +1159,7 @@ function backlogRowId(cell: string): string {
 }
 
 export function readBacklogRow(projectPath: string, storyId: string): { description?: string; status?: string } {
-  const p = join(projectPath, ".roll", "backlog.md");
+  const p = projectBacklogPath(projectPath);
   if (!existsSync(p)) return {};
   let text: string;
   try {
@@ -1352,7 +1366,7 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) continue;
-    if (flagsWithValue.has(arg)) {
+    if (isCanonicalWorkspaceSelectorToken(arg) || flagsWithValue.has(arg)) {
       i += 1;
       continue;
     }
@@ -1414,11 +1428,12 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   const captureWebSkip = flagVal("--capture-web-skip");
   const captureBrowser = flagVal("--capture-browser");
 
-  const projectPath = process.cwd();
+  const projectPath = deps.projectPath ?? process.cwd();
   const featureFile = findFeatureFile(projectPath, storyId);
   if (featureFile === null) {
-    process.stderr.write(`[roll] attest: story ${storyId} not found under .roll/features/\n`);
-    process.stderr.write(`[roll] attest：在 .roll/features/ 下找不到 ${storyId}\n`);
+    const featuresPath = `${relative(projectPath, projectDataPath(projectPath, "features")) || "features"}/`;
+    process.stderr.write(`[roll] attest: story ${storyId} not found under ${featuresPath}\n`);
+    process.stderr.write(`[roll] attest：在 ${featuresPath} 下找不到 ${storyId}\n`);
     return 1;
   }
   let featureText = "";
@@ -1701,7 +1716,7 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   // ac-map is visible to attest regardless of .roll layout.
   const acMap =
     readAcMap(storyDir) ??
-    readAcMap(join(projectPath, ".roll", "verification", storyId)) ??
+    readAcMap(projectDataPath(projectPath, "verification", storyId)) ??
     readAcMap(dirname(runDir));
 
   // US-ATTEST-016 — outward smoke checks

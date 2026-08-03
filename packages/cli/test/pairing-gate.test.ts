@@ -454,6 +454,33 @@ defaults:
 `);
     expect(enabledPairingStages(dir)).toEqual(["code"]);
   });
+
+  it("reads Workspace evaluate casting from agents.yaml and ignores repository-local project policy", () => {
+    const { dir } = project(null);
+    writeFileSync(join(dir, "workspace.yaml"), "schema: roll-workspace/v1\nworkspace_id: ws-test\n");
+    writeFileSync(join(dir, "agents.yaml"), `schema: roll-agents/v1
+scope: workspace
+inherits: machine
+roles: {}
+defaults:
+  story:
+    roles:
+      evaluate:
+        kind: fixed
+        agent: pi
+`);
+    writeScopedAgents(dir, `schema: roll-agents/v1
+scope: project
+defaults:
+  story:
+    roles:
+      evaluate:
+        kind: fixed
+        agent: reasonix
+`);
+
+    expect(enabledPairingStages(dir)).toEqual(["code"]);
+  });
 });
 
 // ── US-PAIR-009: score stage — heterogeneous peer scores the cycle ───────────

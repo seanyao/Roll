@@ -1,0 +1,25 @@
+Command:
+ROLL_CAPTURE_TRANSCRIPT=1 pnpm --filter @roll/infra exec vitest run test/workspace-discovery.e2e.test.ts --reporter=verbose
+
+Observed decision from an arbitrary /tmp cwd (macOS resolves it to /private/tmp):
+{
+  "requestedCwd": "/tmp",
+  "actualCwd": "/private/tmp",
+  "requirement": "jira:APE-234",
+  "onlyActiveWorkspace": "roll",
+  "decision": {
+    "ok": false,
+    "kind": "activation_required",
+    "code": "workspace_activation_required",
+    "candidates": [
+      {
+        "workspaceId": "fields",
+        "lifecycle": "registered",
+        "hardMatch": true
+      }
+    ],
+    "diagnostics": []
+  }
+}
+
+The only active Workspace was roll, but it had no hard match for APE-234 and was not selected.

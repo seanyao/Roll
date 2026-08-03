@@ -8,7 +8,9 @@ import type {
   ToolPolicy,
   ToolRequirementResolution,
   ToolResult,
+  WorkspaceExecutionContextV1,
 } from "@roll/spec";
+import { WORKSPACE_EXECUTION_CONTEXT_V1 } from "@roll/spec";
 import { describe, expect, it } from "vitest";
 import { ToolRegistry, type Tool, type ToolRegistryEventSink, type ToolRegistryPolicyEngine } from "../src/index.js";
 
@@ -25,7 +27,7 @@ const declaration: ToolDeclaration = {
   },
 };
 
-function deps(): ToolDeps {
+function deps(redact: ToolDeps["redact"] = (value) => value): ToolDeps {
   const fs: MinimalFs = {
     readFile: async () => "",
     writeFile: async () => undefined,
@@ -35,7 +37,7 @@ function deps(): ToolDeps {
     fs,
     now: () => 100,
     execFile: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
-    redact: (value) => value,
+    redact,
   };
 }
 
@@ -72,6 +74,49 @@ function request(input: unknown = "ok") {
     invocationId: "inv-1",
     input,
     caller: { cycleId: "cycle-1", storyId: "US-TOOL-002", agent: "codex" },
+  };
+}
+
+function workspaceContext(workspaceId = "roll"): WorkspaceExecutionContextV1 {
+  const root = `/ws/${workspaceId}`;
+  return {
+    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
+    workspace: { workspaceId, root, canonicalRoot: root, lifecycle: "active" },
+    resolution: { source: "explicit", evidence: [] },
+    bindings: [],
+    issue: {
+      storyId: "US-WS-035",
+      manifestPath: `${root}/issues/US-WS-035/manifest.json`,
+      execution: {
+        workspaceId,
+        issueRoot: `${root}/issues/US-WS-035`,
+        repositories: {
+          "repo-product": {
+            repoId: "repo-product",
+            alias: "product",
+            access: "write",
+            requiredDelivery: true,
+            noChangePolicy: "changes_required",
+            worktreePath: `${root}/issues/US-WS-035/product`,
+            baseSha: "a".repeat(40),
+            headSha: "b".repeat(40),
+            commands: { test: [], integration: [] },
+          },
+        },
+      },
+    },
+    authorities: {
+      backlog: `${root}/backlog`,
+      features: `${root}/features`,
+      design: `${root}/design`,
+      requirements: `${root}/requirements`,
+      policy: `${root}/policy`,
+      evidence: `${root}/evidence`,
+      toolDumps: `${root}/tool-dumps`,
+      events: `${root}/events`,
+      runtime: `${root}/runtime`,
+      locks: `${root}/locks`,
+    },
   };
 }
 
@@ -172,6 +217,32 @@ describe("US-TOOL-002 ToolRegistry", () => {
     expect(JSON.stringify(emitted)).not.toContain("output");
   });
 
+  it("redacts nested invocation input in events without changing adapter input", async () => {
+    const events = sink();
+    const secret = "token-secret";
+    const registry = new ToolRegistry({
+      deps: deps((value) => value.replaceAll(secret, "[REDACTED]")),
+      policyEngine: policyEngine(),
+      events,
+    });
+    registry.register(tool());
+
+    const input = { token: secret, nested: { headers: [secret], password: "field-secret", access_token: "access-secret" } };
+    const result = await registry.invoke(TOOL_ID, request(input));
+
+    expect(result).toMatchObject({ ok: true, output: input });
+    const emitted = events.events.find((event) => event.type === "tool:invoke");
+    expect(JSON.stringify(emitted)).not.toContain(secret);
+    expect(emitted).toMatchObject({
+      invocation: {
+        input: {
+          token: "[REDACTED]",
+          nested: { headers: ["[REDACTED]"], password: "[REDACTED]", access_token: "[REDACTED]" },
+        },
+      },
+    });
+  });
+
   it("emits a sanitized failure result even when emitsEvents:false suppresses success events", async () => {
     const events = sink();
     const registry = new ToolRegistry({ deps: deps(), policyEngine: policyEngine(), events });
@@ -246,6 +317,21 @@ describe("US-TOOL-002 ToolRegistry", () => {
 
     expect(registry.snapshotCosts()).toEqual([
       expect.objectContaining({ toolId: TOOL_ID, invocations: 1, currency: "CNY" }),
+    ]);
+  });
+
+  it("keeps concurrent tool costs separated by Workspace correlation", async () => {
+    const registry = new ToolRegistry({ deps: deps(), policyEngine: policyEngine() });
+    registry.register(tool());
+
+    await Promise.all([
+      registry.invoke(TOOL_ID, { ...request("alpha"), invocationId: "inv-alpha", context: workspaceContext("alpha"), repoId: "repo-product" }),
+      registry.invoke(TOOL_ID, { ...request("beta"), invocationId: "inv-beta", context: workspaceContext("beta"), repoId: "repo-product" }),
+    ]);
+
+    expect(registry.snapshotCosts()).toEqual([
+      expect.objectContaining({ invocations: 1, correlation: { workspaceId: "alpha", storyId: "US-WS-035", repoId: "repo-product" } }),
+      expect.objectContaining({ invocations: 1, correlation: { workspaceId: "beta", storyId: "US-WS-035", repoId: "repo-product" } }),
     ]);
   });
 
@@ -357,6 +443,28 @@ describe("US-TOOL-002 ToolRegistry", () => {
     expect(t.executes).toBe(1);
   });
 
+  it("keeps invocation budgets isolated across concurrent Workspace cycles", async () => {
+    const t = tool();
+    const registry = new ToolRegistry({
+      deps: deps(),
+      policyEngine: policyEngine({ maxInvocationsPerCycle: 1 }),
+    });
+    registry.register(t);
+    const alpha = { ...request("alpha"), invocationId: "inv-alpha", caller: { ...request().caller, cycleId: "cycle-alpha" }, context: workspaceContext("alpha"), repoId: "repo-product" };
+    const beta = { ...request("beta"), invocationId: "inv-beta", caller: { ...request().caller, cycleId: "cycle-beta" }, context: workspaceContext("beta"), repoId: "repo-product" };
+
+    const [alphaResult, betaResult] = await Promise.all([
+      registry.invoke(TOOL_ID, alpha),
+      registry.invoke(TOOL_ID, beta),
+    ]);
+    const alphaSecond = await registry.invoke(TOOL_ID, { ...alpha, invocationId: "inv-alpha-2" });
+
+    expect(alphaResult.ok).toBe(true);
+    expect(betaResult.ok).toBe(true);
+    expect(alphaSecond).toMatchObject({ ok: false, error: { code: "budget_exhausted" } });
+    expect(t.executes).toBe(2);
+  });
+
   it("catches adapter crashes and returns adapter_error", async () => {
     const registry = new ToolRegistry({ deps: deps(), policyEngine: policyEngine() });
     registry.register(
@@ -454,6 +562,72 @@ describe("US-TOOL-002 ToolRegistry", () => {
 
     expect(result).toMatchObject({ ok: true, output: "ok" });
     expect(calls).toBe(2);
+  });
+
+  it("freezes Workspace context and repo selection across adapter retries", async () => {
+    const context = workspaceContext();
+    const seen: Array<{ context: WorkspaceExecutionContextV1 | undefined; repoId: string | undefined }> = [];
+    let calls = 0;
+    const registry = new ToolRegistry({
+      deps: deps(),
+      policyEngine: policyEngine({ retry: { attempts: 2, backoffMs: 0 } }),
+    });
+    registry.register(tool({
+      async execute(invocation) {
+        calls += 1;
+        seen.push({ context: invocation.context, repoId: invocation.repoId });
+        if (calls === 1) {
+          return {
+            ok: false,
+            error: { code: "timeout", message: "retry", retryable: true },
+            meta: {
+              invocationId: invocation.invocationId,
+              toolId: invocation.toolId,
+              caller: invocation.caller,
+              startedAt: 100,
+              endedAt: 101,
+              durationMs: 1,
+            },
+          };
+        }
+        return okResult(invocation, "ok");
+      },
+    }));
+
+    const result = await registry.invoke(TOOL_ID, {
+      ...request("x"),
+      context,
+      repoId: "repo-product",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      meta: { correlation: { workspaceId: "roll", storyId: "US-WS-035", repoId: "repo-product" } },
+    });
+    expect(seen).toEqual([
+      { context, repoId: "repo-product" },
+      { context, repoId: "repo-product" },
+    ]);
+    expect(seen[0]?.context).toBe(context);
+    expect(seen[1]?.context).toBe(context);
+  });
+
+  it("correlates registry failures without exposing Workspace paths", async () => {
+    const context = workspaceContext();
+    const registry = new ToolRegistry({ deps: deps(), policyEngine: policyEngine() });
+
+    const result = await registry.invoke(TOOL_ID, {
+      ...request(),
+      context,
+      repoId: "repo-product",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "not_found" },
+      meta: { correlation: { workspaceId: "roll", storyId: "US-WS-035", repoId: "repo-product" } },
+    });
+    expect(JSON.stringify(result)).not.toContain("/ws/roll");
   });
 
   it("shutdown disposes initialized tools once and is idempotent", async () => {

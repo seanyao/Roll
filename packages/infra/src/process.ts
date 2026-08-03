@@ -52,7 +52,7 @@ import { hostname as osHostname } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExecOpts, ExecResult, ToolInvocation, ToolResult } from "@roll/spec";
 import { BashTool, type BashInput, type BashOutput } from "./tools/bash.js";
-import { infraToolExecFile, infraToolFs, invokeInfraTool, redactInfraToolValue } from "./tools/delegation.js";
+import { infraToolExecFile, invokeInfraTool, redactInfraToolValue } from "./tools/delegation.js";
 
 /** v2 default: outer PR-loop lock staleness (bin/roll 8326). */
 export const OUTER_LOCK_STALE_SEC = 900;
@@ -84,18 +84,43 @@ export async function execFile(command: string, args: readonly string[], opts: E
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       ...(opts.env !== undefined ? { env: { ...opts.env } } : {}),
     },
+    // This compatibility wrapper is used by machine lifecycle code. Agent-facing
+    // process execution goes through BashTool with repository_required context.
+    scope: "machine_only",
     policy: {
       timeoutMs: opts.timeoutMs,
       sandbox: {
         maxOutputBytes: opts.maxOutputBytes,
       },
     },
-    run: (invocation: ToolInvocation<BashInput>): Promise<ToolResult<BashOutput>> => tool.execute(invocation, {
-      fs: infraToolFs,
-      now: () => Date.now(),
-      execFile: infraToolExecFile,
-      redact: redactInfraToolValue,
-    }),
+    run: async (invocation: ToolInvocation<BashInput>): Promise<ToolResult<BashOutput>> => {
+      const startedAt = Date.now();
+      const output = await infraToolExecFile(
+        redactInfraToolValue(invocation.input.command),
+        (invocation.input.args ?? []).map(redactInfraToolValue),
+        {
+          cwd: invocation.input.cwd,
+          env: invocation.input.env === undefined
+            ? undefined
+            : Object.fromEntries(Object.entries(invocation.input.env).map(([key, value]) => [key, redactInfraToolValue(value)])),
+          timeoutMs: invocation.policy.timeoutMs,
+          maxOutputBytes: invocation.policy.sandbox?.maxOutputBytes,
+        },
+      );
+      const endedAt = Date.now();
+      return {
+        ok: true,
+        output,
+        meta: {
+          invocationId: invocation.invocationId,
+          toolId: invocation.toolId,
+          caller: invocation.caller,
+          startedAt,
+          endedAt,
+          durationMs: Math.max(0, endedAt - startedAt),
+        },
+      };
+    },
   });
   if (result.ok) return { ...result.output };
   return {
@@ -282,11 +307,21 @@ export function isOwnerHeld(
  * thing that decides ownership is which process wins the kernel-atomic `mkdir`.
  *
  * @param staleSec  {@link OUTER_LOCK_STALE_SEC} or {@link INNER_LOCK_STALE_SEC}.
+ * @param unparseableIsHeld fail closed while a winning process is between the
+ *   atomic mkdir and owner-metadata write; callers that can repair abandoned
+ *   empty locks explicitly should use this for cross-process mutual exclusion.
  */
 export function acquireLock(
   lockPath: string,
   pid: number = process.pid,
-  opts: { now?: Clock; staleSec?: number; pidAlive?: PidAlive; cycleId?: string; hostname?: string } = {},
+  opts: {
+    now?: Clock;
+    staleSec?: number;
+    pidAlive?: PidAlive;
+    cycleId?: string;
+    hostname?: string;
+    unparseableIsHeld?: boolean;
+  } = {},
 ): AcquireResult {
   const now = (opts.now ?? systemClock)();
   const staleSec = opts.staleSec ?? OUTER_LOCK_STALE_SEC;
@@ -307,6 +342,9 @@ export function acquireLock(
 
   // EEXIST: someone holds it (dir) OR a legacy file is in the way. Decide.
   const held = readLockOwner(lockPath);
+  if (held === undefined && opts.unparseableIsHeld === true) {
+    return { acquired: false, heldByPid: undefined };
+  }
   if (isOwnerHeld(held, now, staleSec, pidAlive, selfHost)) {
     return { acquired: false, heldByPid: held?.pid };
   }

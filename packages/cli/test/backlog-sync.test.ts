@@ -3,7 +3,7 @@
  * Injected opener / loadIssues keep it network-free.
  */
 import type { GhIssue } from "@roll/core";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
   fetchIssues,
   resolveToken,
 } from "../src/commands/backlog-sync.js";
+import type { ResolvedBacklogTarget } from "../src/commands/backlog-target.js";
 import { stripAnsi } from "../src/render.js";
 
 let cwd0: string;
@@ -22,7 +23,7 @@ beforeEach(() => {
   cwd0 = process.cwd();
   dir = mkdtempSync(join(tmpdir(), "backlog-sync-"));
   process.chdir(dir);
-  mkdirSync(".roll", { recursive: true });
+  mkdirSync("backlog", { recursive: true });
 });
 afterEach(() => {
   process.chdir(cwd0);
@@ -52,10 +53,37 @@ function capture(fn: () => Promise<number>): Promise<{ status: number; out: stri
 
 const HEADER = "| ID | Description | Status |\n|----|----|----|\n";
 function seedBacklog(rows = ""): void {
-  writeFileSync(join(".roll", "backlog.md"), HEADER + rows);
+  writeFileSync(join("backlog", "index.md"), HEADER + rows);
+}
+function target(): ResolvedBacklogTarget {
+  return {
+    ok: true,
+    workspaceId: "ws-test",
+    workspaceRoot: dir,
+    canonicalRoot: dir,
+    backlogPath: join(dir, "backlog", "index.md"),
+    storyRoot: join(dir, "backlog"),
+    runtimeRoot: join(dir, "runtime"),
+    configPath: join(dir, "runtime", "backlog-sync.yaml"),
+  };
 }
 function deps(issues: GhIssue[]): SyncDeps {
-  return { loadIssues: async () => issues, nowIso: () => "2026-06-09T00:00:00Z" };
+  return {
+    loadIssues: async () => issues,
+    nowIso: () => "2026-06-09T00:00:00Z",
+    resolveTarget: () => target(),
+  };
+}
+
+function treeState(root: string, relative = ""): readonly string[] {
+  const path = relative === "" ? root : join(root, relative);
+  if (!existsSync(path)) return [];
+  if (!statSync(path).isDirectory()) return [`F ${relative} ${readFileSync(path, "utf8")}`];
+  const rows = relative === "" ? [] : [`D ${relative}`];
+  for (const name of readdirSync(path).sort()) {
+    rows.push(...treeState(root, relative === "" ? name : join(relative, name)));
+  }
+  return rows;
 }
 
 describe("resolveToken — US-PORT-019", () => {
@@ -123,17 +151,17 @@ describe("backlogSyncCommand — US-PORT-019", () => {
 
   it("--dry-run previews without writing backlog", async () => {
     seedBacklog("| US-GH-1 | existing | 📋 Todo |\n");
-    const before = readFileSync(join(".roll", "backlog.md"), "utf8");
+    const before = readFileSync(join("backlog", "index.md"), "utf8");
     const issues: GhIssue[] = [
       { number: 1, title: "existing", state: "open" },
       { number: 2, title: "new bug", state: "open", labels: [{ name: "bug" }] },
     ];
     const r = await capture(() => backlogSyncCommand(["--repo", "acme/widgets", "--dry-run"], deps(issues)));
     expect(r.status).toBe(0);
-    expect(r.out).toContain("+ GH-2 [FIX] new bug");
-    expect(r.out).toContain("= GH-1 [US] (skipped, already exists)");
+    expect(r.out).toContain("+ FIX-GH-2 [FIX] new bug");
+    expect(r.out).toContain("= US-GH-1 [US] (skipped, already exists)");
     expect(r.out).toContain("dry-run, no changes written");
-    expect(readFileSync(join(".roll", "backlog.md"), "utf8")).toBe(before); // untouched
+    expect(readFileSync(join("backlog", "index.md"), "utf8")).toBe(before); // untouched
   });
 
   it("apply: appends new rows, writes feature stub, persists config", async () => {
@@ -150,14 +178,14 @@ describe("backlogSyncCommand — US-PORT-019", () => {
     const r = await capture(() => backlogSyncCommand(["--repo", "acme/widgets"], deps(issues)));
     expect(r.status).toBe(0);
     // row appended
-    const backlog = readFileSync(join(".roll", "backlog.md"), "utf8");
-    expect(backlog).toContain("| US-GH-7 | sync from issues | 📋 Todo |");
+    const backlog = readFileSync(join("backlog", "index.md"), "utf8");
+    expect(backlog).toContain("| [US-GH-7](backlog-lifecycle/US-GH-7/spec.md) | sync from issues | 📋 Todo |");
     // feature stub with AC
-    const stub = readFileSync(join(".roll", "features", "backlog-lifecycle", "GH-7.md"), "utf8");
-    expect(stub).toContain("# GH-7 sync from issues");
+    const stub = readFileSync(join("backlog", "backlog-lifecycle", "US-GH-7", "spec.md"), "utf8");
+    expect(stub).toContain("# US-GH-7 sync from issues");
     expect(stub).toContain("- [ ] map labels");
     // config persisted
-    const cfg = readFileSync(join(".roll", "local.yaml"), "utf8");
+    const cfg = readFileSync(join("runtime", "backlog-sync.yaml"), "utf8");
     expect(cfg).toContain("backlog_sync:");
     expect(cfg).toContain("repo: acme/widgets");
     expect(r.out).toContain("added: 1, skipped: 0");
@@ -168,19 +196,96 @@ describe("backlogSyncCommand — US-PORT-019", () => {
     const issues: GhIssue[] = [{ number: 9, title: "once", state: "open" }];
     await capture(() => backlogSyncCommand(["--repo", "a/b"], deps(issues)));
     const r2 = await capture(() => backlogSyncCommand(["--repo", "a/b"], deps(issues)));
-    expect(r2.out).toContain("skipped (already exists): GH-9");
+    expect(r2.out).toContain("skipped (already exists): US-GH-9");
     expect(r2.out).toContain("added: 0, skipped: 1");
   });
 
   it("reuses the persisted repo when --repo is omitted", async () => {
     seedBacklog();
+    mkdirSync("runtime", { recursive: true });
     writeFileSync(
-      join(".roll", "local.yaml"),
+      join("runtime", "backlog-sync.yaml"),
       "backlog_sync:\n  repo: saved/repo\n  labels: []\n",
     );
     const issues: GhIssue[] = [{ number: 5, title: "from saved", state: "open" }];
     const r = await capture(() => backlogSyncCommand([], deps(issues)));
     expect(r.status).toBe(0);
-    expect(readFileSync(join(".roll", "backlog.md"), "utf8")).toContain("US-GH-5");
+    expect(readFileSync(join("backlog", "index.md"), "utf8")).toContain("US-GH-5");
+  });
+
+  it("imports a closed Issue as planning Todo, never Done", async () => {
+    seedBacklog();
+    const issues: GhIssue[] = [{ number: 11, title: "closed elsewhere", state: "closed", labels: [{ name: "bug" }] }];
+    expect((await capture(() => backlogSyncCommand(["--repo", "a/b"], deps(issues)))).status).toBe(0);
+    const backlog = readFileSync(join("backlog", "index.md"), "utf8");
+    expect(backlog).toContain("[FIX-GH-11](backlog-lifecycle/FIX-GH-11/spec.md)");
+    expect(backlog).toContain("📋 Todo");
+    expect(backlog).not.toContain("✅ Done");
+  });
+
+  it("keeps the durable Story ID when an imported Issue is relabeled", async () => {
+    seedBacklog("| [US-GH-7](backlog-lifecycle/US-GH-7/spec.md) | existing | 🔨 In Progress |\n");
+    const issues: GhIssue[] = [{ number: 7, title: "now labeled bug", state: "open", labels: [{ name: "bug" }] }];
+    const r = await capture(() => backlogSyncCommand(["--repo", "a/b"], deps(issues)));
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("skipped (already exists): US-GH-7");
+    expect(readFileSync(join("backlog", "index.md"), "utf8")).toContain("🔨 In Progress");
+    expect(existsSync(join("backlog", "backlog-lifecycle", "FIX-GH-7"))).toBe(false);
+  });
+
+  it("fails loud when an explicit repo conflicts with the Workspace sync source", async () => {
+    seedBacklog();
+    mkdirSync("runtime");
+    writeFileSync(join("runtime", "backlog-sync.yaml"), "backlog_sync:\n  repo: first/repo\n  labels: []\n");
+    const before = treeState(dir);
+    const r = await capture(() => backlogSyncCommand(["--repo", "second/repo"], deps([])));
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("source conflict");
+    expect(treeState(dir)).toEqual(before);
+  });
+
+  it("treats GitHub owner/repo identity as case-insensitive", async () => {
+    seedBacklog();
+    mkdirSync("runtime");
+    writeFileSync(join("runtime", "backlog-sync.yaml"), "backlog_sync:\n  repo: Owner/Repo\n  labels: []\n");
+    const r = await capture(() => backlogSyncCommand(["--repo", "owner/repo"], deps([])));
+    expect(r.status).toBe(0);
+    expect(readFileSync(join("runtime", "backlog-sync.yaml"), "utf8")).toContain("repo: Owner/Repo");
+  });
+
+  it("rejects a Workspace path that escapes through a symlink before writing", async () => {
+    seedBacklog();
+    const external = mkdtempSync(join(tmpdir(), "backlog-sync-external-"));
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, "sentinel"), "outside\n");
+    symlinkSync(external, join(dir, "runtime"), "dir");
+    const backlogBefore = readFileSync(join("backlog", "index.md"), "utf8");
+    const externalBefore = treeState(external);
+    const r = await capture(() => backlogSyncCommand(["--repo", "a/b"], deps([{ number: 31, title: "escape" }])));
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("invalid_target");
+    expect(readFileSync(join("backlog", "index.md"), "utf8")).toBe(backlogBefore);
+    expect(treeState(external)).toEqual(externalBefore);
+    rmSync(external, { recursive: true, force: true });
+  });
+
+  it("rolls back the whole Workspace mutation when a later file write fails", async () => {
+    seedBacklog();
+    mkdirSync(join("backlog", "backlog-lifecycle", "US-GH-21"), { recursive: true });
+    writeFileSync(join("backlog", "backlog-lifecycle", "US-GH-21", "spec.md"), "preexisting contract\n");
+    mkdirSync("runtime");
+    writeFileSync(join("runtime", "backlog-sync.yaml"), "backlog_sync:\n  repo: a/b\n  labels: []\n");
+    const before = treeState(dir);
+    const injected = deps([{ number: 21, title: "atomic", state: "open", body: "- [ ] appended AC" }]);
+    let writes = 0;
+    injected.writeFile = (path, content) => {
+      writes += 1;
+      writeFileSync(path, content);
+      if (writes === 3) throw new Error("injected config write failure");
+    };
+    const r = await capture(() => backlogSyncCommand(["--repo", "a/b"], injected));
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("sync write error: injected config write failure");
+    expect(treeState(dir)).toEqual(before);
   });
 });

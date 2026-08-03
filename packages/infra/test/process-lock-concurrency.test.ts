@@ -17,7 +17,7 @@
  * spawned dead-pid helper).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,6 +95,17 @@ describe("FIX-365 atomic inner-lock — concurrency", () => {
     expect(owner?.pid).toBe(42);
     expect(owner?.hostname).toBe(hostname());
     expect(typeof owner?.startedAt).toBe("number");
+  });
+
+  it("can fail closed while owner metadata is not yet readable", () => {
+    const d = tmp();
+    const lock = join(d, "inner.lock");
+    mkdirSync(lock, { recursive: true });
+
+    const result = acquireLock(lock, 99, { unparseableIsHeld: true });
+
+    expect(result).toEqual({ acquired: false, heldByPid: undefined });
+    expect(statSync(lock).isDirectory()).toBe(true);
   });
 });
 

@@ -1,0 +1,8 @@
+{
+  "schema": "roll.physical-capture-skip/v1",
+  "storyId": "US-WS-028",
+  "physical": false,
+  "taken": false,
+  "reason": "Physical Terminal capture is unavailable in this headless agent environment; no PNG was fabricated.",
+  "fallback": "transcript.txt"
+}

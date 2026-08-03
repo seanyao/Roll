@@ -1,5 +1,6 @@
 import {
   assessBacklog,
+  buildClaimedByOther,
   buildHasOpenPr,
   claimStoryLease,
   cleanDeadLeases,
@@ -14,18 +15,16 @@ import {
   projectDeliveryLeases,
   readLeases,
   reconcileBranchName,
-  releaseStoryLease,
   runRowHasPublishedPr,
   type BacklogItem,
   type CycleCommand,
   type CycleContext,
   type HasOpenPr,
-  type LeaseEntry,
   type OpenPrReferenceInput,
   type PickOptions,
 } from "@roll/core";
-import { classifyStatus, parseEventLine, STATUS_MARKER, type LoopType, type RollEvent } from "@roll/spec";
-import { isScreenLocked, resolveIntegrationBranch } from "@roll/infra";
+import { classifyStatus, STATUS_MARKER, type LoopType } from "@roll/spec";
+import { isScreenLocked, readWorkspace, resolveIntegrationBranch } from "@roll/infra";
 import { dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { storySpecPath } from "./attest-gate.js";
@@ -46,6 +45,14 @@ import type { ExecuteResult, Ports } from "./ports.js";
 import { activeRigs, probeDueSuspendedRigs, readRigLifecycleState, suspendedRigs } from "./agent-liveness.js";
 import { latestScreenLockEvent } from "./screen-lock-events.js";
 import { pendingRecoveryCandidateIds } from "./recovery-candidates.js";
+import { resolveStoryLeasePath } from "./story-lease-path.js";
+import { decideInProgressReclaim, parseLegacyClaimTimestamp, readLeaseEvents } from "./lease-reclaim.js";
+import {
+  freezeWorkspaceCycleContext,
+  persistWorkspaceCycleContext,
+  persistWorkspaceCycleRepositorySelector,
+} from "./scoped-route.js";
+import { workspaceSetupFailed } from "./workspace-setup-failure.js";
 
 type SetupCommand = Extract<CycleCommand, { kind:
   | "preflight"
@@ -55,81 +62,6 @@ type SetupCommand = Extract<CycleCommand, { kind:
   | "resolve_route"
 }>;
 
-/** FIX-1211: lease records live in a directory next to the events ledger. */
-function storyLeasePath(ports: Ports): string {
-  return join(dirname(ports.paths.eventsPath), "leases");
-}
-
-/**
- * US-DELIV-005: read the event ledger for the delivery-lease projection.
- * Best-effort — a missing/unreadable ledger means "no leases" (the picker
- * stays free), never a pick blocker.
- */
-function readLeaseEvents(eventsPath: string): RollEvent[] {
-  try {
-    if (!existsSync(eventsPath)) return [];
-    const out: RollEvent[] = [];
-    for (const line of readFileSync(eventsPath, "utf8").split("\n")) {
-      const ev = parseEventLine(line);
-      if (ev !== null) out.push(ev);
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-const LEGACY_SOFT_LEASE_HOURS = 24;
-const HOUR_MS = 3_600_000;
-
-function parseLegacyClaimTimestamp(row: { desc?: string; status?: string }): number | undefined {
-  const text = `${row.status ?? ""} ${row.desc ?? ""}`;
-  const iso = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z\b/.exec(text)?.[0];
-  if (iso !== undefined) {
-    const parsed = Date.parse(iso);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  const loose = /\b(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?\b/.exec(text);
-  if (loose !== null) {
-    const parsed = Date.parse(`${loose[1]}T${loose[2]}:00`);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
-
-/** FIX-1211: decide whether a 🔨 In Progress row can be reclaimed to 📋 Todo.
- *  Returns the action + a human-readable reason for observability. */
-function decideInProgressReclaim(
-  entry: LeaseEntry | undefined,
-  nowMs: number,
-  storyId: string,
-  annotatedClaimedAt?: number,
-): { action: "reclaim" | "keep"; reason: string } {
-  if (entry === undefined) {
-    if (annotatedClaimedAt === undefined) {
-      return { action: "reclaim", reason: `no lease for ${storyId} and no live delivery evidence` };
-    }
-    const ageHours = (nowMs - annotatedClaimedAt) / HOUR_MS;
-    if (ageHours < LEGACY_SOFT_LEASE_HOURS) {
-      return { action: "keep", reason: `annotated soft lease for ${storyId} is within 24h window (${Math.max(0, Math.round(ageHours))}h)` };
-    }
-    return { action: "reclaim", reason: `annotated soft lease expired for ${storyId} (${Math.round(ageHours)}h, no lease file entry)` };
-  }
-  if (entry.source === "cycle") {
-    if (entry.pid !== undefined && isLeaseAlive(entry)) {
-      return { action: "keep", reason: `cycle lease ${entry.pid} is alive for ${storyId}` };
-    }
-    return { action: "reclaim", reason: `cycle lease for ${storyId} is dead (pid ${entry.pid})` };
-  }
-  if (entry.source === "human" || entry.source === "supervisor" || entry.source === "host-delegation") {
-    if (isHumanSoftLeaseActive(entry, nowMs)) {
-      return { action: "keep", reason: `${entry.source} lease for ${storyId} is within 24h soft window` };
-    }
-    return { action: "reclaim", reason: `${entry.source} lease for ${storyId} expired (${Math.round((nowMs - entry.claimedAt) / 3_600_000)}h)` };
-  }
-  return { action: "keep", reason: `unknown lease source ${entry.source} for ${storyId} — preserving` };
-}
-
 export async function executeSetupCommand(
   cmd: SetupCommand,
   ports: Ports,
@@ -137,6 +69,7 @@ export async function executeSetupCommand(
 ): Promise<ExecuteResult> {
   switch (cmd.kind) {
     case "preflight": {
+      if (ports.repositories !== undefined) return { event: { type: "preflight_done" } };
       // FIX-198/FIX-112/FIX-211 — PR-aware claim reconcile. The inner lock
       // guarantees a single live cycle per project, so a 🔨 In Progress row is
       // from a PRIOR cycle. It is NOT always a dead claim (FIX-211): a cycle
@@ -174,7 +107,7 @@ export async function executeSetupCommand(
         const claims = rows.filter((r) => (r.status ?? "").includes("🔨"));
         if (claims.length > 0) {
           const slug = await ports.github.repoSlug(ports.repoCwd).catch(() => undefined);
-          const leases = readLeases(storyLeasePath(ports));
+          const leases = readLeases(resolveStoryLeasePath(ports.paths));
           const nowMs = Date.now();
           for (const claim of claims) {
             const cycle = latestDeliveringCycle(runRows, claim.id);
@@ -232,6 +165,7 @@ export async function executeSetupCommand(
     // infra/git _worktree_create (STRICT). worktree_created on success, else
     // worktree_failed (→ failed terminal, bin/roll:9000).
     case "create_worktree": {
+      if (ports.repositories !== undefined) return { event: { type: "worktree_created" } };
       // RESUME-PRIOR-WORK does NOT happen here: the story id is UNDEFINED at
       // create_worktree (the picker reads the backlog INSIDE the worktree,
       // FIX-198/FIX-204C), so resume/submodule decisions are deferred to the
@@ -321,30 +255,23 @@ export async function executeSetupCommand(
       // delivering the rest. Runtime overlay (.roll/loop/skip-cards.json); backlog
       // truth is untouched.
       const skipCards = readSkipCards(dirname(ports.paths.eventsPath));
-      // FIX-1205: de-dup from both GitHub PR references and durable delivery
-      // truth. Loop PR titles may be only `loop cycle cycle-<id>`, so body
-      // trailers and published-pending delivery records must also block a pick.
-      // FIX-1215: fail-OPEN on gh query failure — a network blip must not
-      // silently block every card (fail-closed = starvation). Log the blip and
-      // proceed with an empty PR list so the picker stays honest.
-      let openPrTitles: OpenPrReferenceInput[];
+      // Legacy projects de-dup picks against open PRs; Workspace delivery is repository-scoped downstream.
+      let openPrTitles: OpenPrReferenceInput[] = [];
       let ghError = false;
-      try {
-        openPrTitles = await ports.github.openPrTitles(ports.repoCwd);
-      } catch (err) {
-        ghError = true;
-        openPrTitles = [];
-        const msg = err instanceof Error ? err.message : String(err);
-        ports.events.appendAlert(
-          ports.paths.alertsPath,
-          `[WARN] cycle ${ctx.cycleId}: gh pr list failed (${msg.slice(0, 120)}); proceeding with empty PR list — cards with pending-publish markers remain pickable`,
-        );
-        ports.events.appendEvent(ports.paths.eventsPath, {
-          type: "pick:gh_error",
-          cycleId: ctx.cycleId,
-          reason: msg.slice(0, 200),
-          ts: eventTs(ports),
-        });
+      if (ports.repositories === undefined) {
+        try {
+          openPrTitles = await ports.github.openPrTitles(ports.repoCwd);
+        } catch (err) {
+          ghError = true;
+          const msg = err instanceof Error ? err.message : String(err);
+          ports.events.appendAlert(ports.paths.alertsPath, `[WARN] cycle ${ctx.cycleId}: gh pr list failed (${msg.slice(0, 120)}); proceeding with empty PR list — cards with pending-publish markers remain pickable`);
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "pick:gh_error",
+            cycleId: ctx.cycleId,
+            reason: msg.slice(0, 200),
+            ts: eventTs(ports),
+          });
+        }
       }
       const githubHasOpenPr = buildHasOpenPr(openPrTitles);
       const pendingMergeReason = (id: string): string | undefined => {
@@ -364,9 +291,10 @@ export async function executeSetupCommand(
       const pendingPublish = readPendingPublish(dirname(ports.paths.eventsPath));
       // FIX-1232: clean dead PID leases from the lease file before the picker
       // runs. A crashed cycle leaves a stale cycle-lease that accumulates in the
-      // file — harmless to the picker (isClaimedByOther is not wired) but noise
-      // for diagnostics and the preflight reclaim step.
-      const deadLeases = cleanDeadLeases(storyLeasePath(ports));
+      // file. Clean it before the claim predicate reads the shared ledger so a
+      // dead owner cannot keep the Story blocked.
+      const leasePath = resolveStoryLeasePath(ports.paths);
+      const deadLeases = cleanDeadLeases(leasePath);
       if (deadLeases.length > 0) {
         ports.events.appendAlert(
           ports.paths.alertsPath,
@@ -376,7 +304,8 @@ export async function executeSetupCommand(
       // US-DELIV-005: derive delivery leases before picking; --race permits
       // parallel work, then the first merge supersedes its siblings.
       const raceMode = process.env["ROLL_LOOP_RACE"] === "1";
-      const liveClaims = readLeases(storyLeasePath(ports));
+      const liveClaims = readLeases(leasePath);
+      const claimedByOther = buildClaimedByOther(liveClaims, Date.now(), process.pid);
       const cycleEvents = readLeaseEvents(ports.paths.eventsPath);
       const recoveryCandidateIds = pendingRecoveryCandidateIds(cycleEvents);
       const activeLeases = projectDeliveryLeases(cycleEvents).filter(
@@ -422,6 +351,18 @@ export async function executeSetupCommand(
         shouldSkip: (id) => skipCards.has(id),
         hasPendingPublish: (id) =>
           (ports.pendingPublish?.(id) ?? false) || pendingPublish.has(id),
+        isClaimedByOther: (id) => {
+          const lease = liveClaims[id];
+          if (lease === undefined) return false;
+          if (lease.source === "human" || lease.source === "supervisor") {
+            return isHumanSoftLeaseActive(lease, Date.now());
+          }
+          return claimedByOther(id);
+        },
+        skipClaimedReason: (id) => {
+          const lease = liveClaims[id];
+          return lease === undefined ? undefined : `claimed by ${lease.source}`;
+        },
         deliveryLeaseBlock: (id) => leaseBlockReason(id, activeLeases, { race: raceMode }),
         isScreenLocked: screenLocked,
         requiresPhysicalSurface,
@@ -547,18 +488,13 @@ export async function executeSetupCommand(
       // 🔨 we are about to write. Best-effort: an absent status leaves it unset
       // (no revert target — the terminal then leaves the row untouched).
       const preCycleStatus = (story as { status?: string }).status;
-      // Claim immediately on the MAIN backlog: 🔨 In Progress is the
-      // anti-duplicate-pick signal and must be visible to `roll backlog`/brief
-      // the moment the story is taken (owner观察: 行一直红着不动 = 此处之前
-      // 写在 worktree 的虚空里，且真实 ports 从未绑定 markStatus).
-      ports.backlog.markStatus?.(ports.repoCwd, story.id, STATUS_MARKER.in_progress);
       // FIX-1211: atomically claim a cycle lease so another loop instance
       // (or a host-delegation prepare) cannot claim the same story.
       // Uses the single-truth claimStoryLease primitive — no-clobber.
       // A claim failure here means another owner already holds the lease;
       // the picker already filtered those, so this is a diagnostic guard.
       try {
-        const claimResult = claimStoryLease(storyLeasePath(ports), story.id, {
+        const claimResult = claimStoryLease(leasePath, story.id, {
           pid: process.pid,
           source: "cycle",
           claimedAt: Date.now(),
@@ -566,12 +502,69 @@ export async function executeSetupCommand(
         if (claimResult.status !== "claimed") {
           ports.events.appendAlert(
             ports.paths.alertsPath,
-            `[FIX-1211] claimStoryLease for ${story.id} returned ${claimResult.status} (source: ${claimResult.status === "exists" ? claimResult.existingSource : "?"}) — another owner holds the lease`,
+            `[FIX-1211] claimStoryLease for ${story.id} returned ${claimResult.status} (source: ${claimResult.existingSource}) — another owner holds the lease`,
           );
         }
       } catch {
         /* lease claim is a safety guard; a write failure must not block the pick */
       }
+      let repositoryExecution;
+      if (ports.repositories !== undefined) {
+        const prepared = await ports.repositories.prepare({ storyId: story.id, cycleId: ctx.cycleId });
+        if (prepared.kind === "failed") {
+          const workspaceId = readWorkspace(ports.repoCwd).workspaceId;
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "workspace:issue_init_failed",
+            workspaceId,
+            storyId: story.id,
+            cycleId: ctx.cycleId,
+            code: prepared.code,
+            repairJournal: prepared.repairJournal,
+            ts: eventTs(ports),
+          });
+          return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath });
+        }
+        repositoryExecution = await ports.repositories.resolve(story.id);
+      }
+      let workspaceExecution = ctx.workspaceExecution;
+      let repositorySelector = ctx.repositorySelector;
+      if (workspaceExecution !== undefined) {
+        const freezeExecution = repositoryExecution ?? workspaceExecution.issue?.execution;
+        const frozen = freezeExecution === undefined
+          ? { ok: false as const, code: "missing_execution_context" }
+          : freezeWorkspaceCycleContext({ workspace: workspaceExecution, storyId: story.id, execution: freezeExecution });
+        if (!frozen.ok) {
+          return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath,
+            alert: `workspace cycle context blocked before spawn for ${story.id}: ${frozen.code}` });
+        }
+        workspaceExecution = frozen.context;
+        const persisted = persistWorkspaceCycleContext(dirname(ports.paths.eventsPath), ctx.cycleId, workspaceExecution);
+        if (!persisted.ok) {
+          return workspaceSetupFailed({ ports, storyId: story.id, preCycleStatus, leasePath,
+            alert: `workspace cycle context persistence blocked before spawn for ${story.id}: ${persisted.code}` });
+        }
+        workspaceExecution = persisted.context;
+        const selected = persistWorkspaceCycleRepositorySelector(
+          dirname(ports.paths.eventsPath),
+          ctx.cycleId,
+          workspaceExecution,
+          repositorySelector,
+        );
+        if (selected.ok) {
+          repositorySelector = selected.repoId;
+        } else if (selected.code !== "repository_selector_required") {
+          return workspaceSetupFailed({
+            ports,
+            storyId: story.id,
+            preCycleStatus,
+            leasePath,
+            alert: `workspace repository selection blocked before spawn for ${story.id}: ${selected.code}`,
+          });
+        }
+      }
+      // The visible claim follows successful Workspace preparation. Legacy
+      // projects retain the same pick-time status transition.
+      ports.backlog.markStatus?.(ports.repoCwd, story.id, STATUS_MARKER.in_progress);
       const evidenceRunDir = ports.evidence.openFrame(ports.repoCwd, story.id, ctx.cycleId);
       ports.events.appendEvent(ports.paths.eventsPath, {
         type: "evidence:frame-opened",
@@ -581,10 +574,18 @@ export async function executeSetupCommand(
         ts: eventTs(ports),
       });
       // E2: post-pick submodule worktree (fail-loud) — see submodule-worktree.ts.
-      const sub = await createSubmoduleWorktreeIfDeclared(ports, ctx, story);
+      const sub = ports.repositories === undefined
+        ? await createSubmoduleWorktreeIfDeclared(ports, ctx, story)
+        : { failed: false };
       if (sub.failed) return { event: { type: "worktree_failed" } };
       return {
-        event: { type: "story_picked", storyId: story.id },
+        event: {
+          type: "story_picked",
+          storyId: story.id,
+          ...(repositoryExecution === undefined ? {} : { repositoryExecution }),
+          ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+          ...(repositorySelector === undefined ? {} : { repositorySelector }),
+        },
         ctxPatch: {
           evidenceRunDir,
           ...(preCycleStatus !== undefined && preCycleStatus !== "" ? { preCycleStatus } : {}),
@@ -594,7 +595,6 @@ export async function executeSetupCommand(
     }
 
     // RESUME-PRIOR-WORK re-point (post-pick) — the ONE real resume decision point.
-    //
     // The worktree was created on origin/main (the fresh-context default) BEFORE
     // the story was picked; this is the FIRST step that has the real picked story
     // id (pick_story reads the backlog INSIDE the worktree, FIX-198/FIX-204C, so
@@ -613,6 +613,7 @@ export async function executeSetupCommand(
     // worktree carries the resume tree by the time the agent spawns. Best-effort: a
     // reset failure leaves the worktree on origin/main rather than topple the cycle.
     case "resume_worktree": {
+      if (ports.repositories !== undefined) return {};
       // E1: resolveResumeBase returns the configured integration branch verbatim
       // when there is no resumable prior branch → that equality is the no-op.
       const base = await resolveResumeBase(ports, cmd.storyId);

@@ -10,6 +10,7 @@ import {
   AGENT_SCOPE_ROLES,
   AGENT_SCOPE_SCHEMA,
   type AgentBindingStrategy,
+  type AgentCapacityPolicy,
   type AgentName,
   type AgentScopeAgent,
   type AgentScopeConfig,
@@ -31,6 +32,12 @@ function isMap(v: unknown): v is YamlMap {
 
 function stringValue(v: YamlValue | undefined): string | undefined {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+}
+
+function positiveInteger(v: YamlValue | undefined, where: string, errors: string[]): number | undefined {
+  if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+  errors.push(`${where}: expected a positive integer`);
+  return undefined;
 }
 
 function asStringList(v: YamlValue | undefined): string[] {
@@ -189,14 +196,130 @@ function parseModels(node: YamlValue | undefined): Record<ModelId, AgentScopeMod
   return models;
 }
 
-function parseDefaults(node: YamlValue | undefined, errors: string[]): Record<string, AgentScopeDefaults> {
+const WORKSPACE_TOP_LEVEL_KEYS = new Set(["schema", "scope", "inherits", "roles", "defaults"]);
+const WORKSPACE_DEFAULT_SCOPES = new Set(["story", "skill"]);
+
+/** Canonical closed Workspace casting scope used by every Workspace creator. */
+export function renderDefaultWorkspaceAgentScope(): string {
+  return `schema: ${AGENT_SCOPE_SCHEMA}\nscope: workspace\ninherits: machine\n\nroles: {}\n`;
+}
+
+function validateWorkspaceTopLevel(root: YamlMap, errors: string[]): void {
+  for (const key of Object.keys(root)) {
+    if (!WORKSPACE_TOP_LEVEL_KEYS.has(key)) errors.push(`workspace: key '${key}' is not allowed`);
+  }
+  if (stringValue(root["inherits"]) !== "machine") errors.push("workspace.inherits: expected 'machine'");
+}
+
+function parseDefaults(node: YamlValue | undefined, errors: string[], workspace = false): Record<string, AgentScopeDefaults> {
   const defaults: Record<string, AgentScopeDefaults> = {};
-  if (!isMap(node)) return defaults;
+  if (!isMap(node)) {
+    if (workspace && node !== undefined && node !== null) {
+      errors.push("workspace.defaults: malformed defaults block (expected a map)");
+    }
+    return defaults;
+  }
   for (const [scopeName, rawNode] of Object.entries(node)) {
+    if (workspace && !WORKSPACE_DEFAULT_SCOPES.has(scopeName)) {
+      errors.push(`workspace.defaults.${scopeName}: unknown default scope`);
+      continue;
+    }
+    if (workspace && !isMap(rawNode)) {
+      errors.push(`workspace.defaults.${scopeName}: malformed default block (expected a map)`);
+      continue;
+    }
     const m = isMap(rawNode) ? rawNode : {};
+    if (workspace) {
+      for (const key of Object.keys(m)) {
+        if (key !== "roles") errors.push(`workspace.defaults.${scopeName}.${key}: unknown key`);
+      }
+    }
     defaults[scopeName] = { roles: parseRoles(m["roles"], `defaults.${scopeName}.roles`, errors) };
   }
   return defaults;
+}
+
+const CAPACITY_KEYS = new Set([
+  "global",
+  "default_per_agent",
+  "agents",
+  "heartbeat_seconds",
+  "stale_after_seconds",
+]);
+
+function parseCapacity(node: YamlValue | undefined, errors: string[]): AgentCapacityPolicy | undefined {
+  if (node === undefined || node === null) return undefined;
+  if (!isMap(node)) {
+    errors.push("capacity: malformed capacity block (expected a map)");
+    return undefined;
+  }
+  for (const key of Object.keys(node)) {
+    if (!CAPACITY_KEYS.has(key)) errors.push(`capacity.${key}: unknown key`);
+  }
+
+  const rawGlobal = node["global"];
+  let global: number | "auto" | undefined;
+  if (rawGlobal === "auto") global = "auto";
+  else global = positiveInteger(rawGlobal, "capacity.global", errors);
+
+  const defaultPerAgent = positiveInteger(
+    node["default_per_agent"],
+    "capacity.default_per_agent",
+    errors,
+  );
+  const heartbeatSeconds = positiveInteger(
+    node["heartbeat_seconds"],
+    "capacity.heartbeat_seconds",
+    errors,
+  );
+  const staleAfterSeconds = positiveInteger(
+    node["stale_after_seconds"],
+    "capacity.stale_after_seconds",
+    errors,
+  );
+
+  const agents: Partial<Record<AgentName, number>> = {};
+  const seen = new Map<string, string>();
+  const rawAgents = node["agents"];
+  if (!isMap(rawAgents)) {
+    errors.push("capacity.agents: malformed agents block (expected a map)");
+  } else {
+    for (const [rawAgent, rawLimit] of Object.entries(rawAgents)) {
+      const agent = canonicalAgentName(rawAgent);
+      if (!agentIsKnown(agent)) {
+        errors.push(`capacity.agents.${rawAgent}: unknown agent`);
+        continue;
+      }
+      const prior = seen.get(agent);
+      if (prior !== undefined) {
+        errors.push(`capacity.agents.${rawAgent}: duplicate canonical agent '${agent}' (already declared as '${prior}')`);
+        continue;
+      }
+      seen.set(agent, rawAgent);
+      const limit = positiveInteger(rawLimit, `capacity.agents.${rawAgent}`, errors);
+      if (limit !== undefined) agents[agent as AgentName] = limit;
+    }
+  }
+
+  if (
+    heartbeatSeconds !== undefined &&
+    staleAfterSeconds !== undefined &&
+    staleAfterSeconds <= heartbeatSeconds
+  ) {
+    errors.push("capacity.stale_after_seconds: must be greater than heartbeat_seconds");
+  }
+  const largest = Math.max(0, ...Object.values(agents));
+  if (typeof global === "number" && largest > global) {
+    errors.push(`capacity.global: must be at least the largest per-agent limit (${largest})`);
+  }
+
+  if (
+    global === undefined ||
+    defaultPerAgent === undefined ||
+    heartbeatSeconds === undefined ||
+    staleAfterSeconds === undefined
+  ) return undefined;
+  return { global, defaultPerAgent, agents, heartbeatSeconds, staleAfterSeconds };
 }
 
 /** Normalize a `roll-agents/v1` file into a typed Scope config. Pure + total. */
@@ -211,15 +334,22 @@ export function normalizeAgentScopeConfig(text: string): AgentScopeConfigParse {
     ? rawScope
     : null;
   if (scope === null) errors.push(`scope: unknown or missing scope '${rawScope ?? ""}'`);
+  const workspace = scope === "workspace";
+  if (workspace) validateWorkspaceTopLevel(root, errors);
+  if (scope !== null && scope !== "machine" && scope !== "workspace" && root["capacity"] !== undefined) {
+    errors.push(`${scope}.capacity: capacity is machine-only`);
+  }
+  const capacity = scope === "machine" ? parseCapacity(root["capacity"], errors) : undefined;
 
   const config: AgentScopeConfig = {
     schema: AGENT_SCOPE_SCHEMA,
     scope: (scope ?? "project") as AgentScopeConfig["scope"],
     ...(stringValue(root["inherits"]) !== undefined ? { inherits: stringValue(root["inherits"]) as string } : {}),
-    agents: parseAgents(root["agents"], errors),
-    models: parseModels(root["models"]),
+    agents: workspace ? {} : parseAgents(root["agents"], errors),
+    models: workspace ? {} : parseModels(root["models"]),
     roles: parseRoles(root["roles"], "roles", errors),
-    defaults: parseDefaults(root["defaults"], errors),
+    defaults: parseDefaults(root["defaults"], errors, workspace),
+    ...(capacity !== undefined ? { capacity } : {}),
   };
   return { config, errors };
 }

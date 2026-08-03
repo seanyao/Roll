@@ -53,11 +53,20 @@ interface BindingCandidate {
   readonly binding: AgentScopeRoleBinding;
 }
 
-const RESOLUTION_SCOPES: readonly AgentScopeKind[] = ["machine", "project", "story", "skill"];
+const PROJECT_RESOLUTION_SCOPES: readonly AgentScopeKind[] = ["machine", "project", "story", "skill"];
+const WORKSPACE_RESOLUTION_SCOPES: readonly AgentScopeKind[] = ["machine", "workspace", "story", "skill"];
 
-function scopeRank(scope: AgentScopeKind): number {
-  const i = RESOLUTION_SCOPES.indexOf(scope);
-  return i >= 0 ? i : RESOLUTION_SCOPES.length;
+function workspaceMode(input: ResolveAgentScopeRoleInput): boolean {
+  return input.scope === "workspace" || input.layers.some((layer) => layer.config.scope === "workspace");
+}
+
+function resolutionScopes(input: ResolveAgentScopeRoleInput): readonly AgentScopeKind[] {
+  return workspaceMode(input) ? WORKSPACE_RESOLUTION_SCOPES : PROJECT_RESOLUTION_SCOPES;
+}
+
+function scopeRank(scope: AgentScopeKind, scopes: readonly AgentScopeKind[]): number {
+  const i = scopes.indexOf(scope);
+  return i >= 0 ? i : scopes.length;
 }
 
 function layerFor(layers: readonly AgentScopeResolveLayer[], scope: AgentScopeKind): AgentScopeResolveLayer | undefined {
@@ -65,10 +74,11 @@ function layerFor(layers: readonly AgentScopeResolveLayer[], scope: AgentScopeKi
 }
 
 function bindingChain(input: ResolveAgentScopeRoleInput): BindingCandidate[] {
-  const targetRank = scopeRank(input.scope);
+  const scopes = resolutionScopes(input);
+  const targetRank = scopeRank(input.scope, scopes);
   const chain: BindingCandidate[] = [];
   for (let i = targetRank; i >= 0; i -= 1) {
-    const scope = RESOLUTION_SCOPES[i];
+    const scope = scopes[i];
     if (scope === undefined) continue;
     const layer = layerFor(input.layers, scope);
     if (layer === undefined) continue;
@@ -88,9 +98,14 @@ function bindingChain(input: ResolveAgentScopeRoleInput): BindingCandidate[] {
   return chain;
 }
 
-function agentDeclarations(layers: readonly AgentScopeResolveLayer[]): Map<AgentName, readonly AgentScopeRole[]> {
+function capabilityLayers(input: ResolveAgentScopeRoleInput): readonly AgentScopeResolveLayer[] {
+  if (!workspaceMode(input)) return input.layers;
+  return input.layers.filter((layer) => layer.config.scope === "machine");
+}
+
+function agentDeclarations(input: ResolveAgentScopeRoleInput): Map<AgentName, readonly AgentScopeRole[]> {
   const out = new Map<AgentName, readonly AgentScopeRole[]>();
-  for (const layer of layers) {
+  for (const layer of capabilityLayers(input)) {
     for (const [agent, spec] of Object.entries(layer.config.agents) as [AgentName, NonNullable<AgentScopeConfig["agents"][AgentName]>][]) {
       out.set(agent, spec.capabilities);
     }
@@ -101,17 +116,17 @@ function agentDeclarations(layers: readonly AgentScopeResolveLayer[]): Map<Agent
 /** US-AGENT-050 — check whether an agent is disabled in ANY config layer.
  *  Project-layer disable overrides machine-layer enable (project is more
  *  specific). An agent not declared anywhere is treated as not disabled. */
-function isAgentDisabled(layers: readonly AgentScopeResolveLayer[], agent: AgentName): boolean {
-  for (const layer of [...layers].reverse()) {
+function isAgentDisabled(input: ResolveAgentScopeRoleInput, agent: AgentName): boolean {
+  for (const layer of [...capabilityLayers(input)].reverse()) {
     const spec = layer.config.agents[agent];
     if (spec?.disabled === true) return true;
   }
   return false;
 }
 
-function declaredAgents(layers: readonly AgentScopeResolveLayer[]): AgentName[] {
+function declaredAgents(input: ResolveAgentScopeRoleInput): AgentName[] {
   const out: AgentName[] = [];
-  for (const layer of layers) {
+  for (const layer of capabilityLayers(input)) {
     for (const agent of Object.keys(layer.config.agents) as AgentName[]) {
       if (!out.includes(agent)) out.push(agent);
     }
@@ -209,8 +224,44 @@ function failure(input: ResolveAgentScopeRoleInput, fields: Omit<AgentScopeResol
 function resolveFixed(input: ResolveAgentScopeRoleInput, candidate: BindingCandidate, trace: readonly AgentScopeResolutionTrace[]): AgentScopeRoleResolution {
   const binding = candidate.binding;
   if (binding.kind !== "fixed") throw new Error("resolveFixed called with non-fixed binding");
+  if (workspaceMode(input)) {
+    const machine = agentDeclarations(input);
+    const capabilities = machine.get(binding.agent);
+    if (capabilities === undefined) {
+      return failure(input, {
+        source: candidate.source,
+        errors: [`${candidate.source}: fixed agent '${binding.agent}' is not declared in machine scope`],
+        candidates: [binding.agent],
+        skipped: [{ agent: binding.agent, reason: "not-declared-in-machine" }],
+        trace: [...trace, { source: candidate.source, bindingKind: "fixed", action: "fail" }],
+      });
+    }
+    if (!capabilities.includes(input.role)) {
+      return failure(input, {
+        source: candidate.source,
+        errors: [`${candidate.source}: fixed agent '${binding.agent}' lacks role capability '${input.role}'`],
+        candidates: [binding.agent],
+        skipped: [{ agent: binding.agent, reason: `missing-role-capability: ${input.role}` }],
+        trace: [...trace, { source: candidate.source, bindingKind: "fixed", action: "fail" }],
+      });
+    }
+    if (binding.model !== undefined) {
+      const machineAgent = capabilityLayers(input)
+        .flatMap((layer) => [layer.config.agents[binding.agent]])
+        .find((agent) => agent !== undefined);
+      if (machineAgent?.models?.includes(binding.model) !== true) {
+        return failure(input, {
+          source: candidate.source,
+          errors: [`${candidate.source}: fixed model '${binding.model}' is not declared for machine agent '${binding.agent}'`],
+          candidates: [binding.agent],
+          skipped: [{ agent: binding.agent, reason: `model-not-declared-for-machine-agent: ${binding.model}` }],
+          trace: [...trace, { source: candidate.source, bindingKind: "fixed", action: "fail" }],
+        });
+      }
+    }
+  }
   // US-AGENT-050 — a disabled agent cannot be resolved even for fixed bindings.
-  if (isAgentDisabled(input.layers, binding.agent)) {
+  if (isAgentDisabled(input, binding.agent)) {
     return failure(input, {
       source: candidate.source,
       errors: [`${candidate.source}: fixed agent '${binding.agent}' is disabled`],
@@ -253,7 +304,8 @@ function skipForAgent(
   input: ResolveAgentScopeRoleInput,
 ): string | null {
   // US-AGENT-050 — owner-disabled agents are hard-excluded from ALL pools.
-  if (isAgentDisabled(input.layers, agent)) return "disabled";
+  if (workspaceMode(input) && !declarations.has(agent)) return "not-declared-in-machine";
+  if (isAgentDisabled(input, agent)) return "disabled";
   // FIX-1267 — the no-consecutive-repeat rotation exclusion is a hard skip,
   // reported first so the audit trail names it explicitly (a previous builder is
   // excluded because it just built, not because it lacks a capability).
@@ -262,6 +314,7 @@ function skipForAgent(
     if (input.assignedRoles?.[avoidedRole] === agent) return `assigned-to-avoided-role: ${avoidedRole}`;
   }
   const caps = declarations.get(agent) ?? [];
+  if (workspaceMode(input) && !caps.includes(input.role)) return `missing-role-capability: ${input.role}`;
   for (const required of binding.require ?? []) {
     if (!caps.includes(required)) return `missing-required-capability: ${required}`;
   }
@@ -273,8 +326,8 @@ function skipForAgent(
 function resolveSelect(input: ResolveAgentScopeRoleInput, candidate: BindingCandidate, trace: readonly AgentScopeResolutionTrace[]): AgentScopeRoleResolution {
   const binding = candidate.binding;
   if (binding.kind !== "select") throw new Error("resolveSelect called with non-select binding");
-  const declarations = agentDeclarations(input.layers);
-  const candidates = binding.from !== undefined && binding.from.length > 0 ? [...binding.from] : declaredAgents(input.layers);
+  const declarations = agentDeclarations(input);
+  const candidates = binding.from !== undefined && binding.from.length > 0 ? [...binding.from] : declaredAgents(input);
   const skipped: AgentScopeSkippedCandidate[] = [];
   const available: AgentName[] = [];
   for (const agent of candidates) {
@@ -321,6 +374,7 @@ function resolveSelect(input: ResolveAgentScopeRoleInput, candidate: BindingCand
 /** Resolve one Scope + Role to an auditable Agent assignment. Pure + total. */
 export function resolveAgentScopeRole(input: ResolveAgentScopeRoleInput): AgentScopeRoleResolution {
   const chain = bindingChain(input);
+  const scopes = resolutionScopes(input);
   const trace: AgentScopeResolutionTrace[] = [];
   let index = 0;
   while (index < chain.length) {
@@ -329,8 +383,8 @@ export function resolveAgentScopeRole(input: ResolveAgentScopeRoleInput): AgentS
     if (binding.kind === "inherit") {
       trace.push({ source: candidate.source, bindingKind: "inherit", action: "inherit" });
       if (binding.from !== undefined) {
-        const target = scopeRank(binding.from as AgentScopeKind);
-        const next = chain.findIndex((c, i) => i > index && scopeRank(c.scope) <= target);
+        const target = scopeRank(binding.from as AgentScopeKind, scopes);
+        const next = chain.findIndex((c, i) => i > index && scopeRank(c.scope, scopes) <= target);
         index = next >= 0 ? next : chain.length;
       } else {
         index += 1;

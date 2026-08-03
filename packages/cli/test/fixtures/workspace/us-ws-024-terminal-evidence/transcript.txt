@@ -1,0 +1,48 @@
+US-WS-024 normalized terminal transcript
+Generated from packages/cli/test/workspace-create-recovery.e2e.test.ts through the real CLI entrypoint.
+Runtime paths and SHA-256 values are redacted only after the assertions bind them to real output.
+
+$ roll workspace create ws-e2e --config <CONFIG> --check --json
+{
+  "mode": "check",
+  "outcome": "created",
+  "workspaceId": "ws-e2e",
+  "configSha256": "<CONFIG_SHA256>",
+  "planSha256": "<PLAN_SHA256>"
+}
+
+$ roll workspace create ws-e2e --config <CONFIG> --authorization <CREATE_NEW_INTENT> --json
+{
+  "error": {
+    "code": "invalid_apply_authorization"
+  }
+}
+
+$ roll workspace create ws-e2e --config <CONFIG> --authorization <OWNER_APPROVED_AUTHORIZATION> --json
+{
+  "mode": "apply",
+  "outcome": "created",
+  "authorizationSource": "owner_after_preview"
+}
+
+$ roll workspace create ws-e2e --config <CONFIG> --check --json
+{
+  "outcome": "repaired",
+  "recovery": {
+    "kind": "legacy_completed",
+    "journalPath": "<ROLL_HOME>/workspace-init/ws-e2e.pending.json"
+  }
+}
+
+$ roll workspace create ws-e2e --config <CONFIG> --json
+{
+  "outcome": "repaired",
+  "recovery": {
+    "kind": "legacy_completed"
+  }
+}
+
+$ roll workspace create ws-e2e --config <CONFIG> --json
+{
+  "outcome": "reused"
+}

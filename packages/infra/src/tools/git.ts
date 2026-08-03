@@ -2,6 +2,7 @@ import type { GitResult } from "../git.js";
 import { rawGit } from "../git.js";
 import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
 import { gitCommandOutputSchema, gitCommitInputSchema, gitMergeInputSchema, gitPushInputSchema, gitStatusInputSchema, gitStatusOutputSchema } from "./schema-contracts.js";
+import { canonicalExistingPath, resolveWorkspaceLocalRepository } from "./workspace-local-context.js";
 
 export type GitToolId = "git.commit" | "git.status" | "git.push" | "git.merge";
 
@@ -79,41 +80,49 @@ export class GitTool {
 
   async execute(invocation: ToolInvocation<GitInput>, deps: ToolDeps): Promise<ToolResult<GitOutput>> {
     const startedAt = deps.now();
+    const access = this.id === "git.status" ? "read" : "write";
+    const repository = resolveWorkspaceLocalRepository(invocation, access);
+    if (!repository.ok) return contextFailure(invocation, startedAt, deps.now(), repository.code, repository.message);
+    const boundInvocation = invocation.repoId === undefined
+      ? { ...invocation, repoId: repository.repository.repoId }
+      : invocation;
+    const cwd = canonicalExistingPath(invocation.input.cwd);
+    if (cwd === undefined || cwd !== repository.canonicalWorktreePath) {
+      return contextFailure(boundInvocation, startedAt, deps.now(), "invalid_execution_context", "git cwd does not match the selected Issue repository");
+    }
     try {
       if (this.id === "git.commit") {
         const input = invocation.input as GitCommitInput;
         const args = ["commit", "-m", deps.redact(input.message)];
         if (input.allowEmpty === true) args.splice(1, 0, "--allow-empty");
-        return ok(invocation, startedAt, deps.now(), await rawGit(args, input.cwd));
+        return ok(boundInvocation, startedAt, deps.now(), await rawGit(args, cwd));
       }
       if (this.id === "git.status") {
-        const input = invocation.input as GitStatusInput;
-        const result = await rawGit(["status", "--short"], input.cwd);
+        const result = await rawGit(["status", "--short"], cwd);
         return {
           ok: true,
           output: { ...toOutput(result), clean: result.code === 0 && result.stdout.trim() === "" },
-          meta: meta(invocation, startedAt, deps.now()),
+          meta: meta(boundInvocation, startedAt, deps.now()),
         };
       }
       if (this.id === "git.push") {
         const input = invocation.input as GitPushInput;
         const remote = input.remote ?? "origin";
         const args = input.setUpstream === true ? ["push", "-u", remote, input.branch] : ["push", remote, input.branch];
-        return ok(invocation, startedAt, deps.now(), await rawGit(args, input.cwd));
+        return ok(boundInvocation, startedAt, deps.now(), await rawGit(args, cwd));
       }
       const input = invocation.input as GitMergeInput;
       const args = ["merge", ...(input.ffOnly === true ? ["--ff-only"] : []), ...(input.noCommit === true ? ["--no-commit"] : []), input.ref];
-      return ok(invocation, startedAt, deps.now(), await rawGit(args, input.cwd));
-    } catch (cause) {
+      return ok(boundInvocation, startedAt, deps.now(), await rawGit(args, cwd));
+    } catch {
       return {
         ok: false,
         error: {
           code: "adapter_error",
           message: "git execution failed",
           retryable: true,
-          detail: cause,
         },
-        meta: meta(invocation, startedAt, deps.now()),
+        meta: meta(boundInvocation, startedAt, deps.now()),
       };
     }
   }
@@ -154,5 +163,26 @@ function meta(invocation: ToolInvocation<GitInput>, startedAt: number, endedAt: 
     startedAt,
     endedAt,
     durationMs: Math.max(0, endedAt - startedAt),
+    correlation: invocation.context === undefined
+      ? undefined
+      : {
+          workspaceId: invocation.context.workspace.workspaceId,
+          ...(invocation.context.issue?.storyId === undefined ? {} : { storyId: invocation.context.issue.storyId }),
+          ...(invocation.repoId === undefined ? {} : { repoId: invocation.repoId }),
+        },
+  };
+}
+
+function contextFailure(
+  invocation: ToolInvocation<GitInput>,
+  startedAt: number,
+  endedAt: number,
+  code: "missing_execution_context" | "invalid_execution_context",
+  message: string,
+): ToolResult<never> {
+  return {
+    ok: false,
+    error: { code, message, retryable: false },
+    meta: meta(invocation, startedAt, endedAt),
   };
 }

@@ -136,6 +136,13 @@ easy/default/hard/fallback route slots 仍作为兼容输入可迁移，但不�
 管理模型。使用 `roll agent` 查看 scope/role/pool，使用
 `roll agent migrate --dry-run` 预览迁移。
 
+Workspace-first 模式下，稳定的 `workspaceId` 是身份；一台机器可以保持多个 active
+Workspace，每个变更命令必须显式或确定性解析到一个目标。Workspace 保存 Requirement、
+backlog 与 Story/Issue 交付记录，代码只出现在 `issues/<storyId>/<repoAlias>/` worktree；
+`~/.roll/repos/<repoId>.git` 是多个 Workspace 可复用、可重建且不进入交付真相链的机器
+bare cache。完整的创建、目标解析、多仓 Story、exact-SHA 验收和历史迁移流程见
+[Workspace 指南](guide/zh/workspaces.md)。
+
 ## 接入样例
 
 **从零开始的新项目**
@@ -181,25 +188,30 @@ roll loop go
 标上浪费 agent token。需要暂停时运行 `roll loop pause` 会持久化暂停标记；
 准备好后用 `roll loop resume` 恢复。
 
+例外：显式配置 `publish_mode: local` 的 campaign 只落到本地 integration branch；
+在全部本地验收通过且 owner 打开远端发布闸之前，不会 push 或创建 PR。
+
 ## 命令
 
 | 命令 | 说明 |
 |------|------|
-| `roll agent [migrate\|list\|cast]` | Agent Scope、已安装 agent 与角色分工 |
-| `roll backlog [sync\|block\|defer\|lint\|…]` | 查看、管理、lint 和同步待办 |
+| `roll agent [--workspace <ID\|路径>\|migrate\|list\|readiness\|cast]` | 查看机器 Agent Scope/就绪度，或只读解析一个 Workspace 的角色分工 |
+| `roll backlog [show\|sync\|block\|defer\|lint\|…] [--workspace <ID\|路径>]` | 查看和管理一个明确 Workspace 的待办；`--all` 仅限只读 |
 | `roll config [lang\|prices\|tune\|…]` | 配置语言、价格和建议式调参 |
-| `roll design [--from-file <path>] [--agent <name>]` | 交互式启动 `$roll-design`；详细设计会生成自包含 Design Review Page |
+| `roll delivery <list\|show\|reconcile> [--workspace <ID\|路径>]` | 查看 Issue 各仓 PR/CI/merge 事实与 exact-SHA 集成验收；`list --all` 仅限只读 |
+| `roll design [--from-file <path>] [--agent <name>] [--workspace <ID\|路径>]` | 在一个明确 Workspace authority 上交互式启动 `$roll-design` |
 | `roll doctor [skills\|tools\|language]` | 诊断安装、skills、工具、权限与语言漂移 |
 | `roll help [--lang en\|zh] [name]` | 查看内置 Charter / guide；`roll --help` 显示 CLI usage |
-| `roll idea "<一句话描述>"` | 捕获并分类一张 backlog 卡 |
+| `roll idea "<一句话描述>" --workspace <ID\|路径>` | 在一个明确 Workspace backlog 中捕获并分类卡片 |
 | `roll init` | 诊断当前目录并路由 setup/onboard |
-| `roll loop <on\|off\|go\|watch\|runs\|cycles\|cycle\|alert\|…>` | 运行、观察和维护自主执行循环 |
+| `roll loop <on\|go\|pause\|resume> --workspace <ID\|路径>` / `roll loop status --all` | 运行或变更一个 Workspace scheduler；聚合状态仅限只读 |
 | `roll next` | 接续 init/onboard，只给一个最合适的下一步 |
 | `roll north [--json] [--no-color]` | 北极星终端面板：自主运行时长、交付率、修复税和归因错误 |
 | `roll release [--dry-run\|--showcase]` | 发版计划/流程与 golden-path showcase 支撑 |
 | `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup skills\|offboard` | 安装/同步约定，修复 Roll Capture.app 就绪度，或移除 Roll 管理的项目产物 |
 | `roll status [ci\|pulse] [--json]` | 项目健康、CI 状态和交付脉搏 |
 | `roll test [--where] [--reset]` | 通过隔离适配器运行测试 |
+| `roll workspace <init\|issue\|requirement\|doctor\|migrate\|list\|show\|register\|activate\|pause\|archive>` | 初始化/定位 Workspace、诊断并有界修复漂移、检查/应用/续跑/回滚历史迁移，并管理生命周期 |
 | `roll update` | 升级全局 Roll 并重新同步约定 |
 | `roll --version` / `roll -v` | 显示已安装的 roll 版本 |
 
@@ -266,12 +278,12 @@ template/      roll init 安装的项目脚手架
 
 | | |
 |---|---|
-| **从这里开始** | [快速上手](guide/zh/getting-started.md) · [概述与架构](guide/zh/overview.md) · [工程方法论](guide/zh/methodology.md) |
-| **日常使用** | [Loop（自主执行器）](guide/zh/loop.md) · [工具与策略](guide/zh/tools.md) · [浏览器操作（受管通道 + 交互通道）](guide/zh/browser-operations.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
+| **从这里开始** | [快速上手](guide/zh/getting-started.md) · [Workspace-first 交付](guide/zh/workspaces.md) · [概述与架构](guide/zh/overview.md) · [工程方法论](guide/zh/methodology.md) |
+| **日常使用** | [Loop（自主执行器）](guide/zh/loop.md) · [Context Engineering](guide/zh/context.md) · [APE Context 迁移](guide/zh/context-ape-migration.md) · [Workspace Doctor](guide/zh/workspace-doctor.md) · [工具与策略](guide/zh/tools.md) · [浏览器操作（受管通道 + 交互通道）](guide/zh/browser-operations.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
 | **质量机制** | [验收证据（`roll attest`）](guide/zh/acceptance-evidence.md) · [证据生命周期](guide/zh/acceptance-evidence.md#三段式生命周期) · [一致性与发版闸](guide/zh/consistency.md) · [跨 Agent 配对](guide/zh/pairing.md) · [Peer 评审](guide/zh/peer.md) · [测试隔离](guide/zh/test-isolation.md) |
 | **底层设计** | [架构：分层·领域·不变量](docs/architecture.md) · [验证体系](docs/verification.md) · [理念宣言](docs/manifesto.md) |
 
-完整指南目录：[guide/zh/](guide/zh/) —— agent 路由、peer 评审、feedback、backlog 同步、接入模式等。
+完整指南目录：[guide/zh/README.md](guide/zh/README.md) —— agent 路由、peer 评审、feedback、backlog 同步、接入模式等。
 
 ## 贡献
 

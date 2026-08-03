@@ -15,10 +15,14 @@ import {
 } from "@roll/core";
 import { resolveLang, t, v2Catalog, v3Catalog, type Lang } from "@roll/spec";
 import { realAgentEnv } from "../commands/agent-list.js";
-import { onPath, rollConfig, rollPkgDir } from "../commands/setup-shared.js";
+import { onPath, rollPkgDir } from "../commands/setup-shared.js";
 
-function expandHome(path: string): string {
-  const home = process.env["HOME"] ?? homedir();
+function configFromEnv(env: NodeJS.ProcessEnv): string {
+  return join(env["ROLL_HOME"] ?? join(env["HOME"] ?? homedir(), ".roll"), "config.yaml");
+}
+
+function expandHome(path: string, env: NodeJS.ProcessEnv): string {
+  const home = env["HOME"] ?? homedir();
   return path.replace(/^~/, home);
 }
 
@@ -58,28 +62,31 @@ export function agentEnvFromEnv(envDict: NodeJS.ProcessEnv): AgentEnv {
  * Accepts an optional `AgentEnv` so tests can inject a fabricated PATH; when
  * omitted the real process environment is probed.
  */
-export function discoverInteractiveAgents(agentEnv?: AgentEnv): { installed: string[]; missing: string[] } {
+export function discoverInteractiveAgents(
+  agentEnv?: AgentEnv,
+  env: NodeJS.ProcessEnv = process.env,
+): { installed: string[]; missing: string[] } {
   const installed: string[] = [];
   const missing: string[] = [];
-  const cfg = rollConfig();
+  const cfg = configFromEnv(env);
   if (!existsSync(cfg)) return { installed, missing };
-  const env = agentEnv ?? realAgentEnv();
+  const resolvedAgentEnv = agentEnv ?? realAgentEnv();
   for (const line of readFileSync(cfg, "utf8").split("\n")) {
     const match = /^(ai_[^:]+):\s*(.*)$/.exec(line);
     if (match === null) continue;
     let name = (match[1] ?? "").slice("ai_".length);
     if (name === "kimi_code") name = "kimi";
     name = getAgentSpec(name)?.name ?? name;
-    const dir = expandHome(((match[2] ?? "").split("|")[0] ?? "").trim());
-    const target = coreAgentInstalledByName(env, name, dir) ? installed : missing;
+    const dir = expandHome(((match[2] ?? "").split("|")[0] ?? "").trim(), env);
+    const target = coreAgentInstalledByName(resolvedAgentEnv, name, dir) ? installed : missing;
     if (!target.includes(name)) target.push(name);
   }
   return { installed, missing };
 }
 
 /** Read legacy `primary_agent`, or `null` if absent/empty. New writes use `~/.roll/agents.yaml`. */
-export function readPrimaryAgent(): string | null {
-  const cfg = rollConfig();
+export function readPrimaryAgent(env: NodeJS.ProcessEnv = process.env): string | null {
+  const cfg = configFromEnv(env);
   if (!existsSync(cfg)) return null;
   for (const line of readFileSync(cfg, "utf8").split("\n")) {
     const m = /^primary_agent:\s*(.*)$/.exec(line);
@@ -96,8 +103,10 @@ export function readPrimaryAgent(): string | null {
  * install tree, stripping YAML frontmatter. Returns `null` when the skill file
  * is missing (e.g. submodule not initialised).
  */
-export function readSkillBody(skillName: string): string | null {
-  const skillFile = join(rollPkgDir(), "skills", skillName, "SKILL.md");
+export function readSkillBody(skillName: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicitRoot = env["ROLL_PKG_DIR"]?.trim();
+  const packageRoot = explicitRoot === undefined || explicitRoot === "" ? rollPkgDir() : explicitRoot;
+  const skillFile = join(packageRoot, "skills", skillName, "SKILL.md");
   if (!existsSync(skillFile)) return null;
   return readFileSync(skillFile, "utf8").replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
 }

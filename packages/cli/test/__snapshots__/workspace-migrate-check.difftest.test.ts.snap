@@ -1,0 +1,217 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-019b migration check CLI contract > emits the complete byte-stable JSON plan and honors an explicit Workspace ID 1`] = `
+{
+  "status": 0,
+  "stderr": "",
+  "stdout": "{
+  "schema": "roll.workspace-migration-plan/v1",
+  "planId": "340b5485c388d65e2704d41a77bac0b8bb8934b05a6eb7be478a36c0bc3bee5f",
+  "verdict": "ready",
+  "workspaceId": "ws-explicit",
+  "workspaceRoot": "workspaces/ws-explicit",
+  "repository": {
+    "alias": "primary",
+    "repoId": "repo-ab12cd34ef56",
+    "integrationBranch": "main",
+    "cachePath": "repos/repo-ab12cd34ef56.git"
+  },
+  "mappings": [
+    {
+      "action": "move_preserve",
+      "source": "backlog.md",
+      "destination": "backlog/index.md",
+      "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "reason": "backlog_authority"
+    }
+  ],
+  "findings": [
+    {
+      "severity": "info",
+      "code": "cache_create_planned",
+      "path": "repos/repo-ab12cd34ef56.git"
+    }
+  ]
+}
+",
+}
+`;
+
+exports[`US-WS-019b migration check CLI contract > freezes dirty, unpushed and in-flight safety blocks with exit code 2 1`] = `
+{
+  "dirty": {
+    "status": 2,
+    "stderr": "",
+    "stdout": "Historical migration check: blocked
+Source: /fixture/repo
+Workspace: ws-ab12cd34ef56 (workspaces/ws-ab12cd34ef56)
+Repository: repo-ab12cd34ef56 (alias primary)
+Integration branch: main
+Shared cache: repos/repo-ab12cd34ef56.git
+Plan ID: 101e7fc5b9972b783aa1e1f8d83a8df9630ac697ebbaf2c471a3b5656a0bb5de
+Mappings: 1
+Findings: 3
+- error: product repository is dirty (src/wip.ts)
+- info: Workspace ID was derived from repoId
+- info: shared repository cache will be created during apply (repos/repo-ab12cd34ef56.git)
+",
+  },
+  "inFlight": {
+    "status": 2,
+    "stderr": "",
+    "stdout": "Historical migration check: blocked
+Source: /fixture/repo
+Workspace: ws-ab12cd34ef56 (workspaces/ws-ab12cd34ef56)
+Repository: repo-ab12cd34ef56 (alias primary)
+Integration branch: main
+Shared cache: repos/repo-ab12cd34ef56.git
+Plan ID: 91ca8aa4d9f4907bfb9feff03efc6c675233ffed32fdee2c6cf22011b963ba2e
+Mappings: 1
+Findings: 3
+- error: product Git operation is in flight (rebase)
+- info: Workspace ID was derived from repoId
+- info: shared repository cache will be created during apply (repos/repo-ab12cd34ef56.git)
+",
+  },
+  "unpushed": {
+    "status": 2,
+    "stderr": "",
+    "stdout": "Historical migration check: blocked
+Source: /fixture/repo
+Workspace: ws-ab12cd34ef56 (workspaces/ws-ab12cd34ef56)
+Repository: repo-ab12cd34ef56 (alias primary)
+Integration branch: none
+Shared cache: repos/repo-ab12cd34ef56.git
+Plan ID: f215391f5724b910d4ab60d7956c053c30b3ba84c5d2001958a8175da7c7621c
+Mappings: 1
+Findings: 3
+- error: product HEAD is not reachable from the remote default branch
+- info: Workspace ID was derived from repoId
+- info: shared repository cache will be created during apply (repos/repo-ab12cd34ef56.git)
+",
+  },
+}
+`;
+
+exports[`US-WS-019b migration check CLI contract > freezes product cutover and independent metadata handoff 1`] = `
+{
+  "cutover": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "Historical migration check: repository cutover required
+Source: /fixture/repo
+Workspace: ws-ab12cd34ef56 (workspaces/ws-ab12cd34ef56)
+Repository: repo-ab12cd34ef56 (alias primary)
+Integration branch: main
+Shared cache: repos/repo-ab12cd34ef56.git
+Plan ID: ba316e301300deea8482415d75a17d91a343ba420efc0fbc9b06ab27cec3ce83
+Mappings: 1
+Findings: 2
+- info: Workspace ID was derived from repoId
+- info: shared repository cache will be created during apply (repos/repo-ab12cd34ef56.git)
+Repository cutover: HEAD 1111111111111111111111111111111111111111, 1 tracked .roll entries
+Next: remove product tracking through the existing TCR PR/push flow, then apply this saved plan
+",
+  },
+  "handoff": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "历史迁移检查：需要手工移交元数据
+源仓库：/fixture/repo
+工作区：ws-ab12cd34ef56（workspaces/ws-ab12cd34ef56）
+仓库：repo-ab12cd34ef56（别名 primary）
+集成分支：main
+共享缓存：repos/repo-ab12cd34ef56.git
+计划 ID：dd7b92238bc13b59a9eb759a155a518f1e9783338a8e322b303b40c430eb5823
+映射：1
+发现：2
+- 信息：工作区 ID 已从 repoId 推导
+- 信息：应用阶段将创建共享仓库缓存（repos/repo-ab12cd34ef56.git）
+元数据 gitdir：.roll/.git
+元数据顶层目录：.roll
+元数据状态：clean
+元数据 HEAD：4444444444444444444444444444444444444444
+元数据分支：main
+元数据 upstream：origin/main
+元数据远端：ssh://git.example.test/team/roll-meta
+Roll 不会 link、commit 或 push 这个独立元数据仓库。
+",
+  },
+}
+`;
+
+exports[`US-WS-019b migration check CLI contract > freezes ready output in one locale at a time 1`] = `
+{
+  "en": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "Historical migration check: ready
+Source: /fixture/repo
+Workspace: ws-ab12cd34ef56 (workspaces/ws-ab12cd34ef56)
+Repository: repo-ab12cd34ef56 (alias primary)
+Integration branch: main
+Shared cache: repos/repo-ab12cd34ef56.git
+Plan ID: 04f02dbef2f4ae14cd01d538b432df5f95aa58bc62e40a60e7e82bb838fb74c9
+Mappings: 1
+Findings: 2
+- info: Workspace ID was derived from repoId
+- info: shared repository cache will be created during apply (repos/repo-ab12cd34ef56.git)
+",
+  },
+  "zh": {
+    "status": 0,
+    "stderr": "",
+    "stdout": "历史迁移检查：可迁移
+源仓库：/fixture/repo
+工作区：ws-ab12cd34ef56（workspaces/ws-ab12cd34ef56）
+仓库：repo-ab12cd34ef56（别名 primary）
+集成分支：main
+共享缓存：repos/repo-ab12cd34ef56.git
+计划 ID：04f02dbef2f4ae14cd01d538b432df5f95aa58bc62e40a60e7e82bb838fb74c9
+映射：1
+发现：2
+- 信息：工作区 ID 已从 repoId 推导
+- 信息：应用阶段将创建共享仓库缓存（repos/repo-ab12cd34ef56.git）
+",
+  },
+}
+`;
+
+exports[`US-WS-019b migration check CLI contract > freezes symlink and unverifiable remote blocks 1`] = `
+{
+  "remote": {
+    "status": 2,
+    "stderr": "",
+    "stdout": "历史迁移检查：已阻塞
+源仓库：/fixture/repo
+工作区：ws-ab12cd34ef56（workspaces/ws-ab12cd34ef56）
+仓库：repo-ab12cd34ef56（别名 primary）
+集成分支：无
+共享缓存：repos/repo-ab12cd34ef56.git
+计划 ID：652fb5c72ece446ee9fe1d672dcdd291e88d8dafe171706a18d7e80f8d51849a
+映射：1
+发现：3
+- 错误：权威远端 tip 不在本地或无法验证
+- 信息：工作区 ID 已从 repoId 推导
+- 信息：应用阶段将创建共享仓库缓存（repos/repo-ab12cd34ef56.git）
+",
+  },
+  "symlink": {
+    "status": 2,
+    "stderr": "",
+    "stdout": "历史迁移检查：已阻塞
+源仓库：/fixture/repo
+工作区：ws-ab12cd34ef56（workspaces/ws-ab12cd34ef56）
+仓库：repo-ab12cd34ef56（别名 primary）
+集成分支：main
+共享缓存：repos/repo-ab12cd34ef56.git
+计划 ID：261246c8089e3f15014f062791b21ccbd4b999d603a0bf4718ee760fe3939158
+映射：1
+发现：3
+- 错误：.roll 下的符号链接不受支持（features/current）
+- 信息：工作区 ID 已从 repoId 推导
+- 信息：应用阶段将创建共享仓库缓存（repos/repo-ab12cd34ef56.git）
+",
+  },
+}
+`;

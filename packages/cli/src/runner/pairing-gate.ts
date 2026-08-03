@@ -35,6 +35,7 @@ import {
 } from "@roll/core";
 import type { AgentScopeConfig } from "@roll/spec";
 import { writeReviewScoreNote } from "../lib/review-score.js";
+import { scopedAgentPolicyPath } from "./agent-routing.js";
 import { assessComplexity } from "./peer-gate.js";
 
 type PairingConfigSource = "scoped-agents" | "default-score";
@@ -55,7 +56,7 @@ function loadScopedPairingConfig(projectDir: string, installed: readonly string[
   const rollHome = process.env["ROLL_HOME"] ?? join(homedir(), ".roll");
   const layers = [
     readScopedAgentLayer(join(rollHome, "agents.yaml")),
-    readScopedAgentLayer(join(projectDir, ".roll", "agents.yaml")),
+    readScopedAgentLayer(scopedAgentPolicyPath(projectDir)),
   ].filter((layer): layer is { config: AgentScopeConfig; path: string } => layer !== null);
   if (layers.length === 0) return null;
   const scoped = layers.length === 1 ? layers[0]?.config : mergeScopedPairingLayers(layers.map((layer) => layer.config));

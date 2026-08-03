@@ -1,4 +1,5 @@
-import { lstatSync, realpathSync, unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   appendDelivery,
@@ -26,6 +27,7 @@ import { buildRunRow, buildTerminalRecord, commitRollMetadata, stampTs, withReal
 import { eventTs } from "./runner-time.js";
 import { cleanStaleEvidence, isParkedAtHold, resetStaleSpecTruth, revertPrematureDone } from "./resume-truth.js";
 import { appendCleanupEvent, cleanupGuardResult, recordCleanupFailures } from "./sandbox-boundary.js";
+import { resolveStoryLeasePath } from "./story-lease-path.js";
 
 type TerminalCommand = Extract<CycleCommand, { kind:
   | "publish_pr"
@@ -42,20 +44,99 @@ type TerminalCommand = Extract<CycleCommand, { kind:
   | "release_lock"
 }>;
 
+const LEGACY_REPOSITORY_TERMINAL_COMMANDS = new Set<TerminalCommand["kind"]>([
+  "publish_pr",
+  "merge_back",
+  "push_orphan",
+  "rescue_leaked",
+  "wait_merge",
+]);
+
+function preservedIssueWorktreeFacts(ctx: CycleContext): object | undefined {
+  const execution = ctx.repositoryExecution;
+  if (execution === undefined) return undefined;
+  const repositories = Object.values(execution.repositories)
+    .sort((left, right) => left.repoId.localeCompare(right.repoId))
+    .map((repository) => {
+      const worktreePath = existsSync(repository.worktreePath)
+        ? realpathSync(repository.worktreePath)
+        : repository.worktreePath;
+      let headSha = repository.headSha;
+      let dirty = true;
+      let commitsAheadBase = -1;
+      try {
+        headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        dirty = execFileSync("git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8" }).trim() !== "";
+        const ahead = execFileSync("git", ["-C", worktreePath, "rev-list", "--count", `${repository.baseSha}..HEAD`], {
+          encoding: "utf8",
+        }).trim();
+        commitsAheadBase = Number.parseInt(ahead, 10);
+        if (!Number.isFinite(commitsAheadBase)) commitsAheadBase = -1;
+      } catch {
+        // Preserve a conservative recovery record even when Git probing fails:
+        // unknown work is never mislabeled clean or silently omitted.
+      }
+      return {
+        repoId: repository.repoId,
+        alias: repository.alias,
+        worktreePath,
+        headSha,
+        baseSha: repository.baseSha,
+        dirty,
+        commitsAheadBase,
+      };
+    });
+  return {
+    workspaceId: execution.workspaceId,
+    storyId: ctx.storyId ?? "",
+    cycleId: ctx.cycleId,
+    issueRoot: existsSync(execution.issueRoot) ? realpathSync(execution.issueRoot) : execution.issueRoot,
+    repositories,
+  };
+}
+
 export async function executeTerminalCommand(
   cmd: TerminalCommand,
   ports: Ports,
   ctx: CycleContext,
 ): Promise<ExecuteResult> {
+  if (ctx.repositoryExecution !== undefined) {
+    if (cmd.kind === "append_run") {
+      const key: RunKey = { storyId: ctx.storyId ?? "", cycleId: cmd.cycleId };
+      ports.events.upsertRun(ports.paths.runsPath, key, buildRunRow(cmd, ctx, ports.clock()));
+      if ((ctx.storyId ?? "") !== "") {
+        try {
+          releaseStoryLease(resolveStoryLeasePath(ports.paths), ctx.storyId ?? "", {
+            source: "cycle",
+            pid: process.pid,
+          });
+        } catch {
+          /* lease cleanup must never block terminal bookkeeping */
+        }
+      }
+      return {};
+    }
+    if (cmd.kind === "cleanup_environment" || cmd.kind === "cleanup_worktree") {
+      const preserved = preservedIssueWorktreeFacts(ctx);
+      if (preserved !== undefined) {
+        ports.events.appendAlert(
+          ports.paths.alertsPath,
+          `workspace_issue_worktrees_preserved: ${JSON.stringify(preserved)}`,
+        );
+      }
+      ports.events.appendAlert(
+        ports.paths.alertsPath,
+        `workspace_repository_scope_required: ${cmd.kind} skipped legacy repo-global cleanup for cycle ${ctx.cycleId}`,
+      );
+      return {};
+    }
+    if (LEGACY_REPOSITORY_TERMINAL_COMMANDS.has(cmd.kind)) {
+      throw new Error(`workspace_repository_scope_required: ${cmd.kind}`);
+    }
+  }
   switch (cmd.kind) {
-    // delivery/pr planPublishPr → github.runPublishPlan → published result.
     case "publish_pr": {
       const manualMerge = cmd.manualMerge === true || storyRequiresManualMerge(ports.repoCwd, ctx.storyId);
-      // E3: local-only delivery mode. A `publish_mode: local` project lands the
-      // cycle on its LOCAL integration branch and skips push→PR→CI→merge — but
-      // the evidence gate STILL runs (a gate-block is a fault, publish or not).
-      // Resolved from the MAIN checkout's project config (like E1's integration
-      // branch). Default `remote` ⇒ the entire block below is byte-identical.
       if (resolvePublishMode(ports.repoCwd) === "local") {
         return executeLocalPublish(cmd, ports, ctx, manualMerge);
       }
@@ -65,10 +146,6 @@ export async function executeTerminalCommand(
         const pub: PublishResult = { status: 2, mergedBack: false, orphanPushed: false, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
         return { event: { type: "published", result: pub } };
       }
-      // FIX-245 AC2: an agent that opened its own PR inside the cycle bypassed
-      // every runner gate (observed: PR #578, single un-prefixed commit). The
-      // runner detects it at publish time, ADOPTS the registration (the PR is
-      // real — the books must say published) and logs the discipline breach.
       const preState = await ports.github.prState(ports.repoCwd, cmd.branch).catch(() => "UNKNOWN");
       if (preState === "OPEN" || preState === "MERGED") {
         ports.events.appendAlert(
@@ -78,15 +155,6 @@ export async function executeTerminalCommand(
         const pub: PublishResult = { status: 0, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
         return { event: { type: "published", result: pub } };
       }
-      // US-DELIV-004 — push-time evidence gate (fail-loud): verify the
-      // acceptance evidence (attest report + ac-map) was produced BEFORE the
-      // branch leaves the machine. Missing evidence ⇒ blocked_no_evidence:
-      // the branch is NEVER pushed and no PR is opened — "pushed a branch but
-      // opened no PR" (裸分支无 PR) stops being a normal outcome and becomes a
-      // fault state (zero-TCR class). The checkpoint moves earlier; the attest
-      // judgement itself is unchanged (FIX-329). Doc-only PRs and story-less
-      // publishes skip the gate (nothing to attest); the FIX-245 adoption
-      // short-circuit above already returned for branches that have a PR.
       const gateStoryId = ctx.storyId ?? "";
       if (gateStoryId !== "" && cmd.docOnly !== true) {
         if (!evaluateEvidenceGate(ports, ctx, gateStoryId)) {
@@ -103,10 +171,6 @@ export async function executeTerminalCommand(
           return { event: { type: "published", result: pub } };
         }
       }
-      // US-LOOP-094: the cycle worktree is DETACHED (no local branch). Push its
-      // HEAD to the remote ref explicitly, FROM THE WORKTREE CWD — this replaces
-      // the git-push step formerly in planPublishPr. Same short-circuit as
-      // before: a push failure is a status-1 publish (PR steps never run).
       const pushed = await ports.git.push(ports.paths.worktreePath, `HEAD:refs/heads/${cmd.branch}`);
       if (pushed.code !== 0) {
         const pub: PublishResult = { status: 1, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
@@ -475,7 +539,10 @@ export async function executeTerminalCommand(
       // keep its soft-lease protection past this cycle's terminal (kimi review).
       if (terminalStoryId !== "") {
         try {
-          releaseStoryLease(join(dirname(ports.paths.eventsPath), "leases"), terminalStoryId, { source: "cycle", pid: process.pid });
+          releaseStoryLease(resolveStoryLeasePath(ports.paths), terminalStoryId, {
+            source: "cycle",
+            pid: process.pid,
+          });
         } catch {
           /* lease cleanup must never block terminal */
         }
@@ -555,6 +622,12 @@ export async function executeTerminalCommand(
           // reflects TRUE delivery. A later reconciler tick
           // (decideClaimReconcile) flips it once the PR actually merges.
           revertPrematureDone(ports, terminalStoryId, ctx.preCycleStatus);
+        }
+      } else if (cmd.status === "waiting_capacity" && terminalStoryId !== "") {
+        // US-WS-017b: capacity pressure is a neutral scheduler wait. Release the
+        // claim back to Todo without recording a failed/abandoned delivery.
+        if (!isParkedAtHold(ports, terminalStoryId)) {
+          ports.backlog.markStatus?.(ports.repoCwd, terminalStoryId, STATUS_MARKER.todo);
         }
       } else if ((cmd.status === "idle" || cmd.status === "gave_up" || cmd.status === "local") && terminalStoryId !== "") {
         // idle / gave_up / local never merged → the row goes back to 📋 Todo

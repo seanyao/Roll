@@ -1,0 +1,11 @@
+[
+  {
+    "policyKey": "cli:doctor:diagnose",
+    "violationCode": "WORKSPACE_AUTHORITY_FROM_CWD",
+    "file": "packages/cli/src/commands/doctor.ts",
+    "line": 850,
+    "rationale": "Doctor performs a read-only readiness probe against the explicit execution repository and does not select Workspace authority.",
+    "ownerStory": "US-WS-039",
+    "expiresOn": "2026-10-31"
+  }
+]

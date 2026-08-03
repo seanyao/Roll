@@ -1,0 +1,16 @@
+{
+  "storyId": "US-WS-023",
+  "captures": [
+    {
+      "kind": "physical_terminal",
+      "out": "screenshots/terminal.png",
+      "taken": false,
+      "skipped": "roll capture status reported gateway.available=false: host advertised no capture protocols (legacy host); no PNG was fabricated"
+    }
+  ],
+  "fallback": {
+    "kind": "headless_transcript",
+    "path": "transcript.txt",
+    "countsAsScreenshot": false
+  }
+}

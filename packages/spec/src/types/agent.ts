@@ -273,7 +273,7 @@ export interface AgentConfigParse {
 export const AGENT_SCOPE_SCHEMA = "roll-agents/v1" as const;
 export type AgentScopeSchema = typeof AGENT_SCOPE_SCHEMA;
 
-export const AGENT_SCOPE_KINDS = ["machine", "project", "story", "skill", "review", "score"] as const;
+export const AGENT_SCOPE_KINDS = ["machine", "workspace", "project", "story", "skill", "review", "score"] as const;
 export type AgentScopeKind = (typeof AGENT_SCOPE_KINDS)[number];
 
 /** Minimal Role vocabulary for the recursive Agent-domain model. */
@@ -321,6 +321,81 @@ export type AgentScopeRoleBinding =
 export interface AgentScopeDefaults {
   readonly roles: Readonly<Partial<Record<AgentScopeRole, AgentScopeRoleBinding>>>;
 }
+
+/** Machine-owned process-capacity policy. Lower scopes may select an agent but
+ * cannot declare or enlarge the machine's execution limits. */
+export interface AgentCapacityPolicy {
+  readonly global: number | "auto";
+  readonly defaultPerAgent: number;
+  readonly agents: Readonly<Partial<Record<AgentName, number>>>;
+  readonly heartbeatSeconds: number;
+  readonly staleAfterSeconds: number;
+}
+
+/** Fully derived limits used by the broker. Disabled agents have no entry. */
+export interface NormalizedAgentCapacityPolicy {
+  readonly global: number;
+  readonly perAgent: Readonly<Partial<Record<AgentName, number>>>;
+  readonly heartbeatSeconds: number;
+  readonly staleAfterSeconds: number;
+}
+
+export const AGENT_CAPACITY_LEASE_SCHEMA = "roll-agent-capacity-lease/v1" as const;
+export const AGENT_CAPACITY_BROKER_LOCK_SCHEMA = "roll-agent-capacity-broker-lock/v1" as const;
+
+export interface AgentCapacityBrokerLock {
+  readonly schema: typeof AGENT_CAPACITY_BROKER_LOCK_SCHEMA;
+  readonly ownerToken: string;
+  readonly host: string;
+  readonly pid: number;
+  readonly processStartedAtMs: number;
+  readonly acquiredAtMs: number;
+}
+
+export interface AgentCapacityKey {
+  readonly agent: AgentId;
+  readonly model: ModelId;
+  /** Opaque account/profile identity; never rendered in diagnostics. */
+  readonly contextKey: string;
+}
+
+export interface AgentCapacityOwner {
+  readonly leaseId: string;
+  readonly ownerToken: string;
+  readonly workspaceId: string;
+  readonly storyId: string;
+  readonly cycleId: string;
+  readonly spawnId: string;
+  readonly host: string;
+  readonly pid: number;
+  readonly processStartedAtMs: number;
+}
+
+export interface AgentCapacityLease {
+  readonly schema: typeof AGENT_CAPACITY_LEASE_SCHEMA;
+  readonly key: AgentCapacityKey;
+  readonly owner: AgentCapacityOwner;
+  readonly acquiredAtMs: number;
+  readonly heartbeatAtMs: number;
+}
+
+export interface AgentCapacityAcquireRequest {
+  readonly key: AgentCapacityKey;
+  readonly owner: AgentCapacityOwner;
+}
+
+export type AgentCapacityAcquireResult =
+  | { readonly kind: "acquired"; readonly lease: AgentCapacityLease }
+  | {
+      readonly kind: "waiting";
+      readonly retryAtMs: number;
+      readonly contenders: readonly { readonly agent: AgentId; readonly cycleId: string }[];
+      readonly suspect: boolean;
+    };
+
+export type AgentCapacityOwnershipResult =
+  | { readonly kind: "updated" | "released" | "already_released" }
+  | { readonly kind: "ownership_lost"; readonly reason: string };
 
 export type AgentScopeResolutionStrategy = AgentBindingStrategy | "fixed";
 
@@ -372,6 +447,7 @@ export interface AgentScopeConfig {
   readonly models: Readonly<Record<ModelId, AgentScopeModel>>;
   readonly roles: Readonly<Partial<Record<AgentScopeRole, AgentScopeRoleBinding>>>;
   readonly defaults: Readonly<Record<string, AgentScopeDefaults>>;
+  readonly capacity?: AgentCapacityPolicy;
 }
 
 export interface AgentScopeConfigParse {

@@ -34,12 +34,21 @@ import {
   foldCycleAdversarial,
   initialCycleState,
   mapV2Status,
+  releaseStoryLease,
   watchdogVerdict,
 } from "@roll/core";
 import { CYCLE_TIMEOUT_SEC } from "@roll/core";
+import { AGENT_CAPACITY_LEASE_SCHEMA } from "@roll/spec";
+import { dirname } from "node:path";
 import { type Ports, type ProcessClock, executeCommand, buildRunRow, revertPrematureDone } from "./executor.js";
 import { readCycleAttributionFromEvents } from "../lib/cycle-attribution.js";
 import { classifyCycleFailure, readCycleEvents } from "./failure-attribution.js";
+import { killLiveAgents } from "./agent-spawn.js";
+import {
+  restorePersistedWorkspaceCycleContext,
+  restorePersistedWorkspaceCycleRepositorySelector,
+} from "./scoped-route.js";
+import { resolveStoryLeasePath } from "./story-lease-path.js";
 
 /** Inputs for one cycle run. */
 export interface RunCycleOptions {
@@ -52,6 +61,8 @@ export interface RunCycleOptions {
   lockStaleSec?: number;
   /** Max steps before bailing (loop-safety; a terminal is normally reached fast). */
   maxSteps?: number;
+  /** Test seam for fail-loud capacity ownership loss; production kills live agent trees. */
+  killAgents?: () => number;
 }
 
 /** What a finished cycle reports back. */
@@ -74,9 +85,24 @@ export interface RunCycleResult {
  * terminal event in `finally`.
  */
 export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResult> {
-  const { ports, ctx } = opts;
+  const { ports } = opts;
+  let ctx = opts.ctx;
+  if (
+    ctx.repositorySelector === undefined &&
+    ctx.workspaceExecution?.issue !== undefined
+  ) {
+    const restoredRepository = restorePersistedWorkspaceCycleRepositorySelector(
+      dirname(ports.paths.eventsPath),
+      ctx.cycleId,
+      ctx.workspaceExecution,
+    );
+    if (restoredRepository.ok) {
+      ctx = { ...ctx, repositorySelector: restoredRepository.repoId };
+    }
+  }
   const timeoutSec = opts.timeoutSec ?? CYCLE_TIMEOUT_SEC;
   const maxSteps = opts.maxSteps ?? 1000;
+  const killAgents = opts.killAgents ?? ((): number => killLiveAgents("SIGKILL"));
 
   // Lock: single-flight re-entry guard. Skip if another live cycle holds it.
   const acq = ports.process.acquireLock(ports.paths.lockPath, { staleSec: opts.lockStaleSec, cycleId: ctx.cycleId });
@@ -92,6 +118,7 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
   let state: CycleState = initialCycleState(ctx);
   let lockReleased = false;
   let terminalEmitted = false;
+  let liveCapacity: import("@roll/spec").AgentCapacityLease | undefined;
   // Stamp the cycle start onto the live context so the attest gate (FIX-207) in
   // capture_facts can tell a report written THIS cycle from a stale one.
   let liveCtx: CycleContext = { ...ctx, startSec };
@@ -141,9 +168,82 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
       // the next `pending`. Commands are 1:1 with infra calls (executeCommand).
       let nextEvent: CycleEvent | undefined;
       for (const cmd of commands) {
-        const res = await executeCommand(cmd, ports, liveCtx);
+        if ((cmd.kind === "spawn_agent" || cmd.kind === "spawn_role") && liveCapacity !== undefined) {
+          const heartbeat = ports.capacity.heartbeat(
+            liveCapacity.owner.leaseId,
+            liveCapacity.owner.ownerToken,
+          );
+          if (heartbeat.kind === "ownership_lost") {
+            throw new Error(`agent_capacity_ownership_lost:${heartbeat.reason}`);
+          }
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "workspace:capacity_heartbeat",
+            workspaceId: liveCapacity.owner.workspaceId,
+            storyId: liveCapacity.owner.storyId,
+            cycleId: liveCapacity.owner.cycleId,
+            spawnId: liveCapacity.owner.spawnId,
+            agent: liveCapacity.key.agent,
+            model: liveCapacity.key.model,
+            ts: ports.clock() * 1_000,
+          });
+        }
+        let ownershipLostReason: string | undefined;
+        const stopUnleasedExecution = (reason: string): void => {
+          if (ownershipLostReason !== undefined) return;
+          ownershipLostReason = reason;
+          try {
+            ports.events.appendAlert(
+              ports.paths.alertsPath,
+              `cycle ${liveCtx.cycleId}: agent capacity ownership lost (${reason}); killed live agent process`,
+            );
+          } catch {
+            /* the thrown ownership-loss terminal remains authoritative */
+          }
+          killAgents();
+        };
+        const heartbeatTimer = (cmd.kind === "spawn_agent" || cmd.kind === "spawn_role") && liveCapacity !== undefined
+          ? setInterval(() => {
+              if (liveCapacity === undefined || ownershipLostReason !== undefined) return;
+              try {
+                const heartbeat = ports.capacity.heartbeat(
+                  liveCapacity.owner.leaseId,
+                  liveCapacity.owner.ownerToken,
+                );
+                if (heartbeat.kind === "ownership_lost") {
+                  stopUnleasedExecution(heartbeat.reason);
+                  return;
+                }
+                ports.events.appendEvent(ports.paths.eventsPath, {
+                  type: "workspace:capacity_heartbeat",
+                  workspaceId: liveCapacity.owner.workspaceId,
+                  storyId: liveCapacity.owner.storyId,
+                  cycleId: liveCapacity.owner.cycleId,
+                  spawnId: liveCapacity.owner.spawnId,
+                  agent: liveCapacity.key.agent,
+                  model: liveCapacity.key.model,
+                  ts: ports.clock() * 1_000,
+                });
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                stopUnleasedExecution(`heartbeat_error:${reason}`);
+              }
+            }, ports.capacity.heartbeatIntervalMs)
+          : undefined;
+        let res;
+        try {
+          res = await executeCommand(cmd, ports, liveCtx);
+        } finally {
+          if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
+        }
+        if (ownershipLostReason !== undefined) {
+          throw new Error(`agent_capacity_ownership_lost:${ownershipLostReason}`);
+        }
         if (res.lockReleased === true) lockReleased = true;
-        if (res.event !== undefined) nextEvent = res.event;
+        if (res.event !== undefined) {
+          nextEvent = res.event;
+          if (res.event.type === "capacity_acquired") liveCapacity = res.event.lease;
+        }
+        if (res.capacityReleased === true) liveCapacity = undefined;
         // FIX-208: fold executor-captured truth (real tcr count, parsed cost)
         // into the live context so the later append_run / cycle:end commands —
         // which read liveCtx — carry it. The orchestrator never owns these (it
@@ -159,6 +259,23 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
       }
     }
   } finally {
+    if (liveCapacity !== undefined) {
+      const released = ports.capacity.release(
+        liveCapacity.owner.leaseId,
+        liveCapacity.owner.ownerToken,
+      );
+      if (released.kind === "ownership_lost") {
+        try {
+          ports.events.appendAlert(
+            ports.paths.alertsPath,
+            `cycle ${liveCtx.cycleId}: residual agent capacity ownership lost (${released.reason})`,
+          );
+        } catch {
+          /* terminal fallback below remains best-effort */
+        }
+      }
+      liveCapacity = undefined;
+    }
     // I8: a terminal cycle:end + runs row MUST exist on every exit path. If the
     // walk threw / bailed before the orchestrator emitted one, write a fallback
     // `aborted` terminal directly (idempotent — the bus upsert dedupes the row).
@@ -170,7 +287,11 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
       // orchestrator propagated story/agent), recover the best-known attribution
       // from events the cycle already wrote.
       const attr = readCycleAttributionFromEvents(ports.paths.eventsPath, liveCtx.cycleId);
-      const storyId = liveCtx.storyId ?? attr.storyId ?? "";
+      const restored = liveCtx.workspaceExecution?.issue === undefined
+        ? restorePersistedWorkspaceCycleContext(dirname(ports.paths.eventsPath), liveCtx.cycleId)
+        : undefined;
+      const workspaceExecution = restored?.ok ? restored.context : liveCtx.workspaceExecution;
+      const storyId = liveCtx.storyId ?? workspaceExecution?.issue?.storyId ?? attr.storyId ?? "";
       const agent = liveCtx.agent ?? attr.agent ?? "";
       const tctx = {
         cycleId: liveCtx.cycleId,
@@ -192,7 +313,12 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
           outcome: mapV2Status(status),
           cycleId: liveCtx.cycleId,
         };
-        const rowCtx: CycleContext = { ...liveCtx, storyId, agent };
+        const rowCtx: CycleContext = {
+          ...liveCtx,
+          storyId,
+          agent,
+          ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
+        };
         const row = buildRunRow(fakeAppend, rowCtx, terminalSec);
         if (agent === "" && storyId !== "") {
           row["agent_unknown_reason"] = "aborted_before_agent_routed";
@@ -213,6 +339,13 @@ export async function runCycleOnce(opts: RunCycleOptions): Promise<RunCycleResul
         }
       } catch {
         /* best-effort terminal write; never mask the original failure */
+      }
+      if (storyId !== "") {
+        try {
+          releaseStoryLease(resolveStoryLeasePath(ports.paths), storyId, { source: "cycle", pid: process.pid });
+        } catch {
+          /* lease cleanup must never mask the original cycle failure */
+        }
       }
       if (state.done) state = { ...state, terminal: status };
     }
@@ -282,6 +415,10 @@ function mergeCtx(live: CycleContext, next: CycleContext): CycleContext {
     rootCauseKey: next.rootCauseKey ?? live.rootCauseKey,
     agentTimedOut: next.agentTimedOut ?? live.agentTimedOut,
     publishConfirmed: next.publishConfirmed ?? live.publishConfirmed,
+    repositoryExecution: next.repositoryExecution ?? live.repositoryExecution,
+    workspaceExecution: next.workspaceExecution ?? live.workspaceExecution,
+    workspaceContextScope: next.workspaceContextScope ?? live.workspaceContextScope,
+    repositorySelector: next.repositorySelector ?? live.repositorySelector,
   };
 }
 
@@ -314,6 +451,32 @@ export function dryRunPlan(ctx: CycleContext): string[] {
     const { state: next, commands } = cycleStep(state, ev);
     state = next;
     for (const cmd of commands) out.push(describeCommand(cmd));
+    if (commands.some((command) => command.kind === "acquire_capacity") && state.pendingSpawn !== undefined) {
+      const pending = state.pendingSpawn;
+      const acquired = cycleStep(state, {
+        type: "capacity_acquired",
+        spawnId: pending.spawnId,
+        lease: {
+          schema: AGENT_CAPACITY_LEASE_SCHEMA,
+          key: pending.key,
+          owner: {
+            leaseId: `dry:${pending.spawnId}`,
+            ownerToken: "dry-run",
+            workspaceId: state.ctx.repositoryExecution?.workspaceId ?? "dry-run",
+            storyId: state.ctx.storyId ?? "",
+            cycleId: state.ctx.cycleId,
+            spawnId: pending.spawnId,
+            host: "dry-run",
+            pid: 0,
+            processStartedAtMs: 0,
+          },
+          acquiredAtMs: 0,
+          heartbeatAtMs: 0,
+        },
+      });
+      state = acquired.state;
+      for (const cmd of acquired.commands) out.push(describeCommand(cmd));
+    }
     if (state.done) break;
   }
   return out;
@@ -332,10 +495,14 @@ function describeCommand(cmd: CycleCommand): string {
       return `resume_worktree      → resolveResumeBase(${cmd.storyId}) + git.resetWorktreeHard`;
     case "resolve_route":
       return `resolve_route        → router.resolveRoute(${cmd.storyId})`;
+    case "acquire_capacity":
+      return `acquire_capacity     → machine broker (${cmd.pending.key.agent}/${cmd.pending.key.model})`;
     case "spawn_agent":
       return `spawn_agent          → agentSpawn(${cmd.agent}, attempt ${cmd.attempt})`;
     case "spawn_role":
       return `spawn_role           → agentSpawn(${cmd.agent} as ${cmd.role}, round ${cmd.round})`;
+    case "release_capacity":
+      return `release_capacity     → machine broker (${cmd.leaseId})`;
     case "kill_agent":
       return `kill_agent           → SIGKILL (grace ${cmd.graceSec}s)`;
     case "sleep_backoff":

@@ -665,7 +665,7 @@ describe("frozen: roll loop status (live)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                               <NOW> · 2 cycles / 72h
 
-      ◆ session-driven   run roll loop go in this session                       last ✓ 10:48  US-CLI-006  
+      ◆ session-driven   run roll loop go in this session                       last ✓ 10:48  US-CLI-006${"  "}
         会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────

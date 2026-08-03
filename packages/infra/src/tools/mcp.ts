@@ -1,8 +1,17 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join } from "node:path";
 import { BrowserOperationLedger, BrowserTransportRegistry, isReservedBrowserTransport } from "@roll/core";
-import type { BrowserOperationEvent, ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
+import type {
+  BrowserOperationEvent,
+  ToolDeclaration,
+  ToolDeps,
+  ToolInvocation,
+  ToolMeta,
+  ToolResult,
+  WorkspaceExecutionContextV1,
+} from "@roll/spec";
 import { mcpInputSchema, mcpOutputSchema } from "./schema-contracts.js";
+import { resolveToolExecutionContext, toolCorrelation } from "./workspace-context.js";
 
 export interface McpInput {
   serverName: string;
@@ -56,22 +65,17 @@ export class McpTool {
     outputSchema: mcpOutputSchema,
   };
 
-  private readonly projectRoot: string;
+  private readonly projectRoot: string | undefined;
   private readonly connect: (config: McpServerConfig) => Promise<McpConnection>;
   private readonly browserTransportRegistry: BrowserTransportRegistry;
-  private readonly recordBrowserEvent: (event: BrowserMcpBypassDeniedEvent) => void;
+  private readonly recordBrowserEvent: ((event: BrowserMcpBypassDeniedEvent) => void) | undefined;
   private readonly connections = new Map<string, Promise<McpConnection>>();
 
   constructor(options: McpToolOptions = {}) {
-    this.projectRoot = options.projectRoot ?? process.cwd();
+    this.projectRoot = options.projectRoot;
     this.connect = options.connect ?? defaultConnect;
     this.browserTransportRegistry = options.browserTransportRegistry ?? new BrowserTransportRegistry();
-    this.recordBrowserEvent = options.recordBrowserEvent ?? ((event) => {
-      new BrowserOperationLedger().recordMcpBypassDenial(
-        join(this.projectRoot, ".roll", "browser-operations", "events.ndjson"),
-        event,
-      );
-    });
+    this.recordBrowserEvent = options.recordBrowserEvent;
   }
 
   async init(_deps: ToolDeps): Promise<void> {
@@ -86,56 +90,96 @@ export class McpTool {
 
   async execute(invocation: ToolInvocation<McpInput>, deps: ToolDeps): Promise<ToolResult<McpOutput>> {
     const startedAt = deps.now();
-    if (!invocation.policy.enabled) {
-      return failure(invocation, startedAt, deps.now(), "policy_denied", "MCP tool is disabled by policy", false);
+    const scoped = resolveToolExecutionContext(invocation, "issue_required");
+    if (!scoped.ok) {
+      return failure(invocation, startedAt, deps.now(), scoped.error.code, scoped.error.message, false);
+    }
+    const effectiveInvocation = { ...invocation, context: scoped.context };
+    if (!effectiveInvocation.policy.enabled) {
+      return failure(effectiveInvocation, startedAt, deps.now(), "policy_denied", "MCP tool is disabled by policy", false);
     }
 
-    const validation = validateInput(invocation.input);
+    const validation = validateInput(effectiveInvocation.input);
     if (validation !== undefined) {
-      return failure(invocation, startedAt, deps.now(), "invalid_input", validation, false);
+      return failure(effectiveInvocation, startedAt, deps.now(), "invalid_input", validation, false);
     }
 
-    if (isReservedBrowserTransport(invocation.input.serverName)) {
-      const event = this.browserTransportRegistry.denyGenericMcp(invocation.input.serverName, new Date(deps.now()).toISOString());
-      this.recordBrowserEvent(event);
-      return failure(invocation, startedAt, deps.now(), "policy_denied", event.reason.message, false, event.reason.detail);
+    if (isReservedBrowserTransport(effectiveInvocation.input.serverName)) {
+      const event = this.browserTransportRegistry.denyGenericMcp(effectiveInvocation.input.serverName, new Date(deps.now()).toISOString());
+      if (this.recordBrowserEvent !== undefined) this.recordBrowserEvent(event);
+      else new BrowserOperationLedger().recordMcpBypassDenial(
+        join(scoped.context.authorities.events, "browser-operations.ndjson"),
+        event,
+      );
+      return failure(effectiveInvocation, startedAt, deps.now(), "policy_denied", event.reason.message, false, event.reason.detail);
     }
 
-    const servers = await readServers(this.projectRoot, deps);
-    const config = servers[invocation.input.serverName];
+    const servers = await readServers(scoped.context.authorities.policy, this.projectRoot, deps);
+    const config = servers[effectiveInvocation.input.serverName];
     if (config === undefined) {
-      return failure(invocation, startedAt, deps.now(), "adapter_error", `MCP server not configured: ${invocation.input.serverName}`, false);
+      return failure(effectiveInvocation, startedAt, deps.now(), "adapter_error", `MCP server not configured: ${effectiveInvocation.input.serverName}`, false);
     }
 
     try {
-      const connection = await this.connectionFor(invocation.input.serverName, config);
-      const args = redactArgs(invocation.input.arguments ?? {}, deps);
-      const output = normalizeOutput(await connection.callTool(invocation.input.toolName, args));
+      const connection = await this.connectionFor(
+        effectiveInvocation.input.serverName,
+        config,
+        scoped.context,
+        effectiveInvocation.repoId,
+      );
+      const args = redactArgs(effectiveInvocation.input.arguments ?? {}, deps);
+      const output = normalizeOutput(await connection.callTool(effectiveInvocation.input.toolName, args));
       return {
         ok: true,
         output,
-        meta: meta(invocation, startedAt, deps.now()),
+        meta: meta(effectiveInvocation, startedAt, deps.now()),
       };
     } catch (cause) {
       const unavailable = classifyUnavailable(cause);
-      return failure(invocation, startedAt, deps.now(), "adapter_error", unavailable, true, cause);
+      return failure(effectiveInvocation, startedAt, deps.now(), "adapter_error", unavailable, true, cause);
     }
   }
 
-  private connectionFor(serverName: string, config: McpServerConfig): Promise<McpConnection> {
-    const existing = this.connections.get(serverName);
+  private connectionFor(
+    serverName: string,
+    config: McpServerConfig,
+    context: WorkspaceExecutionContextV1,
+    repoId: string | undefined,
+  ): Promise<McpConnection> {
+    const cacheKey = mcpConnectionCacheKey(serverName, config, context, repoId);
+    const existing = this.connections.get(cacheKey);
     if (existing !== undefined) return existing;
     const pending = this.connect(config).catch((cause) => {
-      this.connections.delete(serverName);
+      this.connections.delete(cacheKey);
       throw cause;
     });
-    this.connections.set(serverName, pending);
+    this.connections.set(cacheKey, pending);
     return pending;
   }
 }
 
-export function mcpTools(projectRoot = process.cwd()): McpTool[] {
-  return [new McpTool({ projectRoot })];
+function mcpConnectionCacheKey(
+  serverName: string,
+  config: McpServerConfig,
+  context: WorkspaceExecutionContextV1,
+  repoId: string | undefined,
+): string {
+  return JSON.stringify({
+    workspaceId: context.workspace.workspaceId,
+    storyId: context.issue?.storyId,
+    repoId,
+    serverName,
+    config: {
+      command: config.command,
+      args: config.args ?? [],
+      cwd: config.cwd,
+      env: Object.entries(config.env ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    },
+  });
+}
+
+export function mcpTools(projectRoot?: string): McpTool[] {
+  return [new McpTool(projectRoot === undefined ? {} : { projectRoot })];
 }
 
 function validateInput(input: McpInput): string | undefined {
@@ -173,11 +217,19 @@ function normalizeOutput(value: McpOutput): McpOutput {
   };
 }
 
-async function readServers(projectRoot: string, deps: ToolDeps): Promise<Record<string, McpServerConfig>> {
-  const json = await readOptional(deps, join(projectRoot, ".roll", "mcp-servers.json"));
+async function readServers(
+  workspacePolicyPath: string,
+  machineConfigRoot: string | undefined,
+  deps: ToolDeps,
+): Promise<Record<string, McpServerConfig>> {
+  const workspacePolicy = await readOptional(deps, workspacePolicyPath);
+  const workspaceServers = workspacePolicy === undefined ? {} : parsePolicyServers(workspacePolicy);
+  if (Object.keys(workspaceServers).length > 0) return workspaceServers;
+  if (machineConfigRoot === undefined) return {};
+  const json = await readOptional(deps, join(machineConfigRoot, ".roll", "mcp-servers.json"));
   if (json !== undefined) return parseJsonServers(json);
-  const policy = await readOptional(deps, join(projectRoot, ".roll", "policy.yaml"));
-  return policy === undefined ? {} : parsePolicyServers(policy);
+  const machinePolicy = await readOptional(deps, join(machineConfigRoot, ".roll", "policy.yaml"));
+  return machinePolicy === undefined ? {} : parsePolicyServers(machinePolicy);
 }
 
 async function readOptional(deps: ToolDeps, path: string): Promise<string | undefined> {
@@ -330,7 +382,7 @@ function failure(
   invocation: ToolInvocation<McpInput>,
   startedAt: number,
   endedAt: number,
-  code: "policy_denied" | "invalid_input" | "adapter_error",
+  code: "policy_denied" | "invalid_input" | "adapter_error" | "missing_execution_context" | "invalid_execution_context",
   message: string,
   retryable: boolean,
   detail?: unknown,
@@ -343,6 +395,7 @@ function failure(
 }
 
 function meta(invocation: ToolInvocation<McpInput>, startedAt: number, endedAt: number): ToolMeta {
+  const correlation = toolCorrelation(invocation);
   return {
     invocationId: invocation.invocationId,
     toolId: invocation.toolId,
@@ -350,6 +403,7 @@ function meta(invocation: ToolInvocation<McpInput>, startedAt: number, endedAt: 
     startedAt,
     endedAt,
     durationMs: Math.max(0, endedAt - startedAt),
+    ...(correlation === undefined ? {} : { correlation }),
   };
 }
 

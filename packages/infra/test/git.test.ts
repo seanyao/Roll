@@ -20,6 +20,7 @@ import {
   currentBranch,
   fetchRemoteBranch,
   isAncestor,
+  isCommitReachableFromIntegrationBranch,
   landLocalDelivery,
   lsRemote,
   mergeBase,
@@ -171,6 +172,20 @@ describe("raw wrappers", () => {
     expect(refs.length).toBeGreaterThan(0);
     expect(refs[0]?.sha).toMatch(/^[0-9a-f]{40}$/);
     expect(refs.some((r) => r.ref === "HEAD")).toBe(true);
+  });
+
+  it("US-WS-014 binds reachability to the configured integration branch and exact commit", async () => {
+    const repo = initRepo("integration-reachability");
+    const common = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "-q", "-b", "release"], { cwd: repo });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "release-only"], { cwd: repo });
+    const release = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+
+    expect(await isCommitReachableFromIntegrationBranch(repo, common, "main")).toBe(true);
+    expect(await isCommitReachableFromIntegrationBranch(repo, common, "release")).toBe(true);
+    expect(await isCommitReachableFromIntegrationBranch(repo, release, "release")).toBe(true);
+    expect(await isCommitReachableFromIntegrationBranch(repo, release, "main")).toBe(false);
+    expect(await isCommitReachableFromIntegrationBranch(repo, "main", "release")).toBeUndefined();
   });
 });
 

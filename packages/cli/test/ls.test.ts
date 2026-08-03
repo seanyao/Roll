@@ -170,6 +170,15 @@ describe("resolveProjectName — FIX-307 real project display name", () => {
     expect(resolveProjectName(proj)).toBe("APE-PR");
   });
 
+  it("does not expose the internal support transport basename as the project name", () => {
+    const proj = realProj("roll-name-support-");
+    const support = join(proj, ".worktrees", "support", "product.git");
+    mkdirSync(support, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: proj });
+    execFileSync("git", ["remote", "add", "origin", support], { cwd: proj });
+    expect(resolveProjectName(proj)).toBe(basenameForTest(proj));
+  });
+
   it("falls back to the git top-level directory basename", () => {
     const proj = realProj("roll-name-top-");
     const child = join(proj, "packages", "app");

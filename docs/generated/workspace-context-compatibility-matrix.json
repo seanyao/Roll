@@ -1,0 +1,1635 @@
+{
+  "schema": "roll.workspace-context-compatibility-matrix/v1",
+  "summary": {
+    "cliFamilies": 24,
+    "cliOperations": 118,
+    "skillFamilies": 23,
+    "skillOperations": 33,
+    "toolAdapters": 8,
+    "toolOperations": 16
+  },
+  "rows": [
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "cast",
+      "scope": "workspace_optional_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "default",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "disable",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "enable",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "list",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "migrate",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "readiness",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "set",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "use",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "view",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "agent",
+      "operation": "workspace",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "attest",
+      "operation": "audit",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "attest",
+      "operation": "render",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "block",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "claim",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "defer",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "lint",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "promote",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "read",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "show",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "sync",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "unblock",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "backlog",
+      "operation": "unstick",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "capture",
+      "operation": "local-window",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "capture",
+      "operation": "migrate",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "capture",
+      "operation": "refresh",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "capture",
+      "operation": "repair",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "capture",
+      "operation": "status",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "config",
+      "operation": "prices",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "config",
+      "operation": "read",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "config",
+      "operation": "tune",
+      "scope": "workspace_optional_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "config",
+      "operation": "write",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "context",
+      "operation": "read",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "context",
+      "operation": "status",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "context",
+      "operation": "usage",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "delivery",
+      "operation": "list",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "delivery",
+      "operation": "reconcile",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "delivery",
+      "operation": "show",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "delivery",
+      "operation": "usage",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "design",
+      "operation": "design",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "doctor",
+      "operation": "diagnose",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "doctor",
+      "operation": "language",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "doctor",
+      "operation": "pardon",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "doctor",
+      "operation": "repair-protection",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "cli",
+      "id": "doctor",
+      "operation": "skills",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "doctor",
+      "operation": "tools",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "help",
+      "operation": "read",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "idea",
+      "operation": "capture",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "index",
+      "operation": "rebuild",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "init",
+      "operation": "onboard",
+      "scope": "legacy_migration_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": true,
+      "rationale": "Onboarding inspects a legacy project before Workspace authority exists."
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "adversarial",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "agent-routes",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "alert",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "cycle",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "cycles",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "enforce-tcr",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "eval",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "events",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "exhaustion-split",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "fmt",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "gc",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "go",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "goal",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "hotfix-head-context",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "log",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "mute",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "notify",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "pardon-skip-list",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "pause",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "precheck-ci",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "reconcile",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "reconcile-pending",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "recover",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "reset",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "resume",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "review-resize",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "run-once",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "runs",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "self-downgrade",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "signals",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "status",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "story",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "unmute",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "loop",
+      "operation": "watch",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "next",
+      "operation": "read",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "north",
+      "operation": "read",
+      "scope": "workspace_optional_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "release",
+      "operation": "consistency",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "cli",
+      "id": "release",
+      "operation": "release",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "release",
+      "operation": "showcase",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "cli",
+      "id": "release",
+      "operation": "verify",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "cli",
+      "id": "setup",
+      "operation": "offboard",
+      "scope": "legacy_migration_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": true,
+      "rationale": "Offboarding inspects an explicitly selected legacy project."
+    },
+    {
+      "surface": "cli",
+      "id": "setup",
+      "operation": "setup",
+      "scope": "machine_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Machine setup must run before a Workspace is available."
+    },
+    {
+      "surface": "cli",
+      "id": "setup",
+      "operation": "skills",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "status",
+      "operation": "ci",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "cli",
+      "id": "status",
+      "operation": "pulse",
+      "scope": "workspace_optional_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "status",
+      "operation": "read",
+      "scope": "workspace_optional_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "story",
+      "operation": "new",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "story",
+      "operation": "validate",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "test",
+      "operation": "run",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "cli",
+      "id": "truth",
+      "operation": "audit",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "truth",
+      "operation": "query",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "update",
+      "operation": "apply",
+      "scope": "machine_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Machine-global updates are independent of Workspace selection."
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "activate",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "archive",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "create",
+      "scope": "machine_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Creation starts from an explicit config before the target Workspace exists."
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "doctor.read",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "doctor.repair",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "edit",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace"
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "handoff",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "issue.create",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "issue.init",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "list",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "migrate",
+      "scope": "legacy_migration_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": true,
+      "rationale": "Migration must inspect an explicitly selected legacy Roll project.",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "pause",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "register",
+      "scope": "machine_only",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Registration resolves an explicit existing Workspace path into the machine registry."
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "requirement.add",
+      "scope": "workspace_required_mutation",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "show",
+      "scope": "workspace_required_read",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "workspace",
+      "acceptsWorkspaceSelector": true
+    },
+    {
+      "surface": "cli",
+      "id": "workspace",
+      "operation": "usage",
+      "scope": "machine_only",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.changelog",
+      "operation": "generate",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.changelog",
+      "operation": "refresh_feature_catalog",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.clarify",
+      "operation": "scope",
+      "scope": "workspace_optional_read",
+      "contextConsumer": "workspace",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.clarify",
+      "operation": "workspace_target",
+      "scope": "workspace_optional_read",
+      "contextConsumer": "workspace",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.dream",
+      "operation": "record_candidates",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.dream",
+      "operation": "scan",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.echo",
+      "operation": "restate",
+      "scope": "machine_only",
+      "effectTarget": "none",
+      "access": "none",
+      "repositorySelector": "forbidden",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "rationale": "Intent restatement operates only on the user message and must not acquire Workspace or repository authority."
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.qa",
+      "operation": "evaluate",
+      "scope": "issue_required",
+      "contextConsumer": "issue",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-.review",
+      "operation": "review",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-build",
+      "operation": "build",
+      "scope": "issue_required",
+      "contextConsumer": "issue",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-debug",
+      "operation": "diagnose",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-debug",
+      "operation": "source_fix",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-delta-team",
+      "operation": "deliver",
+      "scope": "issue_required",
+      "contextConsumer": "issue",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-design",
+      "operation": "design",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-doc-audit",
+      "operation": "audit",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-doc-audit",
+      "operation": "draft",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-doc-audit",
+      "operation": "index",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-doctor",
+      "operation": "diagnose",
+      "scope": "machine_only",
+      "effectTarget": "machine",
+      "access": "read",
+      "repositorySelector": "forbidden",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Machine-global installation diagnosis must run before a Workspace can be resolved."
+    },
+    {
+      "surface": "skill",
+      "id": "roll-doctor",
+      "operation": "repair",
+      "scope": "machine_only",
+      "effectTarget": "machine",
+      "access": "mutation",
+      "repositorySelector": "forbidden",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "A confirmed machine repair changes only explicitly named Roll installation targets and never acquires Workspace authority."
+    },
+    {
+      "surface": "skill",
+      "id": "roll-fix",
+      "operation": "fix",
+      "scope": "issue_required",
+      "contextConsumer": "issue",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-idea",
+      "operation": "capture",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-loop",
+      "operation": "operate",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-notes",
+      "operation": "record",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-onboard",
+      "operation": "diagnose",
+      "scope": "legacy_migration_only",
+      "effectTarget": "legacy_project",
+      "access": "read",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": true,
+      "rationale": "Onboarding diagnosis inspects one explicitly selected legacy project before Workspace authority exists."
+    },
+    {
+      "surface": "skill",
+      "id": "roll-onboard",
+      "operation": "write_plan",
+      "scope": "legacy_migration_only",
+      "effectTarget": "legacy_project",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": true,
+      "rationale": "Onboarding plan output is limited to the explicitly selected legacy project and returns one canonical Workspace creation action."
+    },
+    {
+      "surface": "skill",
+      "id": "roll-peer",
+      "operation": "record_evidence",
+      "scope": "issue_required",
+      "contextConsumer": "issue",
+      "effectTarget": "issue",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-peer",
+      "operation": "review",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-prime",
+      "operation": "supervise",
+      "scope": "workspace_required_read",
+      "contextConsumer": "workspace",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-propose",
+      "operation": "propose",
+      "scope": "workspace_required_mutation",
+      "contextConsumer": "workspace",
+      "effectTarget": "workspace",
+      "access": "mutation",
+      "repositorySelector": "not_applicable",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-review-pr",
+      "operation": "review",
+      "scope": "repository_required",
+      "contextConsumer": "repository",
+      "effectTarget": "none",
+      "access": "read",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-spar",
+      "operation": "adversarial_tdd",
+      "scope": "issue_required",
+      "contextConsumer": "issue",
+      "effectTarget": "repository",
+      "access": "mutation",
+      "repositorySelector": "required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false
+    },
+    {
+      "surface": "skill",
+      "id": "roll-ws-create",
+      "operation": "apply",
+      "scope": "machine_only",
+      "effectTarget": "machine",
+      "access": "mutation",
+      "repositorySelector": "forbidden",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Authorized Workspace creation applies an explicit preview before the target Workspace exists."
+    },
+    {
+      "surface": "skill",
+      "id": "roll-ws-create",
+      "operation": "preview",
+      "scope": "machine_only",
+      "effectTarget": "machine",
+      "access": "read",
+      "repositorySelector": "forbidden",
+      "allowsAmbientCwd": true,
+      "allowsLegacyRollPath": false,
+      "rationale": "Workspace creation preview starts from an explicit config before the target Workspace exists."
+    },
+    {
+      "surface": "tool",
+      "id": "bash",
+      "operation": "bash",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "browser",
+      "operation": "browser.console",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "browser",
+      "operation": "browser.dom-query",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "browser",
+      "operation": "browser.screenshot",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "filesystem",
+      "operation": "filesystem.read",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "filesystem",
+      "operation": "filesystem.stat",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "filesystem",
+      "operation": "filesystem.write",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "git",
+      "operation": "git.commit",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "git",
+      "operation": "git.merge",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "git",
+      "operation": "git.push",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "git",
+      "operation": "git.status",
+      "scope": "repository_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "repository"
+    },
+    {
+      "surface": "tool",
+      "id": "github",
+      "operation": "github.ci",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "github",
+      "operation": "github.pr",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "mcp",
+      "operation": "mcp.call",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "network",
+      "operation": "network.fetch",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    },
+    {
+      "surface": "tool",
+      "id": "physical",
+      "operation": "physical.screenshot",
+      "scope": "issue_required",
+      "allowsAmbientCwd": false,
+      "allowsLegacyRollPath": false,
+      "contextConsumer": "issue"
+    }
+  ]
+}

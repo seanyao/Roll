@@ -40,8 +40,10 @@ ALERT + 通知，人决策。agent 连败不自动换人重试。一个坏 Story
 **10. 有界且可逆。**
 一 Cycle 一个 Story、全新上下文、TCR 绿则提交红则回退、Feature 可整体回退、迁移可一键切回。不对大颗粒 Story 让步——拆小再跑。任何一步都要能干净撤销。
 
-**11. 路径即身份。**
-不同项目共享存储 = 污染。每个项目的运行态数据放在自己的 `.roll/loop/` 下，互不可见。
+**11. Workspace ID 是身份，路径只是位置。**
+不同 Workspace 的 Requirement、Issue、runtime 与 evidence 按稳定 ID 隔离；registry path
+可以迁移。只有显式的机器级 agent capacity 与 bare repository cache 可以共享，而且 cache
+可重建、绝不进入交付真相。
 
 **12. 一个能力域，一个家。**
 按能力域（编排/执行/工具/上下文/可观测/Evals/治理）各归其位，用类型化契约连接。能力散落在多种载体、靠文本缝合，就是不稳定与低效的根源——这是重写要根除的。

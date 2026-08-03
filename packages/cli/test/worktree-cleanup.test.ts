@@ -14,7 +14,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RollEvent } from "@roll/spec";
@@ -487,6 +487,13 @@ describe("AC6: CLI help + guidance", () => {
     expect(CLEANUP_USAGE).toContain("roll loop resume");
     expect(CLEANUP_USAGE).toContain("--apply");
     expect(CLEANUP_USAGE).toContain("SOLE authority");
+    expect(CLEANUP_USAGE).toContain("Workspace Issue worktrees");
+    expect(CLEANUP_USAGE).toContain("machine repository lock");
+    expect(CLEANUP_USAGE).toContain("legacy --repo mode only");
+    expect(CLEANUP_USAGE).toContain("path-specific proof");
+    expect(CLEANUP_USAGE).toContain("fingerprint");
+    expect(CLEANUP_USAGE).not.toContain("delivery not auto-provable");
+    expect(CLEANUP_USAGE).not.toContain("after you\n  review it");
   });
 
   it("--help prints usage and exits 0 without side effects", async () => {
@@ -1016,10 +1023,49 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
       dirtyUntracked: "unknown",
       ahead: null,
       mergeEvidence: { kind: "none" },
+      orphanRecoveryProof: {
+        state: "trusted_generated",
+        fingerprint: "proof-a",
+        entries: [".next"],
+        detail: "trusted generated roots: .next",
+      },
       disposition: "orphan_reclaimable",
       reason: "orphan (delivered)",
       ...over,
     });
+
+  function realOrphanFixture(): { repo: string; orphan: string } {
+    const repo = mkdtempSync(join(tmpdir(), "roll-orphan-apply-"));
+    const cleanEnv = { ...process.env };
+    delete cleanEnv["GIT_DIR"];
+    delete cleanEnv["GIT_WORK_TREE"];
+    delete cleanEnv["GIT_INDEX_FILE"];
+    const runGit = (args: string[]): void => {
+      execFileSync("git", ["-C", repo, ...args], { env: cleanEnv, stdio: "ignore" });
+    };
+    runGit(["init", "-b", "main"]);
+    runGit(["config", "user.name", "Roll Test"]);
+    runGit(["config", "user.email", "roll-test@example.invalid"]);
+    writeFileSync(join(repo, "README.md"), "fixture\n", "utf8");
+    runGit(["add", "README.md"]);
+    runGit(["commit", "-m", "fixture"]);
+
+    const cycleId = "cycle-20260723-130000-1";
+    const orphan = join(repo, ".roll", "loop", "worktrees", cycleId);
+    mkdirSync(join(orphan, ".next", "cache"), { recursive: true });
+    writeFileSync(join(orphan, ".next", "cache", "build.json"), "{}\n", "utf8");
+    mkdirSync(join(repo, ".roll", "loop"), { recursive: true });
+    writeFileSync(
+      join(repo, ".roll", "loop", "events.ndjson"),
+      JSON.stringify({ cycleId, outcome: "delivered" }) + "\n",
+      "utf8",
+    );
+    return { repo, orphan };
+  }
+
+  function realOrphanAudit(repo: string): WorktreeAuditOutput {
+    return auditWorktrees({ repoRoot: repo, home: tmpdir(), integrationBranch: "HEAD" });
+  }
 
   it("isBoundedLoopWorktreeDir accepts only a DIRECT child of .roll/loop/worktrees", () => {
     const root = "/repo";
@@ -1035,6 +1081,15 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
     expect(isReclaimableOrphan(orphanRec({ active: true }))).toBe(false);
     expect(isReclaimableOrphan(orphanRec({ disposition: "preserved_orphan" }))).toBe(false);
     expect(isReclaimableOrphan(orphanRec({ owner: "external" }))).toBe(false);
+    expect(isReclaimableOrphan(orphanRec({ orphanRecoveryProof: undefined }))).toBe(false);
+    expect(isReclaimableOrphan(orphanRec({
+      orphanRecoveryProof: {
+        state: "ambiguous",
+        fingerprint: null,
+        entries: [".next"],
+        detail: "changed during audit",
+      },
+    }))).toBe(false);
   });
 
   it("plans an orphan_reclaimable record as an rm_dir candidate", () => {
@@ -1044,6 +1099,7 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
     expect(plan.candidates[0].reclaim).toBe("rm_dir");
     expect(plan.candidates[0].reason).toBe("orphan_reclaimable");
     expect(plan.candidates[0].expectedHead).toBe("");
+    expect(plan.candidates[0]).toMatchObject({ expectedOrphanFingerprint: "proof-a" });
   });
 
   it("apply reclaims a still-proven orphan via the bounded rm hook", async () => {
@@ -1084,6 +1140,30 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
     expect(res.refused[0].reason).toMatch(/preserved_orphan|provably delivered/);
   });
 
+  it("apply refuses when the exact orphan material proof changed after planning", async () => {
+    const plan = planWorktreeCleanup(auditOf([orphanRec()], []), 0);
+    let called = false;
+    const res = await applyWorktreeCleanup(plan, {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => auditOf([orphanRec({
+        orphanRecoveryProof: {
+          state: "trusted_generated",
+          fingerprint: "proof-b",
+          entries: [".next"],
+          detail: "trusted generated roots: .next",
+        },
+      })], []),
+      reclaimOrphanDir: () => {
+        called = true;
+        return { ok: true, detail: "" };
+      },
+    });
+    expect(called).toBe(false);
+    expect(res.removed).toHaveLength(0);
+    expect(res.refused[0].reason).toMatch(/changed|fingerprint|proof/i);
+  });
+
   it("dry-run reports the orphan candidate but calls no reclaim hook", async () => {
     const plan = planWorktreeCleanup(auditOf([orphanRec()], []), 0);
     let called = false;
@@ -1098,5 +1178,87 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
     });
     expect(called).toBe(false);
     expect(res.removed[0].reclaim).toBe("rm_dir");
+  });
+
+  it("explicit orphan reclaim cannot override a preserved fail-closed audit", async () => {
+    const reclaim = vi.fn(() => ({ ok: true, detail: "" }));
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const code = await worktreeCleanupCommand(
+      ["--reclaim-orphan", "/fake/repo/.roll/loop/worktrees/cycle-20260718-000000-2", "--repo", "/fake/repo"],
+      {
+        git: (args) => args[0] === "worktree" && args[1] === "list"
+          ? "worktree /fake/repo\nHEAD abc\nbranch refs/heads/main\n"
+          : "",
+        readDir: () => ["cycle-20260718-000000-2"],
+        readFile: () => null,
+        reclaimOrphanDir: reclaim,
+      },
+    );
+    expect(code).toBe(2);
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  it("reclaims an exact generated-residue orphan in a real repository fixture", async () => {
+    const { repo, orphan } = realOrphanFixture();
+    try {
+      const plan = planWorktreeCleanup(realOrphanAudit(repo), 0);
+      expect(plan.candidates).toHaveLength(1);
+      const result = await applyWorktreeCleanup(plan, {
+        repositoryRoot: repo,
+        dryRun: false,
+        audit: () => realOrphanAudit(repo),
+      });
+      expect(result.refused).toHaveLength(0);
+      expect(result.removed).toHaveLength(1);
+      expect(existsSync(orphan)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("final bounded reclaim refuses material added after the fresh audit", async () => {
+    const { repo, orphan } = realOrphanFixture();
+    try {
+      const plan = planWorktreeCleanup(realOrphanAudit(repo), 0);
+      const result = await applyWorktreeCleanup(plan, {
+        repositoryRoot: repo,
+        dryRun: false,
+        audit: () => {
+          const fresh = realOrphanAudit(repo);
+          writeFileSync(join(orphan, "package.json"), "{\"private\":true}\n", "utf8");
+          return fresh;
+        },
+      });
+      expect(result.removed).toHaveLength(0);
+      expect(result.refused[0].reason).toMatch(/changed-proof|reclaim-failed/i);
+      expect(existsSync(orphan)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("final bounded reclaim refuses a cycle that activates after the fresh audit", async () => {
+    const { repo, orphan } = realOrphanFixture();
+    try {
+      const plan = planWorktreeCleanup(realOrphanAudit(repo), 0);
+      const result = await applyWorktreeCleanup(plan, {
+        repositoryRoot: repo,
+        dryRun: false,
+        audit: () => {
+          const fresh = realOrphanAudit(repo);
+          writeFileSync(
+            join(repo, ".roll", "loop", "inner.lock"),
+            "cycle-20260723-130000-1 12345\n",
+            "utf8",
+          );
+          return fresh;
+        },
+      });
+      expect(result.removed).toHaveLength(0);
+      expect(result.refused[0].reason).toMatch(/active|proof|reclaim-failed/i);
+      expect(existsSync(orphan)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

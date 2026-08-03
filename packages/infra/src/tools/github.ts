@@ -1,6 +1,7 @@
-import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
+import type { ToolDeclaration, ToolDeps, ToolErrorCode, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
 import { rawGh, type PrMergeMode } from "../github.js";
 import { githubCiInputSchema, githubCiOutputSchema, githubPrInputSchema, githubPrOutputSchema } from "./schema-contracts.js";
+import { resolveToolExecutionContext, toolCorrelation } from "./workspace-context.js";
 
 export type GitHubToolId = "github.pr" | "github.ci";
 
@@ -94,13 +95,18 @@ export class GitHubTool {
 
   async execute(invocation: ToolInvocation<GitHubInput>, deps: ToolDeps): Promise<ToolResult<GitHubOutput>> {
     const startedAt = deps.now();
+    const scoped = resolveToolExecutionContext(invocation, "issue_required");
+    if (!scoped.ok) {
+      return failure(invocation, startedAt, deps.now(), scoped.error.message, false, undefined, scoped.error.code);
+    }
+    const effectiveInvocation = { ...invocation, context: scoped.context };
     try {
       if (this.id === "github.pr") {
-        return await this.executePr(invocation as ToolInvocation<GitHubPrInput>, deps, startedAt);
+        return await this.executePr(effectiveInvocation as ToolInvocation<GitHubPrInput>, deps, startedAt);
       }
-      return await this.executeCi(invocation as ToolInvocation<GitHubCiInput>, deps, startedAt);
+      return await this.executeCi(effectiveInvocation as ToolInvocation<GitHubCiInput>, deps, startedAt);
     } catch (cause) {
-      return failure(invocation, startedAt, deps.now(), "github execution failed", true, cause);
+      return failure(effectiveInvocation, startedAt, deps.now(), "github execution failed", true, cause);
     }
   }
 
@@ -191,11 +197,12 @@ function failure(
   message: string,
   retryable: boolean,
   detail?: unknown,
+  code: ToolErrorCode = "adapter_error",
 ): ToolResult<never> {
   return {
     ok: false,
     error: {
-      code: "adapter_error",
+      code,
       message,
       retryable,
       detail,
@@ -217,6 +224,7 @@ function toOutput(result: GitHubCommandOutput): GitHubCommandOutput {
 }
 
 function meta(invocation: ToolInvocation<GitHubInput>, startedAt: number, endedAt: number): ToolMeta {
+  const correlation = toolCorrelation(invocation);
   return {
     invocationId: invocation.invocationId,
     toolId: invocation.toolId,
@@ -224,5 +232,6 @@ function meta(invocation: ToolInvocation<GitHubInput>, startedAt: number, endedA
     startedAt,
     endedAt,
     durationMs: Math.max(0, endedAt - startedAt),
+    ...(correlation === undefined ? {} : { correlation }),
   };
 }

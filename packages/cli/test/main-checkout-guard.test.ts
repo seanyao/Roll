@@ -14,8 +14,9 @@ import {
   recoverMainCheckoutWriteProtectionResidue,
   releaseMainCheckoutWriteProtection,
   repairCoreWorktreeContamination,
+  resolveMainCheckoutGitPaths,
   withMainCheckoutWriteProtection,
-  worktreeGitEnv,
+  worktreeGitDiscoveryEnv,
   writeMainDirtyBaseline,
 } from "../src/runner/main-checkout-guard.js";
 
@@ -31,6 +32,14 @@ function sh(repo: string, args: string[]): string {
 
 function git(repo: string, args: string[]): void {
   execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+}
+
+function gitPath(repo: string, rel: string): string {
+  return sh(repo, ["rev-parse", "--path-format=absolute", "--git-path", rel]);
+}
+
+function currentBranchRef(repo: string): string {
+  return sh(repo, ["symbolic-ref", "HEAD"]);
 }
 
 function cleanRepo(prefix: string): string {
@@ -290,6 +299,66 @@ describe("main checkout guard — US-LOOP-089", () => {
     expect(sh(repo, ["branch", "--list", "rescue/*"])).toBe("");
   });
 
+  it("FIX-1473: does not quarantine the configured integration branch baseline", async () => {
+    const repo = cleanRepo("roll-main-configured-baseline-");
+    const runtimeDir = join(repo, ".roll", "loop");
+    writeFileSync(join(repo, ".roll", "local.yaml"), "integration_branch: origin/dev\n", "utf8");
+    writeFileSync(join(repo, "tracked.txt"), "workspace baseline\n", "utf8");
+    git(repo, ["add", "tracked.txt"]);
+    git(repo, ["commit", "-q", "-m", "workspace integration baseline"]);
+    git(repo, ["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+    const baselineHead = sh(repo, ["rev-parse", "HEAD"]);
+
+    const results = await quarantineMainCheckout({
+      repoCwd: repo,
+      runtimeDir,
+      cycleId: "C-configured-baseline",
+      storyId: "FIX-1473",
+      phase: "pre-spawn",
+      nowMs: () => 2_100,
+    });
+
+    expect(results).toEqual([]);
+    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(baselineHead);
+  });
+
+  it("FIX-1473: quarantines only commits added after the configured integration branch", async () => {
+    const repo = cleanRepo("roll-main-configured-ahead-");
+    const runtimeDir = join(repo, ".roll", "loop");
+    writeFileSync(join(repo, ".roll", "local.yaml"), "integration_branch: origin/dev\n", "utf8");
+    writeFileSync(join(repo, "tracked.txt"), "workspace baseline\n", "utf8");
+    git(repo, ["add", "tracked.txt"]);
+    git(repo, ["commit", "-q", "-m", "workspace integration baseline"]);
+    git(repo, ["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+    const baselineHead = sh(repo, ["rev-parse", "origin/dev"]);
+    writeFileSync(join(repo, "tracked.txt"), "leaked after baseline\n", "utf8");
+    git(repo, ["add", "tracked.txt"]);
+    git(repo, ["commit", "-q", "-m", "leaked configured checkout commit"]);
+    const leakedHead = sh(repo, ["rev-parse", "HEAD"]);
+
+    const results = await quarantineMainCheckout({
+      repoCwd: repo,
+      runtimeDir,
+      cycleId: "C-configured-ahead",
+      storyId: "FIX-1473",
+      phase: "post-cycle",
+      nowMs: () => 2_200,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      reason: "ahead",
+      files: ["<commit>:leaked configured checkout commit"],
+    });
+    // FIX-1475: quarantine records the leaked commits but must never move the
+    // shared checkout. The operator can inspect the bookmark and decide how to
+    // reconcile the branch explicitly.
+    expect(sh(repo, ["rev-parse", "HEAD"])).toBe(leakedHead);
+    expect(sh(repo, ["rev-parse", results[0]!.ref])).toBe(leakedHead);
+    expect(results[0]!.restoreCommand).toContain("main was NOT moved");
+    expect(results[0]!.restoreCommand).toContain("git reset --hard origin/dev");
+  });
+
   it("checkMainDirty ignores .roll runtime and skills submodule dirt", async () => {
     const repo = cleanRepo("roll-main-dirty-scope-");
     writeFileSync(join(repo, ".roll", "loop", "events.ndjson"), "runtime\n", "utf8");
@@ -337,22 +406,17 @@ describe("main checkout guard — US-LOOP-089", () => {
     const wt = join(nest, "cycle-wt");
     git(repo, ["worktree", "add", "-q", "-b", "cycle/nested-test", wt, "origin/main"]);
 
-    const env = worktreeGitEnv(wt, repo);
-    expect(env).toMatchObject({
-      GIT_WORK_TREE: wt,
-      GIT_CEILING_DIRECTORIES: dirname(repo),
-    });
-    expect(env.GIT_CEILING_DIRECTORIES).not.toBe(dirname(wt));
+    const env = worktreeGitDiscoveryEnv(wt);
+    expect(env).toEqual({ GIT_CEILING_DIRECTORIES: dirname(wt) });
+    expect(env).not.toHaveProperty("GIT_DIR");
+    expect(env).not.toHaveProperty("GIT_WORK_TREE");
   });
 
   it("does not fabricate GIT_DIR when git cannot resolve the worktree", () => {
     const repo = cleanRepo("roll-main-gitenv-fail-");
     const missing = join(repo, "missing-worktree");
 
-    expect(worktreeGitEnv(missing, repo)).toEqual({
-      GIT_WORK_TREE: missing,
-      GIT_CEILING_DIRECTORIES: tmpdir(),
-    });
+    expect(worktreeGitDiscoveryEnv(missing)).toEqual({ GIT_CEILING_DIRECTORIES: dirname(missing) });
   });
 });
 
@@ -588,6 +652,41 @@ describe("FIX-1210 — config.lock sentinel blocks nested git init writes", () =
     expect(recovered.configLockRemoved).toBe(false);
     expect(recovered.foreignConfigLock).toBe(true);
     expect(readFileSync(lockPath, "utf8")).toBe("foreign git config transaction\n");
+  });
+
+  it.each(["primary", "linked"] as const)("FIX-1473: resolves and guards real Git paths for a %s worktree", (kind) => {
+    const primary = cleanRepo(`roll-fix1473-${kind}-`);
+    const repo = kind === "primary" ? primary : worktreeFrom(primary);
+    const runtimeDir = join(primary, ".roll", "loop", `guard-${kind}`);
+    const protectedTargets = [
+      gitPath(repo, "config"),
+      gitPath(repo, "index"),
+      gitPath(repo, "HEAD"),
+      gitPath(repo, currentBranchRef(repo)),
+    ];
+    const lockPaths = protectedTargets.map((path) => `${path}.lock`);
+    const resolved = resolveMainCheckoutGitPaths(repo);
+
+    expect(resolved).toBeDefined();
+    expect(resolved?.config).toBe(protectedTargets[0]);
+    expect(resolved?.index).toBe(protectedTargets[1]);
+    expect(resolved?.head).toBe(protectedTargets[2]);
+    expect(resolved?.branchRef).toBe(protectedTargets[3]);
+    if (kind === "linked") expect(resolved?.gitDir).not.toBe(resolved?.commonDir);
+    else expect(resolved?.gitDir).toBe(resolved?.commonDir);
+
+    applyMainCheckoutWriteProtection({ repoCwd: repo, runtimeDir, cycleId: `C-${kind}`, nowMs: () => 1000 });
+    try {
+      for (const lockPath of lockPaths) {
+        expect(existsSync(lockPath), lockPath).toBe(true);
+        expect(readFileSync(lockPath, "utf8"), lockPath).toBe("roll main-checkout git lock sentinel\n");
+      }
+      expect(() => sh(repo, ["status", "--porcelain"])).not.toThrow();
+    } finally {
+      releaseMainCheckoutWriteProtection({ repoCwd: repo, runtimeDir, cycleId: `C-${kind}`, nowMs: () => 2000 });
+    }
+
+    for (const lockPath of lockPaths) expect(existsSync(lockPath), lockPath).toBe(false);
   });
 });
 

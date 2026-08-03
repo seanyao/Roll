@@ -42,7 +42,7 @@ afterAll(() => {
   for (const d of dirs) execSync(`rm -rf '${d}'`);
 });
 
-function tsList(env: Record<string, string>): string {
+function tsList(env: Record<string, string>, cwd = proj): string {
   const save: Record<string, string | undefined> = {};
   const keys = ["PATH", "HOME", "ROLL_HOME", "ROLL_LANG", "NO_COLOR", "LC_ALL", "LANG"];
   for (const k of keys) save[k] = process.env[k];
@@ -55,7 +55,7 @@ function tsList(env: Record<string, string>): string {
   delete process.env["ROLL_LANG"];
   for (const [k, v] of Object.entries(env)) process.env[k] = v;
   const saveCwd = process.cwd();
-  process.chdir(proj);
+  process.chdir(cwd);
   const chunks: string[] = [];
   const real = process.stdout.write.bind(process.stdout);
   // @ts-expect-error capture-only
@@ -156,5 +156,43 @@ describe("frozen: roll agent list render", () => {
     } finally {
       execSync(`rm -f '${join(proj, ".roll", "local.yaml")}'`);
     }
+  });
+
+  it("US-WS-017a: machine view is independent of cwd project casting", () => {
+    const other = mkdtempSync(join(tmpdir(), "roll-al-other-"));
+    dirs.push(other);
+    mkdirSync(join(home, ".roll"), { recursive: true });
+    writeFileSync(join(home, ".roll", "agents.yaml"), `schema: roll-agents/v1
+scope: machine
+agents:
+  claude:
+    capabilities: [supervise, execute]
+  kimi:
+    capabilities: [execute]
+    disabled: true
+roles:
+  supervise: { use: claude }
+`);
+    for (const [cwd, current] of [[proj, "codex"], [other, "kimi"]] as const) {
+      mkdirSync(join(cwd, ".roll"), { recursive: true });
+      writeFileSync(join(cwd, ".roll", "agents.yaml"), `schema: roll-agents/v1
+scope: project
+agents:
+  claude:
+    capabilities: [supervise]
+    disabled: true
+  ${current}:
+    capabilities: [supervise]
+roles:
+  supervise: { use: ${current} }
+`);
+    }
+
+    const first = tsList({ ROLL_LANG: "en", NO_COLOR: "1" }, proj);
+    const second = tsList({ ROLL_LANG: "en", NO_COLOR: "1" }, other);
+    expect(second).toBe(first);
+    expect(first).toContain("✓ claude  (current)");
+    expect(first).toContain("⊘ kimi  (disabled · machine)");
+    expect(first).not.toContain("disabled · project");
   });
 });

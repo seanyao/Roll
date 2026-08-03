@@ -53,6 +53,15 @@
 
 ### 发布
 - 发布改为两步，确保「能装到才算发布」：推 `v*` tag 时先建**草稿** GitHub Release(不再一上来就标成正式版);等你手动 `npm publish`(2FA)后,跑 `roll release verify <版本>`(或在 Actions 里手动触发)——它会核对 npm 上确实有这个版本且是 latest,通过了才把草稿提升为正式发布,不通过就明确报错、草稿原样留着,绝不谎报完成。已提升的正式发布不会再被同日合并/删除逻辑动到(FIX-1480)[release]
+ ### 新功能
+- `roll context` — 从 LLM Wiki 获取最新企业上下文，并让 Agent 安全复用同一快照
+- 新增 `roll workspace doctor <id>`：只读汇总 registry/manifest、共享 cache、Requirement 投影/archive、Issue/worktree、runtime lock 与 machine lease 漂移，按 `healthy | repairable | blocked | data_loss_risk` 给出相对证据和一个下一步；仅接受诊断输出的 typed repair，拒绝 dirty/unpushed work、untrusted archive、foreign/live lease 和不明确路径，所有可恢复事务支持 journal 续跑与幂等收敛（US-WS-018）[core+infra+cli]
+- 新增 Workspace-scoped `roll delivery list|show|reconcile`：统一展示 Issue 各 required repository 的 PR/CI/merge facts、缺失 gate 与 exact-SHA Integration Acceptance；`list --all` 只读，`roll loop reconcile` 复用同一对账路径，backlog Markdown 不参与完成判定（US-WS-015）[cli]
+- Workspace 多仓 Story 的集成验收现在绑定每个 required repository 的 exact merge SHA，并先验证该 SHA 可从配置的 integration branch 到达；Requirement `attest.md` 只从安全包含的 Issue evidence 重建，旧 SHA、缺失证据、符号链接逃逸或损坏/不可信的 Requirement archive 都不能产生最终通过（US-WS-014）[core+infra]
+
+### 稳定性
+- 临时 Git 不再污染主检出（FIX-1473）[loop]
+  <!-- evidence: .roll/features/loop-engine/FIX-1473/latest/FIX-1473-report.html -->
 
 ## v4.721.2 — 2026-07-21
 

@@ -226,7 +226,7 @@ describe("ported routing (no bash fallback)", () => {
     expect(u).toContain("roll <command>");
     const listed = u.split("Commands:")[1] ?? "";
     expect(listed.trim()).toMatch(
-      /^agent, backlog, config, design, doctor, help, idea, init, loop, next, north, release, setup, status, test, update$/m,
+      /^agent, backlog, config, delivery, design, doctor, help, idea, init, loop, next, north, release, setup, status, test, workspace, update$/m,
     );
   });
 });

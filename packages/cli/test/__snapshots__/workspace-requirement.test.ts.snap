@@ -1,0 +1,68 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-WS-007 roll workspace requirement add > captures, repeats and updates a Jira-shaped local fixture through stable JSON > created-json 1`] = `
+"{
+  "schema": "roll.workspace-requirement-result/v1",
+  "outcome": "created",
+  "workspaceId": "ws-demo",
+  "source": {
+    "provider": "jira",
+    "ref": "SOT-15499"
+  },
+  "revision": "42",
+  "contextCount": 1,
+  "storyCount": 2,
+  "path": "<HOME>/workspace/requirements/jira/req-c78ccf14ea21"
+}
+"
+`;
+
+exports[`US-WS-007 roll workspace requirement add > captures, repeats and updates a Jira-shaped local fixture through stable JSON > reused-json 1`] = `
+"{
+  "schema": "roll.workspace-requirement-result/v1",
+  "outcome": "reused",
+  "workspaceId": "ws-demo",
+  "source": {
+    "provider": "jira",
+    "ref": "SOT-15499"
+  },
+  "revision": "42",
+  "contextCount": 1,
+  "storyCount": 2,
+  "path": "<HOME>/workspace/requirements/jira/req-c78ccf14ea21"
+}
+"
+`;
+
+exports[`US-WS-007 roll workspace requirement add > captures, repeats and updates a Jira-shaped local fixture through stable JSON > updated-json 1`] = `
+"{
+  "schema": "roll.workspace-requirement-result/v1",
+  "outcome": "updated",
+  "workspaceId": "ws-demo",
+  "source": {
+    "provider": "jira",
+    "ref": "SOT-15499"
+  },
+  "revision": "43",
+  "contextCount": 1,
+  "storyCount": 2,
+  "path": "<HOME>/workspace/requirements/jira/req-c78ccf14ea21"
+}
+"
+`;
+
+exports[`US-WS-007 roll workspace requirement add > resolves explicit, environment and cwd Workspace selectors ahead of a different active Workspace > terminal-cwd-reused 1`] = `
+"Requirement jira:SOT-15499 revision 42 (reused)
+Context files: 1
+Linked Stories: 2
+Path: <HOME>/workspace/requirements/jira/req-c78ccf14ea21
+"
+`;
+
+exports[`US-WS-007 roll workspace requirement add > resolves explicit, environment and cwd Workspace selectors ahead of a different active Workspace > terminal-en 1`] = `
+"Requirement jira:SOT-15499 revision 42 (created)
+Context files: 1
+Linked Stories: 2
+Path: <HOME>/workspace/requirements/jira/req-c78ccf14ea21
+"
+`;

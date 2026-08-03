@@ -52,6 +52,14 @@ interface NoteCandidate {
   path: string;
 }
 
+function isWorkspaceRoot(root: string): boolean {
+  return existsSync(join(root, "workspace.yaml"));
+}
+
+function workspaceIssueNotesDir(root: string, storyId: string): string {
+  return join(root, "issues", storyId, "notes");
+}
+
 const BASE_KEYS = new Set(["skill", "story", "score", "verdict", "ts", "timestamp", "resize-reason", "resize-gaps"]);
 
 function hrefFrom(fromDir: string | undefined, path: string): string | undefined {
@@ -184,6 +192,9 @@ function noteCandidates(dir: string, storyId?: string): NoteCandidate[] {
 }
 
 export function readStoryReviewScores(projectPath: string, storyId: string, hrefFromDir?: string): ReviewScoreEntry[] {
+  if (isWorkspaceRoot(projectPath)) {
+    return readCandidates(noteCandidates(workspaceIssueNotesDir(projectPath, storyId), storyId), storyId, hrefFromDir);
+  }
   const cardNotes = join(cardArchiveDir(projectPath, storyId), "notes");
   const card = readCandidates(noteCandidates(cardNotes), storyId, hrefFromDir);
   if (card.length > 0) return card;
@@ -294,6 +305,19 @@ export function readLatestStoryPeerScore(
 }
 
 function allReviewScoreCandidates(projectPath: string): NoteCandidate[] {
+  if (isWorkspaceRoot(projectPath)) {
+    const out: NoteCandidate[] = [];
+    const issuesDir = join(projectPath, "issues");
+    try {
+      for (const issue of readdirSync(issuesDir, { withFileTypes: true })) {
+        if (!issue.isDirectory() || issue.isSymbolicLink()) continue;
+        out.push(...noteCandidates(join(issuesDir, issue.name, "notes"), issue.name));
+      }
+    } catch {
+      /* issues dir absent */
+    }
+    return out;
+  }
   const out = noteCandidates(join(projectPath, ".roll", "notes"));
   const featuresDir = join(projectPath, ".roll", "features");
   try {
@@ -379,6 +403,7 @@ export interface ReviewScoreWriteResult {
  * design/session-level notes that are not card-owned.
  */
 function reviewScoreNoteDir(projectPath: string, storyId: string): string {
+  if (isWorkspaceRoot(projectPath)) return workspaceIssueNotesDir(projectPath, storyId);
   const epic = epicForStory(projectPath, storyId);
   if (epic !== null && existsSync(cardArchiveDir(projectPath, storyId))) {
     return join(cardArchiveDir(projectPath, storyId), "notes");
@@ -387,8 +412,8 @@ function reviewScoreNoteDir(projectPath: string, storyId: string): string {
 }
 
 export function writeReviewScoreNote(projectPath: string, input: ReviewScoreWriteInput): ReviewScoreWriteResult {
-  if (!existsSync(join(projectPath, ".roll"))) {
-    throw new Error(`review-score: ${projectPath} is not a roll project (no .roll/) — run from the main project root`);
+  if (!existsSync(join(projectPath, ".roll")) && !isWorkspaceRoot(projectPath)) {
+    throw new Error(`review-score: ${projectPath} is not a roll project or Workspace — run from a canonical root`);
   }
   const skill = input.skill.trim();
   if (skill === "") throw new Error("review-score: skill must be non-empty");

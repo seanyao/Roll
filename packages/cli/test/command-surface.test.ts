@@ -20,8 +20,8 @@ import { registerAll } from "../src/index.js";
 
 /** AC2: the approved public top-level command set, in display order. */
 const APPROVED_PUBLIC = [
-  "agent", "backlog", "config", "design", "doctor", "help", "idea",
-  "init", "loop", "next", "north", "release", "setup", "status", "test", "update",
+  "agent", "backlog", "config", "delivery", "design", "doctor", "help", "idea",
+  "init", "loop", "next", "north", "release", "setup", "status", "test", "workspace", "update",
 ];
 
 describe("REFACTOR-056 — command-surface registry truth source", () => {
@@ -100,6 +100,13 @@ describe("REFACTOR-056 — validateCommandSurface fails loud", () => {
     expect(() =>
       validateCommandSurface([{ current: "x", owner: "status", audience: "human", disposition: "nested", rationale: "t" }]),
     ).toThrow(/must declare a target/);
+  });
+
+  it("rejects an alias that collides with any canonical command", () => {
+    expect(() => validateCommandSurface([
+      { current: "workspace", aliases: ["ws"], owner: "workspace", audience: "human", disposition: "public", rationale: "t" },
+      { current: "ws", owner: "status", audience: "human", disposition: "nested", target: "status ws", rationale: "t" },
+    ])).toThrow(/duplicate alias/);
   });
 
   it("accepts the shipped registry", () => {
