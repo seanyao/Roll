@@ -7,7 +7,9 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --passWithNoTests",
+    "test": "pnpm run test:parallel && pnpm run test:stateful",
+    "test:parallel": "vitest run --passWithNoTests --exclude test/multi-repo-capture-facts.test.ts --exclude test/runner-repository-context.test.ts",
+    "test:stateful": "vitest run test/multi-repo-capture-facts.test.ts test/runner-repository-context.test.ts --maxWorkers=1 --no-file-parallelism",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {
