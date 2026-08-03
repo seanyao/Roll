@@ -388,7 +388,6 @@ include_existing: []
 privacy:
   gitignore_dot_roll: true
 sync_targets: []
-enable_loop: false
 agent_routes_template: default
 ${extra}`;
 }
