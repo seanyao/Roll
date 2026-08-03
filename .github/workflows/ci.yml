@@ -57,7 +57,11 @@ jobs:
       - run: node scripts/gen-module-maps.mjs && git diff --exit-code docs/maps/
       # The root gate builds the workspace, runs the role-taxonomy audit and
       # orphan-snapshot guard, then executes every package's Vitest suite.
-      - run: ROLL_TEST_SKIP_BUILD=1 pnpm test
+      # `npm pack` runs root prepack from inside npm. Keep action-setup's pnpm
+      # binary on that child process's PATH on self-hosted runners as well.
+      - run: |
+          export PATH="$PNPM_HOME:$PATH"
+          ROLL_TEST_SKIP_BUILD=1 pnpm test
 
   # US-RULE-004c — a separately named, registry-backed observation. In soft
   # mode a hit annotates the PR and exits 0; switching policy/rules.yaml to
