@@ -10,7 +10,7 @@ import {
 } from "@roll/core";
 import { MANAGED_WORKSPACE_SCHEMA, normalizeManagedWorkspaceSet, type ManagedWorkspaceSet } from "@roll/spec";
 import { git, inspectManagedWorktree, managedWorktreeAbsent, managedWorktreeRelease, managedWorktreeRemoteContainment, projectIdentity, resolveIntegrationBranch, retainManagedWorktreeHead, worktreeAdd } from "@roll/infra";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { bootstrapWorktreeDeps, bootstrapWorktreePrebuild, bootstrapWorktreeSkills, linkRollIntoWorktree, readPrebuildDistEnabled } from "./worktree-bootstrap.js";
@@ -440,6 +440,227 @@ export function releaseSkillDispatchReservation(
     runId,
   });
   return released ? { ok: true } : { ok: false, reason: "reservation_release_refused" };
+}
+
+export type SkillDispatchConfirmRefusal =
+  | "parent_required"
+  | "execution_inside_workspace"
+  | "workspace_unknown"
+  | "merged_or_unverifiable"
+  | "attest_not_accepted"
+  | "workspace_unavailable"
+  | "workspace_identity_mismatch"
+  | "workspace_dirty"
+  | "conflicting_release_request"
+  | "reservation_held_by_other"
+  | "release_incomplete"
+  | "reservation_release_refused";
+
+export type SkillDispatchConfirmResult =
+  | { readonly ok: true; readonly finalized: true }
+  | { readonly ok: false; readonly reason: SkillDispatchConfirmRefusal; readonly releaseFailure?: { readonly relativeLocator: string; readonly reason: string } };
+
+export interface SkillDispatchConfirmDeps {
+  readonly now?: () => number;
+  readonly inspect?: (repoCwd: string, path: string) => ReturnType<typeof inspectManagedWorktree>;
+  readonly absent?: (repoCwd: string, path: string) => ReturnType<typeof managedWorktreeAbsent>;
+  readonly release?: (repoCwd: string, path: string, expectedHead: string, repositoryId: string) => ReturnType<typeof managedWorktreeRelease>;
+  readonly append?: (eventsPath: string, event: Parameters<EventBus["appendEvent"]>[1]) => void;
+  /** Test seam; production proves every member against main and the parent PR anchor. */
+  readonly merged?: (projectRoot: string, workspace: ManagedWorkspaceSet, paths: Readonly<Record<string, string>>) => boolean | Promise<boolean>;
+  /** Test-only external PR lookup boundary; Git proof remains production code. */
+  readonly mergedPrCommit?: (projectRoot: string, branch: string) => string | undefined;
+  readonly integrationBranch?: (projectRoot?: string) => string;
+  /** Test seam; production requires a durable PASS review page for the same story. */
+  readonly attested?: (projectRoot: string, storyId: string) => boolean | Promise<boolean>;
+}
+
+function fullOid(value: string): boolean {
+  return /^[0-9a-f]{40}$/.test(value) || /^[0-9a-f]{64}$/.test(value);
+}
+
+function mergedPrCommit(projectRoot: string, branch: string): string | undefined {
+  try {
+    const raw = execFileSync("gh", ["pr", "view", branch, "--json", "state,mergedAt,mergeCommit,headRefName"], {
+      cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    });
+    const parsed = JSON.parse(raw) as { state?: unknown; mergedAt?: unknown; headRefName?: unknown; mergeCommit?: { oid?: unknown } | null };
+    const oid = parsed.mergeCommit?.oid;
+    return parsed.state === "MERGED" && typeof parsed.mergedAt === "string" && parsed.mergedAt !== ""
+      && parsed.headRefName === branch && typeof oid === "string" && fullOid(oid) ? oid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Prove a delivered multi-member dispatch without relying on its original commits surviving a squash merge. */
+function deliveredDispatchOnIntegration(projectRoot: string, workspace: ManagedWorkspaceSet, paths: Readonly<Record<string, string>>, lookup = mergedPrCommit, branch = resolveIntegrationBranch): boolean {
+  const integration = branch(projectRoot);
+  const parent = workspace.members[0];
+  const parentBranch = parent?.publishRef?.replace(/^refs\/heads\//, "");
+  if (parent === undefined || parentBranch === undefined || parentBranch === "") return false;
+  const merge = lookup(projectRoot, parentBranch);
+  if (merge === undefined) return false;
+  try {
+    execFileSync("git", ["-C", projectRoot, "merge-base", "--is-ancestor", merge, integration], { stdio: "ignore" });
+    const mergeTree = execFileSync("git", ["-C", projectRoot, "rev-parse", `${merge}^{tree}`], { encoding: "utf8" }).trim();
+    if (mergeTree === "") return false;
+    return workspace.members.every((member) => {
+      const path = paths[member.relativeLocator];
+      if (path === undefined) return false;
+      const head = execFileSync("git", ["-C", path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      try {
+        execFileSync("git", ["-C", projectRoot, "merge-base", "--is-ancestor", head, integration], { stdio: "ignore" });
+        return true;
+      } catch {
+        // This is the squash-safe path. A child need not have its own PR when
+        // its final tree is exactly the parent's landed PR tree.
+        return execFileSync("git", ["-C", path, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim() === mergeTree;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function acceptedStoryAttest(projectRoot: string, storyId: string): boolean {
+  const features = join(projectRoot, ".roll", "features");
+  try {
+    for (const epic of readdirSync(features, { withFileTypes: true })) {
+      if (!epic.isDirectory()) continue;
+      const latest = join(features, epic.name, storyId, "latest", `${storyId}-review.html`);
+      try {
+        const review = readFileSync(latest, "utf8");
+        if (/Gate:\s*PASS/.test(review) && /class="ac s-pass"/.test(review)
+          && !/class="ac s-(?:fail|claimed)"/.test(review)) return true;
+      } catch { /* another epic/card is not an acceptance fact */ }
+    }
+  } catch { /* unreadable archive is not accepted evidence */ }
+  return false;
+}
+
+function deliveredRequest(
+  events: readonly LifecycleRecord[],
+  runId: string,
+  operationId: string,
+  workspace: ManagedWorkspaceSet,
+): { readonly heads: readonly { readonly relativeLocator: string; readonly head: string }[]; readonly completed: boolean } | "conflict" | undefined {
+  let heads: readonly { readonly relativeLocator: string; readonly head: string }[] | undefined;
+  let completed = false;
+  for (const event of events) {
+    if (event.runId !== runId) continue;
+    if (event.type === "worktree:release_requested") {
+      // A durable delivered request is the sole retry identity. Even a
+      // byte-for-byte duplicate is ambiguous write-ahead state, not a second
+      // operation to continue.
+      if (heads !== undefined || event.operationId !== operationId || event.reason !== "delivered"
+        || !isCompleteExpectedHeadSet(event.expectedHeads, workspace)) return "conflict";
+      heads = event.expectedHeads;
+      continue;
+    }
+    if (event.type === "worktree:released") {
+      // Completion is valid only after this operation's exact request and may
+      // never stand in for a missing or unrelated delivery admission.
+      if (heads === undefined || completed || event.operationId !== operationId
+        || !isCompleteExpectedHeadSet(event.expectedHeads, workspace)
+        || !sameExpectedHeadSet(heads, event.expectedHeads)) return "conflict";
+      completed = true;
+    }
+  }
+  return heads === undefined ? undefined : { heads, completed };
+}
+
+/**
+ * Parent-only delivery confirmation. It is intentionally the only path that
+ * may turn a live dispatch into the existing delivered release lifecycle.
+ */
+export async function confirmSkillDispatchDelivery(
+  projectRoot: string,
+  storyId: string,
+  runId: string,
+  executionCwd: string,
+  deps: SkillDispatchConfirmDeps = {},
+): Promise<SkillDispatchConfirmResult> {
+  if (skillDispatchActorForCwd(executionCwd) === "child") return { ok: false, reason: "parent_required" };
+  const root = realpathSync(projectRoot);
+  const eventsPath = join(root, ".roll", "loop", "events.ndjson");
+  const events = lifecycleEvents(eventsPath);
+  const workspace = allocatedDispatch(eventsPath, storyId, runId);
+  if (workspace === undefined) return { ok: false, reason: "workspace_unknown" };
+  const paths = workspacePaths(join(root, ".roll", "loop", "worktrees"), workspace);
+  if (cwdInsideAnyWorkspaceMember(executionCwd, paths)) return { ok: false, reason: "execution_inside_workspace" };
+  const allocation = [...events].reverse().find((event) => event.type === "worktree:allocated" && event.workspace?.runId === runId && event.workspace.storyId === storyId);
+  if (allocation?.operationId === undefined) return { ok: false, reason: "workspace_unknown" };
+  const operationId = `${allocation.operationId}:release`;
+  const existing = deliveredRequest(events, runId, operationId, workspace);
+  if (existing === "conflict") return { ok: false, reason: "conflicting_release_request" };
+  const leasePath = join(root, ".roll", "loop", "leases");
+  const lease = readLeases(leasePath)[storyId];
+  if (lease !== undefined && (lease.source !== "skill-dispatch" || lease.runId !== runId)) return { ok: false, reason: "reservation_held_by_other" };
+
+  const inspect = deps.inspect ?? inspectManagedWorktree;
+  const absent = deps.absent ?? managedWorktreeAbsent;
+  const release = deps.release ?? managedWorktreeRelease;
+  const frozen = new Map(existing?.heads.map((head) => [head.relativeLocator, head.head]) ?? []);
+  const ordered = [...workspace.members].sort((left, right) => right.relativeLocator.length - left.relativeLocator.length);
+  // A durable completion means every member was already removed. A later
+  // reappearing path is conflicting state, never an invitation to delete it.
+  if (existing?.completed && !(await Promise.all(ordered.map((member) => absent(root, paths[member.relativeLocator]!)))).every(Boolean)) {
+    return { ok: false, reason: "conflicting_release_request" };
+  }
+  // Before the durable request, all gates are read-only and whole-set atomic.
+  if (existing === undefined) {
+    if (!await (deps.merged?.(root, workspace, paths) ?? deliveredDispatchOnIntegration(root, workspace, paths, deps.mergedPrCommit, deps.integrationBranch))) {
+      return { ok: false, reason: "merged_or_unverifiable" };
+    }
+    if (!await (deps.attested?.(root, storyId) ?? acceptedStoryAttest(root, storyId))) {
+      return { ok: false, reason: "attest_not_accepted" };
+    }
+  }
+  for (const member of ordered) {
+    const path = paths[member.relativeLocator]!;
+    if (existing !== undefined && await absent(root, path)) continue;
+    const observed = await inspect(root, path);
+    if (observed === undefined) return { ok: false, reason: "workspace_unavailable" };
+    if (!observed.registered || observed.repositoryId !== member.repositoryId) return { ok: false, reason: "workspace_identity_mismatch" };
+    if (!observed.clean) return { ok: false, reason: "workspace_dirty" };
+    const prior = frozen.get(member.relativeLocator);
+    if (prior !== undefined && prior !== observed.head) return { ok: false, reason: "conflicting_release_request" };
+    frozen.set(member.relativeLocator, observed.head);
+  }
+  const heads = workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: frozen.get(member.relativeLocator)! }));
+  if (heads.some((head) => head.head === undefined)) return { ok: false, reason: "workspace_unavailable" };
+  if (existing === undefined) {
+    try {
+      (deps.append ?? ((path, event) => new EventBus().appendEvent(path, event)))(eventsPath, {
+        type: "worktree:release_requested", runId, reason: "delivered", operationId, expectedHeads: heads, ts: deps.now?.() ?? Date.now(),
+      });
+    } catch { return { ok: false, reason: "release_incomplete" }; }
+  }
+  for (const member of ordered) {
+    const path = paths[member.relativeLocator]!;
+    const head = frozen.get(member.relativeLocator)!;
+    if (await absent(root, path)) continue;
+    const released = await release(root, path, head, member.repositoryId);
+    if (released.code !== 0) {
+      return {
+        ok: false,
+        reason: "release_incomplete",
+        releaseFailure: { relativeLocator: member.relativeLocator, reason: released.reason ?? "unknown" },
+      };
+    }
+  }
+  if (!existing?.completed) {
+    try {
+      (deps.append ?? ((path, event) => new EventBus().appendEvent(path, event)))(eventsPath, {
+        type: "worktree:released", runId, operationId, expectedHeads: heads, ts: deps.now?.() ?? Date.now(),
+      });
+    } catch { return { ok: false, reason: "release_incomplete" }; }
+  }
+  if (lease !== undefined && !releaseStoryLease(leasePath, storyId, { source: "skill-dispatch", runId })) {
+    return { ok: false, reason: "reservation_release_refused" };
+  }
+  return { ok: true, finalized: true };
 }
 
 export type SkillDispatchStopRefusal =

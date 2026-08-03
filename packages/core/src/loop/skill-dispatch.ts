@@ -54,7 +54,7 @@ export type SkillDispatchPlanResult =
   | { readonly ok: true; readonly value: SkillDispatchPlan }
   | { readonly ok: false; readonly reason: SkillDispatchRefusal };
 
-export type SkillDispatchOperation = "publish_pr" | "attest" | "close_story" | "release_reservation";
+export type SkillDispatchOperation = "publish_pr" | "attest" | "close_story" | "release_reservation" | "confirm_delivery";
 export type SkillDispatchActor = "parent" | "child";
 
 function nonEmpty(value: unknown): value is string {

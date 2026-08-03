@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { EventBus, claimStoryLease, readLeases, setLease } from "@roll/core";
 import { managedWorktreeRelease, projectIdentity } from "@roll/infra";
-import { allocateSkillDispatchRun, integrateSkillDispatchChild, releaseSkillDispatchReservation, skillDispatchActorForCwd, skillDispatchChangedPaths, skillDispatchScopeAllows, stopSkillDispatchRun } from "../src/runner/skill-dispatch-workspace.js";
+import { allocateSkillDispatchRun, confirmSkillDispatchDelivery, integrateSkillDispatchChild, releaseSkillDispatchReservation, skillDispatchActorForCwd, skillDispatchChangedPaths, skillDispatchScopeAllows, stopSkillDispatchRun } from "../src/runner/skill-dispatch-workspace.js";
 
 function project(): string {
   const root = mkdtempSync(join(tmpdir(), "roll-dispatch-project-"));
@@ -30,7 +30,7 @@ async function stopFixture(runId: string) {
   const workspace = {
     schema: 1 as const, runId, storyId: "FIX-1498", kind: "skill_dispatch" as const, topology: "solo" as const,
     members: [
-      { repositoryId, workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached" as const, head: base } },
+      { repositoryId, workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached" as const, head: base }, publishRef: `refs/heads/${runId}` },
       { repositoryId, workspaceKey: runId, relativeLocator: `${runId}.children/docs`, actionId: "docs", declaredFileScope: ["docs"], checkoutRef: { kind: "detached" as const, head: base } },
     ] as const,
   };
@@ -69,6 +69,282 @@ function allocator(root: string) {
 }
 
 describe("US-LOOP-127 — managed Skill parent/child allocator", () => {
+  it("confirms an independently merged and accepted parent plus child through the existing release lifecycle", async () => {
+    const fixture = await stopFixture("dispatch-confirm-delivered");
+    const result = await confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-delivered", fixture.root, {
+      merged: async () => true,
+      attested: () => true,
+    });
+    expect(result).toEqual({ ok: true, finalized: true });
+    expect(existsSync(fixture.child)).toBe(false);
+    expect(existsSync(fixture.parent)).toBe(false);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toBeUndefined();
+    const events = readFileSync(fixture.eventsPath, "utf8");
+    expect(events).toContain('"reason":"delivered"');
+    expect(events.indexOf('"type":"worktree:release_requested"')).toBeLessThan(events.indexOf('"type":"worktree:released"'));
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("admits a real final-tree squash proof through the PR lookup boundary", async () => {
+    const fixture = await stopFixture("dispatch-confirm-final-tree");
+    execFileSync("git", ["branch", "-M", "main"], { cwd: fixture.root });
+    const side = execFileSync("git", ["commit-tree", `${fixture.base}^{tree}`, "-p", fixture.base], { cwd: fixture.root, input: "side\n", encoding: "utf8" }).trim();
+    const merge = execFileSync("git", ["commit-tree", `${fixture.base}^{tree}`, "-p", fixture.base, "-p", side], { cwd: fixture.root, input: "merge\n", encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/heads/main", merge], { cwd: fixture.root });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", merge], { cwd: fixture.root });
+    for (const path of [fixture.parent, fixture.child]) execFileSync("git", ["commit", "--allow-empty", "-m", "squashed tip"], { cwd: path, stdio: "ignore" });
+    const review = join(fixture.root, ".roll", "features", "test", "FIX-1498", "latest");
+    mkdirSync(review, { recursive: true });
+    writeFileSync(join(review, "FIX-1498-review.html"), 'Gate: PASS <div class="ac s-pass"></div>');
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", fixture.workspace.runId, fixture.root, { mergedPrCommit: () => merge, integrationBranch: () => "main" })).resolves.toEqual({ ok: true, finalized: true });
+    expect(readLeases(fixture.leases)["FIX-1498"]).toBeUndefined();
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("uses production gh parsing for ancestor proof and rejects bad PR or attest facts", async () => {
+    const oldPath = process.env.PATH ?? "";
+    const run = async (name: string, response: string, review?: string) => {
+      const fixture = await stopFixture(`dispatch-confirm-gh-${name}`);
+      execFileSync("git", ["branch", "-M", "main"], { cwd: fixture.root });
+      execFileSync("git", ["update-ref", "refs/remotes/origin/main", fixture.base], { cwd: fixture.root });
+      const bin = join(fixture.root, "bin"); mkdirSync(bin);
+      const gh = join(bin, "gh"); writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' '${response.replaceAll("PLACEHOLDER", fixture.base)}'\n`); chmodSync(gh, 0o755);
+      if (review !== undefined) { const latest = join(fixture.root, ".roll", "features", "test", "FIX-1498", "latest"); mkdirSync(latest, { recursive: true }); writeFileSync(join(latest, "FIX-1498-review.html"), review); }
+      process.env.PATH = `${bin}${delimiter}${oldPath}`;
+      const before = readFileSync(fixture.eventsPath, "utf8"); const release = vi.fn(async (...args: Parameters<typeof managedWorktreeRelease>) => managedWorktreeRelease(...args));
+      return { fixture, before, release, result: await confirmSkillDispatchDelivery(fixture.root, "FIX-1498", fixture.workspace.runId, fixture.root, { release }) };
+    };
+    const ok = (runId: string, oid: string) => JSON.stringify({ state: "MERGED", mergedAt: "2026-08-03T00:00:00Z", mergeCommit: { oid }, headRefName: runId });
+    try {
+      const success = await run("ancestor", ok("dispatch-confirm-gh-ancestor", "PLACEHOLDER"), 'Gate: PASS <div class="ac s-pass"></div>');
+      rmSync(success.fixture.root, { recursive: true, force: true });
+      const passing = await run("ancestor-pass", ok("dispatch-confirm-gh-ancestor-pass", "PLACEHOLDER"), 'Gate: PASS <div class="ac s-pass"></div>');
+      expect(passing.result).toEqual({ ok: true, finalized: true }); rmSync(passing.fixture.root, { recursive: true, force: true });
+      for (const [name, response, review, reason] of [["unmerged", JSON.stringify({ state: "OPEN" }), 'Gate: PASS <div class="ac s-pass"></div>', "merged_or_unverifiable"], ["malformed", "{", 'Gate: PASS <div class="ac s-pass"></div>', "merged_or_unverifiable"], ["wrong-head", ok("other", "PLACEHOLDER"), 'Gate: PASS <div class="ac s-pass"></div>', "merged_or_unverifiable"], ["absent-attest", ok("dispatch-confirm-gh-absent-attest", "PLACEHOLDER"), undefined, "attest_not_accepted"], ["rejected-attest", ok("dispatch-confirm-gh-rejected-attest", "PLACEHOLDER"), 'Gate: FAIL <div class="ac s-fail"></div>', "attest_not_accepted"]] as const) {
+        const item = await run(name, response, review); expect(item.result).toEqual({ ok: false, reason }); expect(item.release).not.toHaveBeenCalled(); expect(readFileSync(item.fixture.eventsPath, "utf8")).toBe(item.before); expect(readLeases(item.fixture.leases)["FIX-1498"]).toMatchObject({ runId: item.fixture.workspace.runId }); rmSync(item.fixture.root, { recursive: true, force: true });
+      }
+    } finally { process.env.PATH = oldPath; }
+  });
+
+  it("refuses missing delivery proof, evidence, dirt, identity drift, and a child caller without writing a release request", async () => {
+    const missingMerge = await stopFixture("dispatch-confirm-missing-merge");
+    await expect(confirmSkillDispatchDelivery(missingMerge.root, "FIX-1498", "dispatch-confirm-missing-merge", missingMerge.root, {
+      merged: () => false, attested: () => true,
+    })).resolves.toEqual({ ok: false, reason: "merged_or_unverifiable" });
+    expect(readFileSync(missingMerge.eventsPath, "utf8")).not.toContain('"type":"worktree:release_requested"');
+    expect(existsSync(missingMerge.parent)).toBe(true);
+    rmSync(missingMerge.root, { recursive: true, force: true });
+
+    const missingAttest = await stopFixture("dispatch-confirm-missing-attest");
+    await expect(confirmSkillDispatchDelivery(missingAttest.root, "FIX-1498", "dispatch-confirm-missing-attest", missingAttest.root, {
+      merged: () => true, attested: () => false,
+    })).resolves.toEqual({ ok: false, reason: "attest_not_accepted" });
+    expect(readFileSync(missingAttest.eventsPath, "utf8")).not.toContain('"type":"worktree:release_requested"');
+    rmSync(missingAttest.root, { recursive: true, force: true });
+
+    const dirty = await stopFixture("dispatch-confirm-dirty");
+    writeFileSync(join(dirty.child, "untracked.txt"), "dirty\n");
+    await expect(confirmSkillDispatchDelivery(dirty.root, "FIX-1498", "dispatch-confirm-dirty", dirty.root, {
+      merged: () => true, attested: () => true,
+    })).resolves.toEqual({ ok: false, reason: "workspace_dirty" });
+    expect(readFileSync(dirty.eventsPath, "utf8")).not.toContain('"type":"worktree:release_requested"');
+    rmSync(dirty.root, { recursive: true, force: true });
+
+    const identity = await stopFixture("dispatch-confirm-identity");
+    await expect(confirmSkillDispatchDelivery(identity.root, "FIX-1498", "dispatch-confirm-identity", identity.root, {
+      merged: () => true, attested: () => true,
+      inspect: async () => ({ head: identity.base, repositoryId: "foreign", registered: true, clean: true }),
+    })).resolves.toEqual({ ok: false, reason: "workspace_identity_mismatch" });
+    expect(readFileSync(identity.eventsPath, "utf8")).not.toContain('"type":"worktree:release_requested"');
+    rmSync(identity.root, { recursive: true, force: true });
+
+    const child = await stopFixture("dispatch-confirm-child");
+    await expect(confirmSkillDispatchDelivery(child.root, "FIX-1498", "dispatch-confirm-child", child.child, {
+      merged: () => true, attested: () => true,
+    })).resolves.toEqual({ ok: false, reason: "parent_required" });
+    expect(readFileSync(child.eventsPath, "utf8")).not.toContain('"type":"worktree:release_requested"');
+    rmSync(child.root, { recursive: true, force: true });
+  });
+
+  it("keeps the delivered request and lease after an interrupted child-first removal, then retries only the frozen heads", async () => {
+    const fixture = await stopFixture("dispatch-confirm-retry");
+    let calls = 0;
+    const release = vi.fn(async (...args: Parameters<typeof managedWorktreeRelease>) => {
+      calls += 1;
+      return calls === 2 ? { code: 1, reason: "injected" } : managedWorktreeRelease(...args);
+    });
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-retry", fixture.root, {
+      merged: () => true, attested: () => true, release,
+    })).resolves.toEqual({
+      ok: false,
+      reason: "release_incomplete",
+      releaseFailure: { relativeLocator: "dispatch-confirm-retry", reason: "injected" },
+    });
+    expect(existsSync(fixture.child)).toBe(false);
+    expect(existsSync(fixture.parent)).toBe(true);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-confirm-retry" });
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-retry", fixture.root)).resolves.toEqual({ ok: true, finalized: true });
+    expect(existsSync(fixture.parent)).toBe(false);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toBeUndefined();
+    const events = readFileSync(fixture.eventsPath, "utf8");
+    expect((events.match(/"type":"worktree:release_requested"/g) ?? [])).toHaveLength(1);
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("retries one frozen delivered request without re-admitting merge or attest", async () => {
+    const fixture = await stopFixture("dispatch-confirm-first-failure");
+    const release = vi.fn(async (...args: Parameters<typeof managedWorktreeRelease>) =>
+      release.mock.calls.length === 1 ? { code: 1, reason: "injected_first" } : managedWorktreeRelease(...args),
+    );
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-first-failure", fixture.root, {
+      merged: () => true, attested: () => true, release,
+    })).resolves.toEqual({
+      ok: false,
+      reason: "release_incomplete",
+      releaseFailure: { relativeLocator: "dispatch-confirm-first-failure.children/docs", reason: "injected_first" },
+    });
+    expect(existsSync(fixture.child)).toBe(true);
+    expect(existsSync(fixture.parent)).toBe(true);
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-first-failure", fixture.root, {
+      merged: () => { throw new Error("retry must use the durable request"); },
+      attested: () => { throw new Error("retry must use the durable request"); },
+    })).resolves.toEqual({ ok: true, finalized: true });
+    const events = readFileSync(fixture.eventsPath, "utf8");
+    expect((events.match(/"type":"worktree:release_requested"/g) ?? [])).toHaveLength(1);
+    expect((events.match(/"type":"worktree:released"/g) ?? [])).toHaveLength(1);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toBeUndefined();
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("preserves a frozen request when a surviving member moves", async () => {
+    const fixture = await stopFixture("dispatch-confirm-frozen-safety");
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-frozen-safety", fixture.root, {
+      merged: () => true,
+      attested: () => true,
+      release: async () => ({ code: 1, reason: "injected" }),
+    })).resolves.toMatchObject({ ok: false, reason: "release_incomplete" });
+    advance(fixture.parent, "moved.md");
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-frozen-safety", fixture.root)).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+    expect(existsSync(fixture.child)).toBe(true);
+    expect(existsSync(fixture.parent)).toBe(true);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-confirm-frozen-safety" });
+    expect((readFileSync(fixture.eventsPath, "utf8").match(/"type":"worktree:release_requested"/g) ?? [])).toHaveLength(1);
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("completes an already-removed delivered workspace exactly once", async () => {
+    const fixture = await stopFixture("dispatch-confirm-completion-only");
+    const heads = fixture.workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: member.checkoutRef.head }));
+    new EventBus().appendEvent(fixture.eventsPath, {
+      type: "worktree:release_requested", runId: "dispatch-confirm-completion-only", reason: "delivered", operationId: "dispatch-confirm-completion-only:allocate:release", expectedHeads: heads, ts: 2,
+    });
+    const absent = vi.fn(async () => true);
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-completion-only", fixture.root, { absent })).resolves.toEqual({ ok: true, finalized: true });
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-completion-only", fixture.root, { absent })).resolves.toEqual({ ok: true, finalized: true });
+    const events = readFileSync(fixture.eventsPath, "utf8");
+    expect((events.match(/"type":"worktree:release_requested"/g) ?? [])).toHaveLength(1);
+    expect((events.match(/"type":"worktree:released"/g) ?? [])).toHaveLength(1);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toBeUndefined();
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("refuses duplicate or malformed delivered requests before release", async () => {
+    const fixture = await stopFixture("dispatch-confirm-conflict");
+    const heads = fixture.workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: member.checkoutRef.head }));
+    new EventBus().appendEvent(fixture.eventsPath, {
+      type: "worktree:release_requested", runId: "dispatch-confirm-conflict", reason: "delivered", operationId: "dispatch-confirm-conflict:allocate:release", expectedHeads: heads, ts: 2,
+    });
+    new EventBus().appendEvent(fixture.eventsPath, {
+      type: "worktree:release_requested", runId: "dispatch-confirm-conflict", reason: "delivered", operationId: "dispatch-confirm-conflict:allocate:release", expectedHeads: heads, ts: 3,
+    });
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-conflict", fixture.root)).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+    expect(existsSync(fixture.child)).toBe(true);
+    expect(existsSync(fixture.parent)).toBe(true);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-confirm-conflict" });
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("refuses corrupt delivered lifecycle records and foreign leases without release effects", async () => {
+    const cases = [
+      { name: "incomplete", request: (heads: readonly { relativeLocator: string; head: string }[]) => heads.slice(0, 1) },
+      { name: "foreign-operation", request: (heads: readonly { relativeLocator: string; head: string }[]) => heads, operationId: "other:release" },
+      { name: "wrong-reason", request: (heads: readonly { relativeLocator: string; head: string }[]) => heads, reason: "abandoned" as const },
+    ];
+    for (const entry of cases) {
+      const fixture = await stopFixture(`dispatch-confirm-corrupt-${entry.name}`);
+      const heads = fixture.workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: member.checkoutRef.head }));
+      new EventBus().appendEvent(fixture.eventsPath, {
+        type: "worktree:release_requested", runId: fixture.workspace.runId, reason: entry.reason ?? "delivered", operationId: entry.operationId ?? `${fixture.workspace.runId}:allocate:release`, expectedHeads: entry.request(heads), ts: 2,
+      });
+      const before = readFileSync(fixture.eventsPath, "utf8");
+      const release = vi.fn(async () => ({ code: 0 }));
+      await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", fixture.workspace.runId, fixture.root, { release })).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+      expect(release).not.toHaveBeenCalled();
+      expect(readFileSync(fixture.eventsPath, "utf8")).toBe(before);
+      expect(existsSync(fixture.child)).toBe(true);
+      expect(readLeases(fixture.leases)["FIX-1498"]).toMatchObject({ runId: fixture.workspace.runId });
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+    const foreign = await stopFixture("dispatch-confirm-foreign-lease");
+    setLease(foreign.leases, "FIX-1498", { source: "host-delegation", delegationId: "other", claimedAt: 2 });
+    const release = vi.fn(async () => ({ code: 0 }));
+    await expect(confirmSkillDispatchDelivery(foreign.root, "FIX-1498", foreign.workspace.runId, foreign.root, { release })).resolves.toEqual({ ok: false, reason: "reservation_held_by_other" });
+    expect(release).not.toHaveBeenCalled();
+    rmSync(foreign.root, { recursive: true, force: true });
+  });
+
+  it("refuses reversed and incompatible completion records without effects", async () => {
+    for (const kind of ["reversed", "incompatible"] as const) {
+      const fixture = await stopFixture(`dispatch-confirm-${kind}-completion`);
+      const heads = fixture.workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: member.checkoutRef.head }));
+      const operationId = `${fixture.workspace.runId}:allocate:release`;
+      if (kind === "incompatible") new EventBus().appendEvent(fixture.eventsPath, { type: "worktree:release_requested", runId: fixture.workspace.runId, reason: "delivered", operationId, expectedHeads: heads, ts: 2 });
+      new EventBus().appendEvent(fixture.eventsPath, { type: "worktree:released", runId: fixture.workspace.runId, operationId, expectedHeads: kind === "incompatible" ? [{ ...heads[0]!, head: "f".repeat(40) }, heads[1]!] : heads, ts: 3 });
+      const before = readFileSync(fixture.eventsPath, "utf8");
+      const release = vi.fn(async () => ({ code: 0 }));
+      await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", fixture.workspace.runId, fixture.root, { release })).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+      expect(release).not.toHaveBeenCalled();
+      expect(readFileSync(fixture.eventsPath, "utf8")).toBe(before);
+      expect(readLeases(fixture.leases)["FIX-1498"]).toMatchObject({ runId: fixture.workspace.runId });
+      expect(existsSync(fixture.parent)).toBe(true); expect(existsSync(fixture.child)).toBe(true);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses dirty and unavailable survivors of a frozen delivered request", async () => {
+    const dirty = await stopFixture("dispatch-confirm-retry-dirty");
+    await confirmSkillDispatchDelivery(dirty.root, "FIX-1498", dirty.workspace.runId, dirty.root, { merged: () => true, attested: () => true, release: async () => ({ code: 1, reason: "injected" }) });
+    writeFileSync(join(dirty.child, "untracked.txt"), "dirty\n");
+    const dirtyRelease = vi.fn(async () => ({ code: 0 }));
+    await expect(confirmSkillDispatchDelivery(dirty.root, "FIX-1498", dirty.workspace.runId, dirty.root, { release: dirtyRelease })).resolves.toEqual({ ok: false, reason: "workspace_dirty" });
+    expect(dirtyRelease).not.toHaveBeenCalled();
+    expect(readLeases(dirty.leases)["FIX-1498"]).toMatchObject({ runId: dirty.workspace.runId });
+    rmSync(dirty.root, { recursive: true, force: true });
+
+    const unavailable = await stopFixture("dispatch-confirm-retry-unavailable");
+    await confirmSkillDispatchDelivery(unavailable.root, "FIX-1498", unavailable.workspace.runId, unavailable.root, { merged: () => true, attested: () => true, release: async () => ({ code: 1, reason: "injected" }) });
+    const unavailableRelease = vi.fn(async () => ({ code: 0 }));
+    await expect(confirmSkillDispatchDelivery(unavailable.root, "FIX-1498", unavailable.workspace.runId, unavailable.root, { inspect: async () => undefined, release: unavailableRelease })).resolves.toEqual({ ok: false, reason: "workspace_unavailable" });
+    expect(unavailableRelease).not.toHaveBeenCalled();
+    expect(readLeases(unavailable.leases)["FIX-1498"]).toMatchObject({ runId: unavailable.workspace.runId });
+    rmSync(unavailable.root, { recursive: true, force: true });
+  });
+
+  it("never deletes a reappeared member after a durable delivered completion", async () => {
+    const fixture = await stopFixture("dispatch-confirm-reappeared");
+    const heads = fixture.workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: member.checkoutRef.head }));
+    new EventBus().appendEvent(fixture.eventsPath, {
+      type: "worktree:release_requested", runId: "dispatch-confirm-reappeared", reason: "delivered", operationId: "dispatch-confirm-reappeared:allocate:release", expectedHeads: heads, ts: 2,
+    });
+    new EventBus().appendEvent(fixture.eventsPath, {
+      type: "worktree:released", runId: "dispatch-confirm-reappeared", operationId: "dispatch-confirm-reappeared:allocate:release", expectedHeads: heads, ts: 3,
+    });
+    await expect(confirmSkillDispatchDelivery(fixture.root, "FIX-1498", "dispatch-confirm-reappeared", fixture.root)).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+    expect(existsSync(fixture.parent)).toBe(true);
+    expect(existsSync(fixture.child)).toBe(true);
+    expect(readLeases(fixture.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-confirm-reappeared" });
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
   it("accepts an advanced but unmerged managed parent head as abandoned work", async () => {
     const fixture = await stopFixture("dispatch-stop-parent-advance");
     const parentHead = advance(fixture.parent, "abandoned-parent.md");

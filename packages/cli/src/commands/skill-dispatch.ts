@@ -1,20 +1,22 @@
 /** US-LOOP-127 — explicit parent-owned Skill dispatch command. */
 import { resolveLang } from "@roll/spec";
-import { allocateSkillDispatchRun, integrateSkillDispatchChild, releaseSkillDispatchReservation, stopSkillDispatchRun, type SkillDispatchRunInput } from "../runner/skill-dispatch-workspace.js";
+import { allocateSkillDispatchRun, confirmSkillDispatchDelivery, integrateSkillDispatchChild, releaseSkillDispatchReservation, stopSkillDispatchRun, type SkillDispatchRunInput } from "../runner/skill-dispatch-workspace.js";
 
 const USAGE =
   "Usage: roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>\n" +
   "       roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>\n" +
   "       roll worktree dispatch release <story-id> <dispatch-run-id>\n" +
+  "       roll worktree dispatch confirm <story-id> <dispatch-run-id> [--json]\n" +
   "       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <text> --confirm <story-id> [--json]\n" +
   "  Allocate one parent Skill DeliveryRun and detached child workspaces below .roll/loop/worktrees.\n" +
   "  <json> is an array of { actionId, declaredFileScope }. Only the parent run may publish, attest, close, release, or stop.\n" +
+  "  confirm only finalizes a run after independent merge, accepted-attest, and clean-workspace checks.\n" +
   "  stop only abandons a clean, unmerged, unpublished run; its branches and retained commits stay available for audit.\n";
 
 export function skillDispatchUsage(): string {
   const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
   return zh
-    ? "用法：roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>\n       roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>\n       roll worktree dispatch release <story-id> <dispatch-run-id>\n       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <原因> --confirm <story-id> [--json]\n  分配一个由父 Skill DeliveryRun 持有、位于 .roll/loop/worktrees 下的受管 WorkspaceSet。\n  <json> 为 { actionId, declaredFileScope } 数组；只有父运行可发布、验收、关闭、释放或停止。\n  stop 只会停止干净、未合入、未发布的运行；分支和保留提交会留下供核对。\n"
+    ? "用法：roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>\n       roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>\n       roll worktree dispatch release <story-id> <dispatch-run-id>\n       roll worktree dispatch confirm <story-id> <dispatch-run-id> [--json]\n       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <原因> --confirm <story-id> [--json]\n  分配一个由父 Skill DeliveryRun 持有、位于 .roll/loop/worktrees 下的受管 WorkspaceSet。\n  <json> 为 { actionId, declaredFileScope } 数组；只有父运行可发布、验收、关闭、释放或停止。\n  confirm 只会收尾已合入、已验收且所有目录干净的运行。\n  stop 只会停止干净、未合入、未发布的运行；分支和保留提交会留下供核对。\n"
     : USAGE;
 }
 
@@ -61,6 +63,26 @@ export async function skillDispatchCommand(args: string[]): Promise<number> {
       return 1;
     }
     process.stdout.write(`${JSON.stringify({ ok: true, storyId, runId, recovered: true }, null, 2)}\n`);
+    return 0;
+  }
+  if (args[0] === "confirm") {
+    const [storyId = "", runId = ""] = args.slice(1);
+    if (storyId === "" || runId === "") {
+      process.stderr.write(USAGE);
+      return 1;
+    }
+    const result = await confirmSkillDispatchDelivery(process.cwd(), storyId, runId, process.cwd());
+    if (!result.ok) {
+      if (args.includes("--json")) {
+        process.stderr.write(`${JSON.stringify({ ok: false, storyId, runId, reason: result.reason, releaseFailure: result.releaseFailure }, null, 2)}\n`);
+        return 1;
+      }
+      process.stderr.write(`roll worktree dispatch: confirmation refused (${result.reason}).\n`);
+      return 1;
+    }
+    const payload = { ok: true, storyId, runId, finalized: true, next: "Recorded delivered release, removed the managed workspaces, and released the Story reservation." };
+    if (args.includes("--json")) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else process.stdout.write(`Confirmed delivered run ${runId}, safely removed its managed workspaces, and released the Story reservation.\n`);
     return 0;
   }
   if (args[0] === "stop") {
