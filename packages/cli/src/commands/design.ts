@@ -37,8 +37,8 @@ function emit(line: string): void {
   process.stderr.write(`${line}\n`);
 }
 
-function readDesignPrompt(fromFile: string | undefined, rest: string[]): string | null {
-  const body = readSkillBody("roll-design");
+function readDesignPrompt(fromFile: string | undefined, rest: string[], env: NodeJS.ProcessEnv): string | null {
+  const body = readSkillBody("roll-design", env);
   if (body === null) return null;
   const parts: string[] = [];
   if (fromFile !== undefined) {
@@ -907,7 +907,7 @@ function runDesignCommand(
     // Empty backlog → fall through (onboarding path may still launch agent).
   }
 
-  const rawPrompt = readDesignPrompt(promptFromFile, rest);
+  const rawPrompt = readDesignPrompt(promptFromFile, rest, d.env);
   if (rawPrompt === null) {
     emit(t(v3Catalog, l, "design.skill_missing"));
     return 1;

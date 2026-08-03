@@ -96,8 +96,10 @@ export function readPrimaryAgent(): string | null {
  * install tree, stripping YAML frontmatter. Returns `null` when the skill file
  * is missing (e.g. submodule not initialised).
  */
-export function readSkillBody(skillName: string): string | null {
-  const skillFile = join(rollPkgDir(), "skills", skillName, "SKILL.md");
+export function readSkillBody(skillName: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicitRoot = env["ROLL_PKG_DIR"]?.trim();
+  const packageRoot = explicitRoot === undefined || explicitRoot === "" ? rollPkgDir() : explicitRoot;
+  const skillFile = join(packageRoot, "skills", skillName, "SKILL.md");
   if (!existsSync(skillFile)) return null;
   return readFileSync(skillFile, "utf8").replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
 }

@@ -216,7 +216,16 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       workspaceContextScope: "workspace_required_mutation",
     };
 
-    expect(designCommand(["--from-file", "brief.md"], deps)).toBe(0);
+    const previousPkgDir = process.env["ROLL_PKG_DIR"];
+    process.env["ROLL_PKG_DIR"] = join(f.arbitraryCwd, "poisoned-global-package-root");
+    let status: number;
+    try {
+      status = designCommand(["--from-file", "brief.md"], deps);
+    } finally {
+      if (previousPkgDir === undefined) delete process.env["ROLL_PKG_DIR"];
+      else process.env["ROLL_PKG_DIR"] = previousPkgDir;
+    }
+    expect(status).toBe(0);
     expect(calls).toHaveLength(1);
     const call = calls[0];
     if (call === undefined) return;
