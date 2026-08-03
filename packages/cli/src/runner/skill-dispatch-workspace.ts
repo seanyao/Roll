@@ -464,7 +464,7 @@ export interface SkillDispatchConfirmDeps {
   readonly now?: () => number;
   readonly inspect?: (repoCwd: string, path: string) => ReturnType<typeof inspectManagedWorktree>;
   readonly absent?: (repoCwd: string, path: string) => ReturnType<typeof managedWorktreeAbsent>;
-  readonly release?: (repoCwd: string, path: string, expectedHead: string, repositoryId: string) => ReturnType<typeof managedWorktreeRelease>;
+  readonly release?: (repoCwd: string, path: string, expectedHead: string, repositoryId: string, options?: Parameters<typeof managedWorktreeRelease>[4]) => ReturnType<typeof managedWorktreeRelease>;
   readonly append?: (eventsPath: string, event: Parameters<EventBus["appendEvent"]>[1]) => void;
   /** Test seam; production proves every member against main and the parent PR anchor. */
   readonly merged?: (projectRoot: string, workspace: ManagedWorkspaceSet, paths: Readonly<Record<string, string>>) => boolean | Promise<boolean>;
@@ -641,7 +641,7 @@ export async function confirmSkillDispatchDelivery(
     const path = paths[member.relativeLocator]!;
     const head = frozen.get(member.relativeLocator)!;
     if (await absent(root, path)) continue;
-    const released = await release(root, path, head, member.repositoryId);
+    const released = await release(root, path, head, member.repositoryId, { allowVerifiedSubmoduleForce: true });
     if (released.code !== 0) {
       return {
         ok: false,
@@ -688,7 +688,7 @@ export interface SkillDispatchStopDeps {
   readonly now?: () => number;
   readonly inspect?: (repoCwd: string, path: string) => ReturnType<typeof inspectManagedWorktree>;
   readonly absent?: (repoCwd: string, path: string) => ReturnType<typeof managedWorktreeAbsent>;
-  readonly release?: (repoCwd: string, path: string, expectedHead: string, repositoryId: string) => ReturnType<typeof managedWorktreeRelease>;
+  readonly release?: (repoCwd: string, path: string, expectedHead: string, repositoryId: string, options?: Parameters<typeof managedWorktreeRelease>[4]) => ReturnType<typeof managedWorktreeRelease>;
   readonly retain?: (repoCwd: string, runId: string, relativeLocator: string, head: string) => ReturnType<typeof retainManagedWorktreeHead>;
   readonly remoteContains?: (repoCwd: string, head: string) => ReturnType<typeof managedWorktreeRemoteContainment>;
   readonly append?: (eventsPath: string, event: Parameters<EventBus["appendEvent"]>[1]) => void;
@@ -847,7 +847,7 @@ export async function stopSkillDispatchRun(
     const retainedHead = await retain(path, runId, member.relativeLocator, head);
     if (!retainedHead.ok) return { ok: false, reason: "retention_ref_refused" };
     retained.push({ relativeLocator: member.relativeLocator, head, ref: retainedHead.ref });
-    if ((await release(root, path, head, member.repositoryId)).code !== 0) return { ok: false, reason: "release_incomplete" };
+    if ((await release(root, path, head, member.repositoryId, { allowVerifiedSubmoduleForce: true })).code !== 0) return { ok: false, reason: "release_incomplete" };
   }
   if (!existing?.completed) {
     try {

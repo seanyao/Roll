@@ -480,7 +480,9 @@ export async function executeTerminalCommand(
             ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("expected_head_incomplete")));
             return {};
           }
-          const released = await release(repoCwd, path, expectedHead, member.repositoryId);
+          const released = await release(repoCwd, path, expectedHead, member.repositoryId, {
+            allowVerifiedSubmoduleForce: true,
+          });
           if (released.code !== 0) {
             ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("effect_refused")));
             return {};

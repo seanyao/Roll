@@ -391,7 +391,9 @@ export async function worktreeRemove(
  * tolerant `worktreeRemove` helper.  A lifecycle caller supplies the HEAD it
  * observed while recording `worktree:release_requested`; this function obtains
  * fresh registration, identity, cleanliness and HEAD facts immediately before
- * the destructive effect.  It never uses `--force`, `rm -rf`, or a convenient
+ * the destructive effect. A populated submodule is the one explicit exception:
+ * Git refuses its normal removal, so a freshly revalidated, tightly guarded
+ * checkout uses one `worktree remove --force`. It never uses `rm -rf` or a
  * replacement path.
  */
 export async function managedWorktreeRelease(
@@ -399,23 +401,157 @@ export async function managedWorktreeRelease(
   path: string,
   expectedHead: string,
   repositoryId: string,
+  options: ManagedWorktreeReleaseOptions = {},
 ): Promise<{ code: number; reason?: string }> {
+  const initial = await managedWorktreeReleaseReady(repoCwd, path, expectedHead, repositoryId);
+  if ("reason" in initial) return initial;
+
+  // Git's own normal removal rejects populated submodules. Revalidate every
+  // guard immediately before this one narrowly-authorized force invocation;
+  // ordinary worktrees never receive `--force`.
+  if (initial.mode === "populated_submodule") {
+    if (options.allowVerifiedSubmoduleForce !== true) return { code: 1, reason: "submodule_force_not_authorized" };
+    const final = await managedWorktreeReleaseReady(repoCwd, path, expectedHead, repositoryId);
+    if ("reason" in final) return final;
+    if (final.mode !== "populated_submodule") return { code: 1, reason: "submodule_state_changed" };
+    const removed = await git(["--no-optional-locks", "worktree", "remove", "--force", final.path], repoCwd);
+    if (removed.code !== 0) return { code: removed.code, reason: "remove_refused" };
+    await git(["--no-optional-locks", "worktree", "prune", "--expire", "now"], repoCwd);
+    return { code: 0 };
+  }
+
+  const removed = await git(["--no-optional-locks", "worktree", "remove", initial.path], repoCwd);
+  if (removed.code !== 0) return { code: removed.code, reason: "remove_refused" };
+  await git(["--no-optional-locks", "worktree", "prune", "--expire", "now"], repoCwd);
+  return { code: 0 };
+}
+
+type ManagedWorktreeReleaseMode = "plain" | "populated_submodule";
+
+/** A lifecycle admission fence must opt into the sole managed release force path. */
+export interface ManagedWorktreeReleaseOptions {
+  readonly allowVerifiedSubmoduleForce?: boolean;
+}
+
+type ManagedWorktreeReleaseReady =
+  | { readonly mode: ManagedWorktreeReleaseMode; readonly path: string }
+  | { readonly code: 1; readonly reason: string };
+
+async function managedWorktreeReleaseReady(
+  repoCwd: string,
+  path: string,
+  expectedHead: string,
+  repositoryId: string,
+): Promise<ManagedWorktreeReleaseReady> {
+  const canonicalPath = await realpathQuiet(path);
+  if (canonicalPath === undefined) return { code: 1, reason: "registration_missing" };
+
   const identity = (await managedRepositoryIdentity(repoCwd)).slug;
   if (identity !== repositoryId) return { code: 1, reason: "repository_identity_changed" };
 
-  const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
-  if (registered.code !== 0 || !registered.stdout.split("\n").some((line) => line === `worktree ${path}`)) {
+  const registered = await git(["--no-optional-locks", "worktree", "list", "--porcelain"], repoCwd);
+  const record = registered.code === 0 ? managedWorktreeRecord(registered.stdout, canonicalPath) : undefined;
+  if (
+    record === undefined ||
+    record.head === undefined ||
+    !record.detached ||
+    record.locked ||
+    record.prunable
+  ) {
     return { code: 1, reason: "registration_missing" };
   }
-  const head = await git(["rev-parse", "HEAD"], path);
+  if (record.head !== expectedHead) return { code: 1, reason: "head_changed" };
+  const head = await git(["--no-optional-locks", "rev-parse", "HEAD"], canonicalPath);
   if (head.code !== 0 || head.stdout.trim() !== expectedHead) return { code: 1, reason: "head_changed" };
-  const dirt = await git(["status", "--porcelain"], path);
+  const dirt = await git(
+    ["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"],
+    canonicalPath,
+  );
   if (dirt.code !== 0 || dirt.stdout.trim() !== "") return { code: 1, reason: "workspace_dirty" };
+  const submodules = await managedWorktreeSubmoduleMode(canonicalPath);
+  if (submodules === undefined) return { code: 1, reason: "submodule_untrusted" };
+  return { mode: submodules, path: canonicalPath };
+}
 
-  const removed = await git(["worktree", "remove", path], repoCwd);
-  if (removed.code !== 0) return { code: removed.code, reason: "remove_refused" };
-  await git(["worktree", "prune", "--expire", "now"], repoCwd);
-  return { code: 0 };
+/**
+ * Return the special release mode only when every declared recursive submodule
+ * is populated at its recorded commit and independently clean. A missing,
+ * conflicted, or otherwise non-current submodule is untrusted and must refuse.
+ */
+async function managedWorktreeSubmoduleMode(path: string): Promise<ManagedWorktreeReleaseMode | undefined> {
+  const status = await git(["--no-optional-locks", "submodule", "status", "--recursive"], path);
+  if (status.code !== 0) return undefined;
+
+  const entries = status.stdout.split("\n").filter((line) => line !== "");
+  if (entries.length === 0) return "plain";
+  if (entries.every((line) => line[0] === "-")) {
+    // A never-populated declared submodule is harmless: Git's normal remove
+    // accepts it. A retained per-worktree modules directory means it was once
+    // populated/deinitialized, so preserve it for human recovery instead.
+    const modules = await git(["--no-optional-locks", "rev-parse", "--git-path", "modules"], path);
+    return modules.code === 0 && !existsSync(modules.stdout.trim()) ? "plain" : undefined;
+  }
+  if (entries.some((line) => line[0] !== " ")) return undefined;
+
+  // `--quiet` suppresses foreach progress. Explicit porcelain flags override
+  // status/ignore config in every nested checkout; the command is fixed and
+  // never interpolates repository-controlled paths or names.
+  const nestedDirt = await git(
+    [
+      "--no-optional-locks",
+      "submodule",
+      "foreach",
+      "--quiet",
+      "--recursive",
+      "git --no-optional-locks status --porcelain=v1 --untracked-files=all --ignore-submodules=none",
+    ],
+    path,
+  );
+  return nestedDirt.code === 0 && nestedDirt.stdout.trim() === "" ? "populated_submodule" : undefined;
+}
+
+interface ManagedWorktreeRecord {
+  readonly path: string;
+  readonly head: string | undefined;
+  readonly detached: boolean;
+  readonly locked: boolean;
+  readonly prunable: boolean;
+}
+
+function managedWorktreeRecord(stdout: string, canonicalPath: string): ManagedWorktreeRecord | undefined {
+  const records: ManagedWorktreeRecord[] = [];
+  let path: string | undefined;
+  let head: string | undefined;
+  let detached = false;
+  let locked = false;
+  let prunable = false;
+  const finish = (): void => {
+    if (path !== undefined) records.push({ path, head, detached, locked, prunable });
+  };
+
+  for (const line of stdout.split("\n")) {
+    if (line === "") {
+      finish();
+      path = undefined;
+      head = undefined;
+      detached = false;
+      locked = false;
+      prunable = false;
+    } else if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length);
+    } else if (line.startsWith("HEAD ")) {
+      head = line.slice("HEAD ".length);
+    } else if (line === "detached") {
+      detached = true;
+    } else if (line === "locked" || line.startsWith("locked ")) {
+      locked = true;
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      prunable = true;
+    }
+  }
+  finish();
+  const matches = records.filter((record) => record.path === canonicalPath);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Fresh, non-destructive inspection used immediately before a managed release. */

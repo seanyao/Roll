@@ -5387,7 +5387,9 @@ describe("executeCommand — command → executor mapping", () => {
     await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, CTX);
     const requested = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]).find((event) => event.type === "worktree:release_requested");
     expect(requested).toMatchObject({ type: "worktree:release_requested", operationId: `${CTX.cycleId}:release`, expectedHeads: [{ relativeLocator: key, head }] });
-    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledWith("/repo", "/rt/wt", head, "repo");
+    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledWith(
+      "/repo", "/rt/wt", head, "repo", { allowVerifiedSubmoduleForce: true },
+    );
   });
 
   it("US-LOOP-124: freezes the actual terminal release refusal in EN and ZH", async () => {
@@ -5506,7 +5508,9 @@ describe("executeCommand — command → executor mapping", () => {
 
     await executeCommand({ kind: "cleanup_worktree", branch: CTX.branch }, ports, { ...CTX, targetSubmodule: sub });
     expect(ports.git.managedWorktreeRelease).toHaveBeenCalledTimes(1);
-    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledWith("/repo", "/rt/wt", primaryHead, "repo");
+    expect(ports.git.managedWorktreeRelease).toHaveBeenCalledWith(
+      "/repo", "/rt/wt", primaryHead, "repo", { allowVerifiedSubmoduleForce: true },
+    );
     const released = (calls.event ?? []).map((call) => (call as [string, RollEvent])[1]).find((event) => event.type === "worktree:released");
     expect(released).toMatchObject({ type: "worktree:released", operationId });
   });

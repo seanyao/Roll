@@ -123,6 +123,150 @@ describe("worktree lifecycle", () => {
     expect(existsSync(wt)).toBe(true);
   });
 
+  it("FIX-1501: managed release removes a verified initialized submodule checkout", async () => {
+    const { superproject } = superprojectWithSubmodule("managed-release-submodule");
+    const wt = join(tmp("managed-release-submodule-wt"), "wt");
+    const expectedHead = g(superproject, "rev-parse", "HEAD");
+    expect((await worktreeAdd(superproject, wt, "loop/cycle-submodule", expectedHead)).code).toBe(0);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"], {
+      cwd: wt,
+    });
+    expect(existsSync(join(wt, "sub", "sub-file.txt"))).toBe(true);
+
+    const released = await managedWorktreeRelease(
+      superproject,
+      wt,
+      expectedHead,
+      (await projectIdentity(superproject)).slug,
+      { allowVerifiedSubmoduleForce: true },
+    );
+
+    expect(released).toEqual({ code: 0 });
+    expect(existsSync(wt)).toBe(false);
+  });
+
+  it("FIX-1501: generic managed release never forces a populated submodule checkout", async () => {
+    const { superproject } = superprojectWithSubmodule("managed-release-submodule-generic");
+    const wt = join(tmp("managed-release-submodule-generic-wt"), "wt");
+    const expectedHead = g(superproject, "rev-parse", "HEAD");
+    expect((await worktreeAdd(superproject, wt, "loop/cycle-submodule-generic", expectedHead)).code).toBe(0);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"], {
+      cwd: wt,
+    });
+
+    const refused = await managedWorktreeRelease(
+      superproject,
+      wt,
+      expectedHead,
+      (await projectIdentity(superproject)).slug,
+    );
+
+    expect(refused).toMatchObject({ code: 1, reason: "submodule_force_not_authorized" });
+    expect(existsSync(join(wt, "sub", "sub-file.txt"))).toBe(true);
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("FIX-1501: managed release refuses root dirt before forcing a submodule checkout", async () => {
+    const { superproject } = superprojectWithSubmodule("managed-release-submodule-dirty");
+    const wt = join(tmp("managed-release-submodule-dirty-wt"), "wt");
+    const expectedHead = g(superproject, "rev-parse", "HEAD");
+    expect((await worktreeAdd(superproject, wt, "loop/cycle-submodule-dirty", expectedHead)).code).toBe(0);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"], {
+      cwd: wt,
+    });
+    writeFileSync(join(wt, "preserve-me"), "do not remove dirty work\n");
+
+    const refused = await managedWorktreeRelease(
+      superproject,
+      wt,
+      expectedHead,
+      (await projectIdentity(superproject)).slug,
+    );
+
+    expect(refused).toMatchObject({ code: 1, reason: "workspace_dirty" });
+    expect(existsSync(join(wt, "preserve-me"))).toBe(true);
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("FIX-1501: managed release refuses tracked dirt in an initialized submodule", async () => {
+    const { superproject } = superprojectWithSubmodule("managed-release-submodule-tracked-dirty");
+    const wt = join(tmp("managed-release-submodule-tracked-dirty-wt"), "wt");
+    const expectedHead = g(superproject, "rev-parse", "HEAD");
+    expect((await worktreeAdd(superproject, wt, "loop/cycle-submodule-tracked-dirty", expectedHead)).code).toBe(0);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"], {
+      cwd: wt,
+    });
+    writeFileSync(join(wt, "sub", "sub-file.txt"), "tracked nested change\n");
+
+    const refused = await managedWorktreeRelease(
+      superproject,
+      wt,
+      expectedHead,
+      (await projectIdentity(superproject)).slug,
+    );
+
+    expect(refused).toMatchObject({ code: 1, reason: "workspace_dirty" });
+    expect(existsSync(join(wt, "sub", "sub-file.txt"))).toBe(true);
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("FIX-1501: managed release refuses untracked dirt in an initialized submodule", async () => {
+    const { superproject } = superprojectWithSubmodule("managed-release-submodule-untracked-dirty");
+    const wt = join(tmp("managed-release-submodule-untracked-dirty-wt"), "wt");
+    const expectedHead = g(superproject, "rev-parse", "HEAD");
+    expect((await worktreeAdd(superproject, wt, "loop/cycle-submodule-untracked-dirty", expectedHead)).code).toBe(0);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"], {
+      cwd: wt,
+    });
+    g(wt, "config", "status.ignoreSubmodules", "all");
+    g(join(wt, "sub"), "config", "status.showUntrackedFiles", "no");
+    writeFileSync(join(wt, "sub", "preserve-me"), "untracked nested change\n");
+
+    const refused = await managedWorktreeRelease(
+      superproject,
+      wt,
+      expectedHead,
+      (await projectIdentity(superproject)).slug,
+    );
+
+    expect(refused).toMatchObject({ code: 1, reason: "submodule_untrusted" });
+    expect(existsSync(join(wt, "sub", "preserve-me"))).toBe(true);
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("FIX-1501: managed release refuses a missing declared submodule", async () => {
+    const { superproject } = superprojectWithSubmodule("managed-release-submodule-missing");
+    const wt = join(tmp("managed-release-submodule-missing-wt"), "wt");
+    const expectedHead = g(superproject, "rev-parse", "HEAD");
+    expect((await worktreeAdd(superproject, wt, "loop/cycle-submodule-missing", expectedHead)).code).toBe(0);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"], {
+      cwd: wt,
+    });
+    execFileSync("git", ["submodule", "deinit", "-f", "--all"], { cwd: wt });
+
+    const refused = await managedWorktreeRelease(
+      superproject,
+      wt,
+      expectedHead,
+      (await projectIdentity(superproject)).slug,
+    );
+
+    expect(refused).toMatchObject({ code: 1, reason: "submodule_untrusted" });
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("FIX-1501: ordinary managed release still succeeds without submodule force mode", async () => {
+    const repo = initRepo("managed-release-plain");
+    const wt = join(tmp("managed-release-plain-wt"), "wt");
+    const expectedHead = g(repo, "rev-parse", "HEAD");
+    expect((await worktreeAdd(repo, wt, "loop/cycle-plain", expectedHead)).code).toBe(0);
+
+    const released = await managedWorktreeRelease(repo, wt, expectedHead, (await projectIdentity(repo)).slug);
+
+    expect(released).toEqual({ code: 0 });
+    expect(existsSync(wt)).toBe(false);
+  });
+
   it("US-LOOP-095: worktreeRemove bundles UNPUSHED detached work before teardown", async () => {
     const repo = initRepo("bundle");
     const wt = join(tmp("bundlewt"), "wt");

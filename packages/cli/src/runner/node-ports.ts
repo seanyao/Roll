@@ -265,8 +265,8 @@ export function nodePorts(opts: {
         if (resolved.code !== 0 || resolved.stdout.trim() === "") return undefined;
         return { baseSha: resolved.stdout.trim(), repositoryId: (await managedRepositoryIdentity(repoCwd)).slug };
       },
-      async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId) {
-        return managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId);
+      async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId, options) {
+        return managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId, options);
       },
       async managedWorktreeInspect(repoCwd, path) {
         return inspectManagedWorktree(repoCwd, path);

@@ -31,6 +31,7 @@ export interface GitPort {
     path: string,
     expectedHead: string,
     repositoryId: string,
+    options?: { readonly allowVerifiedSubmoduleForce?: boolean },
   ): Promise<{ code: number; reason?: string }>;
   managedWorktreeInspect?(repoCwd: string, path: string): Promise<{ repositoryId: string; head: string; registered: boolean; clean: boolean } | undefined>;
   /** Proves that a retry sees neither a registration nor an on-disk target. */
