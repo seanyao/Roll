@@ -3,8 +3,7 @@
  *
  * The READ surface (help / --list / key read) was ported first (US-CLI-003,
  * config-get.ts) and is reused verbatim here. This module adds the WRITE
- * surface and the three compact facades (loop-window / loop-schedule /
- * dream-time), so the entire `config` command is now TS — the bash fallback in
+ * surface and the dream-time compact facade, so the entire `config` command is now TS — the bash fallback in
  * the router is retired (整个 config 命令收口).
  *
  * REFACTOR-049: the `config lang` sub-command subsumes the former top-level
@@ -12,17 +11,12 @@
  * lang surface now lives exclusively under `roll config lang <zh|en|--reset>`.
  *
  * ─── v2 oracle ──────────────────────────────────────────────────────────────
- *   cmd_config (bin/roll 6085-6181), _config_loop_window (5929), _config_loop_schedule
- *   (5974), _config_daily_time (6021). Validation / yaml writing / scope→file
+ *   cmd_config (bin/roll 6085-6181), _config_daily_time (6021). Validation /
+ *   yaml writing / scope→file
  *   live in @roll/infra (configValidate / configSet / configKeyFile).
  *
- * ─── DELIBERATE DIVERGENCE: schedule reload ─────────────────────────────────
- * US-LOOP-120: `loop-window` and `loop-schedule` write keys that NOTHING READS.
- * A quiet window and a period only meant something to a resident scheduler, and
- * Roll installs none — how often cards advance is decided by when the owner opens
- * a session and runs `roll loop go`. Both facades therefore say so on write rather
- * than printing an apply hint for a command that no longer exists. Removing the
- * facades outright is FIX-1485; until then they must not imply they took effect.
+ * FIX-1506 retires the scheduler-only loop-window and loop-schedule facades and
+ * their raw keys. They must reject before config file selection or mutation.
  */
 import { CONFIG_KEYS, configKeyFile, configResolve, configSet, configValidate } from "@roll/infra";
 import { INACTIVE_KEYS } from "./config-get.js";
@@ -55,6 +49,15 @@ import { CONFIG_FACADE_KEYS, configGetCommand } from "./config-get.js";
 
 type Scope = "project" | "global";
 
+const RETIRED_CONFIG_KEYS = new Set([
+  "loop-window",
+  "loop-schedule",
+  "loop_active_start",
+  "loop_active_end",
+  "loop_schedule.period_minutes",
+  "loop_schedule.offset_minute",
+]);
+
 function noColor(): boolean {
   return (process.env["NO_COLOR"] ?? "") !== "";
 }
@@ -71,7 +74,13 @@ function err(line: string): void {
   process.stderr.write(`${RED}[roll]${NC} ${line}\n`);
 }
 
-/** Render a resolved key's source as bash's facades do: "from <file>|default". */
+function retiredConfig(key: string): number {
+  err(`config: '${key}' is retired; run 'roll loop go' when needed`);
+  err(`config：'${key}' 已退役；需要时请运行 'roll loop go'`);
+  return 2;
+}
+
+/** Render a resolved key's source as a facade does: "from <file>|default". */
 function fromSource(source: string): string {
   return source !== "default" ? `from ${source}` : "from default";
 }
@@ -79,89 +88,6 @@ function fromSource(source: string): string {
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
 // ─── facades ────────────────────────────────────────────────────────────────
-
-/** `config loop-window [<start>-<end>]` — mirrors _config_loop_window. */
-function loopWindow(value: string, scope: Scope): number {
-  if (value === "") {
-    const [vs, s1] = configResolve("loop_active_start") ?? ["", "default"];
-    const [ve] = configResolve("loop_active_end") ?? ["", "default"];
-    process.stdout.write(`loop-window: ${vs}-${ve} (${fromSource(s1)}) — inactive, nothing reads this\n`);
-    return 0;
-  }
-  if (!/^[0-9]+-[0-9]+$/.test(value)) {
-    err(`config: loop-window expects <start>-<end>, got '${value}'`);
-    err(`config：loop-window 需要 <start>-<end> 格式，收到 '${value}'`);
-    return 2;
-  }
-  const start = Number(value.slice(0, value.indexOf("-")));
-  const end = Number(value.slice(value.indexOf("-") + 1));
-  if (start < 0 || start > 24) {
-    err("config: loop-window start must be in [0,24]");
-    err("config：loop-window 开始时间必须在 [0,24]");
-    return 2;
-  }
-  if (end > 24) {
-    err("config: loop-window end must be <= 24");
-    err("config：loop-window 结束时间必须 ≤ 24");
-    return 2;
-  }
-  if (start >= end) {
-    err(`config: loop-window start must be < end (got ${start}-${end})`);
-    err(`config：loop-window 开始时间必须 < 结束时间（收到 ${start}-${end}）`);
-    return 2;
-  }
-  const file = configKeyFile(scope);
-  configSet("loop_active_start", String(start), file);
-  configSet("loop_active_end", String(end), file);
-  ok(`✓ set loop-window = ${start}-${end} in ${file}`);
-  inactiveNote(
-    "note: nothing reads this — a session drives delivery, so you choose when to run `roll loop go`",
-    "说明:这个值没人读 —— 交付由会话驱动,什么时候跑 `roll loop go` 由你决定",
-  );
-  return 0;
-}
-
-/** `config loop-schedule [<period>[/<offset>]]` — mirrors _config_loop_schedule. */
-function loopSchedule(value: string, scope: Scope): number {
-  if (value === "") {
-    const [vp, sp] = configResolve("loop_schedule.period_minutes") ?? ["", "default"];
-    const [vo] = configResolve("loop_schedule.offset_minute") ?? ["", "default"];
-    // codex r2: printing "every 60min" reads as a schedule in effect. Show the
-    // stored value, then say plainly that nothing acts on it.
-    process.stdout.write(`loop-schedule: ${vp}min / offset :${vo} (${fromSource(sp)}) — inactive, nothing reads this\n`);
-    return 0;
-  }
-  if (!/^[0-9]+(\/[0-9]+)?$/.test(value)) {
-    err(`config: loop-schedule expects <period>[/<offset>], got '${value}'`);
-    err(`config：loop-schedule 需要 <period>[/<offset>] 格式，收到 '${value}'`);
-    return 2;
-  }
-  const period = Number(value.includes("/") ? value.slice(0, value.indexOf("/")) : value);
-  const offset = value.includes("/") ? value.slice(value.indexOf("/") + 1) : "";
-  if (period < 1 || period > 1440) {
-    err("config: loop-schedule period must be in [1,1440]");
-    err("config：loop-schedule 周期必须在 [1,1440]");
-    return 2;
-  }
-  if (offset !== "" && Number(offset) > period - 1) {
-    err(`config: loop-schedule offset must be in [0, period-1] (period ${period})`);
-    err(`config：loop-schedule 偏移必须在 [0, period-1]（周期 ${period}）`);
-    return 2;
-  }
-  const file = configKeyFile(scope);
-  configSet("loop_schedule.period_minutes", String(period), file);
-  if (offset !== "") {
-    configSet("loop_schedule.offset_minute", String(Number(offset)), file);
-    ok(`✓ set loop-schedule = ${period}/${Number(offset)} in ${file}`);
-  } else {
-    ok(`✓ set loop-schedule = ${period} in ${file}`);
-  }
-  inactiveNote(
-    "note: nothing reads this — there is no scheduler; run `roll loop go` when you want cycles",
-    "说明:这个值没人读 —— 没有调度器;想跑 cycle 就跑 `roll loop go`",
-  );
-  return 0;
-}
 
 /** `config dream-time [<HH:MM>]` — mirrors _config_daily_time "dream". */
 function dreamTime(value: string, scope: Scope): number {
@@ -242,7 +168,7 @@ function configLangSub(value: string, _scope: Scope): number {
  * read surface dispatch on the parsed key.
  *
  * REFACTOR-049 addition: `config lang <zh|en|--reset>` is a compact facade
- * like loop-window/loop-schedule/dream-time — it translates into the
+ * like dream-time — it translates into the
  * lang.ts write/clear/read surface without needing a separate config key.
  */
 export function configCommand(args: string[]): number {
@@ -250,6 +176,7 @@ export function configCommand(args: string[]): number {
   let value = "";
   let scope: Scope | "" = "";
   let sawValue = false;
+  let extraArgument = "";
   for (const a of args) {
     if (a === "--help" || a === "-h" || a === "help") return configGetCommand(args);
     if (a === "--list") continue; // delegated to the read surface below
@@ -266,22 +193,22 @@ export function configCommand(args: string[]): number {
     } else if (!sawValue) {
       value = a;
       sawValue = true;
-    } else {
-      err(`config: unexpected argument '${a}'`);
-      err(`config：多余参数 '${a}'`);
-      return 2;
-    }
+    } else if (extraArgument === "") extraArgument = a;
+  }
+
+  if (RETIRED_CONFIG_KEYS.has(key)) return retiredConfig(key);
+  if (extraArgument !== "") {
+    err(`config: unexpected argument '${extraArgument}'`);
+    err(`config：多余参数 '${extraArgument}'`);
+    return 2;
   }
 
   // REFACTOR-049: `config lang` is a compact facade — it writes/reads the
   // global ~/.roll/config.yaml `lang:` line, not a standard config key.
   if (key === "lang") return configLangSub(value, scope === "" ? "global" : scope);
 
-  // Compact facades (US-LOOP-034/035): translate one token into key writes.
-  // loop-* default to project scope; dream-time defaults to global.
+  // dream-time defaults to global scope.
   if (CONFIG_FACADE_KEYS.includes(key)) {
-    if (key === "loop-window") return loopWindow(value, scope === "" ? "project" : scope);
-    if (key === "loop-schedule") return loopSchedule(value, scope === "" ? "project" : scope);
     return dreamTime(value, scope === "" ? "global" : scope);
   }
 
@@ -306,9 +233,8 @@ export function configCommand(args: string[]): number {
   const file = configKeyFile(sc);
   configSet(key, value, file);
   ok(`✓ set ${key} = ${value} in ${file}`);
-  // codex r8: the FACADES disclose that these keys are dead, but a raw write
-  // (`roll config loop_schedule.period_minutes 30`) printed a bare success. Same
-  // key, same non-effect — say so on both paths.
+  // The remaining inactive dream keys must disclose that nothing reads them on
+  // both raw and facade write paths.
   if (INACTIVE_KEYS.has(key)) {
     inactiveNote("note: this key is inactive — nothing reads it", "说明:这个 key 已失效 —— 没有任何东西读它");
   }
