@@ -200,6 +200,20 @@ raw chat. The Builder is the sole worktree writer; Designer, Evaluator, and Peer
 are read-only except for their own artifact directory. Peer is optional advisory
 input to the Evaluator, never a substitute for it.
 
+Before handing materials to an independent Evaluator, the Builder runs
+`roll delta preflight --delegation <id> --stage builder --json` as a read-only
+self-check: it applies the same structural checks as formal validation
+(prepared context, managed workspace identity and detached heads, manifest and
+output digests, containment, identity/attestation, and Builder evidence format)
+but appends no event and changes no lease, frame, workspace, or checkpoint. A
+failed preflight is a local diagnostic the Builder can repair in the same
+delegation/frame. Save its JSON output outside the managed frame, then pass it
+immediately to `roll delta validate --delegation <id> --stage builder
+--preflight-receipt <path>`. The formal gate compares that receipt with fresh
+heads and artifact bytes before it can advance the delegation; a missing,
+malformed, stale, or mismatched receipt writes no lifecycle event, so the
+Builder can preflight again.
+
 **Honest boundaries — these are stated by the protocol and must not be
 overclaimed:**
 

@@ -182,6 +182,15 @@ Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要
 唯一的 worktree 写者；Designer、Evaluator、Peer 除自己的 artifact 目录外均只读。Peer
 只是 Evaluator 的可选咨询输入，绝不替代 Evaluator。
 
+在把材料交给独立 Evaluator 之前，Builder 运行
+`roll delta preflight --delegation <id> --stage builder --json` 做只读自检：它使用与正式校验
+相同的结构检查（prepared 上下文、受管工作区身份与分离 HEAD、manifest 与产物校验和、
+路径包含、身份/attestation、Builder 证据格式），但不追加任何事件，也不改动
+lease/帧/工作区/检查点。失败的预检只是本地诊断，Builder 可在同一委派/帧内修复。把 JSON
+输出保存在受管帧之外，随后立刻传给 `roll delta validate --delegation <id> --stage builder
+--preflight-receipt <path>`。正式门会把收据与新读取的 heads 和产物字节逐一比对后才推进委派；
+收据缺失、格式损坏、过期或不匹配时不写任何生命周期事件，Builder 可以重新预检。
+
 **诚实边界——这些是协议明说的限制，绝不可夸大：**
 
 - **终止绑定是 Option C，仅 handoff。** 结构上有效的 Evaluator 报告最多只能到

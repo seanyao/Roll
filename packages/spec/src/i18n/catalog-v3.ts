@@ -1038,8 +1038,8 @@ export const v3Catalog: Catalog = {
     zh: "用法：roll delta <prepare|validate|conclude|status|help>\n\n  Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native\n  能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Roll 从不\n  spawn、resume 或配置任何会话（包括你自己的）。\n\n  受管运行时边界：\n    - solo 或 delta-team 的 prepare 会原子持有 Story 交付预留，在\n      .roll/loop/worktrees 下创建一个受管 WorkspaceSet，并返回 detached checkout\n      和 publish-ref 身份。Builder 只能在该工作区开始。\n    - host-guided full-delta-team 会在副作用前被拒绝；Full Delta 只附着到既有 Cycle\n      WorkspaceSet，绝不创建嵌套 Delta 工作区。\n    - handoff_ready 会保留预留和工作区；它不是 Done、merge、attest 裁定或\n      DeliveryRecord。清理必须有已确认合并、已接受 attest 和新鲜的全成员检查。\n    - 旧路径/外部路径只会作为 unknown 或 unmanaged 可见；Roll 从不自动认领或删除。\n\n  如实的协议边界：\n    - 宿主 attestation 仅结构校验（token 非空/唯一且在 resolution/事件/manifest 间\n      对应）；绝不证明会话新起或模型执行过。\n    - preset 放在 ~/.roll/delta-team/presets.yaml（仅宿主本地配置）。\n    - host-guided 成本渲染 ? (host_unobservable)——绝不估算或写零。\n\n  宿主导引的委派生命周期命令（仅协议层；不启任何 agent）。\n\n  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]\n    原子预留交付、分配受管工作区，并创建不可变帧。\n    --continuation-run 只接手明确转交给 <name> 的任务（owner_redelegate --continuation-run\n    <name>）：它会核对已落盘的转交记录，创建全新的标准 delta 运行，并原子替换占用——\n    绝不触碰其他任务。\n\n  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]\n    经过协议校验边界验证角色阶段提交。\n\n  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]\n    记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。\n    owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare\n    --continuation-run <name> 接手。\n\n  roll delta status [--story <id>|--delegation <id>] [--json]\n    从事件真相只读投影委派状态。\n\n  roll delta help\n    打印此帮助。\n",
   },
   "delta.error.unknown_subcommand": {
-    en: "roll delta: unknown subcommand '%s'. Try: prepare, validate, conclude, status, help",
-    zh: "roll delta：未知子命令 '%s'。可用：prepare、validate、conclude、status、help",
+    en: "roll delta: unknown subcommand '%s'. Try: prepare, validate, preflight, conclude, status, help",
+    zh: "roll delta：未知子命令 '%s'。可用：prepare、validate、preflight、conclude、status、help",
   },
   "delta.error.missing_story": {
     en: "roll delta: <story-id> is required",
@@ -1100,6 +1100,30 @@ export const v3Catalog: Catalog = {
   "delta.prepare.continuation_picked_up": {
     en: "Picked up the task redelegated to '%s' (from run %s)",
     zh: "已接手转交给 '%s' 的任务（来自运行 %s）",
+  },
+  "delta.preflight.unsupported_stage": {
+    en: "roll delta preflight supports only the managed builder stage (got '%s')",
+    zh: "roll delta preflight 仅支持受管理的建造者阶段（收到 '%s'）",
+  },
+  "delta.preflight.managed_required": {
+    en: "roll delta preflight requires managed workspace facts (legacy or missing preparation)",
+    zh: "roll delta preflight 需要受管理的工作区事实（旧版或缺失的准备数据）",
+  },
+  "delta.preflight.passed": {
+    en: "Builder preflight passed: %s is structurally complete",
+    zh: "建造者预检通过：%s 在结构上完整",
+  },
+  "delta.preflight.failed": {
+    en: "Builder preflight failed: %s",
+    zh: "建造者预检失败：%s",
+  },
+  "delta.help.preflight": {
+    en: "\n  roll delta preflight --delegation <id> --stage builder [--json]\n    Read-only Builder self-check: the same structural checks as formal\n    validation, with no events and no lease/frame/workspace/checkpoint writes.\n    Formal roll delta validate remains the only lifecycle gate.\n\n",
+    zh: "\n  roll delta preflight --delegation <id> --stage builder [--json]\n    只读建造者自检：与正式校验相同的结构检查，不写任何事件，也不改动\n    lease/帧/工作区/检查点。正式 roll delta validate 仍是唯一生命周期门。\n\n",
+  },
+  "delta.help.builder_receipt": {
+    en: "\n  Managed Builder handoff:\n    Save `roll delta preflight --delegation <id> --stage builder --json` stdout outside the managed frame.\n    Then run validate with `--preflight-receipt <path>`; a missing, stale, or malformed receipt writes no lifecycle event.\n",
+    zh: "\n  受管 Builder 交接：\n    把 `roll delta preflight --delegation <id> --stage builder --json` 的 stdout 保存在受管帧外。\n    随后用 `--preflight-receipt <path>` 运行 validate；收据缺失、过期或格式损坏时不写生命周期事件。\n",
   },
   "delta.status.orphan_header": {
     en: "Uncommitted frames:",

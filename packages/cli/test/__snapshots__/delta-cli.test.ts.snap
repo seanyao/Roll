@@ -34,6 +34,10 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help is localiz
   roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
     经过协议校验边界验证角色阶段提交。
 
+  roll delta preflight --delegation <id> --stage builder [--json]
+    只读建造者自检：与正式校验相同的结构检查，不写任何事件，也不改动
+    lease/帧/工作区/检查点。正式 roll delta validate 仍是唯一生命周期门。
+
   roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。
     owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
@@ -44,6 +48,10 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help is localiz
 
   roll delta help
     打印此帮助。
+
+  受管 Builder 交接：
+    把 \`roll delta preflight --delegation <id> --stage builder --json\` 的 stdout 保存在受管帧外。
+    随后用 \`--preflight-receipt <path>\` 运行 validate；收据缺失、过期或格式损坏时不写生命周期事件。
 "
 `;
 
@@ -86,6 +94,11 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help prints EN 
   roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
     Validate a role-stage submission through the protocol-validator boundary.
 
+  roll delta preflight --delegation <id> --stage builder [--json]
+    Read-only Builder self-check: the same structural checks as formal
+    validation, with no events and no lease/frame/workspace/checkpoint writes.
+    Formal roll delta validate remains the only lifecycle gate.
+
   roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
     owner_redelegate transfers the reservation to the named successor; the successor
@@ -96,5 +109,9 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help prints EN 
 
   roll delta help
     Print this help.
+
+  Managed Builder handoff:
+    Save \`roll delta preflight --delegation <id> --stage builder --json\` stdout outside the managed frame.
+    Then run validate with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
 "
 `;

@@ -32,7 +32,7 @@ import {
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
 import { managedWorkspaceOperationId } from "../lib/managed-workspace-operation.js";
 import { renderDeltaBanner, renderDeltaPhaseBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
-import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation } from "@roll/core";
+import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type ObservedBuilderHead } from "@roll/core";
 import type { DelegationResolution, DeltaArtifactManifest, ManagedWorkspaceSet } from "@roll/spec";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -249,7 +249,11 @@ export async function deltaCommand(args: string[]): Promise<number> {
 
   // Help
   if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
-    process.stdout.write(T("delta.help.usage"));
+    const usage = T("delta.help.usage").replace(
+      "\n  roll delta conclude",
+      `${T("delta.help.preflight")}  roll delta conclude`,
+    );
+    process.stdout.write(usage + T("delta.help.builder_receipt"));
     return 0;
   }
 
@@ -257,6 +261,8 @@ export async function deltaCommand(args: string[]): Promise<number> {
   switch (sub) {
     case "prepare":
       return await prepareCommand(args.slice(1));
+    case "preflight":
+      return preflightCommand(args.slice(1));
     case "validate":
       return validateCommand(args.slice(1));
     case "conclude":
@@ -733,8 +739,11 @@ function getEventBus(): EventBus {
  * Re-inspect the materialized member rather than trusting a manifest's copied
  * WorkspaceSet literals.  A member is valid only when it lives below the one
  * managed root, is registered by Git, belongs to this repository identity, and
- * is still detached. The Builder manifest must keep the immutable allocation
- * identity; a later checkpoint, never the manifest, proves a committed head.
+ * is still detached. The Builder manifest keeps the immutable allocation
+ * identity; a committed Builder head is admitted only when it is either already
+ * checkpointed for this run or is the exact head in this read-only observation.
+ * Formal validation checkpoints that observed head only after its unchanged
+ * second observation succeeds.
  */
 function allocationMemberForBinding(
   workspace: ManagedWorkspaceSet,
@@ -851,6 +860,7 @@ function independentlyVerifyWorkspaceMember(
   projectPath: string,
   workspace: ManagedWorkspaceSet,
   member: NonNullable<DeltaArtifactManifest["workspaceMember"]>,
+  observedHeads: readonly ObservedBuilderHead[],
 ): boolean {
   if (!preflightVerifyWorkspaceMemberIdentity(projectPath, workspace, member)) return false;
   try {
@@ -866,30 +876,13 @@ function independentlyVerifyWorkspaceMember(
         try { return line === "" ? [] : [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
       })
       : [];
-    return isBuilderValidationHeadAllowed(workspace, member, head, events);
-  } catch {
-    return false;
-  }
-}
-
-function builderIdentityPreflight(input: DeltaValidationInput): boolean {
-  if (input.stage !== "builder" || input.workspace === undefined || !existsSync(input.artifactPath)) return false;
-  try {
-    const parsed = JSON.parse(readFileSync(input.manifestPath, "utf8")) as { schemaVersion?: unknown };
-    if (parsed.schemaVersion !== 2) return false;
-    const manifest = parsed as DeltaArtifactManifest;
-    if (
-      manifest.role !== "builder"
-      || manifest.delegationId !== input.delegationId
-      || manifest.storyId !== input.storyId
-      || manifest.trigger !== input.trigger
-      || manifest.topology !== input.topology
-      || manifest.qualityProfile !== input.qualityProfile
-      || manifest.runId !== input.workspace.runId
-      || manifest.workspaceMember === undefined
-    ) return false;
-    return allocationMemberForBinding(input.workspace, manifest.workspaceMember) !== undefined
-      && preflightVerifyWorkspaceMemberIdentity(process.cwd(), input.workspace, manifest.workspaceMember);
+    // A prior deterministic checkpoint admits a retried successful submission.
+    // Before that checkpoint exists, only the head captured by this same
+    // read-only observation is admissible. The caller re-observes it before
+    // writing the checkpoint, so an arbitrary later checkout cannot piggyback
+    // on a prior green preflight.
+    return isBuilderValidationHeadAllowed(workspace, member, head, events)
+      || observedHeads.some((observed) => observed.relativeLocator === member.relativeLocator && observed.head === head);
   } catch {
     return false;
   }
@@ -901,32 +894,26 @@ function builderIdentityPreflight(input: DeltaValidationInput): boolean {
  * Builder actually produced without changing the workspace to
  * `release_requested` in the execution projection.  Cleanup still requires its
  * separate delivered/attested release request.
+ *
+ * US-DELTA-015: the heads come from the already-verified read-only snapshot,
+ * never from a fresh read, so the checkpoint is exactly the submission formal
+ * validation accepted.  A formal failure writes no checkpoint; a formal success
+ * writes at most one matching one (idempotent on retry).
  */
 function recordBuilderValidationHeads(
   projectPath: string,
   eventsPath: string,
   workspace: ManagedWorkspaceSet,
   now: number,
+  heads: readonly ObservedBuilderHead[],
 ): boolean {
-  const root = resolve(projectPath, ".roll", "loop", "worktrees");
   try {
-    const expectedHeads = workspace.members.map((member) => {
-      const checkout = resolve(root, member.relativeLocator);
-      if (relative(root, checkout) === "" || relative(root, checkout).startsWith("..") || relative(root, checkout).includes(`..${sep}`)) throw new Error("workspace escape");
-      const canonicalRoot = realpathSync(root);
-      const canonicalCheckout = realpathSync(checkout);
-      if (!canonicalCheckout.startsWith(`${canonicalRoot}${sep}`)) throw new Error("workspace escape");
-      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: canonicalCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-      if (head === "") throw new Error("missing head");
-      try {
-        if (execFileSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: canonicalCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() !== "") throw new Error("attached head");
-      } catch (error) {
-        // `symbolic-ref -q` exits non-zero for a legitimate detached HEAD.
-        if (error instanceof Error && error.message === "attached head") throw error;
-      }
-      return { relativeLocator: member.relativeLocator, head };
-    });
-    const opDigest = createHash("sha256").update(JSON.stringify(expectedHeads)).digest("hex").slice(0, 16);
+    if (
+      heads.length !== workspace.members.length
+      || new Set(heads.map((head) => head.relativeLocator)).size !== workspace.members.length
+      || !workspace.members.every((member) => heads.some((head) => head.relativeLocator === member.relativeLocator && head.head !== ""))
+    ) return false;
+    const opDigest = createHash("sha256").update(JSON.stringify(heads)).digest("hex").slice(0, 16);
     const operationId = `${workspace.runId}:builder-validation:${opDigest}`;
     const prior = existsSync(eventsPath)
       ? readFileSync(eventsPath, "utf8").split("\n").some((line) => {
@@ -944,7 +931,7 @@ function recordBuilderValidationHeads(
       runId: workspace.runId,
       reason: "builder_validation",
       operationId,
-      expectedHeads,
+      expectedHeads: heads.map((head) => ({ relativeLocator: head.relativeLocator, head: head.head })),
       ts: now,
     });
     return true;
@@ -1020,7 +1007,7 @@ function defaultValidator(input: DeltaValidationInput): ValidatorResult {
       const binding = manifest.workspaceMember;
       const member = binding === undefined ? undefined : allocationMemberForBinding(input.workspace, binding);
       const independentlyVerified = binding !== undefined
-        && independentlyVerifyWorkspaceMember(process.cwd(), input.workspace, binding);
+        && independentlyVerifyWorkspaceMember(process.cwd(), input.workspace, binding, []);
       if (manifest.runId !== input.workspace.runId || member === undefined || !independentlyVerified) {
         return {
           ok: false,
@@ -1090,13 +1077,377 @@ function defaultValidator(input: DeltaValidationInput): ValidatorResult {
   return { ok: true };
 }
 
+// ── Preflight (Builder self-check, US-DELTA-015) ─────────────────────────────
+
+const BUILDER_PREFLIGHT_RECEIPT_SCHEMA = "roll-delta-builder-preflight-receipt/v1";
+
+/**
+ * The receipt deliberately contains only an observation. It is neither a
+ * signature nor a delivery claim: validate always compares it with a fresh
+ * observation before it can append any event.
+ */
+type BuilderPreflightReceipt = {
+  readonly schema: typeof BUILDER_PREFLIGHT_RECEIPT_SCHEMA;
+  readonly ok: true;
+  readonly class: "artifact_protocol";
+  readonly delegationId: string;
+  readonly storyId: string;
+  readonly trigger: string;
+  readonly topology: string;
+  readonly qualityProfile: string;
+  readonly runId: string;
+  readonly stage: "builder";
+  readonly snapshot: {
+    readonly workspaceRunId: string;
+    readonly members: readonly ObservedBuilderHead[];
+    readonly manifestSha256: string;
+    readonly outputSha256: readonly { readonly path: string; readonly sha256: string }[];
+  };
+};
+
+function makeBuilderPreflightReceipt(
+  context: BuilderSubmissionContext,
+  snapshot: BuilderSubmissionSnapshot,
+): BuilderPreflightReceipt {
+  return {
+    schema: BUILDER_PREFLIGHT_RECEIPT_SCHEMA,
+    ok: true,
+    class: "artifact_protocol",
+    delegationId: context.delegationId,
+    storyId: context.storyId,
+    trigger: context.trigger,
+    topology: context.topology,
+    qualityProfile: context.qualityProfile,
+    runId: context.runId,
+    stage: "builder",
+    snapshot: {
+      workspaceRunId: snapshot.heads.workspaceRunId,
+      members: snapshot.heads.members,
+      manifestSha256: snapshot.manifestSha256,
+      outputSha256: snapshot.outputSha256,
+    },
+  };
+}
+
+function receiptMatchesContext(receipt: BuilderPreflightReceipt, context: BuilderSubmissionContext): boolean {
+  return receipt.delegationId === context.delegationId
+    && receipt.storyId === context.storyId
+    && receipt.trigger === context.trigger
+    && receipt.topology === context.topology
+    && receipt.qualityProfile === context.qualityProfile
+    && receipt.runId === context.runId;
+}
+
+function receiptMatchesSnapshot(receipt: BuilderPreflightReceipt, snapshot: BuilderSubmissionSnapshot): boolean {
+  const observed = {
+    heads: {
+      workspaceRunId: receipt.snapshot.workspaceRunId,
+      members: receipt.snapshot.members,
+      observedAt: 0,
+    },
+    manifestSha256: receipt.snapshot.manifestSha256,
+    outputSha256: receipt.snapshot.outputSha256,
+  };
+  return builderSubmissionSnapshotsMatch(observed, snapshot);
+}
+
+function isReceiptSnapshot(value: unknown): value is BuilderPreflightReceipt["snapshot"] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (typeof snapshot.workspaceRunId !== "string" || typeof snapshot.manifestSha256 !== "string"
+    || !Array.isArray(snapshot.members) || !Array.isArray(snapshot.outputSha256)) return false;
+  return snapshot.members.every((member) => typeof member === "object" && member !== null
+    && !Array.isArray(member)
+    && typeof (member as Record<string, unknown>).relativeLocator === "string"
+    && typeof (member as Record<string, unknown>).head === "string")
+    && snapshot.outputSha256.every((output) => typeof output === "object" && output !== null
+      && !Array.isArray(output)
+      && typeof (output as Record<string, unknown>).path === "string"
+      && typeof (output as Record<string, unknown>).sha256 === "string");
+}
+
+function parseBuilderPreflightReceipt(path: string): { readonly ok: true; readonly receipt: BuilderPreflightReceipt } | { readonly ok: false; readonly detail: string } {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8").trim();
+  } catch {
+    return { ok: false, detail: `preflight receipt cannot be read: ${path}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, detail: "preflight receipt is not valid JSON" };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, detail: "preflight receipt is not a complete canonical receipt" };
+  }
+  const receipt = parsed as Record<string, unknown>;
+  const receiptKeys = ["schema", "ok", "class", "delegationId", "storyId", "trigger", "topology", "qualityProfile", "runId", "stage", "snapshot"];
+  const valid = receipt.schema === BUILDER_PREFLIGHT_RECEIPT_SCHEMA
+    && receipt.ok === true
+    && receipt.class === "artifact_protocol"
+    && receipt.stage === "builder"
+    && Object.keys(receipt).length === receiptKeys.length
+    && receiptKeys.every((key) => key in receipt)
+    && ["delegationId", "storyId", "trigger", "topology", "qualityProfile", "runId"].every((key) => typeof receipt[key] === "string")
+    && isReceiptSnapshot(receipt.snapshot);
+  if (!valid || raw !== JSON.stringify(parsed)) {
+    return { ok: false, detail: "preflight receipt is not a complete canonical receipt" };
+  }
+  return { ok: true, receipt: parsed as BuilderPreflightReceipt };
+}
+
+function writeReceiptFailure(json: boolean, detail: string): number {
+  if (json) process.stderr.write(JSON.stringify({ ok: false, error: "preflight_receipt_invalid", detail, role: "builder" }) + "\n");
+  else process.stderr.write(`${detail}\n`);
+  return 1;
+}
+
+function readManagedBuilderHeads(
+  root: string,
+  members: readonly { readonly relativeLocator: string }[],
+): readonly ObservedBuilderHead[] | null {
+  try {
+    const canonicalRoot = realpathSync(root);
+    const heads: ObservedBuilderHead[] = [];
+    for (const member of members) {
+      const checkout = resolve(root, member.relativeLocator);
+      const canonicalCheckout = realpathSync(checkout);
+      if (!canonicalCheckout.startsWith(`${canonicalRoot}${sep}`)) return null;
+      try {
+        if (execFileSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: canonicalCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() !== "") return null;
+      } catch (error) {
+        // `symbolic-ref -q HEAD` exits 1 for a detached HEAD, which is required;
+        // another Git/I/O failure is unobservable and must fail closed.
+        if (typeof error !== "object" || error === null || (error as { status?: unknown }).status !== 1) return null;
+      }
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: canonicalCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (head === "") return null;
+      heads.push({ relativeLocator: member.relativeLocator, head });
+    }
+    return heads;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `roll delta preflight --delegation <id> --stage builder [--json]` — a
+ * read-only Builder self-check. It consumes the SAME immutable prepared/
+ * resolution context and the current Builder artifact as formal validation, but
+ * appends no event and changes no lease, frame, workspace, or checkpoint. A
+ * failed preflight is a loud local diagnostic the Builder can repair in the
+ * same delegation/frame. Structural failures render `class: artifact_protocol`
+ * — never `delta:blocked`, never an Evaluator verdict or delivery claim.
+ */
+function preflightCommand(args: string[]): number {
+  const { positional, flags } = parseArgs(args);
+  const json = flags["json"] === true;
+
+  const knownFlags = new Set(["delegation", "stage", "json"]);
+  const dupFlag = detectDuplicateFlags(args, knownFlags);
+  if (dupFlag) {
+    const msg = T("delta.error.duplicate_flag", `--${dupFlag}`);
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "duplicate_flag", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  if (positional.length > 0) {
+    const msg = T("delta.error.unexpected_positional", positional[0]!);
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "unexpected_positional", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  for (const k of Object.keys(flags)) {
+    if (!knownFlags.has(k)) {
+      const msg = T("delta.error.unknown_flag", `--${k}`);
+      if (json) process.stderr.write(JSON.stringify({ ok: false, error: "unknown_flag", detail: msg }) + "\n");
+      else process.stderr.write(`${msg}\n`);
+      return 1;
+    }
+  }
+
+  const delegationId = flags["delegation"];
+  if (!delegationId || delegationId === true) {
+    const msg = T("delta.error.missing_required", "--delegation");
+    if (json) {
+      process.stderr.write(JSON.stringify({ ok: false, error: "missing_required", detail: msg, flag: "delegation" }) + "\n");
+    } else {
+      process.stderr.write(`${msg}\n`);
+    }
+    return 1;
+  }
+
+  const stageErr = checkEnumFlag(flags, "stage", DELTA_ROLES);
+  if (stageErr) {
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: stageErr }) + "\n");
+    else process.stderr.write(`${stageErr}\n`);
+    return 1;
+  }
+
+  const stage = flags["stage"] as DeltaRole | undefined;
+  if (!stage) {
+    const msg = T("delta.error.missing_required", "--stage");
+    if (json) {
+      process.stderr.write(JSON.stringify({ ok: false, error: "missing_required", detail: msg, flag: "stage" }) + "\n");
+    } else {
+      process.stderr.write(`${msg}\n`);
+    }
+    return 1;
+  }
+
+  // Preflight is deliberately Builder-only: a read-only self-check of the
+  // managed Builder submission.  Other stages are an explicit
+  // unsupported-stage diagnostic — never a silent no-op, a routing decision,
+  // or an automatic fallback — with zero state mutation.
+  if (stage !== "builder") {
+    const msg = T("delta.preflight.unsupported_stage", stage);
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "unsupported_stage", detail: msg, stage }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  // Load delegation events
+  const cwd = process.cwd();
+  const bus = getEventBus();
+  const eventsPath = join(cwd, ".roll", "loop", "events.ndjson");
+  const events = existsSync(eventsPath) ? bus.readEvents(eventsPath) : [];
+
+  const delegationEvents = events.filter(
+    (e) => "delegationId" in e && (e as Record<string, unknown>).delegationId === delegationId,
+  );
+  if (delegationEvents.length === 0) {
+    const msg = `Delegation not found: ${delegationId}`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  const preparedEvent = delegationEvents.find((e) => e.type === "delta:prepared") as Record<string, unknown> | undefined;
+  if (!preparedEvent) {
+    const msg = `Delegation ${delegationId}: no prepared event found`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  if (preparedWorkspaceSchema(preparedEvent) === "unknown") {
+    const msg = `Delegation ${delegationId}: unsupported workspace schema ${JSON.stringify(preparedEvent.workspaceSchema)}`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "unsupported_workspace_schema", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+  // Preflight requires the managed Builder workspace facts.  A legacy record
+  // (no WorkspaceSet) is an explicit unsupported diagnostic, never a
+  // zero-member or successful workspace.
+  if (preparedWorkspaceSchema(preparedEvent) === "legacy") {
+    const msg = T("delta.preflight.managed_required");
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "managed_workspace_required", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  const storyId = preparedEvent.storyId as string;
+  const cardDir = resolveExistingUniqueCardArchiveDir(cwd, storyId);
+  if (!cardDir) {
+    const msg = `Story ${storyId}: card directory not found`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  const frameDir = join(cardDir, `delta-${delegationId}`);
+  if (!existsSync(frameDir)) {
+    const msg = `Frame directory not found: ${frameDir}`;
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "delegation_not_found", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+
+  // Load the same immutable managed context formal validation uses, including
+  // the durable `worktree:allocated` identity cross-check.
+  const stageArtifactPath = join(frameDir, "role-artifacts", "builder", "evaluation-manifest.json");
+  let workspace: ManagedWorkspaceSet | undefined;
+  try {
+    const preparation = JSON.parse(readFileSync(join(frameDir, "preparation.json"), "utf8")) as { schema?: unknown; workspace?: ManagedWorkspaceSet; runId?: unknown };
+    if (preparation.schema === "roll-delta-preparation/v2") workspace = preparation.workspace;
+    if (workspace !== undefined) {
+      const operationId = managedWorkspaceOperationId(preparation.runId as string, "prepare");
+      const allocated = events.some((event) => event.type === "worktree:allocated"
+        && (event as Record<string, unknown>).operationId === operationId
+        && JSON.stringify((event as Record<string, unknown>).workspace) === JSON.stringify(workspace));
+      if (!allocated) workspace = undefined;
+    }
+  } catch { /* a v2 prepared event remains managed and fails closed below */ }
+  if (workspace === undefined) {
+    const msg = T("delta.preflight.managed_required");
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "managed_workspace_required", detail: msg }) + "\n");
+    else process.stderr.write(`${msg}\n`);
+    return 1;
+  }
+  const boundWorkspace = workspace;
+
+  const context: BuilderSubmissionContext = {
+    delegationId,
+    storyId,
+    trigger: preparedEvent.trigger as string,
+    topology: preparedEvent.topology as string,
+    qualityProfile: preparedEvent.qualityProfile as string,
+    runId: boundWorkspace.runId,
+    workspace: boundWorkspace,
+    frameDir,
+    manifestPath: stageArtifactPath,
+  };
+  const root = resolve(cwd, ".roll", "loop", "worktrees");
+  const observer: BuilderSubmissionObserver = {
+    contains: (p: string): boolean => {
+      const abs = resolve(frameDir, p);
+      return abs === frameDir || abs.startsWith(frameDir + sep);
+    },
+    readBytes: (p: string): string | null => {
+      try { return readFileSync(resolve(frameDir, p), "utf8"); } catch { return null; }
+    },
+    readMemberHeads: (members: readonly { readonly relativeLocator: string }[]): readonly ObservedBuilderHead[] | null =>
+      readManagedBuilderHeads(root, members),
+    verifyMemberBinding: (binding: NonNullable<DeltaArtifactManifest["workspaceMember"]>, observedHeads: readonly ObservedBuilderHead[]): boolean =>
+      independentlyVerifyWorkspaceMember(cwd, boundWorkspace, binding, observedHeads),
+  };
+
+  const observed = observeBuilderSubmission(context, observer);
+  const verdict = observed.ok
+    ? validateBuilderSubmission(context, observed.manifest, observed.snapshot, observed.evidenceContent)
+    : { ok: false, reason: observed.reason, detail: observed.detail };
+
+  if (!observed.ok || !verdict.ok) {
+    const reason = observed.ok ? (verdict.reason ?? "artifact_invalid") : observed.reason;
+    const detail = observed.ok ? (verdict.detail ?? "artifact protocol violation") : observed.detail;
+    // Loud but repairable: advisory execution feedback, never lifecycle truth.
+    if (json) {
+      process.stderr.write(JSON.stringify({ ok: false, class: "artifact_protocol", reason, detail }) + "\n");
+    } else {
+      process.stderr.write(`${T("delta.preflight.failed", detail)}\n`);
+    }
+    return 1;
+  }
+
+  if (json) {
+    process.stdout.write(JSON.stringify(makeBuilderPreflightReceipt(context, observed.snapshot)) + "\n");
+  } else {
+    process.stdout.write(`${T("delta.preflight.passed", `${T("delta.phase.delegation")} ${delegationId} ${T("delta.phase.stage")} builder`)}\n`);
+  }
+  return 0;
+}
+
 // ── Validate ─────────────────────────────────────────────────────────────────
 
 function validateCommand(args: string[]): number {
   const { positional, flags } = parseArgs(args);
   const json = flags["json"] === true;
 
-  const knownFlags = new Set(["delegation", "stage", "json"]);
+  const knownFlags = new Set(["delegation", "stage", "json", "preflight-receipt"]);
   const dupFlag = detectDuplicateFlags(args, knownFlags);
   if (dupFlag) {
     const msg = T("delta.error.duplicate_flag", `--${dupFlag}`);
@@ -1218,6 +1569,19 @@ function validateCommand(args: string[]): number {
       process.stderr.write(`${msg}\n`);
     }
     return 1;
+  }
+
+  // Do this before any admission branch can append a lifecycle fact. A Builder
+  // can repair a missing or malformed receipt in the same delegation.
+  let builderReceipt: BuilderPreflightReceipt | undefined;
+  if (stage === "builder" && preparedWorkspaceSchema(preparedEvent) === "managed-v2" && _injectedValidator === null) {
+    const receiptPath = flags["preflight-receipt"];
+    if (receiptPath === undefined || receiptPath === true) {
+      return writeReceiptFailure(json, "managed Builder validation requires --preflight-receipt <path>");
+    }
+    const parsedReceipt = parseBuilderPreflightReceipt(receiptPath);
+    if (!parsedReceipt.ok) return writeReceiptFailure(json, parsedReceipt.detail);
+    builderReceipt = parsedReceipt.receipt;
   }
 
   // ── Stage admission ──────────────────────────────────────────────────────
@@ -1380,18 +1744,63 @@ function validateCommand(args: string[]): number {
     ...(workspace === undefined ? {} : { workspace }),
   };
 
-  // A normal detached Builder commits before it writes its evidence.  Record
-  // the complete same-run member set before validating that evidence, rather
-  // than requiring tests/hosts to forge a later destructive release event.
-  if (stage === "builder" && workspace !== undefined && _injectedValidator === null && builderIdentityPreflight(validationInput)) {
-    // Authenticate the immutable manifest-to-allocation identity before any
-    // checkpoint write. A later validator failure may block the artifact, but
-    // cannot mutate the workspace lifecycle or its Story lease.
-    recordBuilderValidationHeads(cwd, eventsPath, workspace, now);
+  // US-DELTA-015: managed Builder admission is a read-only two-pass observation.
+  // Pass 1 observes + validates the submission entirely in memory — no event,
+  // lease, frame, workspace, or checkpoint write. Pass 2 re-observes from fresh
+  // state; only an unchanged success writes the single matching checkpoint.
+  let builderContext: BuilderSubmissionContext | undefined;
+  let builderObserver: BuilderSubmissionObserver | undefined;
+  let builderObservation: BuilderObservationResult | undefined;
+  if (stage === "builder" && workspace !== undefined && _injectedValidator === null) {
+    const boundWorkspace = workspace;
+    builderContext = {
+      delegationId,
+      storyId: preparedEvent.storyId as string,
+      trigger: preparedEvent.trigger as string,
+      topology: preparedEvent.topology as string,
+      qualityProfile: preparedEvent.qualityProfile as string,
+      runId: boundWorkspace.runId,
+      workspace: boundWorkspace,
+      frameDir,
+      manifestPath: stageArtifactPath,
+    };
+    const root = resolve(cwd, ".roll", "loop", "worktrees");
+    builderObserver = {
+      contains: (p: string): boolean => {
+        const abs = resolve(frameDir, p);
+        return abs === frameDir || abs.startsWith(frameDir + sep);
+      },
+      readBytes: (p: string): string | null => {
+        try { return readFileSync(resolve(frameDir, p), "utf8"); } catch { return null; }
+      },
+      readMemberHeads: (members: readonly { readonly relativeLocator: string }[]): readonly ObservedBuilderHead[] | null =>
+        readManagedBuilderHeads(root, members),
+      verifyMemberBinding: (binding: NonNullable<DeltaArtifactManifest["workspaceMember"]>, observedHeads: readonly ObservedBuilderHead[]): boolean =>
+        independentlyVerifyWorkspaceMember(cwd, boundWorkspace, binding, observedHeads),
+    };
+    builderObservation = observeBuilderSubmission(builderContext, builderObserver);
+    if (!receiptMatchesContext(builderReceipt!, builderContext)) {
+      return writeReceiptFailure(json, "preflight receipt does not match this immutable Builder delegation");
+    }
+    if (!builderObservation.ok || !receiptMatchesSnapshot(builderReceipt!, builderObservation.snapshot)) {
+      const detail = builderObservation.ok
+        ? "preflight receipt does not match the current Builder submission"
+        : `preflight receipt does not match the current Builder submission: ${builderObservation.detail}`;
+      return writeReceiptFailure(json, detail);
+    }
   }
 
   const validator = _injectedValidator ?? defaultValidator;
-  const result = validator(validationInput);
+  const result = (() => {
+    if (builderObservation !== undefined) {
+      // The shared read-only observation IS the validator input for the managed
+      // production Builder path (the injected seam is intentionally bypassed).
+      return builderObservation.ok
+        ? validateBuilderSubmission(builderContext!, builderObservation.manifest, builderObservation.snapshot, builderObservation.evidenceContent)
+        : { ok: false, reason: builderObservation.reason, detail: builderObservation.detail, role: "builder" };
+    }
+    return validator(validationInput);
+  })();
 
   if (!result.ok) {
     // Block: append delta:blocked event, return non-zero.
@@ -1432,6 +1841,55 @@ function validateCommand(args: string[]): number {
       process.stderr.write(`${result.detail ?? result.reason}\n`);
     }
     return 1;
+  }
+
+  // Pass 2 — time-of-check/time-of-use guard: re-observe the heads, manifest,
+  // and output digests from fresh state.  Any change is a formal validation
+  // failure, never a pass carried from pass 1 or from a green preflight.
+  if (builderObservation !== undefined && builderContext !== undefined && builderObserver !== undefined && builderObservation.ok) {
+    const reobserved = observeBuilderSubmission(builderContext, builderObserver);
+    const changedDetail = reobserved.ok
+      ? "builder submission changed between observation and formal validation"
+      : reobserved.detail;
+    if (!reobserved.ok || !builderSubmissionSnapshotsMatch(builderObservation.snapshot, reobserved.snapshot)) {
+      bus.appendEvent(eventsPath, {
+        type: "delta:blocked",
+        delegationId,
+        storyId,
+        role: stage,
+        reason: "artifact_invalid",
+        detail: changedDetail,
+        ts: now,
+      });
+      process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "artifact_invalid")}\n`);
+      if (json) {
+        process.stderr.write(JSON.stringify({ ok: false, error: "artifact_invalid", detail: changedDetail, role: stage }) + "\n");
+      } else {
+        process.stderr.write(`${changedDetail}\n`);
+      }
+      return 1;
+    }
+    // Formal success writes exactly one matching checkpoint from the validated
+    // snapshot, then lifecycle facts below.  A formal failure never gets here.
+    if (!recordBuilderValidationHeads(cwd, eventsPath, builderContext.workspace, now, builderObservation.snapshot.heads.members)) {
+      const msg = "managed workspace release checkpoint could not be recorded";
+      bus.appendEvent(eventsPath, {
+        type: "delta:blocked",
+        delegationId,
+        storyId,
+        role: stage,
+        reason: "artifact_invalid",
+        detail: msg,
+        ts: now,
+      });
+      process.stderr.write(`${validationPhaseBanner(delegationId, stage, "blocked", "artifact_invalid")}\n`);
+      if (json) {
+        process.stderr.write(JSON.stringify({ ok: false, error: "artifact_invalid", detail: msg, role: stage }) + "\n");
+      } else {
+        process.stderr.write(`${msg}\n`);
+      }
+      return 1;
+    }
   }
 
   // Allow: append lifecycle event (delta:artifact_published for US-003 thin validator)

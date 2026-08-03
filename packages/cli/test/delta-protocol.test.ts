@@ -332,7 +332,11 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     const member = workspace.members[1]!;
     const memberCheckout = join(dir, ".roll", "loop", "worktrees", member.relativeLocator);
     writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-SUBMODULE", delegationId, workspace, member, executionCwd: memberCheckout });
-    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir)).code).toBe(0);
+    const receipt = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(receipt.code).toBe(0);
+    const receiptPath = join(dir, "submodule-builder-receipt.json");
+    writeFileSync(receiptPath, receipt.stdout);
+    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--preflight-receipt", receiptPath, "--json"], dir)).code).toBe(0);
     // The production publication is repository-member scoped: the submodule
     // Builder's commit/ref/tree is never copied from the primary member.
     const publication = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n")
@@ -375,7 +379,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }],
       createdAt: "2026-08-01T00:00:00Z",
     }, null, 2));
-    const validated = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    const validated = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
     expect(validated.code).toBe(1);
     expect(parseStderrJsonTail(validated.stderr).detail).toContain("managed workspace member");
     execFileSync("git", ["worktree", "remove", "--force", join(dir, ".roll", "loop", "worktrees", primary.relativeLocator)], { cwd: dir, stdio: "ignore" });
@@ -403,9 +407,9 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       worktreeAccess: "builder-write", inputs: [], outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }], createdAt: "2026-08-01T00:00:00Z",
     }, null, 2));
     execFileSync("git", ["checkout", "-B", "attached-builder"], { cwd: checkout, stdio: "ignore" });
-    const result = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    const result = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
     expect(result.code).toBe(1);
-    expect(parseStderrJsonTail(result.stderr).detail).toContain("managed workspace member");
+    expect(parseStderrJsonTail(result.stderr).detail).toContain("managed workspace");
     execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
   });
 
@@ -917,7 +921,11 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       hostAttestation: { schema: "roll-delta-host-attestation/v1", hostId: "pi", role: "builder", roleInstanceId: "ri-2", modelId: "claude", sessionId: "builder-cwd-session", assertedAt: "2026-08-01T00:00:00Z" },
       worktreeAccess: "builder-write", inputs: [], outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }], createdAt: "2026-08-01T00:00:00Z",
     }, null, 2));
-    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir)).code).toBe(0);
+    const receipt = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(receipt.code).toBe(0);
+    const receiptPath = join(dir, "cwd-builder-receipt.json");
+    writeFileSync(receiptPath, receipt.stdout);
+    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--preflight-receipt", receiptPath, "--json"], dir)).code).toBe(0);
     execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
   });
 
@@ -1022,7 +1030,11 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     // manifest. The write-ahead builder-validation checkpoint admits its
     // actual detached HEAD after that identity preflight succeeds.
     writeManagedBuilderArtifact({ ...changed, storyId: "US-DELTA-CHANGED-HEAD", executionCwd: changed.checkout });
-    expect((await tsRunCwd(["validate", "--delegation", changed.delegationId, "--stage", "builder", "--json"], changed.dir)).code).toBe(0);
+    const changedPreflight = await tsRunCwd(["preflight", "--delegation", changed.delegationId, "--stage", "builder", "--json"], changed.dir);
+    expect(changedPreflight.code).toBe(0);
+    const changedReceipt = join(changed.dir, "changed-builder-receipt.json");
+    writeFileSync(changedReceipt, changedPreflight.stdout);
+    expect((await tsRunCwd(["validate", "--delegation", changed.delegationId, "--stage", "builder", "--preflight-receipt", changedReceipt, "--json"], changed.dir)).code).toBe(0);
     const changedCheckpoint = readFileSync(join(changed.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
@@ -1043,12 +1055,12 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     // The manifest cannot replace its allocation base with the new commit.
     // That forgery must fail before it writes a builder-validation checkpoint.
     const leaseBeforeForgery = readLeases(storyLeasesPath(released.dir));
-    expect((await tsRunCwd(["validate", "--delegation", released.delegationId, "--stage", "builder", "--json"], released.dir)).code).toBe(1);
+    expect((await tsRunCwd(["preflight", "--delegation", released.delegationId, "--stage", "builder", "--json"], released.dir)).code).toBe(1);
     const releasedEvents = readFileSync(join(released.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
     const checkpoint = releasedEvents.find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
     expect(checkpoint).toBeUndefined();
-    expect(releasedEvents.at(-1)).toMatchObject({ type: "delta:blocked", role: "builder", reason: "artifact_invalid" });
+    expect(releasedEvents.some((event) => event.type === "delta:blocked")).toBe(false);
     expect(readLeases(storyLeasesPath(released.dir))).toEqual(leaseBeforeForgery);
 
     const wrongRepository = await prepare("US-DELTA-WRONG-REPOSITORY");
@@ -6080,5 +6092,288 @@ describe("FIX-1502 — prepare --continuation-run picks up a redelegated task", 
       });
     writeFileSync(eventsPath, kept.join("\n") + "\n", "utf8");
     await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_verifiable");
+  });
+});
+
+// ── US-DELTA-015 — Builder preflight + checkpoint refactor ──────────────────
+
+describe("US-DELTA-015 — Builder preflight and formal checkpoint ownership", () => {
+  async function prepareManaged(storyId: string): Promise<{
+    dir: string;
+    delegationId: string;
+    workspace: ManagedWorkspaceSet;
+    frame: string;
+    checkout: string;
+  }> {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const prepared = await tsRunCwd([
+      "prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", writeResolutionTemplate(dir, storyId, "local-preset"), "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", storyId, `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    return {
+      dir,
+      delegationId,
+      workspace,
+      frame,
+      checkout: join(dir, ".roll", "loop", "worktrees", workspace.members[0]!.relativeLocator),
+    };
+  }
+
+  function eventsOf(dir: string): Array<Record<string, unknown>> {
+    const p = join(dir, ".roll", "loop", "events.ndjson");
+    return existsSync(p)
+      ? readFileSync(p, "utf8").trim().split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as Record<string, unknown>)
+      : [];
+  }
+
+  /** Byte-level snapshot of the lifecycle surfaces preflight must never touch. */
+  function readLifecycleState(dir: string, frame: string, storyId: string): string {
+    const parts: string[] = [];
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    const leasePath = join(dir, ".roll", "loop", "leases", `${storyId}.lease`);
+    if (existsSync(eventsPath)) parts.push(readFileSync(eventsPath, "utf8"));
+    if (existsSync(leasePath)) parts.push(readFileSync(leasePath, "utf8"));
+    for (const name of ["preparation.json", "delegation-open.json", "role-artifacts/builder/evaluation-manifest.json"]) {
+      const p = join(frame, name);
+      if (existsSync(p)) parts.push(readFileSync(p, "utf8"));
+    }
+    return parts.join("\n---\n");
+  }
+
+  async function preflightReceipt(dir: string, delegationId: string): Promise<string> {
+    const preflight = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(preflight.code).toBe(0);
+    const path = join(dir, `${delegationId}-builder-receipt.json`);
+    writeFileSync(path, preflight.stdout);
+    return path;
+  }
+
+  it("green preflight is read-only: no events, lease, frame, workspace, or checkpoint changes", async () => {
+    const { dir, delegationId, workspace, frame, checkout } = await prepareManaged("US-DELTA-PREFLIGHT-GREEN");
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-PREFLIGHT-GREEN", delegationId, workspace, executionCwd: checkout });
+    const before = readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-GREEN");
+    const r = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      schema: "roll-delta-builder-preflight-receipt/v1",
+      ok: true,
+      class: "artifact_protocol",
+      delegationId,
+      stage: "builder",
+      snapshot: expect.objectContaining({ manifestSha256: expect.any(String) }),
+    });
+    expect(readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-GREEN")).toBe(before);
+    expect(eventsOf(dir).filter((e) => e.type === "worktree:release_requested" || e.type === "delta:blocked" || e.type === "delta:artifact_published")).toHaveLength(0);
+    // The checkout head is untouched by the self-check.
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim()).toBe(workspace.members[0]!.checkoutRef.head);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("red preflight is read-only and reports artifact_protocol without delta:blocked", async () => {
+    const { dir, delegationId, workspace, frame, checkout } = await prepareManaged("US-DELTA-PREFLIGHT-RED");
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-PREFLIGHT-RED", delegationId, workspace, executionCwd: checkout });
+    unlinkSync(join(frame, "role-artifacts", "builder", "evidence.md"));
+    const before = readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-RED");
+    const r = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const envelope = parseStderrJsonTail(r.stderr);
+    expect(envelope).toMatchObject({ ok: false, class: "artifact_protocol", reason: "artifact_invalid" });
+    expect(envelope.detail).toContain("builder evidence artifact missing on disk");
+    expect(readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-RED")).toBe(before);
+    expect(eventsOf(dir).filter((e) => e.type === "delta:blocked" || e.type === "worktree:release_requested")).toHaveLength(0);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("rejects non-builder stages and unsupported/legacy managed facts without mutation", async () => {
+    const { dir, delegationId, workspace, frame, checkout } = await prepareManaged("US-DELTA-PREFLIGHT-STAGE");
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-PREFLIGHT-STAGE", delegationId, workspace, executionCwd: checkout });
+    const eventsBefore = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8");
+    for (const stage of ["designer", "evaluator", "peer"]) {
+      const r = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", stage, "--json"], dir);
+      expect(r.code).toBe(1);
+      expect(parseStderrJsonTail(r.stderr).error).toBe("unsupported_stage");
+    }
+    expect(readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8")).toBe(eventsBefore);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+
+    // Legacy persisted v1 record: no managed workspace facts → explicit rejection.
+    const legacy = setupMinimalProject("US-DELTA-PREFLIGHT-LEGACY", "delta-team");
+    const legacyId = "legacy-preflight-delegation";
+    const legacyEventsPath = join(legacy, ".roll", "loop", "events.ndjson");
+    expect(claimHostDelegationLease(legacy, "US-DELTA-PREFLIGHT-LEGACY", legacyId, `delta-${legacyId}`)).toBe("claimed");
+    const legacyFrame = join(legacy, ".roll", "features", "delta-team", "US-DELTA-PREFLIGHT-LEGACY", `delta-${legacyId}`);
+    mkdirSync(join(legacyFrame, "role-artifacts", "builder"), { recursive: true });
+    writeFileSync(join(legacyFrame, "preparation.json"), JSON.stringify({ schema: "roll-delta-preparation/v1", delegationId: legacyId, storyId: "US-DELTA-PREFLIGHT-LEGACY" }, null, 2));
+    writeFileSync(legacyEventsPath, [
+      { type: "delta:prepared", delegationId: legacyId, storyId: "US-DELTA-PREFLIGHT-LEGACY", trigger: "host-guided", topology: "solo", qualityProfile: "standard", ts: Date.now() },
+      { type: "delta:role_resolved", delegationId: legacyId, storyId: "US-DELTA-PREFLIGHT-LEGACY", role: "builder", roleInstanceId: "legacy-builder", hostId: "pi", modelId: "claude", ts: Date.now() },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const legacyBefore = readFileSync(legacyEventsPath, "utf8");
+    const legacyRun = await tsRunCwd(["preflight", "--delegation", legacyId, "--stage", "builder", "--json"], legacy);
+    expect(legacyRun.code).toBe(1);
+    expect(parseStderrJsonTail(legacyRun.stderr).error).toBe("managed_workspace_required");
+    expect(readFileSync(legacyEventsPath, "utf8")).toBe(legacyBefore);
+  });
+
+  it("formal Builder validation rejects a missing receipt without blocking the delegation", async () => {
+    const cases = [
+      {
+        storyId: "US-DELTA-PARITY-MISSING",
+        sabotage: (frame: string) => unlinkSync(join(frame, "role-artifacts", "builder", "evidence.md")),
+        expectDetail: "builder evidence artifact missing on disk",
+      },
+      {
+        storyId: "US-DELTA-PARITY-DIGEST",
+        sabotage: (_frame: string, dir: string, workspace: ManagedWorkspaceSet, delegationId: string, checkout: string) => {
+          // Declare a sha256 that does not match the actual evidence bytes.
+          const manifestPath = join(dir, ".roll", "features", "delta-team", "US-DELTA-PARITY-DIGEST", `delta-${delegationId}`, "role-artifacts", "builder", "evaluation-manifest.json");
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { outputs: Array<{ path: string; sha256: string }> };
+          manifest.outputs[0]!.sha256 = createHash("sha256").update("tampered bytes").digest("hex");
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        },
+        expectDetail: "digest mismatch for role-artifacts/builder/evidence.md",
+      },
+      {
+        storyId: "US-DELTA-PARITY-BINDING",
+        sabotage: (_frame: string, dir: string, _workspace: ManagedWorkspaceSet, delegationId: string, _checkout: string) => {
+          // executionCwd pointing at the project root (not the registered checkout).
+          const manifestPath = join(dir, ".roll", "features", "delta-team", "US-DELTA-PARITY-BINDING", `delta-${delegationId}`, "role-artifacts", "builder", "evaluation-manifest.json");
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { workspaceMember?: { executionCwd?: string } };
+          manifest.workspaceMember!.executionCwd = dir;
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        },
+        expectDetail: "manifest is not bound to a registered canonical DeliveryRun managed workspace member",
+      },
+    ];
+    for (const fixture of cases) {
+      const { dir, delegationId, workspace, frame, checkout } = await prepareManaged(fixture.storyId);
+      writeManagedBuilderArtifact({ dir, storyId: fixture.storyId, delegationId, workspace, executionCwd: checkout });
+      fixture.sabotage(frame, dir, workspace, delegationId, checkout);
+      const preflight = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+      expect(preflight.code).toBe(1);
+      const preflightEnvelope = parseStderrJsonTail(preflight.stderr);
+      expect(preflightEnvelope).toMatchObject({ ok: false, class: "artifact_protocol", reason: "artifact_invalid" });
+      expect(preflightEnvelope.detail).toContain(fixture.expectDetail);
+      const validate = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+      expect(validate.code).toBe(1);
+      const validateEnvelope = parseStderrJsonTail(validate.stderr);
+      expect(validateEnvelope.error).toBe("preflight_receipt_invalid");
+      expect(eventsOf(dir).filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+      expect(eventsOf(dir).filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+      execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+    }
+  });
+
+  it("rejects malformed and replayed Builder receipts without writing an event", async () => {
+    const first = await prepareManaged("US-DELTA-RECEIPT-FIRST");
+    writeManagedBuilderArtifact({ dir: first.dir, storyId: "US-DELTA-RECEIPT-FIRST", delegationId: first.delegationId, workspace: first.workspace, executionCwd: first.checkout });
+    const firstReceipt = await preflightReceipt(first.dir, first.delegationId);
+    const canonical = readFileSync(firstReceipt, "utf8").trim();
+    expect(canonical).toBe(JSON.stringify(JSON.parse(canonical)));
+
+    const malformed = join(first.dir, "malformed-receipt.json");
+    writeFileSync(malformed, "{not json");
+    const malformedValidate = await tsRunCwd(["validate", "--delegation", first.delegationId, "--stage", "builder", "--preflight-receipt", malformed, "--json"], first.dir);
+    expect(malformedValidate.code).toBe(1);
+    expect(parseStderrJsonTail(malformedValidate.stderr).error).toBe("preflight_receipt_invalid");
+    expect(eventsOf(first.dir).filter((event) => event.type === "delta:blocked")).toHaveLength(0);
+
+    const second = await prepareManaged("US-DELTA-RECEIPT-SECOND");
+    writeManagedBuilderArtifact({ dir: second.dir, storyId: "US-DELTA-RECEIPT-SECOND", delegationId: second.delegationId, workspace: second.workspace, executionCwd: second.checkout });
+    const replayed = await tsRunCwd(["validate", "--delegation", second.delegationId, "--stage", "builder", "--preflight-receipt", firstReceipt, "--json"], second.dir);
+    expect(replayed.code).toBe(1);
+    expect(parseStderrJsonTail(replayed.stderr).detail).toContain("immutable Builder delegation");
+    expect(eventsOf(second.dir).filter((event) => event.type === "delta:blocked")).toHaveLength(0);
+
+    execFileSync("git", ["worktree", "remove", "--force", first.checkout], { cwd: first.dir, stdio: "ignore" });
+    execFileSync("git", ["worktree", "remove", "--force", second.checkout], { cwd: second.dir, stdio: "ignore" });
+  });
+
+  it("TOCTOU: a head or artifact change after a green receipt is rejected with no stale checkpoint", async () => {
+    // Head change after the green self-check.
+    const head = await prepareManaged("US-DELTA-TOCTOU-HEAD");
+    writeManagedBuilderArtifact({ dir: head.dir, storyId: "US-DELTA-TOCTOU-HEAD", delegationId: head.delegationId, workspace: head.workspace, executionCwd: head.checkout });
+    const headReceipt = await preflightReceipt(head.dir, head.delegationId);
+    execFileSync("git", ["-c", "user.email=delta@test.invalid", "-c", "user.name=Delta Test", "commit", "--allow-empty", "-m", "post-preflight change"], { cwd: head.checkout, stdio: "ignore" });
+    const headValidate = await tsRunCwd(["validate", "--delegation", head.delegationId, "--stage", "builder", "--preflight-receipt", headReceipt, "--json"], head.dir);
+    expect(headValidate.code).toBe(1);
+    let events = eventsOf(head.dir);
+    expect(events.filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:artifact_published")).toHaveLength(0);
+
+    // Artifact byte change after the green self-check.
+    const artifact = await prepareManaged("US-DELTA-TOCTOU-ARTIFACT");
+    writeManagedBuilderArtifact({ dir: artifact.dir, storyId: "US-DELTA-TOCTOU-ARTIFACT", delegationId: artifact.delegationId, workspace: artifact.workspace, executionCwd: artifact.checkout });
+    const artifactReceipt = await preflightReceipt(artifact.dir, artifact.delegationId);
+    writeFileSync(join(artifact.frame, "role-artifacts", "builder", "evidence.md"), "commit abc\ncommands: test\nevidence: tampered after green preflight\n## Known Limitations\nfixture\n");
+    const artifactValidate = await tsRunCwd(["validate", "--delegation", artifact.delegationId, "--stage", "builder", "--preflight-receipt", artifactReceipt, "--json"], artifact.dir);
+    expect(artifactValidate.code).toBe(1);
+    expect(parseStderrJsonTail(artifactValidate.stderr).detail).toContain("does not match");
+    events = eventsOf(artifact.dir);
+    expect(events.filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:artifact_published")).toHaveLength(0);
+  });
+
+  it("formal success writes exactly one matching checkpoint then one publication; formal failure writes none", async () => {
+    const success = await prepareManaged("US-DELTA-CHECKPOINT-SUCCESS");
+    writeManagedBuilderArtifact({ dir: success.dir, storyId: "US-DELTA-CHECKPOINT-SUCCESS", delegationId: success.delegationId, workspace: success.workspace, executionCwd: success.checkout });
+    const successReceipt = await preflightReceipt(success.dir, success.delegationId);
+    expect((await tsRunCwd(["validate", "--delegation", success.delegationId, "--stage", "builder", "--preflight-receipt", successReceipt, "--json"], success.dir)).code).toBe(0);
+    let events = eventsOf(success.dir);
+    const checkpoints = events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation");
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]?.expectedHeads).toEqual([{ relativeLocator: success.workspace.members[0]!.relativeLocator, head: success.workspace.members[0]!.checkoutRef.head }]);
+    expect(events.filter((e) => e.type === "delta:artifact_published" && e.role === "builder")).toHaveLength(1);
+    execFileSync("git", ["worktree", "remove", "--force", success.checkout], { cwd: success.dir, stdio: "ignore" });
+
+    const failure = await prepareManaged("US-DELTA-CHECKPOINT-FAILURE");
+    writeManagedBuilderArtifact({ dir: failure.dir, storyId: "US-DELTA-CHECKPOINT-FAILURE", delegationId: failure.delegationId, workspace: failure.workspace, executionCwd: failure.dir });
+    expect((await tsRunCwd(["validate", "--delegation", failure.delegationId, "--stage", "builder", "--json"], failure.dir)).code).toBe(1);
+    events = eventsOf(failure.dir);
+    expect(events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:artifact_published" && e.role === "builder")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+    execFileSync("git", ["worktree", "remove", "--force", failure.checkout], { cwd: failure.dir, stdio: "ignore" });
+  });
+
+  it("preflight human + JSON output is frozen in EN and ZH (green and red)", async () => {
+    const previousLang = process.env["ROLL_LANG"];
+    try {
+      for (const language of ["en", "zh"] as const) {
+        process.env["ROLL_LANG"] = language;
+        const greenStory = `US-DELTA-PREFLIGHT-SNAP-${language.toUpperCase()}`;
+        const green = await prepareManaged(greenStory);
+        writeManagedBuilderArtifact({ dir: green.dir, storyId: greenStory, delegationId: green.delegationId, workspace: green.workspace, executionCwd: green.checkout });
+        const greenHuman = await tsRunCwd(["preflight", "--delegation", green.delegationId, "--stage", "builder"], green.dir);
+        const greenJson = await tsRunCwd(["preflight", "--delegation", green.delegationId, "--stage", "builder", "--json"], green.dir);
+        expect([greenHuman.code, greenJson.code]).toEqual([0, 0]);
+        expect(scrubAll([greenHuman.stdout, greenJson.stdout].join("\n"), green.dir, green.delegationId)).toMatchSnapshot();
+        execFileSync("git", ["worktree", "remove", "--force", green.checkout], { cwd: green.dir, stdio: "ignore" });
+
+        const redStory = `US-DELTA-PREFLIGHT-RED-SNAP-${language.toUpperCase()}`;
+        const red = await prepareManaged(redStory);
+        writeManagedBuilderArtifact({ dir: red.dir, storyId: redStory, delegationId: red.delegationId, workspace: red.workspace, executionCwd: red.checkout });
+        unlinkSync(join(red.frame, "role-artifacts", "builder", "evidence.md"));
+        const redHuman = await tsRunCwd(["preflight", "--delegation", red.delegationId, "--stage", "builder"], red.dir);
+        const redJson = await tsRunCwd(["preflight", "--delegation", red.delegationId, "--stage", "builder", "--json"], red.dir);
+        expect([redHuman.code, redJson.code]).toEqual([1, 1]);
+        expect(scrubAll([redHuman.stderr, redJson.stderr].join("\n"), red.dir, red.delegationId)).toMatchSnapshot();
+        const stageUnsupported = await tsRunCwd(["preflight", "--delegation", red.delegationId, "--stage", "evaluator", "--json"], red.dir);
+        expect(stageUnsupported.code).toBe(1);
+        expect(scrubAll(stageUnsupported.stderr, red.dir, red.delegationId)).toMatchSnapshot();
+        execFileSync("git", ["worktree", "remove", "--force", red.checkout], { cwd: red.dir, stdio: "ignore" });
+      }
+    } finally {
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
   });
 });

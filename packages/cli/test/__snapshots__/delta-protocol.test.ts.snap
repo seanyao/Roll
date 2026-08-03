@@ -334,3 +334,41 @@ exports[`US-DELTA-003 — status human output with provenance > status human out
     evaluator: resolved [pi/claude] cost=? (host_unobservable)
 "
 `;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 1`] = `
+"Builder preflight passed: delegation <DELEGATION_ID> stage builder is structurally complete
+
+{"schema":"roll-delta-builder-preflight-receipt/v1","ok":true,"class":"artifact_protocol","delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-PREFLIGHT-SNAP-EN","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","runId":"delta-<DELEGATION_ID>","stage":"builder","snapshot":{"workspaceRunId":"delta-<DELEGATION_ID>","members":[{"relativeLocator":"delta-<DELEGATION_ID>","head":"<GIT_SHA>"}],"manifestSha256":"<SHA256>","outputSha256":[{"path":"role-artifacts/builder/evidence.md","sha256":"<SHA256>"}]}}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 2`] = `
+"Builder preflight failed: builder evidence artifact missing on disk: role-artifacts/builder/evidence.md
+
+{"ok":false,"class":"artifact_protocol","reason":"artifact_invalid","detail":"builder evidence artifact missing on disk: role-artifacts/builder/evidence.md"}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 3`] = `
+"{"ok":false,"error":"unsupported_stage","detail":"roll delta preflight supports only the managed builder stage (got 'evaluator')","stage":"evaluator"}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 4`] = `
+"建造者预检通过：委派 <DELEGATION_ID> 阶段 builder 在结构上完整
+
+{"schema":"roll-delta-builder-preflight-receipt/v1","ok":true,"class":"artifact_protocol","delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-PREFLIGHT-SNAP-ZH","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","runId":"delta-<DELEGATION_ID>","stage":"builder","snapshot":{"workspaceRunId":"delta-<DELEGATION_ID>","members":[{"relativeLocator":"delta-<DELEGATION_ID>","head":"<GIT_SHA>"}],"manifestSha256":"<SHA256>","outputSha256":[{"path":"role-artifacts/builder/evidence.md","sha256":"<SHA256>"}]}}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 5`] = `
+"建造者预检失败：builder evidence artifact missing on disk: role-artifacts/builder/evidence.md
+
+{"ok":false,"class":"artifact_protocol","reason":"artifact_invalid","detail":"builder evidence artifact missing on disk: role-artifacts/builder/evidence.md"}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 6`] = `
+"{"ok":false,"error":"unsupported_stage","detail":"roll delta preflight 仅支持受管理的建造者阶段（收到 'evaluator'）","stage":"evaluator"}
+"
+`;
