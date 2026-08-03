@@ -25,8 +25,11 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import type { BrowserEnvironmentReadiness } from "@roll/spec";
+import { defaultBrowserEnvironmentProbeDeps } from "@roll/infra";
 import { doctorCommand } from "../src/commands/doctor.js";
 import { generateCatalog } from "../src/commands/skills.js";
+import { collectBrowserEnvironmentReadiness } from "../src/lib/browser-readiness-doctor.js";
 import { binRollVersion, seedUpdateCheckCache, seedBinaryStalenessCache, pathWithout } from "./helpers.js";
 
 const REPO = resolve(__dirname, "../../..");
@@ -103,6 +106,32 @@ interface Run {
   stderr: string;
 }
 
+/** Keep frozen doctor output independent of the runner's installed browser. */
+function fixtureBrowserReadiness(): BrowserEnvironmentReadiness {
+  const base = defaultBrowserEnvironmentProbeDeps();
+  return collectBrowserEnvironmentReadiness(
+    {
+      status: "skip",
+      installed: { status: "missing" },
+      hostPermission: { status: "skipped", detail: "macOS only" },
+      inbox: { status: "skipped", path: "/tmp/inbox", detail: "macOS only" },
+      detailLines: ["skipped — Roll Capture.app is a macOS-only physical screenshot host."],
+      repairCommands: [],
+    },
+    {
+      ...base,
+      env: {
+        _ROLL_BROWSER_NODE: "missing",
+        _ROLL_BROWSER_NPX: "missing",
+        _ROLL_BROWSER_CHROME: "present",
+        _ROLL_BROWSER_MCP: "missing",
+        _ROLL_BROWSER_REMOTE_DEBUG: "off",
+      },
+      tcpReachable: () => false,
+    },
+  );
+}
+
 function tsDoctor(e: Env): Run {
   const keys = [
     "PATH",
@@ -139,7 +168,7 @@ function tsDoctor(e: Env): Run {
   process.stderr.write = (c: string | Uint8Array): boolean => (errChunks.push(String(c)), true);
   let status: number;
   try {
-    status = doctorCommand([]);
+    status = doctorCommand([], { browserReadiness: fixtureBrowserReadiness });
   } finally {
     process.stdout.write = realOut;
     process.stderr.write = realErr;
