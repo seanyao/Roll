@@ -199,6 +199,30 @@ describe("RepositoryCache identity and path safety", () => {
     expect(canonical.lockPath).toBe(join(rollHome, "locks", "repos", `${canonical.repoId}.lock`));
   });
 
+  it.each([
+    "git@example.test:team/product.git",
+    "https://example.test/team/product.git",
+  ])("uses the repository binding transport URL without forcing another protocol: %s", async (transportRemote) => {
+    const rollHome = sandbox();
+    const upstream = localRemote(sandbox(), "configured-transport");
+    const repository: RepositoryBinding = {
+      ...binding(transportRemote),
+      transportRemote,
+    };
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", `url.${upstream.remote}.insteadOf`);
+    vi.stubEnv("GIT_CONFIG_VALUE_0", transportRemote);
+
+    const created = await ensureRepositoryCache({
+      rollHome,
+      binding: repository,
+      integrationRefspec: "+refs/heads/main:refs/remotes/origin/main",
+    });
+
+    expect(resolveRepositoryCacheIdentity({ rollHome, binding: repository }).transportRemote).toBe(transportRemote);
+    expect(runGit(created.cachePath, ["config", "--get", "remote.origin.url"])).toBe(transportRemote);
+  });
+
   it("rejects an embedded credential before invoking Git and never echoes the secret", async () => {
     const rollHome = sandbox();
     const runGitAdapter = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));

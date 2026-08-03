@@ -134,6 +134,7 @@ function transactionInput(f: ReturnType<typeof fixture>, preview: WorkspaceEditP
           repositories: preview.afterManifest.repositories.map((repository) => ({
             alias: repository.alias,
             remote: repository.remote,
+            transportRemote: repository.transportRemote ?? repository.remote,
             provider: repository.provider,
             integrationBranch: repository.integrationBranch,
             branchPattern: repository.workflow.branchPattern,

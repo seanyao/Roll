@@ -143,7 +143,7 @@ export function resolveRepositoryCacheIdentity(
       : "invalid_binding";
     throw new RepositoryCacheError(code, "Repository binding is invalid or unsafe");
   }
-  const transportRemote = input.transportRemote ?? input.binding.remote;
+  const transportRemote = input.transportRemote ?? parsed.value.transportRemote ?? input.binding.remote;
   const parsedTransport = normalizeRepositoryRemote(transportRemote);
   if (!parsedTransport.ok) {
     throw new RepositoryCacheError("unsafe_remote", "Repository transport remote is invalid or unsafe");

@@ -22,6 +22,7 @@ const current: WorkspaceManifest = {
     repoId: "repo-ff7a87ddbb2b",
     alias: "product",
     remote: "https://example.test/owner/product",
+    transportRemote: "https://example.test/owner/product.git",
     integrationBranch: "main",
     provider: "github",
     workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: ["test"] },
@@ -63,6 +64,35 @@ function configText(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("US-WS-025 Workspace metadata edit plan", () => {
+  it.each([
+    {
+      protocol: "SSH",
+      configured: "git@example.test:owner/product.git",
+      canonical: "ssh://example.test/owner/product",
+    },
+    {
+      protocol: "HTTPS",
+      configured: "https://example.test/owner/product.git",
+      canonical: "https://example.test/owner/product",
+    },
+  ])("preserves the configured $protocol URL for future repository transport", ({ configured, canonical }) => {
+    const parsed = parseWorkspaceEditConfig(configText({
+      repositories: [{
+        alias: "product",
+        remote: configured,
+        provider: "github",
+        integration_branch: "main",
+        branch_pattern: "roll/{workspace_id}/{story_id}",
+        required_checks: ["test"],
+      }],
+    }), { workspaceId: "ws-demo" });
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: { repositories: [{ remote: canonical, transportRemote: configured }] },
+    });
+  });
+
   it("parses the closed desired-state schema and builds a byte-stable display-name preview", () => {
     const parsed = parseWorkspaceEditConfig(configText(), { workspaceId: "ws-demo" });
     expect(parsed).toMatchObject({
@@ -75,6 +105,7 @@ describe("US-WS-025 Workspace metadata edit plan", () => {
         repositories: [{
           alias: "product",
           remote: "https://example.test/owner/product",
+          transportRemote: "https://example.test/owner/product.git",
         }],
       },
     });
@@ -86,6 +117,7 @@ describe("US-WS-025 Workspace metadata edit plan", () => {
       "provider",
       "remote",
       "requiredChecks",
+      "transportRemote",
     ]);
 
     const first = buildWorkspaceEditPlan({

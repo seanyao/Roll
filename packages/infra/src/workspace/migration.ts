@@ -534,6 +534,7 @@ function binding(journal: MigrationJournal): RepositoryBinding {
     repoId: journal.plan.repository.repoId,
     alias: "primary",
     remote: journal.normalizedRemote,
+    transportRemote: journal.transportRemote,
     integrationBranch: journal.plan.repository.integrationBranch as string,
     provider: "generic",
     workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },

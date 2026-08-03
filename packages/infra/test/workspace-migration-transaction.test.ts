@@ -161,6 +161,12 @@ describe("US-WS-019a historical Workspace migration transaction", () => {
     expect(agentScope.config).toMatchObject({ scope: "workspace", inherits: "machine" });
     expect(existsSync(join(workspace, "primary"))).toBe(false);
     expect(existsSync(join(f.rollHome, "repos", `${saved.repository.repoId}.git`))).toBe(true);
+    expect(JSON.parse(readFileSync(join(workspace, "workspace.yaml"), "utf8"))).toMatchObject({
+      repositories: [{
+        remote: `file://${f.remote.replace(/\.git$/u, "")}`,
+        transportRemote: `file://${f.remote}`,
+      }],
+    });
     expect(JSON.parse(readFileSync(workspaceRegistryPath(f.rollHome), "utf8"))).toMatchObject({
       entries: [{ workspaceId: "ws-demo", root: workspace }],
     });
