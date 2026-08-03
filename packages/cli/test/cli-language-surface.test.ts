@@ -45,7 +45,11 @@ async function runCli(argv: string[], lang: "en" | "zh"): Promise<Run> {
   };
   try {
     const result = await dispatch(argv, async () => ({ ok: true }));
-    return { status: result.status, stdout, stderr };
+    return {
+      status: result.status,
+      stdout: stdout.replaceAll(home, "<HOME>"),
+      stderr: stderr.replaceAll(home, "<HOME>"),
+    };
   } finally {
     process.stdout.write = realOut;
     process.stderr.write = realErr;
@@ -97,6 +101,24 @@ describe("US-LANG-003 CLI language surface", () => {
     expect(zh.status).toBe(2);
     expectNoAdjacentBilingualPairs(en.stderr + en.stdout);
     expectNoAdjacentBilingualPairs(zh.stderr + zh.stdout);
+    expect({ en, zh }).toMatchSnapshot();
+  });
+
+  it("config success output follows the selected locale without adjacent translations", async () => {
+    const en = {
+      write: await runCli(["config", "loop_dream_hour", "5", "--global"], "en"),
+      lang: await runCli(["config", "lang", "zh"], "en"),
+      inactive: await runCli(["config", "dream-time", "03:20"], "en"),
+    };
+    const zh = {
+      write: await runCli(["config", "loop_dream_hour", "5", "--global"], "zh"),
+      lang: await runCli(["config", "lang", "en"], "zh"),
+      inactive: await runCli(["config", "dream-time", "03:20"], "zh"),
+    };
+    for (const result of [...Object.values(en), ...Object.values(zh)]) {
+      expect(result.status).toBe(0);
+      expectNoAdjacentBilingualPairs(result.stdout + result.stderr);
+    }
     expect({ en, zh }).toMatchSnapshot();
   });
 });

@@ -19,6 +19,55 @@ exports[`US-LANG-003 CLI language surface > config lang error output follows the
 }
 `;
 
+exports[`US-LANG-003 CLI language surface > config success output follows the selected locale without adjacent translations 1`] = `
+{
+  "en": {
+    "inactive": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml
+note: nothing reads this — run \`roll dream run-once\` when you want a scan
+",
+    },
+    "lang": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ set lang = zh
+",
+    },
+    "write": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ set loop_dream_hour = 5 in <HOME>/.roll/config.yaml
+note: this key is inactive — nothing reads it
+",
+    },
+  },
+  "zh": {
+    "inactive": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ 已设置 dream-time = 03:20，写入 <HOME>/.roll/config.yaml
+说明:这个值没人读 —— 想扫就跑 \`roll dream run-once\`
+",
+    },
+    "lang": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ 已将语言设置为 en
+",
+    },
+    "write": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ 已设置 loop_dream_hour = 5，写入 <HOME>/.roll/config.yaml
+说明:这个 key 已失效 —— 没有任何东西读它
+",
+    },
+  },
+}
+`;
+
 exports[`US-LANG-003 CLI language surface > doctor --help is locale-pinned and single-language 1`] = `
 {
   "en": "Usage: roll doctor [skills|language|pardon|repair-protection|--tools]

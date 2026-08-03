@@ -23,25 +23,11 @@ import { INACTIVE_KEYS } from "./config-get.js";
 /**
  * The "this key does nothing" note, in ONE language.
  *
- * codex r12: my first version printed EN and ZH back to back, which breaks the
- * project's single-language rule for user-facing output (the language-surface test
- * asserts `expectNoAdjacentBilingualPairs`). Bilingual means both wordings exist,
- * not that both are shown.
+ * The success line and this note must use the same resolved language.  The
+ * language-surface test freezes both variants and rejects adjacent translations.
  */
 function inactiveNote(en: string, zh: string): void {
-  // Deliberately English, and NOT locale-selected (codex raised this in r13 and r18).
-  //
-  // The `ok("✓ set …")` line this annotates is English-only hardcoded, in all six
-  // places. Making the note Chinese under a zh locale therefore produces "English
-  // success line + Chinese note" — adjacent bilingual output, the exact rule this was
-  // meant to respect. Keeping it English makes the command's output CONSISTENTLY
-  // English for a zh user: not localised, but not lying and not mixed.
-  //
-  // The real fix is to localise `ok()` itself along with the frozen values that
-  // capture it, which is wider than a docs card. Tracked as FIX-1485 item 5.
-  void zh;
-  void resolveCurrent;
-  process.stdout.write(`${en}\n`);
+  process.stdout.write(`${resolveCurrent() === "zh" ? zh : en}\n`);
 }
 
 import { clearLang, resolveCurrent, resolveSource, writeLang } from "./lang.js";
@@ -80,8 +66,9 @@ function retiredConfig(key: string): number {
   return 2;
 }
 
-/** Render a resolved key's source as a facade does: "from <file>|default". */
+/** Render a resolved key's source in the active language. */
 function fromSource(source: string): string {
+  if (resolveCurrent() === "zh") return source !== "default" ? `来自 ${source}` : "来自默认值";
   return source !== "default" ? `from ${source}` : "from default";
 }
 
@@ -98,7 +85,12 @@ function dreamTime(value: string, scope: Scope): number {
     const [vh, sh] = configResolve(hourKey) ?? ["", "default"];
     let [vm] = configResolve(minKey) ?? ["", "default"];
     if (vm === "-" || vm === "") vm = "0";
-    process.stdout.write(`${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))} (${fromSource(sh)}) — inactive, nothing reads this\n`);
+    const zh = resolveCurrent() === "zh";
+    process.stdout.write(
+      zh
+        ? `${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))}（${fromSource(sh)}）— 已失效，没有任何功能会读取它\n`
+        : `${svc}-time: ${pad2(Number(vh))}:${pad2(Number(vm))} (${fromSource(sh)}) — inactive, nothing reads this\n`,
+    );
     return 0;
   }
   if (!/^[0-9]{1,2}:[0-9]{1,2}$/.test(value)) {
@@ -121,7 +113,7 @@ function dreamTime(value: string, scope: Scope): number {
   const file = configKeyFile(scope);
   configSet(hourKey, String(hh), file);
   configSet(minKey, String(mm), file);
-  ok(`✓ set ${svc}-time = ${pad2(hh)}:${pad2(mm)} in ${file}`);
+  ok(resolveCurrent() === "zh" ? `✓ 已设置 ${svc}-time = ${pad2(hh)}:${pad2(mm)}，写入 ${file}` : `✓ set ${svc}-time = ${pad2(hh)}:${pad2(mm)} in ${file}`);
   inactiveNote(
     `note: nothing reads this — run \`roll ${svc} run-once\` when you want a scan`,
     `说明:这个值没人读 —— 想扫就跑 \`roll ${svc} run-once\``,
@@ -136,17 +128,17 @@ function configLangSub(value: string, _scope: Scope): number {
   if (value === "") {
     const current = resolveCurrent();
     const src = resolveSource();
-    process.stdout.write(`lang: ${current} (source: ${src})\n`);
+    process.stdout.write(current === "zh" ? `语言：${current}（来源：${src}）\n` : `lang: ${current} (source: ${src})\n`);
     return 0;
   }
   if (value === "zh" || value === "en") {
     writeLang(value);
-    ok(`✓ set lang = ${value}`);
+    ok(resolveCurrent() === "zh" ? `✓ 已将语言设置为 ${value}` : `✓ set lang = ${value}`);
     return 0;
   }
   if (value === "--reset") {
     clearLang();
-    ok("✓ language preference cleared (will follow locale)");
+    ok(resolveCurrent() === "zh" ? "✓ 已清除语言偏好设置（将跟随系统语言）" : "✓ language preference cleared (will follow locale)");
     return 0;
   }
   if (resolveCurrent() === "zh") {
@@ -232,7 +224,7 @@ export function configCommand(args: string[]): number {
   const sc: Scope = scope === "" ? "project" : scope;
   const file = configKeyFile(sc);
   configSet(key, value, file);
-  ok(`✓ set ${key} = ${value} in ${file}`);
+  ok(resolveCurrent() === "zh" ? `✓ 已设置 ${key} = ${value}，写入 ${file}` : `✓ set ${key} = ${value} in ${file}`);
   // The remaining inactive dream keys must disclose that nothing reads them on
   // both raw and facade write paths.
   if (INACTIVE_KEYS.has(key)) {
