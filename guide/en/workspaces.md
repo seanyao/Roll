@@ -188,9 +188,22 @@ Issue when execution starts:
 Create or repair repository worktrees only through the Issue command:
 
 ```bash
+roll workspace issue create "checkout fails for archived forms" \
+  --workspace ws-payments --type fix --id FIX-204 \
+  --repository api:write --base-ref api=refs/tags/v4.7.2 --json
 roll workspace issue init US-PAY-101 --workspace ws-payments --check --json
 roll workspace issue init US-PAY-101 --workspace ws-payments --json
 ```
+
+`issue create` writes the execution-ready card and initializes its repositories
+as one recoverable operation. `--id` selects the exact FIX/IDEA identity; omit
+it for automatic allocation. Each `--base-ref` is an exact `refs/heads/*` or
+`refs/tags/*` source for that Issue only—the Workspace integration branch is
+unchanged, and the first resolved commit remains pinned on retries.
+
+An explicit Workspace handoff also sets `ROLL_WORKSPACE_LOCK`. While that task
+context is active, clarification cannot fall through to create-new and
+`roll workspace create` is rejected until the host supplies a new handoff.
 
 Writable code exists only in `issues/<storyId>/<repoAlias>/` worktrees. A
 read-only repository target can provide context without becoming a required

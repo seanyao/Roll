@@ -164,9 +164,19 @@ input；Roll 不会同时写两套布局。
 Repository worktree 只能通过 Issue 命令创建或修复：
 
 ```bash
+roll workspace issue create "归档表单结账失败" \
+  --workspace ws-payments --type fix --id FIX-204 \
+  --repository api:write --base-ref api=refs/tags/v4.7.2 --json
 roll workspace issue init US-PAY-101 --workspace ws-payments --check --json
 roll workspace issue init US-PAY-101 --workspace ws-payments --json
 ```
+
+`issue create` 以一个可恢复操作写入可执行卡片并初始化仓库。`--id` 可精确指定 FIX/IDEA；
+省略时自动编号。每个 `--base-ref` 必须是精确的 `refs/heads/*` 或 `refs/tags/*`，只影响
+当前 Issue，不修改 Workspace integration branch；首次解析到的 commit 会在重试时保持 pin。
+
+显式 Workspace handoff 还会设置 `ROLL_WORKSPACE_LOCK`。该任务 context 生效期间，clarification
+不会回退到 create-new，`roll workspace create` 也会拒绝执行，直到 host 提供新的 handoff。
 
 可写代码只存在于 `issues/<storyId>/<repoAlias>/` worktree。只读 repository target 可以
 提供 context，但不成为必需交付 leg。任一 setup leg 失败时只回滚本次新建状态，而且不会
