@@ -1060,6 +1060,49 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
     expect(out).toMatchSnapshot();
   });
 
+  it("accepts a host Delta's rendered attestation report for safe cleanup", () => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },
+      { type: "delta:terminal", delegationId: "d-1", storyId: "US-LOOP-123", runId: "delta-d-1", outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", ts: 2 },
+      { type: "delivery:reconciled", cycleId: "delta-d-1", storyId: "US-LOOP-123", state: "delivered_external", mergedBy: "external", mergeCommit: "main-head", signal: "backlog_attest", delegationId: "d-1", runId: "delta-d-1", ts: 3 },
+      { type: "attest:host_delta", cycleId: "delta-d-1", storyId: "US-LOOP-123", delegationId: "d-1", reportPath: ".roll/features/US-LOOP-123/latest/US-LOOP-123-report.html", ts: 4 },
+      { type: "worktree:release_requested", runId: "delta-d-1", reason: "delivered", operationId: "release-1", expectedHeads: [{ relativeLocator: "delta-d-1", head: "head-1" }], ts: 5 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") return "https://github.com/example/repo.git";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).toBe("safe_to_release");
+  });
+
+  it("keeps a host Delta directory when delivery has no independent attestation evidence", () => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },
+      { type: "delta:terminal", delegationId: "d-1", storyId: "US-LOOP-123", runId: "delta-d-1", outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", ts: 2 },
+      { type: "delivery:reconciled", cycleId: "delta-d-1", storyId: "US-LOOP-123", state: "delivered_external", mergedBy: "external", mergeCommit: "main-head", signal: "backlog_attest", delegationId: "d-1", runId: "delta-d-1", ts: 3 },
+      { type: "worktree:release_requested", runId: "delta-d-1", reason: "delivered", operationId: "release-1", expectedHeads: [{ relativeLocator: "delta-d-1", head: "head-1" }], ts: 4 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") return "https://github.com/example/repo.git";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).not.toBe("safe_to_release");
+  });
+
   it("inspects a submodule through its own registration and never counts the container", () => {
     const submoduleWorkspace = {
       ...workspace,

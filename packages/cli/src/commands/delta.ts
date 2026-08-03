@@ -1376,22 +1376,50 @@ function validateCommand(args: string[]): number {
       const selectedLocator = published.workspaceMember?.relativeLocator;
       if (selectedLocator === undefined) return undefined;
       const root = resolve(cwd, ".roll", "loop", "worktrees");
+      const primaryMember = workspace.members.find((member) => member.relativeLocator === workspace.runId);
+      if (primaryMember === undefined) throw new Error("missing primary workspace member");
+      const primaryCheckout = realpathSync(resolve(root, primaryMember.relativeLocator));
+      const primaryDeliveryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: primaryCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      const primaryDeliveryTree = execFileSync("git", ["show", "-s", "--format=%T", primaryDeliveryCommit], {
+        cwd: primaryCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (primaryDeliveryCommit === "" || primaryDeliveryTree === "") throw new Error("missing primary delivery Git fact");
+      const submoduleGitlink = (commit: string, path: string): string => {
+        const line = execFileSync("git", ["ls-tree", commit, "--", path], {
+          cwd: primaryCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+        const match = /^160000 commit ([0-9a-f]{40})\t/.exec(line);
+        if (match?.[1] === undefined) throw new Error("missing submodule gitlink");
+        return match[1];
+      };
       const members = workspace.members.map((member) => {
         const checkout = resolve(root, member.relativeLocator);
         const canonical = realpathSync(checkout);
-        const deliveryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-          cwd: canonical, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
+        const prefix = `${workspace.runId}.submodules/`;
+        const submodulePath = member.relativeLocator.startsWith(prefix) ? member.relativeLocator.slice(prefix.length) : undefined;
+        // A subordinate checkout can remain on its allocation base after the
+        // primary commit has adopted a separately delivered gitlink.  The
+        // primary commit is the immutable cross-repository truth, never the
+        // mutable checkout HEAD.
+        const deliveryCommit = submodulePath === undefined
+          ? primaryDeliveryCommit
+          : submoduleGitlink(primaryDeliveryCommit, submodulePath);
         const deliveryTree = execFileSync("git", ["show", "-s", "--format=%T", deliveryCommit], {
           cwd: canonical, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
         }).trim();
         if (deliveryCommit === "" || deliveryTree === "") throw new Error("missing delivery Git fact");
+        const deliveryState = submodulePath === undefined
+          ? "changed" as const
+          : submoduleGitlink(primaryMember.checkoutRef.head, submodulePath) === deliveryCommit ? "unchanged" as const : "changed" as const;
         return {
           repositoryId: member.repositoryId,
           relativeLocator: member.relativeLocator,
           deliveryBase: member.checkoutRef.head,
           deliveryCommit,
           deliveryTree,
+          ...(submodulePath === undefined ? {} : { deliveryState }),
           ...(member.publishRef === undefined ? {} : { publishRef: member.publishRef }),
         };
       });

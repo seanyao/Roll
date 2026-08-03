@@ -92,6 +92,14 @@ function setupMinimalProject(storyId: string, epic: string): string {
   return dir;
 }
 
+function hostDeltaAcceptanceReport(dir: string, storyId: string): string {
+  const path = join(".roll", "features", "delta-team", storyId, "latest", `${storyId}-review.html`);
+  const absolute = join(dir, path);
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, "<html>accepted host Delta evidence</html>\n", "utf8");
+  return path;
+}
+
 // ── tsRun with cwd ──────────────────────────────────────────────────────────
 
 async function tsRunCwd(argv: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -333,7 +341,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(publication.deliveryCommit).toBe(execFileSync("git", ["rev-parse", "HEAD"], { cwd: memberCheckout, encoding: "utf8" }).trim());
     expect(publication.publishRef).toBe(member.publishRef);
     expect(publication.deliveryMembers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ relativeLocator: member.relativeLocator, repositoryId: member.repositoryId, publishRef: member.publishRef }),
+      expect.objectContaining({ relativeLocator: member.relativeLocator, repositoryId: member.repositoryId, publishRef: member.publishRef, deliveryState: "unchanged" }),
       expect.objectContaining({ relativeLocator: workspace.members[0]!.relativeLocator, repositoryId: workspace.members[0]!.repositoryId, publishRef: workspace.members[0]!.publishRef }),
     ]));
   });
@@ -476,13 +484,13 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     setLease(storyLeasesPath(dir), "US-DELTA-ATTEST-CLOSE", {
       claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId: "wrong-run",
     });
-    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE")).toBe(false);
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(false);
     setLease(storyLeasesPath(dir), "US-DELTA-ATTEST-CLOSE", {
       claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId,
     });
     // An arbitrary integration HEAD is not enough to close a host reservation:
     // the exact admitted Builder delivery commit must be on main.
-    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE")).toBe(false);
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(false);
     writeFileSync(join(dir, "DELTA-DELIVERY.md"), "specific delivery\n");
     execFileSync("git", ["add", "DELTA-DELIVERY.md"], { cwd: dir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "specific delta delivery"], { cwd: dir, stdio: "ignore" });
@@ -521,7 +529,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     });
     // This is the production attest boundary: source is the pulled integration
     // branch and the immutable Builder fact proves this Delta's commit reached it.
-    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE")).toBe(true);
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(true);
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
     const events = readFileSync(eventsPath, "utf8");
     expect(events).toContain(`\"cycleId\":\"${runId}\"`);
@@ -530,7 +538,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(readLeases(storyLeasesPath(dir))["US-DELTA-ATTEST-CLOSE"]).toBeUndefined();
     // A stale historical delivery or a second call cannot mint authority for a
     // new/released reservation.
-    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE")).toBe(false);
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(false);
   });
 
   it("US-LOOP-126 closes a member's exact squash after a disjoint origin/main advance and rejects forged member facts", () => {
@@ -602,9 +610,9 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       // A copied delivery tree must not borrow the real PR record.
       const before = readFileSync(eventsPath, "utf8");
       writeFileSync(eventsPath, before.split(deliveryTree).join("0".repeat(40)), "utf8");
-      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-CONCURRENT-SQUASH")).toBe(false);
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-CONCURRENT-SQUASH", hostDeltaAcceptanceReport(dir, "US-DELTA-CONCURRENT-SQUASH"))).toBe(false);
       writeFileSync(eventsPath, before, "utf8");
-      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-CONCURRENT-SQUASH")).toBe(true);
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-CONCURRENT-SQUASH", hostDeltaAcceptanceReport(dir, "US-DELTA-CONCURRENT-SQUASH"))).toBe(true);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
@@ -689,17 +697,124 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     try {
       // Independent submodule evidence is insufficient: the primary must
       // publish the gitlink that adopts the delivered submodule result.
-      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-SUBMODULE-CLOSURE")).toBe(false);
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-SUBMODULE-CLOSURE", hostDeltaAcceptanceReport(dir, "US-DELTA-SUBMODULE-CLOSURE"))).toBe(false);
       execFileSync("git", ["add", "modules/member"], { cwd: dir, stdio: "ignore" });
       execFileSync("git", ["commit", "-m", "adopt delivered submodule"], { cwd: dir, stdio: "ignore" });
       execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: "ignore" });
       execFileSync("git", ["fetch", "origin"], { cwd: dir, stdio: "ignore" });
-      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-SUBMODULE-CLOSURE")).toBe(true);
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-SUBMODULE-CLOSURE", hostDeltaAcceptanceReport(dir, "US-DELTA-SUBMODULE-CLOSURE"))).toBe(true);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
     }
     expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["US-DELTA-SUBMODULE-CLOSURE"]);
+  });
+
+  it("FIX-1503 re-proves an F1502-shaped stale child fact from the primary gitlink without rewriting history", () => {
+    const dir = setupMinimalProject("FIX-1503-LEGACY-CLOSURE", "delta-team");
+    execFileSync("git", ["branch", "-M", "main"], { cwd: dir, stdio: "ignore" });
+    const primaryRemote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: primaryRemote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", primaryRemote], { cwd: dir, stdio: "ignore" });
+    const subSource = makeProject();
+    execFileSync("git", ["init"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: subSource });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: subSource });
+    writeFileSync(join(subSource, "member.txt"), "base\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "sub base"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["branch", "-M", "main"], { cwd: subSource, stdio: "ignore" });
+    const subRemote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: subRemote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", subRemote], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-b", "main", subRemote, "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["add", ".gitmodules", "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "add child"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    const primaryBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const primaryTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const child = join(dir, "modules", "member");
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: child });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: child });
+    const childBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    const childBaseTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "-b", "roll/real-child-pr"], { cwd: child, stdio: "ignore" });
+    // The child source adds its own line.  An intervening main PR later adds a
+    // different line at the same location, so the eventual squash contains the
+    // source content plus independent content and cannot share one patch id.
+    writeFileSync(join(child, "member.txt"), "base\ndelivered\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "child delivery"], { cwd: child, stdio: "ignore" });
+    const childDelivery = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main"], { cwd: child, stdio: "ignore" });
+    writeFileSync(join(child, "member.txt"), "base\nintervening\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "intervening child main change"], { cwd: child, stdio: "ignore" });
+    try {
+      execFileSync("git", ["merge", "--squash", "roll/real-child-pr"], { cwd: child, stdio: "ignore" });
+    } catch {
+      // The test intentionally models a resolved same-file conflict.
+    }
+    writeFileSync(join(child, "member.txt"), "base\nintervening\ndelivered\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "squashed child delivery"], { cwd: child, stdio: "ignore" });
+    const childSquash = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    execFileSync("git", ["push", "origin", "main"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["fetch", "origin"], { cwd: child, stdio: "ignore" });
+    // The primary delivery pins the original child delivery commit.  The old
+    // F1502 event below still claims the allocation base, exactly the retained
+    // field shape we must not mutate.
+    execFileSync("git", ["checkout", "--detach", childDelivery], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["add", "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "adopt child delivery"], { cwd: dir, stdio: "ignore" });
+    const primaryDelivery = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const primaryDeliveryTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    // The checked-out child is deliberately stale in the old event; all new
+    // authority must come from immutable commits plus the canonical PR API.
+    execFileSync("git", ["checkout", "--detach", childBase], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/fixture/child.git"], { cwd: child, stdio: "ignore" });
+
+    const delegationId = "fix-1503-legacy-delegation";
+    const runId = `delta-${delegationId}`;
+    const primary = { repositoryId: "fixture-primary", workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached" as const, head: primaryBase }, publishRef: "refs/heads/roll/primary" };
+    const member = { repositoryId: "fixture-child", workspaceKey: runId, relativeLocator: `${runId}.submodules/modules/member`, checkoutRef: { kind: "detached" as const, head: childBase }, publishRef: "refs/heads/roll/stale-incorrect-name" };
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    new EventBus().appendEvent(eventsPath, { type: "worktree:allocated", workspace: { schema: 1, runId, storyId: "FIX-1503-LEGACY-CLOSURE", kind: "host_delta", topology: "solo", delegationId, members: [primary, member] }, ts: Date.now() });
+    new EventBus().appendEvent(eventsPath, {
+      type: "delta:artifact_published", delegationId, storyId: "FIX-1503-LEGACY-CLOSURE", role: "builder", path: "role-artifacts/builder/evidence.md", sha256: "fixture", manifestPath: "role-artifacts/builder/evaluation-manifest.json", sessionId: "builder", roleInstanceId: "ri-builder", identityProvenance: "host-attested", runId,
+      deliveryCommit: primaryDelivery, deliveryTree: primaryDeliveryTree, publishRef: primary.publishRef,
+      deliveryMembers: [
+        { repositoryId: primary.repositoryId, relativeLocator: primary.relativeLocator, deliveryBase: primaryBase, deliveryCommit: primaryDelivery, deliveryTree: primaryDeliveryTree, publishRef: primary.publishRef },
+        { repositoryId: member.repositoryId, relativeLocator: member.relativeLocator, deliveryBase: childBase, deliveryCommit: childBase, deliveryTree: childBaseTree, publishRef: member.publishRef },
+      ], ts: Date.now(),
+    });
+    new EventBus().appendEvent(eventsPath, { type: "delta:terminal", delegationId, storyId: "FIX-1503-LEGACY-CLOSURE", runId, outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", deliveryDisposition: "owner_continue", ts: Date.now() });
+    setLease(storyLeasesPath(dir), "FIX-1503-LEGACY-CLOSURE", { claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId });
+    const shimDir = join(dir, "legacy-gh-shim");
+    mkdirSync(shimDir);
+    writeFileSync(join(shimDir, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify([{ merged_at: "2026-08-03T00:00:00Z", merge_commit_sha: childSquash, base: { ref: "main", repo: { full_name: "fixture/child" } }, head: { sha: childDelivery, repo: { full_name: "fixture/child" } } }])}'\n`, "utf8");
+    chmodSync(join(shimDir, "gh"), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
+    try {
+      const before = readFileSync(eventsPath, "utf8");
+      // Repository proof alone cannot mint a host-Delta acceptance fact.
+      expect(recordHostDeltaAttestationClosure(dir, "FIX-1503-LEGACY-CLOSURE", ".roll/features/delta-team/FIX-1503-LEGACY-CLOSURE/latest/missing-review.html")).toBe(false);
+      expect(readFileSync(eventsPath, "utf8")).toBe(before);
+      expect(recordHostDeltaAttestationClosure(dir, "FIX-1503-LEGACY-CLOSURE", hostDeltaAcceptanceReport(dir, "FIX-1503-LEGACY-CLOSURE"))).toBe(true);
+      // Existing records are retained byte-for-byte; closure is append-only.
+      expect(readFileSync(eventsPath, "utf8").startsWith(before)).toBe(true);
+      const closureEvents = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string });
+      expect(closureEvents.slice(-2).map((event) => event.type)).toEqual(["delivery:reconciled", "attest:host_delta"]);
+      expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["FIX-1503-LEGACY-CLOSURE"]);
+      const releasedEvents = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string });
+      expect(releasedEvents.at(-1)?.type).toBe("delta:reservation_closed");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
   });
 
   it("US-LOOP-126 keeps persisted v1 records operable and rejects unknown workspace schemas", async () => {

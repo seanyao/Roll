@@ -529,6 +529,10 @@ export type RollEvent =
   // Attest gate (FIX-207) — every actual delivery records whether a fresh
   // acceptance report was produced ("produced") or silently skipped ("skipped").
   | { type: "attest:gate"; cycleId: string; verdict: "produced" | "skipped"; reasons: string[]; ts: number }
+  // A host-guided Delta has no synthetic runner Cycle, so a successful
+  // story-scoped `roll attest` records its report separately.  This is evidence
+  // of the rendered report, not a runner-gate verdict.
+  | { type: "attest:host_delta"; cycleId: string; storyId: string; delegationId: string; reportPath: string; ts: number }
   // US-RULE-004a — doc-drift gate in SOFT mode: a declared doc surface's
   // sources changed without its declared docs (verdict from the shared pure
   // checkDocDrift). This is an auditable FACT, never an adjudication: there is
@@ -789,6 +793,8 @@ export type RollEvent =
         deliveryBase?: string;
         deliveryCommit: string;
         deliveryTree: string;
+        /** Whether the primary delivery changed this subordinate gitlink. */
+        deliveryState?: "changed" | "unchanged";
         publishRef?: string;
       }>;
       ts: number;

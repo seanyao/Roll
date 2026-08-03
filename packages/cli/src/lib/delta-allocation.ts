@@ -951,7 +951,10 @@ type DeliveryProofMember = Readonly<{
   deliveryBase: string;
   deliveryCommit: string;
   deliveryTree: string;
+  deliveryState?: "changed" | "unchanged";
   publishRef: string;
+  /** Derived from an immutable primary gitlink; never persisted over old facts. */
+  legacyDerived?: boolean;
 }>;
 
 type MemberDeliveryProof = Readonly<{
@@ -1014,6 +1017,167 @@ function memberRepositoryPath(projectPath: string, runId: string, locator: strin
   return join(projectPath, submodulePath);
 }
 
+function submoduleGitlink(repositoryPath: string, commit: string, submodulePath: string): string | undefined {
+  try {
+    const line = gitOutput(repositoryPath, ["ls-tree", commit, "--", submodulePath]);
+    return /^160000 commit ([0-9a-f]{40})\t/.exec(line)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Old F1502-style facts recorded the child checkout HEAD even though the
+ * primary delivery commit had already fixed a different child gitlink.  Do
+ * not edit that fact: derive a candidate only when the old child fact is
+ * exactly its allocated base and the primary's immutable delivery commit
+ * proves the replacement gitlink.
+ */
+function deriveLegacySubmoduleMember(
+  projectPath: string,
+  runId: string,
+  primary: DeliveryProofMember,
+  member: DeliveryProofMember,
+): DeliveryProofMember | undefined {
+  const prefix = `${runId}.submodules/`;
+  if (!member.relativeLocator.startsWith(prefix) || member.deliveryCommit !== member.deliveryBase) return undefined;
+  const submodulePath = member.relativeLocator.slice(prefix.length);
+  if (submodulePath === "" || submodulePath.startsWith("/") || submodulePath.split("/").includes("..")) return undefined;
+  const adopted = submoduleGitlink(projectPath, primary.deliveryCommit, submodulePath);
+  const allocated = submoduleGitlink(projectPath, primary.deliveryBase, submodulePath);
+  if (adopted === undefined || allocated === undefined || adopted === allocated || allocated !== member.deliveryBase) return undefined;
+  const repositoryPath = memberRepositoryPath(projectPath, runId, member.relativeLocator);
+  if (repositoryPath === undefined) return undefined;
+  try {
+    const tree = gitOutput(repositoryPath, ["show", "-s", "--format=%T", adopted]);
+    if (tree === "") return undefined;
+    return { ...member, deliveryCommit: adopted, deliveryTree: tree, deliveryState: "changed", legacyDerived: true };
+  } catch {
+    return undefined;
+  }
+}
+
+function githubRepository(repositoryPath: string): string | undefined {
+  try {
+    const remote = gitOutput(repositoryPath, ["remote", "get-url", "origin"]);
+    const match = /github\.com(?::|\/)([^/]+\/[^/.]+)(?:\.git)?$/i.exec(remote);
+    return match?.[1]?.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+type ZeroContextBlocks = ReadonlyMap<string, Readonly<{ added: readonly string[][]; removed: readonly string[][] }>>;
+
+function zeroContextBlocks(patch: string): ZeroContextBlocks | undefined {
+  if (patch.trim() === "" || patch.includes("Binary files ")) return undefined;
+  const blocks = new Map<string, { added: string[][]; removed: string[][] }>();
+  let path: string | undefined;
+  let added: string[] = [];
+  let removed: string[] = [];
+  const flush = () => {
+    if (path === undefined) return;
+    const entry = blocks.get(path) ?? { added: [], removed: [] };
+    if (added.length > 0) entry.added.push(added);
+    if (removed.length > 0) entry.removed.push(removed);
+    blocks.set(path, entry);
+    added = [];
+    removed = [];
+  };
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) { flush(); path = undefined; continue; }
+    if (line.startsWith("+++ b/")) { flush(); path = line.slice("+++ b/".length); continue; }
+    if (line.startsWith("@@ ")) { flush(); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) { added.push(line.slice(1)); continue; }
+    if (line.startsWith("-") && !line.startsWith("---")) { removed.push(line.slice(1)); continue; }
+    flush();
+  }
+  flush();
+  return blocks.size === 0 ? undefined : blocks;
+}
+
+/**
+ * A squash can be applied after an intervening integration commit that touches
+ * the same file.  Whole-patch identity then quite correctly differs, even when
+ * every source change survived the conflict resolution.  Prove the source
+ * content instead: each zero-context added block must be present at the same
+ * path in the squash result and each removed block must be absent.  Binary,
+ * renamed, malformed, or context-free changes are rejected unless the source
+ * and squash blobs are exactly equal.  This is deliberately conservative.
+ */
+function sourceContentSurvivesSquash(repositoryPath: string, base: string, source: string, squash: string): boolean {
+  let sourcePatch: string;
+  let squashPatch: string;
+  try {
+    sourcePatch = execFileSync("git", ["diff", "--no-ext-diff", "--no-renames", "--unified=0", base, source], {
+      cwd: repositoryPath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    });
+    squashPatch = execFileSync("git", ["diff", "--no-ext-diff", "--no-renames", "--unified=0", `${squash}^`, squash], {
+      cwd: repositoryPath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch { return false; }
+  const sourceBlocks = zeroContextBlocks(sourcePatch);
+  const mergedBlocks = zeroContextBlocks(squashPatch);
+  if (sourceBlocks === undefined || mergedBlocks === undefined) return false;
+  const containsBlock = (blocks: readonly string[][], sourceBlock: readonly string[]) =>
+    sourceBlock.length > 0 && blocks.some((block) => block.some((_, start) => sourceBlock.every((line, index) => block[start + index] === line)));
+  for (const [changedPath, delta] of sourceBlocks) {
+    if (changedPath === "" || changedPath.startsWith("/") || changedPath.split("/").includes("..")) return false;
+    // The matching text must have been added by this squash, not merely have
+    // existed in its parent or elsewhere on the child integration branch.
+    if (delta.added.some((block) => !containsBlock(mergedBlocks.get(changedPath)?.added ?? [], block))) return false;
+    let target = "";
+    try { target = gitOutput(repositoryPath, ["show", `${squash}:${changedPath}`]); } catch {
+      if (delta.added.length > 0) return false;
+    }
+    const targetLines = target === "" ? [] : target.split("\n");
+    const contains = (block: string[]) => block.length > 0 && targetLines.some((_, start) => block.every((line, index) => targetLines[start + index] === line));
+    if (delta.removed.some((block) => contains(block))) return false;
+  }
+  return true;
+}
+
+function proveLegacySquash(
+  repositoryPath: string,
+  member: DeliveryProofMember,
+  integrationRef: string,
+  integrationHead: string,
+): string | undefined {
+  const repository = githubRepository(repositoryPath);
+  const integrationBranch = integrationRef.replace(/^origin\//, "");
+  if (repository === undefined || integrationBranch === "") return undefined;
+  let raw: string;
+  try {
+    raw = execFileSync("gh", ["api", `repos/${repository}/commits/${member.deliveryCommit}/pulls`], {
+      cwd: repositoryPath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch { return undefined; }
+  let candidates: unknown;
+  try { candidates = JSON.parse(raw); } catch { return undefined; }
+  if (!Array.isArray(candidates)) return undefined;
+  const matches = candidates.flatMap((candidate) => {
+    if (typeof candidate !== "object" || candidate === null) return [];
+    const pr = candidate as Record<string, unknown>;
+    const base = pr.base as Record<string, unknown> | undefined;
+    const head = pr.head as Record<string, unknown> | undefined;
+    const baseRepo = base?.repo as Record<string, unknown> | undefined;
+    const headRepo = head?.repo as Record<string, unknown> | undefined;
+    const merge = pr.merge_commit_sha;
+    const headSha = head?.sha;
+    if (typeof pr.merged_at !== "string" || pr.merged_at === "" || typeof merge !== "string" || !/^[0-9a-f]{40}$/i.test(merge)
+      || typeof headSha !== "string" || !/^[0-9a-f]{40}$/i.test(headSha)
+      || base?.ref !== integrationBranch
+      || baseRepo?.full_name?.toString().toLowerCase() !== repository
+      || headRepo?.full_name?.toString().toLowerCase() !== repository
+      || !isAncestor(repositoryPath, member.deliveryCommit, headSha)
+      || !isAncestor(repositoryPath, merge, integrationHead)) return [];
+    const squashParent = gitOutput(repositoryPath, ["rev-parse", `${merge}^`]);
+    return sourceContentSurvivesSquash(repositoryPath, member.deliveryBase, member.deliveryCommit, merge)
+      && isAncestor(repositoryPath, squashParent, merge) ? [merge] : [];
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 function proveMemberDelivery(projectPath: string, runId: string, member: DeliveryProofMember): MemberDeliveryProof | undefined {
   const repositoryPath = memberRepositoryPath(projectPath, runId, member.relativeLocator);
   if (repositoryPath === undefined || member.deliveryBase === "" || member.deliveryCommit === "" || member.deliveryTree === "") return undefined;
@@ -1033,6 +1197,10 @@ function proveMemberDelivery(projectPath: string, runId: string, member: Deliver
       return { member, repositoryPath, integrationRef, integrationHead, deliveredCommit: member.deliveryCommit };
     }
 
+    if (member.legacyDerived === true) {
+      const mergeCommit = proveLegacySquash(repositoryPath, member, integrationRef, integrationHead);
+      return mergeCommit === undefined ? undefined : { member, repositoryPath, integrationRef, integrationHead, deliveredCommit: mergeCommit };
+    }
     const branch = member.publishRef.replace(/^refs\/heads\//, "");
     if (branch === "" || branch === member.publishRef || !/^[A-Za-z0-9._/-]+$/.test(branch)) return undefined;
     let raw: string;
@@ -1066,10 +1234,13 @@ function primaryAdoptsSubmodule(primary: MemberDeliveryProof, submodule: MemberD
     const line = gitOutput(primary.repositoryPath, ["ls-tree", primary.integrationHead, "--", submodulePath]);
     const match = /^160000 commit ([0-9a-f]{40})\t/.exec(line);
     if (match?.[1] === undefined) return false;
-    // The gitlink may intentionally point at a later integration commit, but
-    // it must contain the exact delivery (or its verified squash) in that
-    // submodule's real repository history.
-    return isAncestor(submodule.repositoryPath, submodule.deliveredCommit, match[1]);
+    // A primary may pin the original PR commit while the child independently
+    // squash-merges it.  The squash proof above binds that exact source commit
+    // to the integration merge; accepting the equality here is therefore not
+    // a branch-name shortcut.  A later integration gitlink remains valid only
+    // when it contains the verified delivered commit.
+    return match[1] === submodule.member.deliveryCommit
+      || isAncestor(submodule.repositoryPath, submodule.deliveredCommit, match[1]);
   } catch {
     return false;
   }
@@ -1082,9 +1253,13 @@ function primaryAdoptsSubmodule(primary: MemberDeliveryProof, submodule: MemberD
  * a host Delta without inventing a Cycle.  A stale terminal, wrong current
  * reservation, detached checkout, or non-integration branch produces no fact.
  */
-export function recordHostDeltaAttestationClosure(projectPath: string, storyId: string): boolean {
+export function recordHostDeltaAttestationClosure(projectPath: string, storyId: string, acceptanceReportPath: string): boolean {
   const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
   if (!existsSync(eventsPath)) return false;
+  if (!acceptanceReportPath.startsWith(".roll/") || acceptanceReportPath.split("/").includes("..")) return false;
+  try {
+    if (readFileSync(join(projectPath, acceptanceReportPath), "utf8").trim() === "") return false;
+  } catch { return false; }
   const events: Array<Record<string, unknown>> = readFileSync(eventsPath, "utf8")
     .split("\n")
     .flatMap((line) => {
@@ -1150,6 +1325,7 @@ export function recordHostDeltaAttestationClosure(projectPath: string, storyId: 
         deliveryBase: value.deliveryBase,
         deliveryCommit: value.deliveryCommit,
         deliveryTree: value.deliveryTree,
+        ...(value.deliveryState === "changed" || value.deliveryState === "unchanged" ? { deliveryState: value.deliveryState } : {}),
         publishRef: value.publishRef,
       } satisfies DeliveryProofMember];
     });
@@ -1157,7 +1333,13 @@ export function recordHostDeltaAttestationClosure(projectPath: string, storyId: 
       || new Set(proofMembers.map((member) => member.relativeLocator)).size !== proofMembers.length
       || proofMembers.some((member) => expectedByLocator.get(member.relativeLocator) !== member.repositoryId)) return false;
 
-    const memberProofs = proofMembers.map((member) => proveMemberDelivery(projectPath, runId, member));
+    const primaryMember = proofMembers.find((member) => member.relativeLocator === runId);
+    if (primaryMember === undefined) return false;
+    const resolvedMembers = proofMembers.map((member) => {
+      if (member.relativeLocator === runId) return member;
+      return deriveLegacySubmoduleMember(projectPath, runId, primaryMember, member) ?? member;
+    });
+    const memberProofs = resolvedMembers.map((member) => proveMemberDelivery(projectPath, runId, member));
     if (memberProofs.some((proof) => proof === undefined)) return false;
     const proofs = memberProofs as MemberDeliveryProof[];
     const primary = proofs.find((proof) => proof.member.relativeLocator === runId);
@@ -1176,6 +1358,18 @@ export function recordHostDeltaAttestationClosure(projectPath: string, storyId: 
       signal: "backlog_attest",
       delegationId,
       runId,
+      ts: Date.now(),
+    });
+    // The caller is the successful story-scoped attest command.  Record its
+    // rendered acceptance-report evidence so the managed-worktree audit can release
+    // only this proven delivery, rather than treating the lack of a synthetic
+    // runner cycle as missing evidence.
+    new EventBus().appendEvent(eventsPath, {
+      type: "attest:host_delta",
+      cycleId: runId,
+      storyId,
+      delegationId,
+      reportPath: acceptanceReportPath,
       ts: Date.now(),
     });
     return true;

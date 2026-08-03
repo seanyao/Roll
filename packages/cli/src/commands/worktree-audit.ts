@@ -360,12 +360,15 @@ function deliveryFacts(events: readonly RollEvent[], runId: string): {
   let missing = false;
   for (const event of events) {
     if ("cycleId" in event && event.cycleId === runId) {
-      if (event.type === "delivery:merge_confirmed") merged = true;
+      if (event.type === "delivery:merge_confirmed"
+        || (event.type === "delivery:reconciled"
+          && (event.state === "delivered" || event.state === "delivered_external" || event.state === "delivered_local"))) merged = true;
       if (event.type === "delivery:abandoned") unmerged = true;
       if (event.type === "attest:gate") {
         if (event.verdict === "produced") accepted = true;
         else missing = true;
       }
+      if (event.type === "attest:host_delta") accepted = true;
     }
   }
   return {

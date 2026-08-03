@@ -1997,6 +1997,6 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   // has succeeded, bind that real closure to the retained reservation.  The
   // reconcile tick releases it from the identity-bearing event; this command
   // never releases a lease directly.
-  recordHostDeltaAttestationClosure(projectPath, storyId);
+  recordHostDeltaAttestationClosure(projectPath, storyId, relative(projectPath, reviewPath));
   return 0;
 }
