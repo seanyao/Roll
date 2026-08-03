@@ -36,7 +36,7 @@ const CLI_POLICY_SHAPES: Readonly<Record<string, PolicyShape>> = {
   "workspace:usage": machine,
   "workspace:create": { ...machine, allowsAmbientCwd: true, rationale: "Creation starts from an explicit config before the target Workspace exists." },
   "workspace:handoff": workspaceMutation,
-  "workspace:issue.init": workspaceMutation, "workspace:requirement.add": workspaceMutation,
+  "workspace:issue.init": workspaceMutation, "workspace:issue.create": workspaceMutation, "workspace:requirement.add": workspaceMutation,
   "workspace:doctor.read": workspaceRead, "workspace:doctor.repair": workspaceMutation,
   "workspace:migrate": { scope: "legacy_migration_only", allowsAmbientCwd: true, allowsLegacyRollPath: true, rationale: "Migration must inspect an explicitly selected legacy Roll project." },
   "workspace:edit": workspaceMutation, "workspace:list": machine, "workspace:show": workspaceRead,

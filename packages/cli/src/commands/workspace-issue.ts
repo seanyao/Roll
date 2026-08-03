@@ -1,8 +1,17 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  appendIdea,
+  BacklogStore,
+  ConflictError,
+  inferEpic,
+  lintIdeaDescription,
+  nextIdeaId,
+  prefixForKind,
   resolveWorkspaceTarget,
   validateStoryId,
+  type BacklogItem,
+  type IdeaKind,
   type IssueStoryContract,
   type WorkspaceContextCandidate,
 } from "@roll/core";
@@ -14,28 +23,58 @@ import {
   readWorkspace,
   resolveRequirementSourcesForStoryOnDisk,
   resolveWorkspaceBacklogStoryContract,
+  withWorkspaceAuthorityLock,
   type InspectedWorkspace,
   type IssueCheckReport,
 } from "@roll/infra";
 import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
+import { generateIndex, UNCATEGORIZED } from "../lib/archive.js";
+import { writeStoryCardFiles } from "../lib/story-mint.js";
 import { workspaceRegistryCandidates, workspaceRollHome, workspaceTargetSelector } from "./workspace-target.js";
 import { canonicalWorkspaceSelectorValue, isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
 
 const CHECK_RESULT_V1 = "roll.workspace-issue-check/v1" as const;
 const APPLY_RESULT_V1 = "roll.workspace-issue-apply/v1" as const;
+const CREATE_CHECK_RESULT_V1 = "roll.workspace-issue-create-check/v1" as const;
+const CREATE_APPLY_RESULT_V1 = "roll.workspace-issue-create-apply/v1" as const;
 const ERROR_V1 = "roll.workspace-issue-error/v1" as const;
 
 interface IssueInitArgs {
+  readonly kind: "init";
   readonly storyId: string;
   readonly workspace?: string;
   readonly check: boolean;
   readonly json: boolean;
 }
 
+interface IssueCreateRepositoryArgs {
+  readonly alias: string;
+  readonly access: "read" | "write";
+}
+
+interface IssueCreateArgs {
+  readonly kind: "create";
+  readonly title: string;
+  readonly workspace?: string;
+  readonly type: IdeaKind;
+  readonly storyId?: string;
+  readonly repositories: readonly IssueCreateRepositoryArgs[];
+  readonly check: boolean;
+  readonly json: boolean;
+}
+
+type ParsedIssueArgs = IssueInitArgs | IssueCreateArgs;
+
 interface IssueCommandDeps {
   readonly cwd?: () => string;
+  readonly now?: () => Date;
+  readonly inspect?: typeof inspectIssueInit;
+  readonly apply?: typeof applyIssueInit;
+  readonly afterApply?: () => void | Promise<void>;
 }
+
+class IssueCreateConflictError extends Error {}
 
 function lang(): Lang {
   return resolveLang({
@@ -67,8 +106,7 @@ function emitError(code: string, json: boolean, candidates: readonly { readonly 
   return 1;
 }
 
-function parseArgs(args: readonly string[]): IssueInitArgs | undefined {
-  if (args[0] !== "init") return undefined;
+function parseInitArgs(args: readonly string[]): IssueInitArgs | undefined {
   const scalar = new Map<string, string>();
   let check = false;
   let json = false;
@@ -98,7 +136,83 @@ function parseArgs(args: readonly string[]): IssueInitArgs | undefined {
   }
   if (positional.length !== 1 || positional[0] === undefined) return undefined;
   const workspace = canonicalWorkspaceSelectorValue(args);
-  return { storyId: positional[0], ...(workspace === undefined ? {} : { workspace }), check, json };
+  return { kind: "init", storyId: positional[0], ...(workspace === undefined ? {} : { workspace }), check, json };
+}
+
+function parseRepository(value: string): IssueCreateRepositoryArgs | undefined {
+  const [alias, access = "write", ...extra] = value.split(":");
+  if (extra.length > 0 || alias === undefined || alias.trim() === "") return undefined;
+  if (access !== "read" && access !== "write") return undefined;
+  return { alias: alias.trim(), access };
+}
+
+function parseCreateArgs(args: readonly string[]): IssueCreateArgs | undefined {
+  let check = false;
+  let json = false;
+  let type: IdeaKind | undefined;
+  let storyId: string | undefined;
+  const repositories: IssueCreateRepositoryArgs[] = [];
+  const title: string[] = [];
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--check") {
+      if (check) return undefined;
+      check = true;
+      continue;
+    }
+    if (arg === "--json") {
+      if (json) return undefined;
+      json = true;
+      continue;
+    }
+    if (isCanonicalWorkspaceSelectorToken(arg)) {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) return undefined;
+      index += 1;
+      continue;
+    }
+    if (arg === "--type") {
+      const value = args[index + 1];
+      if (value === "fix" || value === "bug") type = "bug";
+      else if (value === "idea") type = "idea";
+      else return undefined;
+      index += 1;
+      continue;
+    }
+    if (arg === "--id") {
+      const value = args[index + 1];
+      if (storyId !== undefined || value === undefined || value.startsWith("-")) return undefined;
+      storyId = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--repository") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) return undefined;
+      const parsed = parseRepository(value);
+      if (parsed === undefined || repositories.some((repository) => repository.alias === parsed.alias)) return undefined;
+      repositories.push(parsed);
+      index += 1;
+      continue;
+    }
+    if (arg === undefined || arg.startsWith("-")) return undefined;
+    title.push(arg);
+  }
+  const workspace = canonicalWorkspaceSelectorValue(args);
+  const joined = title.join(" ").trim();
+  if (workspace === undefined || joined === "" || type === undefined || repositories.length === 0) return undefined;
+  if (storyId !== undefined) {
+    if (!validateStoryId(storyId).ok) return undefined;
+    if (type === "bug" && !/^(?:FIX|BUG)-/u.test(storyId)) return undefined;
+    if (type === "idea" && !/^IDEA-/u.test(storyId)) return undefined;
+  }
+  return { kind: "create", title: joined, workspace, type, ...(storyId === undefined ? {} : { storyId }), repositories, check, json };
+}
+
+function parseArgs(args: readonly string[]): ParsedIssueArgs | undefined {
+  if (args[0] === "init") return parseInitArgs(args);
+  if (args[0] === "create") return parseCreateArgs(args);
+  return undefined;
 }
 
 function contained(root: string, target: string): boolean {
@@ -162,6 +276,148 @@ function renderApply(outcome: string, storyId: string, manifest: unknown): strin
   return `${msg("workspace.issue.apply.title", storyId, outcome)}\n${JSON.stringify(manifest, null, 2)}\n`;
 }
 
+function storyCardIds(featuresDir: string): BacklogItem[] {
+  try {
+    return readdirSync(featuresDir, { withFileTypes: true }).flatMap((epic) => {
+      if (!epic.isDirectory()) return [];
+      const epicDir = join(featuresDir, epic.name);
+      return readdirSync(epicDir, { withFileTypes: true }).flatMap((card) =>
+        card.isDirectory() && existsSync(join(epicDir, card.name, "spec.md"))
+          ? [{ id: card.name, desc: "", status: "" }]
+          : []
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function createContract(storyId: string, repositories: readonly IssueCreateRepositoryArgs[]): IssueStoryContract {
+  return {
+    storyId,
+    repositories: repositories.map((repository) => ({
+      alias: repository.alias,
+      access: repository.access,
+      requiredDelivery: repository.access === "write",
+    })),
+  };
+}
+
+async function createIssue(
+  parsed: IssueCreateArgs,
+  input: {
+    readonly workspaceId: string;
+    readonly workspaceRoot: string;
+    readonly rollHome: string;
+    readonly bindings: ReturnType<typeof readWorkspace>["repositories"];
+  },
+  deps: IssueCommandDeps,
+): Promise<number> {
+  const violations = lintIdeaDescription(parsed.title);
+  if (violations.length > 0) return emitError("invalid_value", parsed.json);
+
+  const backlogPath = join(input.workspaceRoot, "backlog", "index.md");
+  const featuresDir = join(input.workspaceRoot, "features");
+  const store = new BacklogStore();
+  let snapshot;
+  try {
+    snapshot = store.readBacklog(backlogPath);
+  } catch {
+    return emitError("invalid_workspace", parsed.json);
+  }
+  const storyId = parsed.storyId ?? nextIdeaId(
+    [...snapshot.items, ...storyCardIds(featuresDir)],
+    prefixForKind(parsed.type),
+  );
+  const epic = inferEpic(parsed.title) ?? UNCATEGORIZED;
+  const cardDir = join(featuresDir, epic, storyId);
+  if (existsSync(join(cardDir, "spec.md"))) return emitError("duplicate_story", parsed.json);
+
+  const contract = createContract(storyId, parsed.repositories);
+  const requirementManifests = resolveRequirementSourcesForStoryOnDisk(input.workspaceRoot, storyId);
+  const issueRoot = join(input.workspaceRoot, "issues", storyId);
+  const inspect = deps.inspect ?? inspectIssueInit;
+  const report = await inspect({
+    workspaceId: input.workspaceId,
+    rollHome: input.rollHome,
+    workspaceRoot: input.workspaceRoot,
+    issueRoot,
+    contract,
+    bindings: input.bindings,
+    requirementManifests,
+  });
+  const story = { id: storyId, title: parsed.title, type: parsed.type, epic };
+  if (parsed.check) {
+    const result = {
+      schema: CREATE_CHECK_RESULT_V1,
+      workspaceId: input.workspaceId,
+      story,
+      repositories: contract.repositories,
+      report,
+    };
+    process.stdout.write(parsed.json ? `${JSON.stringify(result, null, 2)}\n` : renderCheck(report, storyId));
+    return 0;
+  }
+  if (report.manifest.state === "conflict" || Object.values(report.targets).some((target) => target.decision === "conflict")) {
+    return emitError("rejected", parsed.json);
+  }
+
+  try {
+    const apply = deps.apply ?? applyIssueInit;
+    const applied = await apply({
+      workspaceId: input.workspaceId,
+      rollHome: input.rollHome,
+      workspaceRoot: input.workspaceRoot,
+      issueRoot,
+      contract,
+      bindings: input.bindings,
+      requirementManifests,
+    });
+    await deps.afterApply?.();
+    await withWorkspaceAuthorityLock({
+      rollHome: input.rollHome,
+      workspaceId: input.workspaceId,
+      operation: "issue-create",
+    }, async () => {
+      if (existsSync(join(cardDir, "spec.md"))) throw new IssueCreateConflictError(`Story ${storyId} already exists`);
+      try {
+        writeStoryCardFiles(cardDir, {
+          id: storyId,
+          title: parsed.title,
+          type: parsed.type,
+          ...(epic === UNCATEGORIZED ? {} : { epic }),
+          created: (deps.now ?? (() => new Date()))().toISOString().slice(0, 10),
+          repositories: contract.repositories,
+        });
+        store.writeBacklog(backlogPath, snapshot.hash, (content) =>
+          appendIdea(content, storyId, parsed.type, parsed.title, { epic, linkPrefix: "../features" }).content
+        );
+      } catch (error) {
+        rmSync(cardDir, { recursive: true, force: true });
+        throw error;
+      }
+    });
+    try {
+      generateIndex(input.workspaceRoot, "workspace");
+    } catch {
+      // The live filesystem remains authoritative; index.json is a rebuildable cache.
+    }
+    const result = {
+      schema: CREATE_APPLY_RESULT_V1,
+      workspaceId: input.workspaceId,
+      story,
+      outcome: applied.outcome,
+      manifest: applied.manifest,
+    };
+    process.stdout.write(parsed.json ? `${JSON.stringify(result, null, 2)}\n` : renderApply(applied.outcome, storyId, applied.manifest));
+    return 0;
+  } catch (error) {
+    if (error instanceof ConflictError || error instanceof IssueCreateConflictError) return emitError("rejected", parsed.json);
+    if (error instanceof IssueInitializationError) return emitError(error.code, parsed.json);
+    return emitError("apply_failed", parsed.json);
+  }
+}
+
 export async function workspaceIssueCommand(args: string[], deps: IssueCommandDeps = {}): Promise<number> {
   if (args.length === 0 || args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
     process.stdout.write(workspaceIssueUsage());
@@ -170,7 +426,7 @@ export async function workspaceIssueCommand(args: string[], deps: IssueCommandDe
   const parsed = parseArgs(args);
   const jsonOutput = args.includes("--json");
   if (parsed === undefined) return emitError("invalid_arguments", jsonOutput);
-  if (!validateStoryId(parsed.storyId).ok) return emitError("invalid_story_id", parsed.json);
+  if (parsed.kind === "init" && !validateStoryId(parsed.storyId).ok) return emitError("invalid_story_id", parsed.json);
 
   const registry = new WorkspaceRegistry({ rollHome: workspaceRollHome() });
   let entries: readonly InspectedWorkspace[];
@@ -193,18 +449,21 @@ export async function workspaceIssueCommand(args: string[], deps: IssueCommandDe
   const workspaceRoot = decision.target.root;
   const workspaceId = decision.target.workspaceId;
 
-  const contract = loadContract(workspaceRoot, parsed.storyId);
-  if (!contract.ok) return emitError(contract.code, parsed.json);
-
   let bindings;
   try {
     bindings = readWorkspace(workspaceRoot).repositories;
   } catch {
     return emitError("invalid_workspace", parsed.json);
   }
+  const rollHome = workspaceRollHome();
+  if (parsed.kind === "create") {
+    return createIssue(parsed, { workspaceId, workspaceRoot, rollHome, bindings }, deps);
+  }
+
+  const contract = loadContract(workspaceRoot, parsed.storyId);
+  if (!contract.ok) return emitError(contract.code, parsed.json);
   const requirementManifests = resolveRequirementSourcesForStoryOnDisk(workspaceRoot, parsed.storyId);
   const issueRoot = join(workspaceRoot, "issues", parsed.storyId);
-  const rollHome = workspaceRollHome();
 
   if (parsed.check) {
     const report = await inspectIssueInit({ workspaceId, rollHome, workspaceRoot, issueRoot, contract: contract.value, bindings, requirementManifests });

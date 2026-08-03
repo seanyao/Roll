@@ -2,16 +2,18 @@
 
 exports[`US-WS-008 roll workspace issue init > freezes EN/ZH --help > help-en 1`] = `
 "Usage: roll workspace issue init <story-id> --workspace <id> [--check] [--json]
-  --check resolves the Story Contract, Workspace bindings and every repository target's state with zero writes.
-  Apply creates/reuses/repairs one Issue root: an immutable roll.issue/v1 manifest and one worktree per declared repository target.
+       roll workspace issue create <description> --workspace <id> --type <fix|idea> [--id <story-id>] --repository <alias:read|write>... [--check] [--json]
+  create initializes Issue repositories and transactionally commits an execution-ready card; --check performs zero writes.
+  init creates/reuses/repairs one Issue root from an existing Story Contract.
 
 "
 `;
 
 exports[`US-WS-008 roll workspace issue init > freezes EN/ZH --help > help-zh 1`] = `
 "用法：roll workspace issue init <Story ID> --workspace <ID> [--check] [--json]
-  --check 只读解析 Story Contract、工作区绑定与每个仓库目标的状态，零写入。
-  Apply 创建/复用/修复一个 Issue root：不可变的 roll.issue/v1 manifest 与每个声明仓库目标各一个 worktree。
+      roll workspace issue create <描述> --workspace <ID> --type <fix|idea> [--id <Story ID>] --repository <别名:read|write>... [--check] [--json]
+  create 初始化 Issue 仓库并事务提交可执行卡片；--check 零写入。
+  init 根据已有 Story Contract 创建/复用/修复 Issue root。
 
 "
 `;

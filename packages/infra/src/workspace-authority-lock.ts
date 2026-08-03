@@ -4,6 +4,7 @@ import { acquireLock, releaseLock } from "./process.js";
 
 export type WorkspaceAuthorityOperation =
   | "metadata-edit"
+  | "issue-create"
   | "issue-init"
   | "requirement-capture"
   | "requirement-repair"

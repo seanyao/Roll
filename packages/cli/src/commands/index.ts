@@ -254,6 +254,13 @@ export function registerAll(): void {
       ),
       cliMatchedSelectorOperation(
         "workspace",
+        "issue.create",
+        ["issue", "create"],
+        withWorkspaceSelector(["issue", "create", "Fix checkout", "--type", "fix", "--repository", "primary:write"], "roll"),
+        (args) => args[0] === "issue" && args[1] === "create",
+      ),
+      cliMatchedSelectorOperation(
+        "workspace",
         "requirement.add",
         ["requirement", "add"],
         withWorkspaceSelector(["requirement", "add"], "roll"),

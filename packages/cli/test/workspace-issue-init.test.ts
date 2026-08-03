@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { repositoryIdFromRemote } from "@roll/spec";
 import { dispatch } from "../src/bridge.js";
 import { registerAll } from "../src/commands/index.js";
+import { workspaceIssueCommand } from "../src/commands/workspace-issue.js";
 
 interface Run { readonly status: number; readonly stdout: string; readonly stderr: string }
 const roots: string[] = [];
@@ -99,7 +100,12 @@ repositories:
 `, "utf8");
 }
 
-async function run(args: string[], f: ReturnType<typeof fixture>, opts: { lang?: "en" | "zh" } = {}): Promise<Run> {
+async function run(
+  args: string[],
+  f: ReturnType<typeof fixture>,
+  opts: { lang?: "en" | "zh" } = {},
+  invoke?: (args: string[]) => number | Promise<number>,
+): Promise<Run> {
   const saved: Partial<Record<typeof ENV_KEYS[number], string>> = {};
   for (const key of ENV_KEYS) {
     if (process.env[key] !== undefined) saved[key] = process.env[key];
@@ -119,8 +125,10 @@ async function run(args: string[], f: ReturnType<typeof fixture>, opts: { lang?:
   process.stderr.write = (chunk: string | Uint8Array): boolean => { stderr += String(chunk); return true; };
   process.chdir(f.cwd);
   try {
-    const result = await dispatch(args, async () => ({ ok: true }));
-    return { status: result.status, stdout, stderr };
+    const status = invoke === undefined
+      ? (await dispatch(args, async () => ({ ok: true }))).status
+      : await invoke(args);
+    return { status, stdout, stderr };
   } finally {
     process.stdout.write = out;
     process.stderr.write = err;
@@ -159,6 +167,138 @@ function scrub(text: string, f: ReturnType<typeof fixture>): string {
 }
 
 describe("US-WS-008 roll workspace issue init", () => {
+  it("creates an execution-ready FIX atomically from an explicit Workspace and repository contract", async () => {
+    const f = fixture();
+    await initWorkspace(f);
+
+    const check = await run([
+      "workspace", "issue", "create", "the checkout fails for archived forms",
+      "--workspace", "ws-demo",
+      "--type", "fix",
+      "--repository", "sot:write",
+      "--repository", "docs:read",
+      "--check",
+      "--json",
+    ], f);
+    expect(check.status, check.stderr).toBe(0);
+    const checkView = JSON.parse(check.stdout) as {
+      schema: string;
+      story: { id: string; type: string; title: string };
+      repositories: readonly { alias: string; access: string }[];
+      report: { manifest: { state: string } };
+    };
+    expect(checkView).toMatchObject({
+      schema: "roll.workspace-issue-create-check/v1",
+      story: { id: "FIX-001", type: "bug", title: "the checkout fails for archived forms" },
+      repositories: [
+        { alias: "sot", access: "write" },
+        { alias: "docs", access: "read" },
+      ],
+      report: { manifest: { state: "absent" } },
+    });
+    expect(existsSync(join(f.workspace, "features", "uncategorized", "FIX-001"))).toBe(false);
+    expect(existsSync(join(f.workspace, "issues", "FIX-001"))).toBe(false);
+
+    const apply = await run([
+      "workspace", "issue", "create", "the checkout fails for archived forms",
+      "--workspace", "ws-demo",
+      "--type", "fix",
+      "--repository", "sot:write",
+      "--repository", "docs:read",
+      "--json",
+    ], f);
+    expect(apply.status, apply.stderr).toBe(0);
+    const applyView = JSON.parse(apply.stdout) as {
+      schema: string;
+      story: { id: string };
+      outcome: string;
+      manifest: { schema: string; storyId: string };
+    };
+    expect(applyView).toMatchObject({
+      schema: "roll.workspace-issue-create-apply/v1",
+      story: { id: "FIX-001" },
+      outcome: "created",
+      manifest: { schema: "roll.issue/v1", storyId: "FIX-001" },
+    });
+
+    const spec = readFileSync(join(f.workspace, "features", "uncategorized", "FIX-001", "spec.md"), "utf8");
+    expect(spec).toContain("repositories:\n  - alias: sot\n    access: write\n    required_delivery: true\n  - alias: docs\n    access: read");
+    expect(readFileSync(join(f.workspace, "backlog", "index.md"), "utf8")).toContain("[FIX-001](../features/uncategorized/FIX-001/spec.md)");
+    expect(existsSync(join(f.workspace, "issues", "FIX-001", "sot", ".git"))).toBe(true);
+    expect(existsSync(join(f.workspace, "issues", "FIX-001", "docs", ".git"))).toBe(true);
+  });
+
+  it("creates the exact requested Issue id instead of forcing auto allocation", async () => {
+    const f = fixture();
+    await initWorkspace(f);
+    const created = await run([
+      "workspace", "issue", "create", "checkout fails for archived forms",
+      "--workspace", "ws-demo",
+      "--type", "fix",
+      "--id", "FIX-042",
+      "--repository", "sot:write",
+      "--json",
+    ], f);
+    expect(created.status, created.stderr).toBe(0);
+    expect(JSON.parse(created.stdout)).toMatchObject({ story: { id: "FIX-042" }, outcome: "created" });
+    expect(existsSync(join(f.workspace, "features", "uncategorized", "FIX-042", "spec.md"))).toBe(true);
+    expect(existsSync(join(f.workspace, "issues", "FIX-042", "sot", ".git"))).toBe(true);
+  });
+
+  it("rolls back the card and backlog row when Issue initialization fails, then retries with the same id", async () => {
+    const f = fixture();
+    await initWorkspace(f);
+    const backlogPath = join(f.workspace, "backlog", "index.md");
+    const before = readFileSync(backlogPath, "utf8");
+    const args = [
+      "workspace", "issue", "create", "checkout fails after archive",
+      "--workspace", "ws-demo",
+      "--type", "fix",
+      "--repository", "sot:write",
+      "--json",
+    ];
+
+    const failed = await run(args, f, {}, (fullArgs) => workspaceIssueCommand(fullArgs.slice(2), {
+      apply: async () => { throw new Error("injected apply failure"); },
+    }));
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(failed.stderr)).toMatchObject({ error: { code: "apply_failed" } });
+    expect(readFileSync(backlogPath, "utf8")).toBe(before);
+    expect(existsSync(join(f.workspace, "features", "uncategorized", "FIX-001"))).toBe(false);
+    expect(existsSync(join(f.workspace, "issues", "FIX-001"))).toBe(false);
+
+    const retried = await run(args, f);
+    expect(retried.status, retried.stderr).toBe(0);
+    expect(JSON.parse(retried.stdout)).toMatchObject({ story: { id: "FIX-001" }, outcome: "created" });
+  });
+
+  it("recovers the same id when execution stops after Issue init but before metadata commit", async () => {
+    const f = fixture();
+    await initWorkspace(f);
+    const backlogPath = join(f.workspace, "backlog", "index.md");
+    const before = readFileSync(backlogPath, "utf8");
+    const args = [
+      "workspace", "issue", "create", "checkout fails after archive",
+      "--workspace", "ws-demo",
+      "--type", "fix",
+      "--repository", "sot:write",
+      "--json",
+    ];
+
+    const interrupted = await run(args, f, {}, (fullArgs) => workspaceIssueCommand(fullArgs.slice(2), {
+      afterApply: () => { throw new Error("injected interruption before metadata commit"); },
+    }));
+    expect(interrupted.status).toBe(1);
+    expect(readFileSync(backlogPath, "utf8")).toBe(before);
+    expect(existsSync(join(f.workspace, "features", "uncategorized", "FIX-001"))).toBe(false);
+    expect(existsSync(join(f.workspace, "issues", "FIX-001", "manifest.json"))).toBe(true);
+
+    const retried = await run(args, f);
+    expect(retried.status, retried.stderr).toBe(0);
+    expect(JSON.parse(retried.stdout)).toMatchObject({ story: { id: "FIX-001" }, outcome: "reused" });
+    expect(readFileSync(backlogPath, "utf8")).toContain("[FIX-001](../features/uncategorized/FIX-001/spec.md)");
+  });
+
   it("resolves the Story contract and creates real worktrees across two repositories, then reuses them idempotently", async () => {
     const f = fixture();
     await initWorkspace(f);
