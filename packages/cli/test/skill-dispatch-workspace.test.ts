@@ -3,12 +3,48 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { EventBus, readLeases } from "@roll/core";
-import { allocateSkillDispatchRun, integrateSkillDispatchChild, releaseSkillDispatchReservation, skillDispatchActorForCwd, skillDispatchChangedPaths, skillDispatchScopeAllows } from "../src/runner/skill-dispatch-workspace.js";
+import { EventBus, claimStoryLease, readLeases, setLease } from "@roll/core";
+import { managedWorktreeRelease, projectIdentity } from "@roll/infra";
+import { allocateSkillDispatchRun, integrateSkillDispatchChild, releaseSkillDispatchReservation, skillDispatchActorForCwd, skillDispatchChangedPaths, skillDispatchScopeAllows, stopSkillDispatchRun } from "../src/runner/skill-dispatch-workspace.js";
 
 function project(): string {
   const root = mkdtempSync(join(tmpdir(), "roll-dispatch-project-"));
   return root;
+}
+
+async function stopFixture(runId: string) {
+  const root = project();
+  execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Roll Test"], { cwd: root });
+  writeFileSync(join(root, "README.md"), "base\n");
+  execFileSync("git", ["add", "README.md"], { cwd: root });
+  execFileSync("git", ["commit", "-m", "base"], { cwd: root, stdio: "ignore" });
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const repositoryId = (await projectIdentity(root)).slug;
+  const worktrees = join(root, ".roll", "loop", "worktrees");
+  const parent = join(worktrees, runId);
+  const child = join(worktrees, `${runId}.children`, "docs");
+  execFileSync("git", ["worktree", "add", "--detach", parent, base], { cwd: root, stdio: "ignore" });
+  execFileSync("git", ["worktree", "add", "--detach", child, base], { cwd: root, stdio: "ignore" });
+  const workspace = {
+    schema: 1 as const, runId, storyId: "FIX-1498", kind: "skill_dispatch" as const, topology: "solo" as const,
+    members: [
+      { repositoryId, workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached" as const, head: base } },
+      { repositoryId, workspaceKey: runId, relativeLocator: `${runId}.children/docs`, actionId: "docs", declaredFileScope: ["docs"], checkoutRef: { kind: "detached" as const, head: base } },
+    ] as const,
+  };
+  const eventsPath = join(root, ".roll", "loop", "events.ndjson");
+  new EventBus().appendEvent(eventsPath, { type: "worktree:allocated", workspace, operationId: `${runId}:allocate`, ts: 1 });
+  claimStoryLease(join(root, ".roll", "loop", "leases"), "FIX-1498", { source: "skill-dispatch", runId, claimedAt: 1 });
+  return { root, base, parent, child, workspace, eventsPath, leases: join(root, ".roll", "loop", "leases") };
+}
+
+function advance(path: string, filename: string): string {
+  writeFileSync(join(path, filename), "abandoned\n");
+  execFileSync("git", ["add", filename], { cwd: path });
+  execFileSync("git", ["commit", "-m", `abandoned ${filename}`], { cwd: path, stdio: "ignore" });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: path, encoding: "utf8" }).trim();
 }
 
 function allocator(root: string) {
@@ -33,6 +69,173 @@ function allocator(root: string) {
 }
 
 describe("US-LOOP-127 — managed Skill parent/child allocator", () => {
+  it("accepts an advanced but unmerged managed parent head as abandoned work", async () => {
+    const fixture = await stopFixture("dispatch-stop-parent-advance");
+    const parentHead = advance(fixture.parent, "abandoned-parent.md");
+    await expect(stopSkillDispatchRun(fixture.root, "FIX-1498", "dispatch-stop-parent-advance", "scope was incomplete", "FIX-1498", fixture.root)).resolves.toMatchObject({ ok: true });
+    expect(execFileSync("git", ["rev-parse", "refs/roll-retained/dispatch-stop-parent-advance/dispatch-stop-parent-advance"], { cwd: fixture.root, encoding: "utf8" }).trim()).toBe(parentHead);
+    expect(existsSync(fixture.parent)).toBe(false);
+    expect(existsSync(fixture.child)).toBe(false);
+    rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  it("refuses stop admission failures without events, directory removal, or lease release", async () => {
+    const missing = await stopFixture("dispatch-stop-missing-reason");
+    await expect(stopSkillDispatchRun(missing.root, "FIX-1498", "dispatch-stop-missing-reason", "", "FIX-1498", missing.root)).resolves.toEqual({ ok: false, reason: "missing_reason" });
+    expect(readFileSync(missing.eventsPath, "utf8").match(/worktree:release_requested/g)).toBeNull();
+    expect(existsSync(missing.parent)).toBe(true);
+    expect(readLeases(missing.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-stop-missing-reason" });
+    rmSync(missing.root, { recursive: true, force: true });
+
+    const inside = await stopFixture("dispatch-stop-inside");
+    await expect(stopSkillDispatchRun(inside.root, "FIX-1498", "dispatch-stop-inside", "scope was incomplete", "FIX-1498", inside.parent)).resolves.toEqual({ ok: false, reason: "execution_inside_workspace" });
+    expect(readFileSync(inside.eventsPath, "utf8").match(/worktree:release_requested/g)).toBeNull();
+    expect(existsSync(inside.parent)).toBe(true);
+    expect(readLeases(inside.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-stop-inside" });
+    rmSync(inside.root, { recursive: true, force: true });
+
+    const foreign = await stopFixture("dispatch-stop-foreign-lease");
+    setLease(foreign.leases, "FIX-1498", { source: "host-delegation", delegationId: "other-delegation", claimedAt: 2 });
+    await expect(stopSkillDispatchRun(foreign.root, "FIX-1498", "dispatch-stop-foreign-lease", "scope was incomplete", "FIX-1498", foreign.root)).resolves.toEqual({ ok: false, reason: "reservation_held_by_other" });
+    expect(readFileSync(foreign.eventsPath, "utf8").match(/worktree:release_requested/g)).toBeNull();
+    expect(existsSync(foreign.child)).toBe(true);
+    expect(readLeases(foreign.leases)["FIX-1498"]).toMatchObject({ delegationId: "other-delegation" });
+    rmSync(foreign.root, { recursive: true, force: true });
+
+    const identity = await stopFixture("dispatch-stop-identity");
+    await expect(stopSkillDispatchRun(identity.root, "FIX-1498", "dispatch-stop-identity", "scope was incomplete", "FIX-1498", identity.root, {
+      inspect: async () => ({ head: identity.base, repositoryId: "github.com/acme/foreign", registered: true, clean: true }),
+    })).resolves.toEqual({ ok: false, reason: "workspace_identity_mismatch" });
+    expect(readFileSync(identity.eventsPath, "utf8").match(/worktree:release_requested/g)).toBeNull();
+    expect(existsSync(identity.child)).toBe(true);
+    expect(readLeases(identity.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-stop-identity" });
+    rmSync(identity.root, { recursive: true, force: true });
+
+    const conflicting = await stopFixture("dispatch-stop-conflict");
+    const expectedHeads = conflicting.workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: member.checkoutRef.head }));
+    new EventBus().appendEvent(conflicting.eventsPath, { type: "worktree:release_requested", runId: "dispatch-stop-conflict", reason: "abandoned", note: "other reason", operationId: "different-stop", expectedHeads, ts: 2 });
+    await expect(stopSkillDispatchRun(conflicting.root, "FIX-1498", "dispatch-stop-conflict", "scope was incomplete", "FIX-1498", conflicting.root)).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+    expect(existsSync(conflicting.parent)).toBe(true);
+    expect(readLeases(conflicting.leases)["FIX-1498"]).toMatchObject({ runId: "dispatch-stop-conflict" });
+    rmSync(conflicting.root, { recursive: true, force: true });
+  });
+
+  it("refuses merged and unavailable Git facts before it asks to release", async () => {
+    const merged = await stopFixture("dispatch-stop-merged");
+    const childHead = advance(merged.child, "abandoned.md");
+    execFileSync("git", ["cherry-pick", childHead], { cwd: merged.root, stdio: "ignore" });
+    await expect(stopSkillDispatchRun(merged.root, "FIX-1498", "dispatch-stop-merged", "scope was incomplete", "FIX-1498", merged.root)).resolves.toEqual({ ok: false, reason: "merged_or_unverifiable" });
+    expect(readFileSync(merged.eventsPath, "utf8").match(/worktree:release_requested/g)).toBeNull();
+    expect(existsSync(merged.child)).toBe(true);
+    rmSync(merged.root, { recursive: true, force: true });
+
+    const unavailable = await stopFixture("dispatch-stop-unavailable");
+    advance(unavailable.child, "abandoned.md");
+    await expect(stopSkillDispatchRun(unavailable.root, "FIX-1498", "dispatch-stop-unavailable", "scope was incomplete", "FIX-1498", unavailable.root, { remoteContains: async () => undefined })).resolves.toEqual({ ok: false, reason: "published_or_unverifiable" });
+    expect(readFileSync(unavailable.eventsPath, "utf8").match(/worktree:release_requested/g)).toBeNull();
+    expect(existsSync(unavailable.child)).toBe(true);
+    rmSync(unavailable.root, { recursive: true, force: true });
+  });
+
+  it("stops a clean unmerged two-member run through the paired release lifecycle while retaining abandoned heads", async () => {
+    const root = project();
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Roll Test"], { cwd: root });
+    writeFileSync(join(root, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "base"], { cwd: root, stdio: "ignore" });
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    const repositoryId = (await projectIdentity(root)).slug;
+    const worktrees = join(root, ".roll", "loop", "worktrees");
+    const parent = join(worktrees, "dispatch-stop");
+    const child = join(worktrees, "dispatch-stop.children", "docs");
+    execFileSync("git", ["worktree", "add", "--detach", parent, base], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "--detach", child, base], { cwd: root, stdio: "ignore" });
+    mkdirSync(join(child, "docs"), { recursive: true });
+    writeFileSync(join(child, "docs", "abandoned.md"), "retained\n");
+    execFileSync("git", ["add", "."], { cwd: child });
+    execFileSync("git", ["commit", "-m", "abandoned child work"], { cwd: child, stdio: "ignore" });
+    const childHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    const workspace = {
+      schema: 1 as const, runId: "dispatch-stop", storyId: "FIX-1498", kind: "skill_dispatch" as const, topology: "solo" as const,
+      members: [
+        { repositoryId, workspaceKey: "dispatch-stop", relativeLocator: "dispatch-stop", checkoutRef: { kind: "detached" as const, head: base } },
+        { repositoryId, workspaceKey: "dispatch-stop", relativeLocator: "dispatch-stop.children/docs", actionId: "docs", declaredFileScope: ["docs"], checkoutRef: { kind: "detached" as const, head: base } },
+      ] as const,
+    };
+    new EventBus().appendEvent(join(root, ".roll", "loop", "events.ndjson"), { type: "worktree:allocated", workspace, operationId: "dispatch-stop:allocate", ts: 1 });
+    claimStoryLease(join(root, ".roll", "loop", "leases"), "FIX-1498", { source: "skill-dispatch", runId: "dispatch-stop", claimedAt: 1 });
+
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop", "scope was incomplete", "FIX-1498", child)).resolves.toEqual({ ok: false, reason: "parent_required" });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop", "", "FIX-1498", root)).resolves.toEqual({ ok: false, reason: "missing_reason" });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop", "scope was incomplete", "OTHER", root)).resolves.toEqual({ ok: false, reason: "confirmation_mismatch" });
+    writeFileSync(join(child, "untracked.txt"), "dirty\n");
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop", "scope was incomplete", "FIX-1498", root)).resolves.toEqual({ ok: false, reason: "workspace_dirty" });
+    rmSync(join(child, "untracked.txt"));
+    execFileSync("git", ["update-ref", "refs/remotes/origin/published", childHead], { cwd: root });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop", "scope was incomplete", "FIX-1498", root)).resolves.toEqual({ ok: false, reason: "published_or_unverifiable" });
+    execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/published"], { cwd: root });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop", "scope was incomplete", "FIX-1498", root)).resolves.toMatchObject({ ok: true });
+    expect(existsSync(parent)).toBe(false);
+    expect(existsSync(child)).toBe(false);
+    expect(execFileSync("git", ["rev-parse", "refs/roll-retained/dispatch-stop/dispatch-stop.children-docs"], { cwd: root, encoding: "utf8" }).trim()).toBe(childHead);
+    expect(readLeases(join(root, ".roll", "loop", "leases"))["FIX-1498"]).toBeUndefined();
+    const events = readFileSync(join(root, ".roll", "loop", "events.ndjson"), "utf8");
+    expect(events.indexOf('"type":"worktree:release_requested"')).toBeLessThan(events.indexOf('"type":"worktree:released"'));
+    expect(events).toContain('"note":"scope was incomplete"');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps the request and lease after a partial removal, then accepts only the identical frozen retry", async () => {
+    const root = project();
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Roll Test"], { cwd: root });
+    writeFileSync(join(root, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "base"], { cwd: root, stdio: "ignore" });
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    const repositoryId = (await projectIdentity(root)).slug;
+    const worktrees = join(root, ".roll", "loop", "worktrees");
+    const parent = join(worktrees, "dispatch-stop-retry");
+    const child = join(worktrees, "dispatch-stop-retry.children", "docs");
+    execFileSync("git", ["worktree", "add", "--detach", parent, base], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "--detach", child, base], { cwd: root, stdio: "ignore" });
+    mkdirSync(join(child, "docs"), { recursive: true });
+    writeFileSync(join(child, "docs", "abandoned.md"), "retained\n");
+    execFileSync("git", ["add", "."], { cwd: child });
+    execFileSync("git", ["commit", "-m", "abandoned child work"], { cwd: child, stdio: "ignore" });
+    const workspace = {
+      schema: 1 as const, runId: "dispatch-stop-retry", storyId: "FIX-1498", kind: "skill_dispatch" as const, topology: "solo" as const,
+      members: [
+        { repositoryId, workspaceKey: "dispatch-stop-retry", relativeLocator: "dispatch-stop-retry", checkoutRef: { kind: "detached" as const, head: base } },
+        { repositoryId, workspaceKey: "dispatch-stop-retry", relativeLocator: "dispatch-stop-retry.children/docs", actionId: "docs", declaredFileScope: ["docs"], checkoutRef: { kind: "detached" as const, head: base } },
+      ] as const,
+    };
+    new EventBus().appendEvent(join(root, ".roll", "loop", "events.ndjson"), { type: "worktree:allocated", workspace, operationId: "dispatch-stop-retry:allocate", ts: 1 });
+    claimStoryLease(join(root, ".roll", "loop", "leases"), "FIX-1498", { source: "skill-dispatch", runId: "dispatch-stop-retry", claimedAt: 1 });
+    let calls = 0;
+    const release = vi.fn(async (...args: Parameters<typeof managedWorktreeRelease>) => {
+      calls += 1;
+      return calls === 2 ? { code: 1, reason: "injected" } : managedWorktreeRelease(...args);
+    });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop-retry", "scope was incomplete", "FIX-1498", root, { release })).resolves.toEqual({ ok: false, reason: "release_incomplete" });
+    expect(existsSync(child)).toBe(false);
+    expect(existsSync(parent)).toBe(true);
+    expect(readLeases(join(root, ".roll", "loop", "leases"))["FIX-1498"]).toMatchObject({ runId: "dispatch-stop-retry" });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop-retry", "changed reason", "FIX-1498", root)).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+    advance(parent, "survivor-moved.md");
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop-retry", "scope was incomplete", "FIX-1498", root)).resolves.toEqual({ ok: false, reason: "conflicting_release_request" });
+    expect(existsSync(parent)).toBe(true);
+    expect(readLeases(join(root, ".roll", "loop", "leases"))["FIX-1498"]).toMatchObject({ runId: "dispatch-stop-retry" });
+    execFileSync("git", ["reset", "--hard", "HEAD~1"], { cwd: parent, stdio: "ignore" });
+    await expect(stopSkillDispatchRun(root, "FIX-1498", "dispatch-stop-retry", "scope was incomplete", "FIX-1498", root)).resolves.toMatchObject({ ok: true });
+    expect(existsSync(parent)).toBe(false);
+    expect(readLeases(join(root, ".roll", "loop", "leases"))["FIX-1498"]).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("uses the shared atomic Story lease and persists parent plus children in one workspace event", async () => {
     const root = project();
     const fake = allocator(root);

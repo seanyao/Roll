@@ -9,7 +9,7 @@ import {
   type SkillDispatchActionInput,
 } from "@roll/core";
 import { MANAGED_WORKSPACE_SCHEMA, normalizeManagedWorkspaceSet, type ManagedWorkspaceSet } from "@roll/spec";
-import { git, inspectManagedWorktree, projectIdentity, resolveIntegrationBranch, worktreeAdd } from "@roll/infra";
+import { git, inspectManagedWorktree, managedWorktreeAbsent, managedWorktreeRelease, managedWorktreeRemoteContainment, projectIdentity, resolveIntegrationBranch, retainManagedWorktreeHead, worktreeAdd } from "@roll/infra";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -85,7 +85,7 @@ function appendRecovery(
   }
 }
 
-type LifecycleRecord = { readonly type?: unknown; readonly workspace?: ManagedWorkspaceSet; readonly operationId?: unknown; readonly runId?: unknown; readonly expectedHeads?: unknown };
+type LifecycleRecord = { readonly type?: unknown; readonly workspace?: ManagedWorkspaceSet; readonly operationId?: unknown; readonly runId?: unknown; readonly expectedHeads?: unknown; readonly reason?: unknown; readonly note?: unknown };
 
 function lifecycleEvents(path: string): LifecycleRecord[] {
   try {
@@ -440,6 +440,205 @@ export function releaseSkillDispatchReservation(
     runId,
   });
   return released ? { ok: true } : { ok: false, reason: "reservation_release_refused" };
+}
+
+export type SkillDispatchStopRefusal =
+  | "parent_required"
+  | "execution_inside_workspace"
+  | "missing_reason"
+  | "confirmation_mismatch"
+  | "workspace_unknown"
+  | "conflicting_release_request"
+  | "reservation_held_by_other"
+  | "workspace_unavailable"
+  | "workspace_identity_mismatch"
+  | "workspace_dirty"
+  | "merged_or_unverifiable"
+  | "published_or_unverifiable"
+  | "retention_ref_refused"
+  | "release_incomplete"
+  | "reservation_release_refused";
+
+export type SkillDispatchStopResult =
+  | { readonly ok: true; readonly stopped: boolean; readonly retained: readonly { readonly relativeLocator: string; readonly head: string; readonly ref: string }[] }
+  | { readonly ok: false; readonly reason: SkillDispatchStopRefusal };
+
+export interface SkillDispatchStopDeps {
+  readonly now?: () => number;
+  readonly inspect?: (repoCwd: string, path: string) => ReturnType<typeof inspectManagedWorktree>;
+  readonly absent?: (repoCwd: string, path: string) => ReturnType<typeof managedWorktreeAbsent>;
+  readonly release?: (repoCwd: string, path: string, expectedHead: string, repositoryId: string) => ReturnType<typeof managedWorktreeRelease>;
+  readonly retain?: (repoCwd: string, runId: string, relativeLocator: string, head: string) => ReturnType<typeof retainManagedWorktreeHead>;
+  readonly remoteContains?: (repoCwd: string, head: string) => ReturnType<typeof managedWorktreeRemoteContainment>;
+  readonly append?: (eventsPath: string, event: Parameters<EventBus["appendEvent"]>[1]) => void;
+}
+
+function cwdInsideAnyWorkspaceMember(cwd: string, paths: Readonly<Record<string, string>>): boolean {
+  let resolved: string;
+  try { resolved = realpathSync(cwd); } catch { return true; }
+  return Object.values(paths).some((path) => resolved === path || resolved.startsWith(`${path}${sep}`));
+}
+
+function stopRequest(
+  events: readonly LifecycleRecord[],
+  runId: string,
+  operationId: string,
+  workspace: ManagedWorkspaceSet,
+): { readonly heads: readonly { readonly relativeLocator: string; readonly head: string }[]; readonly note: string; readonly completed: boolean } | "conflict" | undefined {
+  let request: { readonly heads: readonly { readonly relativeLocator: string; readonly head: string }[]; readonly note: string } | undefined;
+  let completed = false;
+  for (const record of events) {
+    if (record.runId !== runId || record.type !== "worktree:release_requested") continue;
+    if (record.operationId !== operationId) {
+      if (record.reason !== "builder_validation") return "conflict";
+      continue;
+    }
+    if (!isCompleteExpectedHeadSet(record.expectedHeads, workspace) || typeof record.note !== "string") return "conflict";
+    if (request !== undefined && (!sameExpectedHeadSet(request.heads, record.expectedHeads) || request.note !== record.note)) return "conflict";
+    request = { heads: record.expectedHeads, note: record.note };
+  }
+  if (request === undefined) return undefined;
+  for (const record of events) {
+    if (record.runId !== runId || record.operationId !== operationId || record.type !== "worktree:released") continue;
+    if (!isCompleteExpectedHeadSet(record.expectedHeads, workspace) || !sameExpectedHeadSet(request.heads, record.expectedHeads)) return "conflict";
+    completed = true;
+  }
+  return { ...request, completed };
+}
+
+function candidateCommits(repoCwd: string, base: string, head: string): readonly string[] | undefined {
+  try {
+    const commits = execFileSync("git", ["-C", repoCwd, "rev-list", "--reverse", `${base}..${head}`], { encoding: "utf8" })
+      .trim().split("\n").filter((value) => value !== "");
+    for (const commit of commits) {
+      const parents = execFileSync("git", ["-C", repoCwd, "rev-list", "--parents", "-n", "1", commit], { encoding: "utf8" }).trim().split(/\s+/);
+      if (parents.length !== 2) return undefined;
+    }
+    return commits;
+  } catch { return undefined; }
+}
+
+async function unmergedFromParent(parentPath: string, memberPath: string, base: string, head: string): Promise<boolean> {
+  const commits = candidateCommits(memberPath, base, head);
+  if (commits === undefined) return false;
+  let parentHead: string;
+  try { parentHead = execFileSync("git", ["-C", parentPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); } catch { return false; }
+  for (const commit of commits) {
+    try {
+      execFileSync("git", ["-C", parentPath, "merge-base", "--is-ancestor", commit, parentHead], { stdio: "ignore" });
+      return false;
+    } catch { /* candidate is not literally on the parent line */ }
+    try {
+      const cherry = execFileSync("git", ["-C", parentPath, "cherry", parentHead, commit], { encoding: "utf8" }).trim();
+      if (!cherry.startsWith(`+ ${commit}`)) return false;
+    } catch { return false; }
+  }
+  return true;
+}
+
+/**
+ * Parent-control-plane entry for abandoning a clean, unmerged and unpublished
+ * Skill dispatch. It deliberately reuses the lifecycle release pair and the
+ * managed infra remover; a durable request is also the sole retry identity.
+ */
+export async function stopSkillDispatchRun(
+  projectRoot: string,
+  storyId: string,
+  runId: string,
+  reason: string,
+  confirm: string,
+  executionCwd: string,
+  deps: SkillDispatchStopDeps = {},
+): Promise<SkillDispatchStopResult> {
+  if (skillDispatchActorForCwd(executionCwd) === "child") return { ok: false, reason: "parent_required" };
+  if (reason.trim() === "") return { ok: false, reason: "missing_reason" };
+  if (confirm !== storyId) return { ok: false, reason: "confirmation_mismatch" };
+  const root = realpathSync(projectRoot);
+  const eventsPath = join(root, ".roll", "loop", "events.ndjson");
+  const events = lifecycleEvents(eventsPath);
+  const workspace = allocatedDispatch(eventsPath, storyId, runId);
+  if (workspace === undefined) return { ok: false, reason: "workspace_unknown" };
+  const canonicalRoot = join(root, ".roll", "loop", "worktrees");
+  const paths = workspacePaths(canonicalRoot, workspace);
+  if (cwdInsideAnyWorkspaceMember(executionCwd, paths)) return { ok: false, reason: "execution_inside_workspace" };
+  const operationId = `${runId}:stop`;
+  const existing = stopRequest(events, runId, operationId, workspace);
+  if (existing === "conflict" || (existing !== undefined && existing.note !== reason)) return { ok: false, reason: "conflicting_release_request" };
+  const lease = readLeases(join(root, ".roll", "loop", "leases"))[storyId];
+  if (lease !== undefined && (lease.source !== "skill-dispatch" || lease.runId !== runId)) return { ok: false, reason: "reservation_held_by_other" };
+
+  const inspect = deps.inspect ?? inspectManagedWorktree;
+  const absent = deps.absent ?? managedWorktreeAbsent;
+  const release = deps.release ?? managedWorktreeRelease;
+  const retain = deps.retain ?? retainManagedWorktreeHead;
+  const remoteContains = deps.remoteContains ?? managedWorktreeRemoteContainment;
+  const ordered = [...workspace.members].sort((left, right) => right.relativeLocator.length - left.relativeLocator.length);
+  const expectedHeads = existing?.heads ?? [];
+  const frozen = new Map(expectedHeads.map((item) => [item.relativeLocator, item.head]));
+  if (workspace.members[0] === undefined) return { ok: false, reason: "workspace_unknown" };
+
+  // Admission is all read-only. A fresh request freezes real advanced heads;
+  // retry admits only the original set and accepts already-removed members.
+  for (const member of ordered) {
+    const path = paths[member.relativeLocator]!;
+    if (existing !== undefined && await absent(root, path)) continue;
+    const observed = await inspect(root, path);
+    if (observed === undefined) return { ok: false, reason: "workspace_unavailable" };
+    if (!observed.registered || observed.repositoryId !== member.repositoryId) return { ok: false, reason: "workspace_identity_mismatch" };
+    if (!observed.clean) return { ok: false, reason: "workspace_dirty" };
+    if (existing !== undefined) {
+      if (frozen.get(member.relativeLocator) !== observed.head) return { ok: false, reason: "conflicting_release_request" };
+      continue;
+    }
+    frozen.set(member.relativeLocator, observed.head);
+  }
+  if (existing === undefined) {
+    for (const member of ordered) {
+      const head = frozen.get(member.relativeLocator);
+      const path = paths[member.relativeLocator]!;
+      // Compare every allocated member with the control-plane checkout. The
+      // managed parent can itself contain abandoned work, so using its own
+      // advanced HEAD would falsely classify that work as already integrated.
+      if (head === undefined || !await unmergedFromParent(root, path, member.checkoutRef.head, head)) return { ok: false, reason: "merged_or_unverifiable" };
+      if (head !== member.checkoutRef.head) {
+        const contained = await remoteContains(path, head);
+        if (contained === undefined || contained.length > 0) return { ok: false, reason: "published_or_unverifiable" };
+      }
+    }
+  }
+  const heads = workspace.members.map((member) => ({ relativeLocator: member.relativeLocator, head: frozen.get(member.relativeLocator)! }));
+  if (heads.some((head) => head.head === undefined)) return { ok: false, reason: "workspace_unavailable" };
+  if (existing === undefined) {
+    try {
+      (deps.append ?? ((path, event) => new EventBus().appendEvent(path, event)))(eventsPath, {
+        type: "worktree:release_requested", runId, reason: "abandoned", note: reason, operationId, expectedHeads: heads, ts: deps.now?.() ?? Date.now(),
+      });
+    } catch { return { ok: false, reason: "release_incomplete" }; }
+  }
+  const retained: { relativeLocator: string; head: string; ref: string }[] = [];
+  for (const member of ordered) {
+    const path = paths[member.relativeLocator]!;
+    const head = frozen.get(member.relativeLocator)!;
+    if (await absent(root, path)) {
+      retained.push({ relativeLocator: member.relativeLocator, head, ref: `refs/roll-retained/${runId}/${member.relativeLocator.replace(/[^A-Za-z0-9._-]/g, "-")}` });
+      continue;
+    }
+    const retainedHead = await retain(path, runId, member.relativeLocator, head);
+    if (!retainedHead.ok) return { ok: false, reason: "retention_ref_refused" };
+    retained.push({ relativeLocator: member.relativeLocator, head, ref: retainedHead.ref });
+    if ((await release(root, path, head, member.repositoryId)).code !== 0) return { ok: false, reason: "release_incomplete" };
+  }
+  if (!existing?.completed) {
+    try {
+      (deps.append ?? ((path, event) => new EventBus().appendEvent(path, event)))(eventsPath, {
+        type: "worktree:released", runId, operationId, expectedHeads: heads, ts: deps.now?.() ?? Date.now(),
+      });
+    } catch { return { ok: false, reason: "release_incomplete" }; }
+  }
+  if (lease !== undefined && !releaseStoryLease(join(root, ".roll", "loop", "leases"), storyId, { source: "skill-dispatch", runId })) {
+    return { ok: false, reason: "reservation_release_refused" };
+  }
+  return { ok: true, stopped: true, retained };
 }
 
 /** A pure boundary used by the parent integration command and tests. */

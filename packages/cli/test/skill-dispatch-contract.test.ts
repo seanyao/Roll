@@ -9,10 +9,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const activeContracts = [
   "skills/roll-build/references/full-contract.md",
   "skills/roll-fix/references/full-contract.md",
+  "skills/roll-delta-team/SKILL.md",
 ];
 
 describe("US-LOOP-127 — active Skill dispatch contracts", () => {
-  it("requires the parent-owned allocate, scoped integrate, and paired release workflow", () => {
+  it("requires the parent-owned allocate, scoped integrate, paired release, and safe stop workflow", () => {
     const text = activeContracts.map((path) => readFileSync(resolve(repoRoot, path), "utf8")).join("\n");
 
     expect(text).not.toMatch(/git worktree add (?:\.worktrees|\.\.\/wt-)/);
@@ -22,6 +23,9 @@ describe("US-LOOP-127 — active Skill dispatch contracts", () => {
     expect(text).toContain("roll worktree dispatch allocate");
     expect(text).toContain("roll worktree dispatch integrate");
     expect(text).toContain("roll worktree dispatch release");
+    expect(text).toContain("roll worktree dispatch stop");
+    expect(text).toMatch(/incomplete declared\s+file scope/);
+    expect(text).toContain("new run ID");
     expect(text).toMatch(/never raw `git\s+cherry-pick`|Raw `git\s+cherry-pick`.*forbidden/);
   });
 });

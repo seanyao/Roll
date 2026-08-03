@@ -82,8 +82,10 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
     "dispatch": "Usage: roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>
        roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>
        roll worktree dispatch release <story-id> <dispatch-run-id>
+       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <text> --confirm <story-id> [--json]
   Allocate one parent Skill DeliveryRun and detached child workspaces below .roll/loop/worktrees.
-  <json> is an array of { actionId, declaredFileScope }. Only the parent run may publish, attest, close, or release.
+  <json> is an array of { actionId, declaredFileScope }. Only the parent run may publish, attest, close, release, or stop.
+  stop only abandons a clean, unmerged, unpublished run; its branches and retained commits stay available for audit.
 ",
     "supervisor": "Usage: roll supervisor [status|observe|advise|next|why|live|journal|health|route|repair-evidence] [--json]
   status           observe + advise summary (alias for no subcommand)
@@ -172,8 +174,10 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
     "dispatch": "用法：roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>
        roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>
        roll worktree dispatch release <story-id> <dispatch-run-id>
+       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <原因> --confirm <story-id> [--json]
   分配一个由父 Skill DeliveryRun 持有、位于 .roll/loop/worktrees 下的受管 WorkspaceSet。
-  <json> 为 { actionId, declaredFileScope } 数组；只有父运行可发布、验收、关闭或释放。
+  <json> 为 { actionId, declaredFileScope } 数组；只有父运行可发布、验收、关闭、释放或停止。
+  stop 只会停止干净、未合入、未发布的运行；分支和保留提交会留下供核对。
 ",
     "supervisor": "用法：roll supervisor [status|observe|advise|next|why|live|journal|health|route|repair-evidence] [--json]
   status           observe + advise 摘要（无子命令的别名）

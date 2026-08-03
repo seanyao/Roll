@@ -448,6 +448,31 @@ export async function managedWorktreeAbsent(repoCwd: string, path: string): Prom
 }
 
 /**
+ * Pin abandoned work before its managed checkout is removed. A pre-existing
+ * matching ref is a crash-retry no-op; a different ref is never overwritten.
+ */
+export async function retainManagedWorktreeHead(
+  repoCwd: string,
+  runId: string,
+  relativeLocator: string,
+  head: string,
+): Promise<{ readonly ok: true; readonly ref: string } | { readonly ok: false }> {
+  const safeLocator = relativeLocator.replace(/[^A-Za-z0-9._-]/g, "-");
+  const ref = `refs/roll-retained/${runId}/${safeLocator}`;
+  const existing = await git(["rev-parse", "--verify", ref], repoCwd);
+  if (existing.code === 0) return existing.stdout.trim() === head ? { ok: true, ref } : { ok: false };
+  const created = await git(["update-ref", ref, head], repoCwd);
+  return created.code === 0 ? { ok: true, ref } : { ok: false };
+}
+
+/** Returns undefined when remote containment cannot be established. */
+export async function managedWorktreeRemoteContainment(repoCwd: string, head: string): Promise<readonly string[] | undefined> {
+  const result = await git(["branch", "-r", "--contains", head], repoCwd);
+  if (result.code !== 0) return undefined;
+  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+}
+
+/**
  * Mirror `_worktree_fetch_origin branch` (bin/roll 12791-12798).
  * `git fetch origin <branch> --quiet`. LENIENT: returns 0 even on failure (a
  * missing remote / network blip must not derail the loop). The `fetched` flag

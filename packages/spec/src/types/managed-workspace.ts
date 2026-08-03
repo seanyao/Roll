@@ -85,7 +85,7 @@ export type WorktreeLifecycleEvent =
    * Builder artifact is accepted, so a committed detached checkout remains
    * recoverable without pretending that delivery has already happened.
    */
-  | { readonly type: "worktree:release_requested"; readonly runId: string; readonly reason: "delivered" | "abandoned" | "blocked" | "builder_validation"; readonly operationId: string; readonly expectedHeads: ReadonlyArray<{ readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly head: string }>; readonly ts: number }
+  | { readonly type: "worktree:release_requested"; readonly runId: string; readonly reason: "delivered" | "abandoned" | "blocked" | "builder_validation"; readonly operationId: string; readonly expectedHeads: ReadonlyArray<{ readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly head: string }>; /** Human-supplied recovery context; optional for legacy records. */ readonly note?: string; readonly ts: number }
   | { readonly type: "worktree:released"; readonly runId: string; readonly operationId: string; readonly expectedHeads: ReadonlyArray<{ readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly head: string }>; readonly ts: number }
   | { readonly type: "worktree:recovery_required"; readonly runId: string; readonly relativeLocator: ManagedWorkspaceMemberLocator; readonly reason: string; /** Carries the exact allocation identity when the allocation event could not be appended. */ readonly workspace?: ManagedWorkspaceSet; readonly operationId?: string; readonly ts: number };
 
