@@ -5557,6 +5557,87 @@ describe("US-LOOP-110 — prepare refuses a resolution template with a non-live 
   });
 });
 
+describe("FIX-1496 — prepare validates resolution template roles before allocation", () => {
+  const baseRoles = () => [
+    { role: "designer", roleInstanceId: "ri-designer", hostId: "host", modelId: "model", source: "user-pin", reasons: ["test"] },
+    { role: "builder", roleInstanceId: "ri-builder", hostId: "host", modelId: "model", source: "preset-preference", reasons: ["test"] },
+    { role: "evaluator", roleInstanceId: "ri-evaluator", hostId: "host", modelId: "model", source: "availability-fallback", reasons: ["test"] },
+  ];
+
+  async function prepareWithRoles(storyId: string, roles: unknown, json = true) {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const resolutionPath = writeResolutionTemplate(dir, storyId, "local-preset");
+    const template = JSON.parse(readFileSync(resolutionPath, "utf8")) as Record<string, unknown>;
+    template.roles = roles;
+    writeFileSync(resolutionPath, JSON.stringify(template), "utf8");
+    const inputBefore = readFileSync(resolutionPath, "utf8");
+    const result = await tsRunCwd([
+      "prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resolutionPath,
+      ...(json ? ["--json"] : []),
+    ], dir);
+    return { dir, resolutionPath, inputBefore, result };
+  }
+
+  it.each([
+    ["an unknown role", () => [{ ...baseRoles()[0], role: "designr" }], "roles[0].role", "designr"],
+    ["a missing role", () => [{ ...baseRoles()[0], role: undefined }], "roles[0].role", "undefined"],
+    ["an empty roleInstanceId", () => [{ ...baseRoles()[0], roleInstanceId: "" }], "roles[0].roleInstanceId", "\"\""],
+    ["a missing hostId", () => [{ ...baseRoles()[0], hostId: undefined }], "roles[0].hostId", "undefined"],
+    ["a whitespace modelId", () => [{ ...baseRoles()[0], modelId: "   " }], "roles[0].modelId", "\"   \""],
+    ["an unknown source", () => [{ ...baseRoles()[0], source: "auto" }], "roles[0].source", "auto"],
+    ["a non-array reasons value", () => [{ ...baseRoles()[0], reasons: "not-an-array" }], "roles[0].reasons", "string"],
+    ["a non-string reason", () => [{ ...baseRoles()[0], reasons: ["ok", 42] }], "roles[0].reasons", "number"],
+    ["a non-array roles value", () => ({ designer: baseRoles()[0] }), "roles", "object"],
+  ])("rejects %s without persistent side effects", async (_case, rolesFactory, field, received) => {
+    const storyId = `FIX-1496-${randomUUID()}`;
+    const { dir, resolutionPath, inputBefore, result } = await prepareWithRoles(storyId, rolesFactory());
+    expect(result.code).toBe(1);
+    const error = parseStderrJsonTail(result.stderr);
+    expect(error).toMatchObject({ ok: false, error: "invalid_value" });
+    expect(error.detail).toContain(field);
+    expect(error.detail).toContain(received);
+    expect(readFileSync(resolutionPath, "utf8")).toBe(inputBefore);
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(readLeases(storyLeasesPath(dir))[storyId]).toBeUndefined();
+    expect(readdirSync(join(dir, ".roll", "features", "delta-team", storyId)).filter((entry) => entry.startsWith("delta-"))).toEqual([]);
+  });
+
+  it("rejects duplicate roles before allocation", async () => {
+    const roles = baseRoles();
+    roles.push({ ...roles[1]!, roleInstanceId: "ri-builder-duplicate" });
+    const storyId = `FIX-1496-DUP-${randomUUID()}`;
+    const { dir, result } = await prepareWithRoles(storyId, roles);
+    expect(result.code).toBe(1);
+    const error = parseStderrJsonTail(result.stderr);
+    expect(error).toMatchObject({ ok: false, error: "invalid_value" });
+    expect(error.detail).toContain('role "builder" twice');
+    expect(error.detail).toContain("roles[1]");
+    expect(error.detail).toContain("roles[3]");
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(readLeases(storyLeasesPath(dir))[storyId]).toBeUndefined();
+    expect(readdirSync(join(dir, ".roll", "features", "delta-team", storyId)).filter((entry) => entry.startsWith("delta-"))).toEqual([]);
+  });
+
+  it("reports the same invalid entry clearly in plain output", async () => {
+    const { result } = await prepareWithRoles(`FIX-1496-PLAIN-${randomUUID()}`, [{ ...baseRoles()[0], source: "auto" }], false);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("roles[0].source");
+    expect(result.stderr).toContain("auto");
+  });
+
+  it("preserves the current successful preparation behavior for valid roles", async () => {
+    const storyId = `FIX-1496-VALID-${randomUUID()}`;
+    const roles = baseRoles();
+    const { dir, result } = await prepareWithRoles(storyId, roles);
+    expect(result.code).toBe(0);
+    const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const resolved = events.filter((event) => event.type === "delta:role_resolved");
+    expect(resolved).toHaveLength(3);
+    expect(resolved.map((event) => ({ role: event.role, roleInstanceId: event.roleInstanceId, hostId: event.hostId, modelId: event.modelId, source: event.source, reasons: event.reasons }))).toEqual(roles);
+  });
+});
+
 
 // ── FIX-1502 — prepare --continuation-run picks up a redelegated task ─────────
 

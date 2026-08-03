@@ -122,7 +122,8 @@ export type DeltaRole = (typeof DELTA_ROLES)[number];
 
 // ── Model resolution (host-neutral contract) ─────────────────────────────────
 
-export type ResolutionSource = "user-pin" | "preset-preference" | "availability-fallback";
+export const RESOLUTION_SOURCES = ["user-pin", "preset-preference", "availability-fallback"] as const;
+export type ResolutionSource = (typeof RESOLUTION_SOURCES)[number];
 
 /** Opaque host model descriptor — Roll never queries a host. */
 export interface HostModelDescriptor {

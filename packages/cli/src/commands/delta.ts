@@ -12,6 +12,7 @@ import {
   DELIVERY_TOPOLOGIES,
   QUALITY_PROFILES,
   DELTA_ROLES,
+  RESOLUTION_SOURCES,
   DELTA_BLOCK_REASONS,
   type DelegationTrigger,
   type DeliveryTopology,
@@ -180,6 +181,65 @@ function checkEnumFlag(flags: Record<string, string | true>, key: string, allowe
     return T("delta.error.invalid_value", String(v), `--${key}`, allowed.join("|"));
   }
   return undefined;
+}
+
+function receivedValue(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? String(value) : serialized;
+}
+
+function receivedType(value: unknown): string {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value;
+}
+
+/** Returns a rejection reason, or null when every supplied template role is admissible. */
+function validateTemplateRoles(roles: unknown): string | null {
+  if (roles === undefined) return null;
+  if (!Array.isArray(roles)) {
+    return `Resolution template roles must be an array (received ${receivedType(roles)})`;
+  }
+
+  const seenRoles = new Map<string, number>();
+  for (const [index, candidate] of roles.entries()) {
+    const location = `roles[${index}]`;
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      return `Resolution template ${location} must be a non-null object (received ${receivedType(candidate)})`;
+    }
+    const roleRecord = candidate as Record<string, unknown>;
+    const role = roleRecord.role;
+    if (typeof role !== "string" || !(DELTA_ROLES as readonly string[]).includes(role)) {
+      return `Resolution template ${location}.role ${receivedValue(role)} is not a valid Delta role (${DELTA_ROLES.join("|")})`;
+    }
+
+    const roleLocation = `${location}`;
+    for (const field of ["roleInstanceId", "hostId", "modelId"] as const) {
+      const value = roleRecord[field];
+      if (typeof value !== "string" || value.trim() === "") {
+        return `Resolution template ${roleLocation}.${field} must be a non-empty string for role ${JSON.stringify(role)} (received ${receivedValue(value)})`;
+      }
+    }
+    const source = roleRecord.source;
+    if (typeof source !== "string" || !(RESOLUTION_SOURCES as readonly string[]).includes(source)) {
+      return `Resolution template ${roleLocation}.source ${receivedValue(source)} is not a valid resolution source for role ${JSON.stringify(role)} (${RESOLUTION_SOURCES.join("|")})`;
+    }
+    const reasons = roleRecord.reasons;
+    if (!Array.isArray(reasons)) {
+      return `Resolution template ${roleLocation}.reasons must be an array of strings for role ${JSON.stringify(role)} (received ${receivedType(reasons)})`;
+    }
+    const invalidReasonIndex = reasons.findIndex((reason) => typeof reason !== "string");
+    if (invalidReasonIndex !== -1) {
+      return `Resolution template ${roleLocation}.reasons must be an array of strings for role ${JSON.stringify(role)} (received ${receivedType(reasons[invalidReasonIndex])} at index ${invalidReasonIndex})`;
+    }
+
+    const firstIndex = seenRoles.get(role);
+    if (firstIndex !== undefined) {
+      return `Resolution template declares role ${JSON.stringify(role)} twice (roles[${firstIndex}], ${location})`;
+    }
+    seenRoles.set(role, index);
+  }
+  return null;
 }
 
 // ── Subcommand routing ────────────────────────────────────────────────────────
@@ -366,6 +426,16 @@ async function prepareCommand(args: string[]): Promise<number> {
       }
       return 1;
     }
+  }
+
+  const templateRolesErr = validateTemplateRoles(templateRecord.roles);
+  if (templateRolesErr) {
+    if (json) {
+      process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail: templateRolesErr }) + "\n");
+    } else {
+      process.stderr.write(`${templateRolesErr}\n`);
+    }
+    return 1;
   }
 
   const hostPresetSha256 = templateRecord.presetSha256 as string | undefined;
