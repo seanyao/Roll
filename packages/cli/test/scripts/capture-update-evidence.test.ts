@@ -75,6 +75,7 @@ describe("US-BROW-010 terminal evidence capture", () => {
   it("captures update --apply --confirm success output", async () => {
     const c = capture();
     const vs: VersionSource = () => "1.6.0";
+    let probeRan = false;
     const code = await browserCommand(["update", "--apply", "--confirm"], {
       configPath: () => "/tmp/roll-test/browser-operations.yaml",
       readFile: () => pinnedCfg,
@@ -83,9 +84,16 @@ describe("US-BROW-010 terminal evidence capture", () => {
       versionSource: vs,
       smokeCheck: async () => true,
       readiness: () => headlessReadiness(),
+      // Evidence capture is deliberately headless. Keep the update path real
+      // while supplying the successful MCP probe result that CI cannot reach.
+      runProbe: async () => {
+        probeRan = true;
+        return { kind: "passed" as const, version: "1.6.0", tools: ["chrome_devtools_call"] };
+      },
       stdout: c.stdout,
     });
     expect(code).toBe(0);
+    expect(probeRan).toBe(true);
     writeFileSync(join(EVIDENCE_DIR, "cmd-update-apply-success.txt"), c.read());
   });
 
