@@ -73,6 +73,9 @@ export type RollEvent =
   | { type: "cycle:phase"; cycleId: string; phase: CyclePhase; ts: number }
   | { type: "cycle:stdout"; cycleId: string; data: string; ts: number }
   | { type: "cycle:tcr"; cycleId: string; commitHash: string; message: string; ts: number; commitTs?: number }
+  // US-DELTA-011 — precise TCR round + test-proof timing observations
+  // (versioned variants declared at the bottom of this file).
+  | TcrObservationEvent
   | { type: "cycle:first_edit"; cycleId: string; commitHash: string; ts: number }
   // US-OBS-042 — observable TCR micro-step rhythm. These are advisory
   // supervisor/evaluator facts: they make rhythm visible and reviewable, but
@@ -902,4 +905,103 @@ export function parseEventLine(line: string): RollEvent | null {
   // clock need the ms contract — they call `eventTsMs` at that comparison.
   if (typeof rec["type"] !== "string" || typeof rec["ts"] !== "number") return null;
   return obj as RollEvent;
+}
+
+// ── US-DELTA-011 — versioned TCR observation variants ────────────────────────
+// Contract: delta-delivery-metrics-design.md §Contract schema. Every row is a
+// discriminated RollEvent variant with `storyId`, optional `delegationId`,
+// `ts`, and a stable schema version (`v: 1`). Values that could reveal command
+// output are a content digest (`outputSha256`), never raw output.
+
+/** A Builder TCR round began (the test gate started for one story round). */
+export interface TcrRoundStartedEvent {
+  type: "tcr:round_started";
+  v: 1;
+  storyId: string;
+  delegationId?: string;
+  roundId: string;
+  role: "builder";
+  hostId: string;
+  modelId: string;
+  headSha: string;
+  ts: number;
+}
+
+/** The round's test run finished — carries the digest of the output, never the output. */
+export interface TcrTestFinishedEvent {
+  type: "tcr:test_finished";
+  v: 1;
+  storyId: string;
+  delegationId?: string;
+  roundId: string;
+  command: string;
+  affectedScope: string;
+  exitCode: number;
+  wallMs: number;
+  outputSha256: string;
+  ts: number;
+}
+
+/** The round's commit landed; `proofAgeMs` is test-completion → commit at the boundary. */
+export interface TcrCommittedEvent {
+  type: "tcr:committed";
+  v: 1;
+  storyId: string;
+  delegationId?: string;
+  roundId: string;
+  commitSha: string;
+  proofAgeMs: number;
+  ts: number;
+}
+
+export type TcrObservationEvent =
+  | TcrRoundStartedEvent
+  | TcrTestFinishedEvent
+  | TcrCommittedEvent;
+
+export const TCR_OBSERVATION_TYPES = [
+  "tcr:round_started",
+  "tcr:test_finished",
+  "tcr:committed",
+] as const;
+
+/**
+ * Strict runtime parse of a `tcr:*` observation row: every required field must
+ * be present with the right type and `v` must be the live schema version.
+ * Returns null for anything else — readers skip invalid rows loudly (with a
+ * diagnostic), never coerce them into facts.
+ */
+export function parseTcrObservationEvent(value: unknown): TcrObservationEvent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  // This v1 schema permits an output digest only. Reject common raw-output
+  // fields rather than accepting a row that could leak test content into the
+  // durable event ledger.
+  if ("output" in r || "stdout" in r || "stderr" in r || "rawOutput" in r) return null;
+  if (r["v"] !== 1) return null;
+  if (typeof r["storyId"] !== "string" || r["storyId"] === "") return null;
+  if (r["delegationId"] !== undefined && typeof r["delegationId"] !== "string") return null;
+  if (typeof r["roundId"] !== "string" || r["roundId"] === "") return null;
+  if (typeof r["ts"] !== "number" || !Number.isFinite(r["ts"])) return null;
+  switch (r["type"]) {
+    case "tcr:round_started":
+      if (r["role"] !== "builder") return null;
+      if (typeof r["hostId"] !== "string" || r["hostId"] === "") return null;
+      if (typeof r["modelId"] !== "string" || r["modelId"] === "") return null;
+      if (typeof r["headSha"] !== "string" || r["headSha"] === "") return null;
+      return value as TcrRoundStartedEvent;
+    case "tcr:test_finished":
+      if (typeof r["command"] !== "string" || r["command"] === "") return null;
+      if (typeof r["affectedScope"] !== "string" || r["affectedScope"] === "") return null;
+      if (typeof r["exitCode"] !== "number" || !Number.isFinite(r["exitCode"])) return null;
+      if (typeof r["wallMs"] !== "number" || !Number.isFinite(r["wallMs"]) || r["wallMs"] < 0) return null;
+      if (typeof r["outputSha256"] !== "string" || !/^[a-f0-9]{64}$/.test(r["outputSha256"])) return null;
+      return value as TcrTestFinishedEvent;
+    case "tcr:committed":
+      if (typeof r["commitSha"] !== "string" || r["commitSha"] === "") return null;
+      if (typeof r["proofAgeMs"] !== "number" || !Number.isFinite(r["proofAgeMs"])) return null;
+      return value as TcrCommittedEvent;
+    default:
+      return null;
+  }
 }

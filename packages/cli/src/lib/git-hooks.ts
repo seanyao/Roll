@@ -35,6 +35,10 @@ const HOOK_DESCRIPTIONS: Record<string, { en: string; zh: string }> = {
     en: "local CI gate before push",
     zh: "push 前本地 CI 闸",
   },
+  "post-commit": {
+    en: "append tcr:committed observation fact",
+    zh: "追加 tcr:committed 观测事实",
+  },
   "commit-msg": {
     en: "commit message validation",
     zh: "提交信息校验",
