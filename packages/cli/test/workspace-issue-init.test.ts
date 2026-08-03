@@ -231,18 +231,28 @@ describe("US-WS-008 roll workspace issue init", () => {
   it("creates the exact requested Issue id instead of forcing auto allocation", async () => {
     const f = fixture();
     await initWorkspace(f);
+    const sotSource = join(f.home, "sot-source");
+    git(sotSource, ["checkout", "-q", "-b", "hotfix-base"]);
+    writeFileSync(join(sotSource, "README.md"), "hotfix base\n", "utf8");
+    git(sotSource, ["add", "README.md"]);
+    git(sotSource, ["commit", "-q", "-m", "hotfix base"]);
+    const baseSha = git(sotSource, ["rev-parse", "HEAD"]);
+    git(sotSource, ["push", "-q", `file://${join(f.home, "sot.git")}`, "hotfix-base"]);
     const created = await run([
       "workspace", "issue", "create", "checkout fails for archived forms",
       "--workspace", "ws-demo",
       "--type", "fix",
       "--id", "FIX-042",
       "--repository", "sot:write",
+      "--base-ref", "sot=refs/heads/hotfix-base",
       "--json",
     ], f);
     expect(created.status, created.stderr).toBe(0);
     expect(JSON.parse(created.stdout)).toMatchObject({ story: { id: "FIX-042" }, outcome: "created" });
     expect(existsSync(join(f.workspace, "features", "uncategorized", "FIX-042", "spec.md"))).toBe(true);
     expect(existsSync(join(f.workspace, "issues", "FIX-042", "sot", ".git"))).toBe(true);
+    expect(readFileSync(join(f.workspace, "features", "uncategorized", "FIX-042", "spec.md"), "utf8")).toContain("base_ref: refs/heads/hotfix-base");
+    expect(git(join(f.workspace, "issues", "FIX-042", "sot"), ["rev-parse", "HEAD"])).toBe(baseSha);
   });
 
   it("rolls back the card and backlog row when Issue initialization fails, then retries with the same id", async () => {

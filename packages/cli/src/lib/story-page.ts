@@ -45,6 +45,7 @@ export interface StoryCardMeta {
     readonly alias: string;
     readonly access: "read" | "write";
     readonly requiredDelivery?: boolean;
+    readonly baseRef?: string;
   }[];
 }
 
@@ -73,6 +74,7 @@ export function renderSpecMd(meta: StoryCardMeta): string {
       : `repositories:\n${meta.repositories.map((repository) =>
         `  - alias: ${repository.alias}\n` +
         `    access: ${repository.access}\n` +
+        (repository.baseRef === undefined ? "" : `    base_ref: ${repository.baseRef}\n`) +
         (repository.requiredDelivery === undefined
           ? ""
           : `    required_delivery: ${repository.requiredDelivery}\n`)

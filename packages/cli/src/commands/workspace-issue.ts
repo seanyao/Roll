@@ -27,7 +27,7 @@ import {
   type InspectedWorkspace,
   type IssueCheckReport,
 } from "@roll/infra";
-import { parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
+import { isSafeRepositoryBaseRef, parseWorkspaceManifest, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { generateIndex, UNCATEGORIZED } from "../lib/archive.js";
 import { writeStoryCardFiles } from "../lib/story-mint.js";
@@ -51,6 +51,7 @@ interface IssueInitArgs {
 interface IssueCreateRepositoryArgs {
   readonly alias: string;
   readonly access: "read" | "write";
+  readonly baseRef?: string;
 }
 
 interface IssueCreateArgs {
@@ -152,6 +153,7 @@ function parseCreateArgs(args: readonly string[]): IssueCreateArgs | undefined {
   let type: IdeaKind | undefined;
   let storyId: string | undefined;
   const repositories: IssueCreateRepositoryArgs[] = [];
+  const baseRefs = new Map<string, string>();
   const title: string[] = [];
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
@@ -195,18 +197,44 @@ function parseCreateArgs(args: readonly string[]): IssueCreateArgs | undefined {
       index += 1;
       continue;
     }
+    if (arg === "--base-ref") {
+      const value = args[index + 1];
+      const separator = value?.indexOf("=") ?? -1;
+      const alias = separator > 0 ? value!.slice(0, separator) : "";
+      const baseRef = separator > 0 ? value!.slice(separator + 1) : "";
+      if (
+        value === undefined || value.startsWith("-") || baseRefs.has(alias) ||
+        alias === "" || !isSafeRepositoryBaseRef(baseRef)
+      ) return undefined;
+      baseRefs.set(alias, baseRef);
+      index += 1;
+      continue;
+    }
     if (arg === undefined || arg.startsWith("-")) return undefined;
     title.push(arg);
   }
   const workspace = canonicalWorkspaceSelectorValue(args);
   const joined = title.join(" ").trim();
   if (workspace === undefined || joined === "" || type === undefined || repositories.length === 0) return undefined;
+  if ([...baseRefs.keys()].some((alias) => !repositories.some((repository) => repository.alias === alias))) return undefined;
   if (storyId !== undefined) {
     if (!validateStoryId(storyId).ok) return undefined;
     if (type === "bug" && !/^(?:FIX|BUG)-/u.test(storyId)) return undefined;
     if (type === "idea" && !/^IDEA-/u.test(storyId)) return undefined;
   }
-  return { kind: "create", title: joined, workspace, type, ...(storyId === undefined ? {} : { storyId }), repositories, check, json };
+  return {
+    kind: "create",
+    title: joined,
+    workspace,
+    type,
+    ...(storyId === undefined ? {} : { storyId }),
+    repositories: repositories.map((repository) => ({
+      ...repository,
+      ...(baseRefs.get(repository.alias) === undefined ? {} : { baseRef: baseRefs.get(repository.alias)! }),
+    })),
+    check,
+    json,
+  };
 }
 
 function parseArgs(args: readonly string[]): ParsedIssueArgs | undefined {
@@ -299,6 +327,7 @@ function createContract(storyId: string, repositories: readonly IssueCreateRepos
       alias: repository.alias,
       access: repository.access,
       requiredDelivery: repository.access === "write",
+      ...(repository.baseRef === undefined ? {} : { baseRef: repository.baseRef }),
     })),
   };
 }
