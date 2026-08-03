@@ -19,6 +19,9 @@ import type {
   TerminalBinding,
   DeliveryDisposition,
   DeltaContinuationProvenance,
+  AttemptCause,
+  RoleAvailabilityProbeOutcome,
+  RoleAvailabilityTransportClass,
 } from "./delta-team.js";
 import type { GoalReviewMode, GoalSafetyGate, GoalScope, GoalStatus, GoalTransitionActor } from "./goal.js";
 import type { LoopType } from "./loop.js";
@@ -839,7 +842,47 @@ export type RollEvent =
       reason: DeltaBlockReason | HistoricalDeltaBlockReason;
       detail: string;
       ts: number;
-    };
+    }
+  | DeltaAttemptOutcomeEvent
+  | DeltaRoleAvailabilityObservedEvent;
+
+/**
+ * US-DELTA-012 — immutable, bounded explanation of one terminal delivery
+ * attempt. `unknown` means the stream did not contain enough evidence to name a
+ * cause; it is never a guessed diagnosis.
+ */
+export interface DeltaAttemptOutcomeEvent {
+  readonly type: "delta:attempt_outcome";
+  readonly v: 1;
+  readonly delegationId: string;
+  readonly storyId: string;
+  readonly cause: AttemptCause;
+  readonly evidenceRef: string;
+  readonly terminalFact: "blocked" | "handoff_ready";
+  readonly ts: number;
+}
+
+/**
+ * US-DELTA-012 — a host/model availability observation.  It records only an
+ * observed selection/probe fact; absence of an artifact must never be read as
+ * proof that an invocation did not happen.
+ */
+export interface DeltaRoleAvailabilityObservedEvent {
+  readonly type: "delta:role_availability_observed";
+  readonly v: 1;
+  readonly delegationId: string;
+  readonly storyId: string;
+  readonly role: DeltaRole;
+  readonly hostId: string;
+  readonly modelId: string;
+  readonly transportClass: RoleAvailabilityTransportClass;
+  readonly probeOutcome: RoleAvailabilityProbeOutcome;
+  readonly probeLatencyMs?: number;
+  readonly selection: "selected" | "excluded";
+  readonly reason: string;
+  readonly invocationObserved: false;
+  readonly ts: number;
+}
 
 /** Supervisor journal action kinds (US-OBS-048). */
 export const SUPERVISOR_JOURNAL_ACTIONS = ["decide", "verify", "rescue", "escalate", "note"] as const;

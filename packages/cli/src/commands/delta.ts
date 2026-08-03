@@ -32,8 +32,8 @@ import {
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
 import { managedWorkspaceOperationId } from "../lib/managed-workspace-operation.js";
 import { renderDeltaBanner, renderDeltaPhaseBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
-import { EventBus, projectDelegationStatus, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type ObservedBuilderHead } from "@roll/core";
-import type { DelegationResolution, DeltaArtifactManifest, ManagedWorkspaceSet } from "@roll/spec";
+import { EventBus, attemptCauseFromBlockReason, projectDelegationStatus, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type ObservedBuilderHead } from "@roll/core";
+import type { DelegationResolution, DeltaArtifactManifest, DeltaAttemptOutcomeEvent, DeltaRoleAvailabilityObservedEvent, ManagedWorkspaceSet, RollEvent } from "@roll/spec";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -80,6 +80,49 @@ function validationPhaseBanner(
       ...(reason === undefined ? [] : [{ label: T("delta.phase.reason"), value: reason }]),
     ],
   });
+}
+
+/**
+ * Write the derived outcome alongside its source fact, while retaining the
+ * source as the final event for existing lifecycle readers. A delegation gets
+ * one terminal cause; conflicts remain visible in the pure read projection.
+ */
+function appendAttemptOutcomeBefore(
+  bus: EventBus,
+  eventsPath: string,
+  source: Extract<RollEvent, { type: "delta:blocked" }> | Extract<RollEvent, { type: "delta:terminal" }>,
+): void {
+  const existing = bus.readEvents(eventsPath).some((event) =>
+    event.type === "delta:attempt_outcome" && event.delegationId === source.delegationId,
+  );
+  if (existing) return;
+  const cause = source.type === "delta:blocked"
+    ? attemptCauseFromBlockReason(source.reason)
+    : source.deliveryDisposition === "owner_redelegate"
+      ? "owner_scope_change"
+      : "unknown";
+  const outcome: DeltaAttemptOutcomeEvent = {
+    type: "delta:attempt_outcome",
+    v: 1,
+    delegationId: source.delegationId,
+    storyId: source.storyId,
+    cause,
+    evidenceRef: source.type === "delta:blocked"
+      ? `event:delta:blocked/${source.reason}`
+      : `event:delta:terminal/${source.deliveryDisposition ?? "unknown"}`,
+    terminalFact: source.type === "delta:blocked" ? "blocked" : "handoff_ready",
+    ts: source.ts,
+  };
+  bus.appendEvent(eventsPath, outcome);
+}
+
+function appendDeltaBlocked(
+  bus: EventBus,
+  eventsPath: string,
+  event: Extract<RollEvent, { type: "delta:blocked" }>,
+): void {
+  appendAttemptOutcomeBefore(bus, eventsPath, event);
+  bus.appendEvent(eventsPath, event);
 }
 
 function concludePhaseBanner(input: {
@@ -544,30 +587,53 @@ async function prepareCommand(args: string[]): Promise<number> {
       // rather than silently treating the delegation as ready.
       const roles = readPersistedResolution(result.resolutionPath).roles;
       const resolvedRoles = new Set<string>();
+      const observedAvailabilityRoles = new Set<string>();
       try {
         for (const line of readFileSync(result.eventsPath, "utf8").split("\n")) {
           const event = JSON.parse(line) as Record<string, unknown>;
           if (event.type === "delta:role_resolved" && event.delegationId === result.delegationId && typeof event.role === "string") resolvedRoles.add(event.role);
+          if (event.type === "delta:role_availability_observed" && event.delegationId === result.delegationId && typeof event.role === "string") observedAvailabilityRoles.add(event.role);
         }
       } catch { /* no event stream means every role still needs publication */ }
       if (Array.isArray(roles)) {
         for (const role of roles) {
           const r = role as Record<string, unknown>;
-          if (resolvedRoles.has(r.role as string)) continue;
-          bus.appendEvent(result.eventsPath, {
-            type: "delta:role_resolved",
-            delegationId: result.delegationId,
-            storyId,
-            role: r.role as DeltaRole,
-            roleInstanceId: r.roleInstanceId as string,
-            hostId: r.hostId as string,
-            modelId: r.modelId as string,
-            source: r.source as "user-pin" | "preset-preference" | "availability-fallback",
-            reasons: r.reasons as string[],
-            inventorySha256: hostInventorySha256 ?? "",
-            inventoryObservedAt: hostInventoryObservedAt ?? "",
-            ts: now,
-          });
+          if (!resolvedRoles.has(r.role as string)) {
+            bus.appendEvent(result.eventsPath, {
+              type: "delta:role_resolved",
+              delegationId: result.delegationId,
+              storyId,
+              role: r.role as DeltaRole,
+              roleInstanceId: r.roleInstanceId as string,
+              hostId: r.hostId as string,
+              modelId: r.modelId as string,
+              source: r.source as "user-pin" | "preset-preference" | "availability-fallback",
+              reasons: r.reasons as string[],
+              inventorySha256: hostInventorySha256 ?? "",
+              inventoryObservedAt: hostInventoryObservedAt ?? "",
+              ts: now,
+            });
+          }
+          // A resolved role is an observed host-resolution selection, not proof
+          // that its model was invoked. No latency is invented when no probe ran.
+          if (!observedAvailabilityRoles.has(r.role as string)) {
+            const availability: DeltaRoleAvailabilityObservedEvent = {
+              type: "delta:role_availability_observed",
+              v: 1,
+              delegationId: result.delegationId,
+              storyId,
+              role: r.role as DeltaRole,
+              hostId: r.hostId as string,
+              modelId: r.modelId as string,
+              transportClass: "host-resolution",
+              probeOutcome: "not_measured",
+              selection: "selected",
+              reason: Array.isArray(r.reasons) && typeof r.reasons[0] === "string" ? r.reasons[0] : "resolved role selection",
+              invocationObserved: false,
+              ts: now,
+            };
+            bus.appendEvent(result.eventsPath, availability);
+          }
         }
       }
     } catch (eventErr) {
@@ -1593,7 +1659,7 @@ function validateCommand(args: string[]): number {
   // Admission check 1: delegation must not be terminal
   const terminalEvent = delegationEvents.find((e) => e.type === "delta:terminal");
   if (terminalEvent) {
-    bus.appendEvent(eventsPath, {
+    appendDeltaBlocked(bus, eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
@@ -1637,7 +1703,7 @@ function validateCommand(args: string[]): number {
         ? `retired prior reason ${String(rawReason)}`
         : `unrecognised prior reason ${JSON.stringify(rawReason)}`;
     const detail = `Delegation ${delegationId} is blocked (${originalNote}); cannot validate further stages`;
-    bus.appendEvent(eventsPath, {
+    appendDeltaBlocked(bus, eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
@@ -1660,7 +1726,7 @@ function validateCommand(args: string[]): number {
     .filter((e) => e.type === "delta:role_resolved")
     .map((e) => (e as Record<string, unknown>).role as string);
   if (stage && !resolvedRoles.includes(stage)) {
-    bus.appendEvent(eventsPath, {
+    appendDeltaBlocked(bus, eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
@@ -1683,7 +1749,7 @@ function validateCommand(args: string[]): number {
     (e) => e.type === "delta:artifact_published" && (e as Record<string, unknown>).role === stage,
   );
   if (alreadyPublished) {
-    bus.appendEvent(eventsPath, {
+    appendDeltaBlocked(bus, eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
@@ -1818,7 +1884,7 @@ function validateCommand(args: string[]): number {
       liveReason === validatorReason || validatorReason === undefined
         ? (result.detail ?? "")
         : `${result.detail ?? ""}${result.detail !== undefined && result.detail !== "" ? " " : ""}(validator reported ${JSON.stringify(validatorReason)})`;
-    bus.appendEvent(eventsPath, {
+    appendDeltaBlocked(bus, eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
@@ -1852,7 +1918,7 @@ function validateCommand(args: string[]): number {
       ? "builder submission changed between observation and formal validation"
       : reobserved.detail;
     if (!reobserved.ok || !builderSubmissionSnapshotsMatch(builderObservation.snapshot, reobserved.snapshot)) {
-      bus.appendEvent(eventsPath, {
+      appendDeltaBlocked(bus, eventsPath, {
         type: "delta:blocked",
         delegationId,
         storyId,
@@ -1873,7 +1939,7 @@ function validateCommand(args: string[]): number {
     // snapshot, then lifecycle facts below.  A formal failure never gets here.
     if (!recordBuilderValidationHeads(cwd, eventsPath, builderContext.workspace, now, builderObservation.snapshot.heads.members)) {
       const msg = "managed workspace release checkpoint could not be recorded";
-      bus.appendEvent(eventsPath, {
+      appendDeltaBlocked(bus, eventsPath, {
         type: "delta:blocked",
         delegationId,
         storyId,
@@ -2125,7 +2191,7 @@ function concludeCommand(args: string[]): number {
   // Missing delivery-disposition → domain error, terminal_path_unselected (append event, retain lease)
   if (!disposition || disposition === true) {
     const detail = "No delivery-disposition selected; owner must choose owner_continue, owner_hold, or owner_redelegate";
-    bus.appendEvent(eventsPath, {
+    appendDeltaBlocked(bus, eventsPath, {
       type: "delta:blocked",
       delegationId,
       storyId,
@@ -2300,7 +2366,10 @@ function concludeCommand(args: string[]): number {
     ...(disposition === "owner_redelegate" && typeof continuationRun === "string" ? { continuationRunId: continuationRun } : {}),
     ts: now,
   };
-  if (priorTerminal === undefined) bus.appendEvent(eventsPath, terminalEvent);
+  if (priorTerminal === undefined) {
+    appendAttemptOutcomeBefore(bus, eventsPath, terminalEvent);
+    bus.appendEvent(eventsPath, terminalEvent);
+  }
 
   // ── Test seam: event append failure after terminal write ────────────────
   // If the seam throws, the terminal event IS written but the caller must

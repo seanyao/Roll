@@ -286,6 +286,37 @@ export type DeltaTerminalOutcome = "handoff_ready" | "blocked" | "abandoned";
 export type TerminalBinding = "cycle_adoption" | "manual_host_bridge" | "handoff_only";
 export type DeliveryDisposition = "owner_continue" | "owner_hold" | "owner_redelegate";
 
+// ── US-DELTA-012 — attempt outcome and availability observations ───────────
+
+/**
+ * Closed, descriptive causes for a Delta delivery attempt.  These facts explain
+ * an observed protocol outcome; they are never a routing rule or a judgement
+ * about a provider.
+ */
+export const ATTEMPT_CAUSES = [
+  "implementation_gap",
+  "evaluator_finding",
+  "artifact_protocol",
+  "identity_or_routing",
+  "ci_or_test_flake",
+  "external_liveness",
+  "owner_scope_change",
+  "unknown",
+] as const;
+export type AttemptCause = (typeof ATTEMPT_CAUSES)[number];
+
+/** How the availability fact reached Roll; this is not a model invocation claim. */
+export const ROLE_AVAILABILITY_TRANSPORT_CLASSES = [
+  "host-resolution",
+  "host-probe",
+  "roll-adapter",
+  "unknown",
+] as const;
+export type RoleAvailabilityTransportClass = (typeof ROLE_AVAILABILITY_TRANSPORT_CLASSES)[number];
+
+/** A bounded observation outcome. `not_measured` is deliberately distinct from failure. */
+export type RoleAvailabilityProbeOutcome = "passed" | "failed" | "not_measured";
+
 /**
  * FIX-1502 — provenance of a run that picked up a redelegated reservation via
  * `roll delta prepare --continuation-run <name>`.  The named successor only

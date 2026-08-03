@@ -1,0 +1,237 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-012 representative immutable fixtures > artifact-invalid: renders facts without a provider preference or invocation inference 1`] = `
+{
+  "availability": [],
+  "delegationId": "artifact-invalid",
+  "diagnostics": [],
+  "outcomes": [
+    {
+      "cause": "artifact_protocol",
+      "delegationId": "artifact-invalid",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;
+
+exports[`US-DELTA-012 representative immutable fixtures > auth-blocked: renders facts without a provider preference or invocation inference 1`] = `
+{
+  "availability": [
+    {
+      "delegationId": "auth-blocked",
+      "hostId": "host-a",
+      "invocationObserved": false,
+      "modelId": "model-a",
+      "probeLatencyMs": 12,
+      "probeOutcome": "passed",
+      "reason": "observed health probe",
+      "role": "builder",
+      "selection": "selected",
+      "storyId": "US-DELTA-012",
+      "transportClass": "host-probe",
+      "ts": 2,
+      "type": "delta:role_availability_observed",
+      "v": 1,
+    },
+  ],
+  "delegationId": "auth-blocked",
+  "diagnostics": [],
+  "outcomes": [
+    {
+      "cause": "external_liveness",
+      "delegationId": "auth-blocked",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;
+
+exports[`US-DELTA-012 representative immutable fixtures > ci-race: renders facts without a provider preference or invocation inference 1`] = `
+{
+  "availability": [],
+  "delegationId": "ci-race",
+  "diagnostics": [],
+  "outcomes": [
+    {
+      "cause": "ci_or_test_flake",
+      "delegationId": "ci-race",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;
+
+exports[`US-DELTA-012 representative immutable fixtures > keeps the first terminal cause and reports duplicate, contradictory, and out-of-order facts 1`] = `
+{
+  "availability": [
+    {
+      "delegationId": "diagnostic",
+      "hostId": "host-a",
+      "invocationObserved": false,
+      "modelId": "model-a",
+      "probeLatencyMs": 12,
+      "probeOutcome": "passed",
+      "reason": "observed health probe",
+      "role": "builder",
+      "selection": "selected",
+      "storyId": "US-DELTA-012",
+      "transportClass": "host-probe",
+      "ts": 2,
+      "type": "delta:role_availability_observed",
+      "v": 1,
+    },
+  ],
+  "delegationId": "diagnostic",
+  "diagnostics": [
+    "out-of-order attempt outcome before delta:prepared for diagnostic",
+    "contradictory terminal cause owner_scope_change after artifact_protocol for diagnostic — kept first occurrence",
+    "duplicate availability observation for builder/host-a/model-a — kept first occurrence",
+  ],
+  "outcomes": [
+    {
+      "cause": "artifact_protocol",
+      "delegationId": "diagnostic",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;
+
+exports[`US-DELTA-012 representative immutable fixtures > normal-merge: renders facts without a provider preference or invocation inference 1`] = `
+{
+  "availability": [
+    {
+      "delegationId": "normal-merge",
+      "hostId": "host-a",
+      "invocationObserved": false,
+      "modelId": "model-a",
+      "probeLatencyMs": 12,
+      "probeOutcome": "passed",
+      "reason": "observed health probe",
+      "role": "builder",
+      "selection": "selected",
+      "storyId": "US-DELTA-012",
+      "transportClass": "host-probe",
+      "ts": 2,
+      "type": "delta:role_availability_observed",
+      "v": 1,
+    },
+  ],
+  "delegationId": "normal-merge",
+  "diagnostics": [],
+  "outcomes": [
+    {
+      "cause": "unknown",
+      "delegationId": "normal-merge",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;
+
+exports[`US-DELTA-012 representative immutable fixtures > pi-stall: renders facts without a provider preference or invocation inference 1`] = `
+{
+  "availability": [
+    {
+      "delegationId": "pi-stall",
+      "hostId": "host-a",
+      "invocationObserved": false,
+      "modelId": "model-a",
+      "probeLatencyMs": 12,
+      "probeOutcome": "passed",
+      "reason": "observed health probe",
+      "role": "builder",
+      "selection": "selected",
+      "storyId": "US-DELTA-012",
+      "transportClass": "host-probe",
+      "ts": 2,
+      "type": "delta:role_availability_observed",
+      "v": 1,
+    },
+  ],
+  "delegationId": "pi-stall",
+  "diagnostics": [],
+  "outcomes": [
+    {
+      "cause": "external_liveness",
+      "delegationId": "pi-stall",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;
+
+exports[`US-DELTA-012 representative immutable fixtures > token-window: renders facts without a provider preference or invocation inference 1`] = `
+{
+  "availability": [
+    {
+      "delegationId": "token-window",
+      "hostId": "host-a",
+      "invocationObserved": false,
+      "modelId": "model-a",
+      "probeLatencyMs": 12,
+      "probeOutcome": "passed",
+      "reason": "observed health probe",
+      "role": "builder",
+      "selection": "selected",
+      "storyId": "US-DELTA-012",
+      "transportClass": "host-probe",
+      "ts": 2,
+      "type": "delta:role_availability_observed",
+      "v": 1,
+    },
+  ],
+  "delegationId": "token-window",
+  "diagnostics": [],
+  "outcomes": [
+    {
+      "cause": "external_liveness",
+      "delegationId": "token-window",
+      "evidenceRef": "event:fixture",
+      "storyId": "US-DELTA-012",
+      "terminalFact": "blocked",
+      "ts": 3,
+      "type": "delta:attempt_outcome",
+      "v": 1,
+    },
+  ],
+  "schemaVersion": 1,
+}
+`;

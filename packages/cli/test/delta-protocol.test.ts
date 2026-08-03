@@ -1723,15 +1723,23 @@ describe("US-DELTA-003 — validate plumbing", () => {
     ], dir);
     expect(r2.code).toBe(1);
 
-    // Verify delta:blocked event was appended
+    // The immutable outcome fact is written immediately before its source
+    // block fact, so legacy readers still see delta:blocked as the terminal row.
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 2);
 
     const lastEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
     expect(lastEvent.type).toBe("delta:blocked");
     expect(lastEvent.delegationId).toBe(delegationId);
     expect(lastEvent.reason).toBe("artifact_invalid");
     expect(lastEvent.role).toBe("designer");
+    expect(JSON.parse(eventsAfter[eventsAfter.length - 2]!)).toMatchObject({
+      type: "delta:attempt_outcome",
+      v: 1,
+      delegationId,
+      cause: "artifact_protocol",
+      terminalFact: "blocked",
+    });
 
     // Lease must be retained (not released by validate)
     const slPath = storyLeasesPath(dir);
@@ -1962,9 +1970,9 @@ describe("US-DELTA-003 — conclude", () => {
     expect(r2.stderr).toContain("blocked");
     expect(r2.stderr).toContain("not owner-approved");
 
-    // Verify delta:blocked event was appended
+    // The terminal-path block carries a paired, immutable unknown outcome fact.
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 2);
     const lastEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
     expect(lastEvent.type).toBe("delta:blocked");
     expect(lastEvent.reason).toBe("terminal_path_unselected");
@@ -3207,9 +3215,10 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     expect(prep.presetId).toBe("local-preset");
     expect(prep.presetSha256).toBe("aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
 
-    // Event stream: exact type/order/count/role bindings
+    // Event stream: recovery + allocation + prepared + 3 resolved roles +
+    // their three descriptive (not invocation) availability observations.
     const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n").map(l => JSON.parse(l));
-    expect(events.length).toBe(6); // recovery + allocation + prepared + 3 roles
+    expect(events.length).toBe(9);
     const preparedEvent = events.find((event) => event.type === "delta:prepared");
     expect(preparedEvent?.delegationId).toBe(delegationId);
     expect(preparedEvent?.storyId).toBe("US-DELTA-XCONSIST");
@@ -3227,6 +3236,19 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
       expect(re.inventorySha256).toBe("bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
       expect(typeof re.inventoryObservedAt).toBe("string");
       expect(re.inventorySha256).not.toBe("aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
+    }
+
+    const availabilityEvents = events.filter((event) => event.type === "delta:role_availability_observed");
+    expect(availabilityEvents).toHaveLength(3);
+    for (const event of availabilityEvents) {
+      expect(event).toMatchObject({
+        delegationId,
+        storyId: "US-DELTA-XCONSIST",
+        transportClass: "host-resolution",
+        probeOutcome: "not_measured",
+        selection: "selected",
+        invocationObserved: false,
+      });
     }
 
     // No cycle/runs/latest/cycle:terminal in events
@@ -3312,7 +3334,7 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
       const r2 = await tsRunCwd(["validate", "--delegation", delegationIdBlock, "--stage", "builder", "--json"], dirBlock);
       expect(r2.code).toBe(1);
       const eventsAfterBlock = readFileSync(eventsPathBlock, "utf8").trim().split("\n").filter(l => l.trim());
-      expect(eventsAfterBlock.length).toBe(eventsBeforeBlock.length + 1);
+      expect(eventsAfterBlock.length).toBe(eventsBeforeBlock.length + 2);
       const blockEvent = JSON.parse(eventsAfterBlock[eventsAfterBlock.length - 1]!);
       expect(blockEvent.type).toBe("delta:blocked");
       expect(blockEvent.reason).toBe("host_attestation_invalid");
@@ -5007,7 +5029,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
 
       // Exactly one delta:blocked event appended
       const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-      expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+      expect(eventsAfter.length).toBe(eventsBefore.length + 2);
       const blockEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
       expect(blockEvent.type).toBe("delta:blocked");
       expect(blockEvent.reason).toBe("identity_collision");
@@ -5448,7 +5470,7 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
 
     // Exactly one delta:blocked event appended (domain error, not parser error)
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 2);
     const lastEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
     expect(lastEvent.type).toBe("delta:blocked");
     expect(lastEvent.reason).toBe("terminal_path_unselected");
