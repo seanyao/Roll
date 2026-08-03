@@ -14,9 +14,9 @@ interface WorkerLaunchState {
 }
 
 const stateKey = Symbol.for("roll.cli.vitest.worker-launch-state");
-const workerGlobal = globalThis as typeof globalThis & { [stateKey]?: WorkerLaunchState };
-workerGlobal[stateKey] ??= { cwd: process.cwd(), env: { ...process.env } };
-const launchState = workerGlobal[stateKey];
+const workerProcess = process as NodeJS.Process & { [stateKey]?: WorkerLaunchState };
+workerProcess[stateKey] ??= { cwd: process.cwd(), env: { ...process.env } };
+const launchState = workerProcess[stateKey];
 
 afterAll(() => {
   if (process.cwd() !== launchState.cwd) process.chdir(launchState.cwd);

@@ -913,14 +913,14 @@ function runDesignCommand(
     return 1;
   }
 
-  const { installed } = discoverInteractiveAgents(agentEnvFromEnv(d.env));
+  const { installed } = discoverInteractiveAgents(agentEnvFromEnv(d.env), d.env);
   if (installed.length === 0) {
     emit(t(v3Catalog, l, "design.no_agent"));
     return 1;
   }
 
   const envAgent = d.env["ROLL_DESIGN_AGENT"];
-  const primary = readPrimaryAgent();
+  const primary = readPrimaryAgent(d.env);
 
   const { agent, error } = selectAgent(installed, forced, envAgent, primary, d.readLine);
   if (error !== null) {

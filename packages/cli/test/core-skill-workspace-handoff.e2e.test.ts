@@ -201,6 +201,7 @@ describe("US-WS-037 core skill Workspace handoff", () => {
       workspaceExecution: loaded.context,
       env: {
         ...process.env,
+        ROLL_HOME: f.rollHome,
         PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
         ROLL_PKG_DIR: REPO,
         ROLL_DESIGN_AGENT: "claude",
