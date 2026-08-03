@@ -2,6 +2,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    setupFiles: ["./test/test-process-isolation.ts"],
     // US-BROW-020 — the live managed-lane gate spawns a real chrome-devtools-mcp
     // process + real Chrome. It must NEVER run inside the default `roll test` /
     // `npm test` suite (those must be green with no Chrome). It runs only in the
