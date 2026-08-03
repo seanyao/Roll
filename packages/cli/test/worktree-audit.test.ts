@@ -1082,6 +1082,106 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
     expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).toBe("safe_to_release");
   });
 
+  it("accepts a stored SSH repository URL for a delivered primary and submodule when their live HTTPS URLs match", () => {
+    const remoteWorkspace = {
+      ...workspace,
+      members: [
+        {
+          ...workspace.members[0],
+          repositoryId: "git@github.com:BIPOSVC/ape-roll.git",
+        },
+        {
+          repositoryId: "git@github.com:BIPOSVC/ape-roll-skills.git",
+          workspaceKey: "delta-d-1",
+          relativeLocator: "delta-d-1.submodules/skills",
+          checkoutRef: { kind: "detached" as const, head: "skills-head" },
+        },
+      ],
+    } as const;
+    const events = [
+      { type: "worktree:allocated", workspace: remoteWorkspace, ts: 1 },
+      { type: "delta:terminal", delegationId: "d-1", storyId: "US-LOOP-123", runId: "delta-d-1", outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", ts: 2 },
+      { type: "delivery:reconciled", cycleId: "delta-d-1", storyId: "US-LOOP-123", state: "delivered_external", mergedBy: "external", mergeCommit: "main-head", signal: "backlog_attest", delegationId: "d-1", runId: "delta-d-1", ts: 3 },
+      { type: "attest:host_delta", cycleId: "delta-d-1", storyId: "US-LOOP-123", delegationId: "d-1", reportPath: ".roll/features/US-LOOP-123/latest/US-LOOP-123-report.html", ts: 4 },
+      {
+        type: "worktree:release_requested",
+        runId: "delta-d-1",
+        reason: "delivered",
+        operationId: "release-1",
+        expectedHeads: [
+          { relativeLocator: "delta-d-1", head: "head-1" },
+          { relativeLocator: "delta-d-1.submodules/skills", head: "skills-head" },
+        ],
+        ts: 5,
+      },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[1] === "/fake/repo" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[1] === "/fake/repo/skills" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1.submodules/skills", head: "skills-head" }]);
+        if (args[0] === "-C" && args[2] === "rev-parse") return args[1];
+        if (args[0] === "-C" && args[2] === "remote") return args[1] === "/fake/repo"
+          ? "https://github.com/BIPOSVC/ape-roll.git"
+          : "https://github.com/BIPOSVC/ape-roll-skills.git";
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+
+    const members = out.records.filter((record) => record.runId === "delta-d-1");
+    expect(members).toHaveLength(2);
+    expect(members.every((record) => record.repositoryIdentity === "expected")).toBe(true);
+    expect(members.every((record) => record.releaseVerdict === "safe_to_release")).toBe(true);
+  });
+
+  it("retains support for the existing short repository identity", () => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") return "https://github.com/example/repo.git";
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.memberLocator === "delta-d-1")?.repositoryIdentity).toBe("expected");
+  });
+
+  it.each([
+    ["different remote", "git@github.com:BIPOSVC/ape-roll.git", "https://github.com/BIPOSVC/other.git"],
+    ["missing remote", "git@github.com:BIPOSVC/ape-roll.git", undefined],
+    ["forged identity", "not-a-repository-identity", "https://github.com/BIPOSVC/ape-roll.git"],
+  ])("fails closed for a %s repository identity", (_caseName, repositoryId, remoteUrl) => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId }] }, ts: 1 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") {
+          if (remoteUrl === undefined) throw new Error("no origin");
+          return remoteUrl;
+        }
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+    const record = out.records.find((candidate) => candidate.memberLocator === "delta-d-1");
+    expect(record?.repositoryIdentity).toBe("foreign");
+    expect(record?.releaseVerdict).not.toBe("safe_to_release");
+  });
+
   it("keeps a host Delta directory when delivery has no independent attestation evidence", () => {
     const events = [
       { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },

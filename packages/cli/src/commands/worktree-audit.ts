@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isEphemeralBranch, managedWorkspaceReleaseVerdict, projectManagedWorkspaceRuns, type ManagedWorkspaceRunView } from "@roll/core";
 import { resolveIntegrationBranch } from "@roll/infra";
-import { parseEventLine, projectSlug, resolveLang, type RollEvent } from "@roll/spec";
+import { normalizeRemoteUrl, parseEventLine, projectSlug, resolveLang, type RollEvent } from "@roll/spec";
 
 // ─── types (shared with the spec) ───────────────────────────────────────────
 
@@ -307,6 +307,36 @@ function parseWorktreeEntries(output: string): RawWorktree[] {
   return entries;
 }
 
+/**
+ * A host-guided Delta allocation persists the configured origin URL, while
+ * older Cycle allocations persist `projectSlug`.  A URL only proves identity
+ * when both sides are recognised Git remote spellings; never treat a similar
+ * repository name as equivalent.
+ */
+function canonicalRemoteIdentity(value: string): string | undefined {
+  const remote = value.trim();
+  if (/^git@[^/:\s]+:[^/\s]+\/.+$/i.test(remote) || /^https?:\/\/[^/\s]+\/.+$/i.test(remote)) {
+    return normalizeRemoteUrl(remote);
+  }
+  const sshUrl = /^ssh:\/\/git@([^/:\s]+)(?::22)?\/(.+)$/i.exec(remote);
+  return sshUrl === null ? undefined : normalizeRemoteUrl(`https://${sshUrl[1]}/${sshUrl[2]}`);
+}
+
+function repositoryIdentityMatches(
+  expectedRepositoryId: string,
+  observed: { readonly top: string; readonly remoteUrl?: string },
+): boolean {
+  const expectedRemote = canonicalRemoteIdentity(expectedRepositoryId);
+  if (expectedRemote !== undefined) {
+    const observedRemote = observed.remoteUrl === undefined ? undefined : canonicalRemoteIdentity(observed.remoteUrl);
+    return observedRemote !== undefined && observedRemote === expectedRemote;
+  }
+  // Preserve the pre-URL allocation contract. `projectSlug` includes the
+  // normalized remote hash when available and a canonical local-path hash when
+  // it is not, so this is still an exact identity comparison.
+  return projectSlug({ path: observed.top, remoteUrl: observed.remoteUrl }) === expectedRepositoryId;
+}
+
 function memberRepositoryEntry(
   repository: string,
   path: string,
@@ -327,8 +357,11 @@ function memberRepositoryEntry(
     } catch { /* a local repository has a path-derived identity */ }
     // Do not pass ROLL_MAIN_SLUG here. It is the owner namespace, whereas this
     // comparison proves the identity of this independently registered repo.
-    const identity = projectSlug({ path: realpathSafe(resolve(top)), remoteUrl });
-    return identity === expectedRepositoryId
+    const matches = repositoryIdentityMatches(expectedRepositoryId, {
+      top: realpathSafe(resolve(top)),
+      remoteUrl,
+    });
+    return matches
       ? { registration: "registered", repositoryIdentity: "expected", entry }
       : { registration: "foreign", repositoryIdentity: "foreign", entry };
   } catch {

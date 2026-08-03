@@ -17,6 +17,7 @@ import { claimStoryLease, releaseStoryLease, readLeases, setLease, writeLeases, 
 import { deltaCommand, injectValidator, injectPrepareInterrupt, injectEventAppendFailure, injectEventBus, isBuilderValidationHeadAllowed } from "../src/commands/delta.js";
 import { injectIdGenerator } from "../src/lib/delta-allocation.js";
 import { renderState } from "../src/render.js";
+import { auditWorktrees } from "../src/commands/worktree-audit.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -468,6 +469,9 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     execFileSync("git", ["init", "--bare"], { cwd: remote, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", remote], { cwd: dir, stdio: "ignore" });
     execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    // Allocation records a portable configured remote identity. The remote ref
+    // itself remains a local fixture ref, so no network is involved in this test.
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/fixture/primary.git"], { cwd: dir, stdio: "ignore" });
     const prepared = await tsRunCwd([
       "prepare", "US-DELTA-ATTEST-CLOSE", "--trigger", "host-guided", "--topology", "solo",
       "--profile", "standard", "--preset", "local-preset", "--resolution", writeResolutionTemplate(dir, "US-DELTA-ATTEST-CLOSE", "local-preset"), "--json",
@@ -494,7 +498,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     writeFileSync(join(dir, "DELTA-DELIVERY.md"), "specific delivery\n");
     execFileSync("git", ["add", "DELTA-DELIVERY.md"], { cwd: dir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "specific delta delivery"], { cwd: dir, stdio: "ignore" });
-    execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: dir, stdio: "ignore" });
     const deliveryCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
     const deliveryBase = execFileSync("git", ["rev-parse", "HEAD^"], { cwd: dir, encoding: "utf8" }).trim();
     const deliveryTree = execFileSync("git", ["show", "-s", "--format=%T", deliveryCommit], { cwd: dir, encoding: "utf8" }).trim();
@@ -527,6 +531,22 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation",
       deliveryDisposition: "owner_continue", ts: Date.now(),
     });
+    const checkout = join(dir, ".roll", "loop", "worktrees", runId);
+    const builderCheckpointHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+    new EventBus().appendEvent(join(dir, ".roll", "loop", "events.ndjson"), {
+      type: "worktree:release_requested", runId, reason: "builder_validation",
+      operationId: `${runId}:builder-validation:fixture`,
+      expectedHeads: [{ relativeLocator: runId, head: builderCheckpointHead }], ts: Date.now(),
+    });
+    // The physical checkout can legitimately advance after Builder admission
+    // while the equivalent delivery is being merged. Its final head must be
+    // frozen only after this exact run is terminal, proved merged, and accepted.
+    execFileSync("git", ["cherry-pick", deliveryCommit], { cwd: checkout, stdio: "ignore" });
+    const terminalHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+    expect(terminalHead).not.toBe(builderCheckpointHead);
+    // A terminal plus an old Builder checkpoint is still not cleanup authority:
+    // delivery and independent acceptance must both be recorded first.
+    expect(auditWorktrees({ repoRoot: dir, home: dir }).records.find((record) => record.runId === runId)?.releaseVerdict).not.toBe("safe_to_release");
     // This is the production attest boundary: source is the pulled integration
     // branch and the immutable Builder fact proves this Delta's commit reached it.
     expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(true);
@@ -534,11 +554,21 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     const events = readFileSync(eventsPath, "utf8");
     expect(events).toContain(`\"cycleId\":\"${runId}\"`);
     expect(events).toContain(`\"delegationId\":\"${delegationId}\",\"runId\":\"${runId}\"`);
+    const finalRelease = events.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>).at(-1);
+    expect(finalRelease).toMatchObject({
+      type: "worktree:release_requested",
+      runId,
+      reason: "delivered",
+      expectedHeads: [{ relativeLocator: runId, head: terminalHead }],
+    });
+    expect(auditWorktrees({ repoRoot: dir, home: dir }).records.find((record) => record.runId === runId)?.releaseVerdict).toBe("safe_to_release");
     expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["US-DELTA-ATTEST-CLOSE"]);
     expect(readLeases(storyLeasesPath(dir))["US-DELTA-ATTEST-CLOSE"]).toBeUndefined();
-    // A stale historical delivery or a second call cannot mint authority for a
-    // new/released reservation.
-    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(false);
+    // A repeated attest may only replay the exact accepted terminal freeze;
+    // it does not append a second delivery claim or widen another run's scope.
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(true);
+    const repeated = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string; runId?: string; reason?: string });
+    expect(repeated.filter((event) => event.type === "worktree:release_requested" && event.runId === runId && event.reason === "delivered")).toHaveLength(1);
   });
 
   it("US-LOOP-126 closes a member's exact squash after a disjoint origin/main advance and rejects forged member facts", () => {

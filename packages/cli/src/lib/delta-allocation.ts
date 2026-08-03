@@ -10,7 +10,7 @@
  * canonical records). No single JSON map file. No lock file. Hardlink
  * no-clobber is the sole mutual-exclusion primitive.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -24,8 +24,9 @@ import {
   openSync,
   closeSync,
   fdatasyncSync,
+  realpathSync,
 } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, relative, resolve, sep } from "node:path";
 import { findFeatureFiles, liveEpicOf } from "./archive.js";
 import { planManagedWorkspaceBootstrap } from "./target-submodule.js";
 import { configResolve, projectConfigPath, resolveIntegrationBranch } from "@roll/infra";
@@ -35,6 +36,7 @@ import {
   allocateManagedWorkspaceSet,
   planManagedPrimaryWorkspace,
 } from "../runner/managed-workspace-allocator.js";
+import { normalizeManagedWorkspaceSet } from "@roll/spec";
 import type {
   DelegationTrigger,
   DeliveryTopology,
@@ -1017,6 +1019,71 @@ function memberRepositoryPath(projectPath: string, runId: string, locator: strin
   return join(projectPath, submodulePath);
 }
 
+/**
+ * A Builder checkpoint only proves the head examined during Builder admission.
+ * Once this exact host Delta is terminal, merged, and independently accepted,
+ * freeze each live detached member again for the later destructive cleanup
+ * check. Any missing, attached, escaping, or unreadable member leaves the old
+ * records intact and produces no release authority.
+ */
+function recordDeliveredReleaseHeads(
+  projectPath: string,
+  eventsPath: string,
+  runId: string,
+  workspace: ManagedWorkspaceSet,
+): boolean {
+  const root = resolve(projectPath, ".roll", "loop", "worktrees");
+  try {
+    const canonicalRoot = realpathSync(root);
+    const expectedHeads = workspace.members.map((member) => {
+      const checkout = resolve(root, member.relativeLocator);
+      const rel = relative(root, checkout);
+      if (rel === "" || rel.startsWith("..") || rel.includes(`..${sep}`)) throw new Error("workspace escape");
+      const canonicalCheckout = realpathSync(checkout);
+      if (!canonicalCheckout.startsWith(`${canonicalRoot}${sep}`)) throw new Error("workspace escape");
+      const head = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: canonicalCheckout,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (head === "") throw new Error("missing head");
+      try {
+        if (execFileSync("git", ["symbolic-ref", "-q", "HEAD"], {
+          cwd: canonicalCheckout,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim() !== "") throw new Error("attached head");
+      } catch (error) {
+        if (error instanceof Error && error.message === "attached head") throw error;
+      }
+      return { relativeLocator: member.relativeLocator, head };
+    });
+    const operationId = `${runId}:delivered:${createHash("sha256").update(JSON.stringify(expectedHeads)).digest("hex").slice(0, 16)}`;
+    const alreadyRecorded = readFileSync(eventsPath, "utf8").split("\n").some((line) => {
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        return event.type === "worktree:release_requested"
+          && event.runId === runId
+          && event.reason === "delivered"
+          && event.operationId === operationId;
+      } catch {
+        return false;
+      }
+    });
+    if (!alreadyRecorded) new EventBus().appendEvent(eventsPath, {
+      type: "worktree:release_requested",
+      runId,
+      reason: "delivered",
+      operationId,
+      expectedHeads,
+      ts: Date.now(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function submoduleGitlink(repositoryPath: string, commit: string, submodulePath: string): string | undefined {
   try {
     const line = gitOutput(repositoryPath, ["ls-tree", commit, "--", submodulePath]);
@@ -1274,10 +1341,35 @@ export function recordHostDeltaAttestationClosure(projectPath: string, storyId: 
   const terminal = terminalIndex.event;
   const delegationId = terminal.delegationId as string;
   const runId = terminal.runId as string;
+  const postTerminal = events.slice(terminalIndex.index + 1);
+  const existingDelivery = postTerminal.some((event) => event.type === "delivery:reconciled"
+    && event.storyId === storyId
+    && event.delegationId === delegationId
+    && event.runId === runId
+    && (event.state === "delivered" || event.state === "delivered_external" || event.state === "delivered_local"));
+  if (existingDelivery) {
+    // A normal re-attest may repair only the missing terminal freeze for this
+    // already-proved host handoff. It never infers delivery from a terminal or
+    // a Builder checkpoint: both the exact delivery fact and independent host
+    // acceptance must already exist, and a released run is immutable.
+    const accepted = postTerminal.some((event) => event.type === "attest:host_delta"
+      && event.cycleId === runId
+      && event.storyId === storyId
+      && event.delegationId === delegationId);
+    const released = events.some((event) => event.type === "worktree:released" && event.runId === runId);
+    const allocation = events.find((event) => event.type === "worktree:allocated"
+      && typeof event.workspace === "object" && event.workspace !== null
+      && (event.workspace as Record<string, unknown>).runId === runId);
+    const workspace = allocation === undefined ? undefined : normalizeManagedWorkspaceSet(allocation.workspace);
+    return accepted
+      && !released
+      && workspace !== undefined
+      && workspace.ok
+      && workspace.value.runId === runId
+      && recordDeliveredReleaseHeads(projectPath, eventsPath, runId, workspace.value);
+  }
   const lease = readLeases(storyLeasesPath(projectPath))[storyId];
   if (lease?.source !== "delivery-reservation" || lease.delegationId !== delegationId || lease.runId !== runId) return false;
-  if (events.some((event) => event.type === "delivery:reconciled"
-    && event.storyId === storyId && event.delegationId === delegationId && event.runId === runId)) return false;
   try {
     const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: projectPath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     const integration = resolveIntegrationBranch(projectPath).replace(/^origin\//, "");
@@ -1304,6 +1396,10 @@ export function recordHostDeltaAttestationClosure(projectPath: string, storyId: 
       ? undefined
       : (allocation.workspace as { members?: unknown }).members;
     if (!Array.isArray(expectedMembers) || expectedMembers.length === 0) return false;
+    const normalizedWorkspace = allocation === undefined
+      ? undefined
+      : normalizeManagedWorkspaceSet(allocation.workspace);
+    if (normalizedWorkspace === undefined || !normalizedWorkspace.ok || normalizedWorkspace.value.runId !== runId) return false;
     const publishedMembers = builder.deliveryMembers as unknown[];
     if (publishedMembers.length !== expectedMembers.length) return false;
     const expectedByLocator = new Map(expectedMembers.flatMap((member) => {
@@ -1372,6 +1468,12 @@ export function recordHostDeltaAttestationClosure(projectPath: string, storyId: 
       reportPath: acceptanceReportPath,
       ts: Date.now(),
     });
+    // Builder admission records a pre-terminal checkpoint, not deletion
+    // authority. With this exact terminal now independently proved and
+    // accepted, a new delivered request freezes the actual detached members
+    // for cleanup. Failure to inspect every member remains fail-closed: the
+    // delivery facts stay true, but audit cannot release the workspace.
+    recordDeliveredReleaseHeads(projectPath, eventsPath, runId, normalizedWorkspace.value);
     return true;
   } catch {
     return false;
