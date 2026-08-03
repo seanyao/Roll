@@ -610,55 +610,12 @@ export function checkDocs(projectDir: string): DimResult {
 }
 
 // ─── site dimension: check_site ──────────────────────────────────────────────
-/**
- * Epics that legitimately have no landing-page presence (internal plumbing).
- *
- * US-LOOP-119: the card asked me to verify whether the `loop-scheduling` entry
- * still has an object. It does not — no such epic exists under `.roll/features/`,
- * so the entry is dropped below.
- *
- * VERIFYING THAT ALSO TURNED UP SOMETHING LARGER, recorded here rather than
- * silently fixed: this whole set is keyed on `### Feature:` headings, and the v3
- * backlog has none — `readDoneFeatures()` returns empty, so `check_site`
- * short-circuits before ever consulting this list. Every entry is therefore
- * currently inert, not just the one removed. That is a defect in the site
- * dimension itself (it silently passes), out of scope for a scheduling-retirement
- * card; see FIX-1485.
- */
-const SITE_INTERNAL_FEATURES = new Set([
-  "cycle-meta-sync", "loop-log-locality", "invoke-stream-visibility",
-  "loop-done-semantics", "loop-status-reader-path", "loop-result-eval",
-  "loop-data-layout", "hooks-path-enforcement", "dev-vm-isolation",
-  "test-quality-gates", "tcr-test-strategy", "test-preconditions",
-  "e2e-lifecycle", "skill-harness", "agent-compliance",
-  "convention-management", "github-actions", "pr-lifecycle",
-  "loop-lifecycle-ownership", "loop-ci-self-heal",
-  "cycle-log-archive", "agent-aware-execution",
-  "manual-only-retirement",
-  "context-feed-budget", "documentation", "github-issues-sync",
-  "notifications", "cycle-event-stream", "phase-tracing",
-  "loop-write-integrity", "cross-machine-sync", "remote-monitoring",
-  "cycle-history-rollup", "non-claude-usage-capture",
-  "loop-config-cli", "loop-exit-summary", "edit-render-fold",
-  "cli-redesign", "directory-restructure", "lifecycle-management",
-  "upstream-watch", "i18n-localization",
-]);
-
-function siteTokens(name: string): Set<string> {
-  const tk = name.toLowerCase();
-  const tokens = new Set<string>();
-  // t.lstrip("$") then split on [-/\s]+.
-  for (const part of tk.replace(/^\$+/, "").split(/[-/\s]+/)) {
-    if (part.length > 1) tokens.add(part);
-  }
-  return tokens;
-}
+const SITE_CHECK_NOTE = "checked top-level commands and guide links; story-to-site coverage is not configured";
 
 export function checkSite(projectDir: string): DimResult {
   const gaps = checkTopLevelCommands(activeSiteFiles(projectDir), SITE_HIDDEN_TOP_LEVEL_COMMANDS);
   const siteJs = join(projectDir, "site", "roll-data.js");
-  const backlog = join(projectDir, ".roll", "backlog.md");
-  if (!existsSync(siteJs) || !existsSync(backlog)) return { status: gaps.length === 0 ? "pass" : "fail", gaps };
+  if (!existsSync(siteJs)) return { status: gaps.length === 0 ? "pass" : "fail", gaps, note: SITE_CHECK_NOTE };
 
   const siteText = readText(siteJs);
 
@@ -677,43 +634,7 @@ export function checkSite(projectDir: string): DimResult {
     }
   }
 
-  const siteFeatures = new Set<string>();
-  for (const m of siteText.matchAll(/\bname:\s*"([^"]+)"/g)) {
-    const name = (m[1] ?? "").trim();
-    if (name) siteFeatures.add(name);
-  }
-
-  if (siteFeatures.size === 0) {
-    gaps.push(
-      "site/roll-data.js has no FEATURE_GROUPS feature names — site may be missing content",
-    );
-    return { status: "fail", gaps };
-  }
-
-  const allSiteTokens = new Set<string>();
-  for (const name of siteFeatures) for (const tok of siteTokens(name)) allSiteTokens.add(tok);
-
-  const doneFeatures = readDoneFeatures(readText(backlog));
-  // Preserve any gaps already found (retired-command scan, dangling guide refs)
-  // even when there are no `### Feature:` headings to token-match (FIX-375).
-  if (doneFeatures.size === 0) return { status: gaps.length === 0 ? "pass" : "fail", gaps };
-
-  for (const featName of doneFeatures.keys()) {
-    if (SITE_INTERNAL_FEATURES.has(featName)) continue;
-    const featTokens = siteTokens(featName.replaceAll("-", " "));
-    if (featTokens.size === 0) continue;
-    let matchCount = 0;
-    for (const tok of featTokens) if (allSiteTokens.has(tok)) matchCount++;
-    if (matchCount < featTokens.size / 2) {
-      gaps.push(
-        `Feature '${featName}' has Done stories but is not mentioned ` +
-          `on the landing page — site may be missing this capability`,
-      );
-    }
-  }
-  // The stale-reference loop in the python is a documented no-op (pass), so it
-  // adds no gaps; omitted intentionally.
-  return { status: gaps.length === 0 ? "pass" : "fail", gaps };
+  return { status: gaps.length === 0 ? "pass" : "fail", gaps, note: SITE_CHECK_NOTE };
 }
 
 // ─── i18n dimension: check_i18n ──────────────────────────────────────────────
@@ -1003,6 +924,8 @@ function formatGateTable(report: Report, lang: Lang): string {
     const zhLabel = pad(c("dim", `  ${meta.zh}`), labelWidth);
     const zhCaption = c("muted", trunc(meta.whatZh, captionWidth - 1));
     out.push(`${zhLabel}${zhCaption}`);
+    const note = report.dimensions[dim]?.note;
+    if (note !== undefined) out.push(`   ${c("muted", `ℹ ${note}`)}`);
   }
   out.push("");
   // Footer: the gate rule + the machine pointer (separate-line bilingual).

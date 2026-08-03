@@ -87,9 +87,7 @@ function testsViolation(): string {
 
 function siteViolation(): string {
   const p = mk();
-  // Done feature 'dashboard' not mentioned on the site (site lists only 'widget').
-  w(p, ".roll/backlog.md", "# Backlog\n\n### Feature: dashboard\n\n| [US-D-001] | x | ✅ Done |\n");
-  w(p, "site/roll-data.js", 'const FEATURE_GROUPS = [{ name: "widget" }];\n');
+  w(p, "site/roll-data.js", 'const NAV = [{ path: "guide/en/ghost.md" }];\n');
   return p;
 }
 
@@ -179,6 +177,7 @@ describe("frozen: roll consistency", () => {
       ✅ tests: pass
       ✅ bilingual: pass
       ✅ site: pass
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: pass
@@ -218,7 +217,8 @@ describe("frozen: roll consistency", () => {
           },
           "site": {
             "status": "pass",
-            "gaps": []
+            "gaps": [],
+            "note": "checked top-level commands and guide links; story-to-site coverage is not configured"
           },
           "truth-live": {
             "status": "pass",
@@ -247,6 +247,7 @@ describe("frozen: roll consistency", () => {
       ✅ tests: pass
       ✅ bilingual: pass
       ✅ site: pass
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: fail
@@ -288,7 +289,8 @@ describe("frozen: roll consistency", () => {
           },
           "site": {
             "status": "pass",
-            "gaps": []
+            "gaps": [],
+            "note": "checked top-level commands and guide links; story-to-site coverage is not configured"
           },
           "truth-live": {
             "status": "pass",
@@ -319,6 +321,7 @@ describe("frozen: roll consistency", () => {
          • i18n key 'only.en' has EN but is missing ZH translation
          • i18n key 'only.zh' has ZH but is missing EN translation
       ✅ site: pass
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: fail
@@ -362,7 +365,8 @@ describe("frozen: roll consistency", () => {
           },
           "site": {
             "status": "pass",
-            "gaps": []
+            "gaps": [],
+            "note": "checked top-level commands and guide links; story-to-site coverage is not configured"
           },
           "truth-live": {
             "status": "pass",
@@ -392,6 +396,7 @@ describe("frozen: roll consistency", () => {
          • Test file 'stalefeature.bats' appears to reference feature 'stalefeature' which does not exist in backlog — may be stale
       ✅ bilingual: pass
       ✅ site: pass
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: fail
@@ -434,7 +439,8 @@ describe("frozen: roll consistency", () => {
           },
           "site": {
             "status": "pass",
-            "gaps": []
+            "gaps": [],
+            "note": "checked top-level commands and guide links; story-to-site coverage is not configured"
           },
           "truth-live": {
             "status": "pass",
@@ -462,7 +468,8 @@ describe("frozen: roll consistency", () => {
       ✅ tests: pass
       ✅ bilingual: pass
       ❌ site: fail
-         • Feature 'dashboard' has Done stories but is not mentioned on the landing page — site may be missing this capability
+         • site/roll-data.js links a guide that does not exist: guide/en/ghost.md
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: fail
@@ -503,8 +510,9 @@ describe("frozen: roll consistency", () => {
           "site": {
             "status": "fail",
             "gaps": [
-              "Feature 'dashboard' has Done stories but is not mentioned on the landing page — site may be missing this capability"
-            ]
+              "site/roll-data.js links a guide that does not exist: guide/en/ghost.md"
+            ],
+            "note": "checked top-level commands and guide links; story-to-site coverage is not configured"
           },
           "truth-live": {
             "status": "pass",
@@ -532,6 +540,7 @@ describe("frozen: roll consistency", () => {
       ✅ tests: pass
       ✅ bilingual: pass
       ✅ site: pass
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: fail
@@ -574,7 +583,8 @@ describe("frozen: roll consistency", () => {
             "status": "fail",
             "gaps": [
               "site/roll-data.js:1 references hidden/retired top-level 'roll alert' (use 'roll loop alert')"
-            ]
+            ],
+            "note": "checked top-level commands and guide links; story-to-site coverage is not configured"
           },
           "truth-live": {
             "status": "pass",
@@ -602,6 +612,7 @@ describe("frozen: roll consistency", () => {
       ✅ tests: pass
       ✅ bilingual: pass
       ✅ site: pass
+         ℹ checked top-level commands and guide links; story-to-site coverage is not configured
       ✅ truth-live: pass
       --------------------------------------------------
       Overall: pass
@@ -752,6 +763,7 @@ describe("US-DOSSIER-036: roll release consistency check — verdict-first table
     for (const glyph of ["① code ↔ backlog", "② cards / evidence", "③ docs", "④ tests", "⑤ bilingual", "⑥ site", "⑦ truth live"]) {
       expect(r.stdout).toContain(glyph);
     }
+    expect(r.stdout).toContain("checked top-level commands and guide links; story-to-site coverage is not configured");
     expect(r.stdout).toContain("any f>0 aborts the release");
   });
 

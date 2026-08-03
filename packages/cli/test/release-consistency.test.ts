@@ -285,30 +285,36 @@ describe("checkDocs — changelog coverage of the release delta (FIX-375)", () =
   });
 });
 
-describe("checkSite — no dangling guide references (FIX-375)", () => {
+describe("checkSite — actual site checks only (FIX-1505)", () => {
   const backlog = "| [FIX-901](x) | a | ✅ Done (#1) |\n";
   const siteHead = 'const FEATURE_GROUPS = [{ name: "Delivery Dossier", desc: "x" }];\n';
 
-  it("fails when site/roll-data.js links a guide that does not exist", () => {
+  it("freezes a v3 Done card as unconfigured story-to-site coverage", () => {
+    const dir = makeProject({
+      deltaSubjects: ["Fix: FIX-901 (#1)"],
+      backlog,
+      siteData: 'const NAV = [{ path: "guide/en/loop.md" }];\n',
+      guides: ["guide/en/loop.md"],
+    });
+    expect(checkSite(dir)).toMatchSnapshot();
+  });
+
+  it("freezes a missing top-level command as a site failure", () => {
+    const dir = makeProject({
+      deltaSubjects: ["Fix: FIX-901 (#1)"],
+      backlog,
+      siteData: siteHead + 'const COPY = "run roll alert to inspect the loop";\n',
+    });
+    expect(checkSite(dir)).toMatchSnapshot();
+  });
+
+  it("freezes a broken guide link as a site failure", () => {
     const dir = makeProject({
       deltaSubjects: ["Fix: FIX-901 (#1)"],
       backlog,
       siteData: siteHead + 'const NAV = [{ path: "guide/en/loop.md" }, { path: "guide/en/ghost.md" }];\n',
       guides: ["guide/en/loop.md"], // ghost.md intentionally absent
     });
-    const r = checkSite(dir);
-    expect(r.status).toBe("fail");
-    expect(r.gaps.join("\n")).toContain("guide/en/ghost.md");
-    expect(r.gaps.join("\n")).not.toContain("guide/en/loop.md");
-  });
-
-  it("passes when every linked guide exists", () => {
-    const dir = makeProject({
-      deltaSubjects: ["Fix: FIX-901 (#1)"],
-      backlog,
-      siteData: siteHead + 'const NAV = [{ path: "guide/en/loop.md" }, { path: "guide/zh/loop.md" }];\n',
-      guides: ["guide/en/loop.md", "guide/zh/loop.md"],
-    });
-    expect(checkSite(dir).status).toBe("pass");
+    expect(checkSite(dir)).toMatchSnapshot();
   });
 });
