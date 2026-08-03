@@ -6032,6 +6032,10 @@ describe("FIX-1502 — prepare --continuation-run picks up a redelegated task", 
       cardDir: join(dir, ".roll", "features", "delta-team", "FIX-1502-GHOST"),
     };
     await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_verifiable");
+    const refusal = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(parseStderrJsonTail(refusal.stderr).detail).toContain(
+      `reservation on story ${fx.storyId} naming '${SUCCESSOR}'`,
+    );
   });
 
   it("refuses when the recorded redelegation names a different successor than the occupancy", async () => {

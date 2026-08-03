@@ -1086,7 +1086,7 @@ export const v3Catalog: Catalog = {
     zh: "roll delta prepare：故事 %s 上没有明确转交给 '%s' 的占用；--continuation-run 只能接手明确写着这个继任名字的任务",
   },
   "delta.error.continuation_not_verifiable": {
-    en: "roll delta prepare: the reservation naming '%s' on story %s cannot be matched to a recorded redelegation; the pickup identity cannot be verified, refusing",
+    en: "roll delta prepare: the reservation on story %s naming '%s' cannot be matched to a recorded redelegation; the pickup identity cannot be verified, refusing",
     zh: "roll delta prepare：故事 %s 上名为 '%s' 的占用找不到对应的转交记录；接手身份无法核实，已拒绝",
   },
   "delta.error.continuation_adoption_failed": {
