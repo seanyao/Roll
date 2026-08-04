@@ -1,0 +1,132 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN/ZH help and guide contract 1`] = `
+{
+  "guide": {
+    "en": undefined,
+    "zh": undefined,
+  },
+  "help": {
+    "en": "Usage: roll delta <prepare|validate|conclude|status|help>
+
+  Delta Team (host-guided) = the current host main session (implicit Supervisor)
+  plus host-native Designer/Builder/Evaluator sub-agent sessions, driven through
+  roll delta. Roll never spawns, resumes, or configures any session, including
+  yours.
+
+  Managed-runtime boundary:
+    - prepare for solo or delta-team atomically holds the Story delivery reservation,
+      creates one managed WorkspaceSet beneath .roll/loop/worktrees, and returns its
+      detached checkout and publish-ref identity. Start the Builder only there.
+    - host-guided full-delta-team is refused before side effects; Full Delta attaches
+      to an existing Cycle WorkspaceSet and never creates a nested Delta workspace.
+    - handoff_ready preserves the reservation and workspace. It is NOT Done, a merge,
+      an attest verdict, or a DeliveryRecord. Cleanup needs confirmed merge plus
+      accepted attest and a fresh all-member inspection.
+    - Legacy/external paths remain visible as unknown or unmanaged; Roll never adopts
+      or deletes them automatically.
+
+  Honest protocol boundary:
+    - Host attestation is structural validation only (non-empty/unique tokens that
+      correspond across resolution/event/manifest); never proof of a fresh session
+      or that a model executed.
+    - Presets live in ~/.roll/delta-team/presets.yaml (host-local config only).
+    - Host-guided cost renders ? (host_unobservable) — never estimated or zeroed.
+
+  Host-guided delegation lifecycle commands (protocol-only; no agent spawning).
+
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]
+    Atomically reserve delivery, allocate the managed workspace, and create the immutable frame.
+    --continuation-run only takes over a task that was explicitly redelegated to <name>
+    (owner_redelegate --continuation-run <name>): it verifies the recorded redelegation,
+    creates a fresh standard delta run, and swaps the occupancy atomically — it never
+    touches any other task.
+
+  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
+    Validate a role-stage submission through the protocol-validator boundary.
+
+  roll delta preflight --delegation <id> --stage builder [--json]
+    After the Builder's final green TCR commit, run this read-only self-check
+    before formal validation. It writes no events or lease/frame/workspace/checkpoint
+    state, does not prove a model executed, and never replaces the Evaluator or formal gate.
+
+
+  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
+    Read immutable event and delivery truth. It never selects a rig, changes priority, or merges.
+
+  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
+    Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
+    owner_redelegate transfers the reservation to the named successor; the successor
+    takes over with roll delta prepare --continuation-run <name>.
+
+  roll delta status [--story <id>|--delegation <id>] [--json]
+    Read-only delegation status projection from event truth.
+
+  roll delta help
+    Print this help.
+
+  Managed Builder handoff:
+    Save \`roll delta preflight --delegation <id> --stage builder --json\` stdout outside the managed frame.
+    A red preflight is repaired in the same frame, then preflight runs green before one formal validate
+    with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
+",
+    "zh": "用法：roll delta <prepare|validate|conclude|status|help>
+
+  Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native
+  能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Roll 从不
+  spawn、resume 或配置任何会话（包括你自己的）。
+
+  受管运行时边界：
+    - solo 或 delta-team 的 prepare 会原子持有 Story 交付预留，在
+      .roll/loop/worktrees 下创建一个受管 WorkspaceSet，并返回 detached checkout
+      和 publish-ref 身份。Builder 只能在该工作区开始。
+    - host-guided full-delta-team 会在副作用前被拒绝；Full Delta 只附着到既有 Cycle
+      WorkspaceSet，绝不创建嵌套 Delta 工作区。
+    - handoff_ready 会保留预留和工作区；它不是 Done、merge、attest 裁定或
+      DeliveryRecord。清理必须有已确认合并、已接受 attest 和新鲜的全成员检查。
+    - 旧路径/外部路径只会作为 unknown 或 unmanaged 可见；Roll 从不自动认领或删除。
+
+  如实的协议边界：
+    - 宿主 attestation 仅结构校验（token 非空/唯一且在 resolution/事件/manifest 间
+      对应）；绝不证明会话新起或模型执行过。
+    - preset 放在 ~/.roll/delta-team/presets.yaml（仅宿主本地配置）。
+    - host-guided 成本渲染 ? (host_unobservable)——绝不估算或写零。
+
+  宿主导引的委派生命周期命令（仅协议层；不启任何 agent）。
+
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]
+    原子预留交付、分配受管工作区，并创建不可变帧。
+    --continuation-run 只接手明确转交给 <name> 的任务（owner_redelegate --continuation-run
+    <name>）：它会核对已落盘的转交记录，创建全新的标准 delta 运行，并原子替换占用——
+    绝不触碰其他任务。
+
+  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
+    经过协议校验边界验证角色阶段提交。
+
+  roll delta preflight --delegation <id> --stage builder [--json]
+    Builder 完成最后一次 green TCR 提交后、正式校验前运行此只读自检。它不写事件或
+    lease/帧/工作区/检查点状态，不证明模型执行，也绝不替代 Evaluator 或正式闸门。
+
+
+  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
+    只读不可变事件和交付真相；绝不选择模型组合、改变优先级或合并。
+
+  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
+    记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。
+    owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
+    --continuation-run <name> 接手。
+
+  roll delta status [--story <id>|--delegation <id>] [--json]
+    从事件真相只读投影委派状态。
+
+  roll delta help
+    打印此帮助。
+
+  受管 Builder 交接：
+    把 \`roll delta preflight --delegation <id> --stage builder --json\` 的 stdout 保存在受管帧外。
+    预检失败在同一帧修复、预检通过后，才用 \`--preflight-receipt <path>\` 做一次正式 validate；
+    收据缺失、过期或格式损坏时不写生命周期事件。
+",
+  },
+}
+`;

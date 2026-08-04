@@ -112,6 +112,14 @@ health-remediation **delivery team** (the FIX-routing target):
   topology that shares the same protocol but launches distinct role sessions
   through Roll's generic adapters.
 
+**Builder preflight comes after the Builder's final green TCR commit and before
+its one formal Builder validate.** It is a read-only, repairable self-check: it
+writes no lifecycle success and does not prove that a model executed. A red
+preflight is repaired in the same frame, then the Builder runs a green preflight
+before formal `roll delta validate --stage builder --preflight-receipt <path>`.
+The formal validation remains fail-closed and is not replaced by preflight; the
+independent Evaluator still reviews the formally validated handoff.
+
 Honest boundaries the protocol states and never overclaims:
 
 - **Terminal binding is Option C, handoff-only.** A valid Evaluator report reaches

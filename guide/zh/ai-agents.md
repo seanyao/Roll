@@ -182,14 +182,19 @@ Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要
 唯一的 worktree 写者；Designer、Evaluator、Peer 除自己的 artifact 目录外均只读。Peer
 只是 Evaluator 的可选咨询输入，绝不替代 Evaluator。
 
-在把材料交给独立 Evaluator 之前，Builder 运行
+Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builder 校验前，运行
 `roll delta preflight --delegation <id> --stage builder --json` 做只读自检：它使用与正式校验
 相同的结构检查（prepared 上下文、受管工作区身份与分离 HEAD、manifest 与产物校验和、
 路径包含、身份/attestation、Builder 证据格式），但不追加任何事件，也不改动
-lease/帧/工作区/检查点。失败的预检只是本地诊断，Builder 可在同一委派/帧内修复。把 JSON
-输出保存在受管帧之外，随后立刻传给 `roll delta validate --delegation <id> --stage builder
+lease/帧/工作区/检查点。失败的预检只是本地诊断，Builder 可在同一委派/帧内修复。它不产生
+生命周期成功，也不证明模型执行；它绝不替代正式 fail-closed 校验或独立 Evaluator。把 JSON
+输出保存在受管帧之外，随后传给 `roll delta validate --delegation <id> --stage builder
 --preflight-receipt <path>`。正式门会把收据与新读取的 heads 和产物字节逐一比对后才推进委派；
 收据缺失、格式损坏、过期或不匹配时不写任何生命周期事件，Builder 可以重新预检。
+
+**Builder 交接示例：**`预检失败 → 在同一帧修复 → 预检通过 → 正式 validate`。例如 Builder
+证据文件缺失会令预检失败；Builder 在当前帧补齐文件后重跑预检，只有通过后才将收据交给唯一一次
+正式 validate。这是本地修复，不是正式 blocked delegation，也不表示自动重试或 fallback。
 
 **诚实边界——这些是协议明说的限制，绝不可夸大：**
 

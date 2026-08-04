@@ -1118,16 +1118,16 @@ export const v3Catalog: Catalog = {
     zh: "建造者预检失败：%s",
   },
   "delta.help.preflight": {
-    en: "\n  roll delta preflight --delegation <id> --stage builder [--json]\n    Read-only Builder self-check: the same structural checks as formal\n    validation, with no events and no lease/frame/workspace/checkpoint writes.\n    Formal roll delta validate remains the only lifecycle gate.\n\n",
-    zh: "\n  roll delta preflight --delegation <id> --stage builder [--json]\n    只读建造者自检：与正式校验相同的结构检查，不写任何事件，也不改动\n    lease/帧/工作区/检查点。正式 roll delta validate 仍是唯一生命周期门。\n\n",
+    en: "\n  roll delta preflight --delegation <id> --stage builder [--json]\n    After the Builder's final green TCR commit, run this read-only self-check\n    before formal validation. It writes no events or lease/frame/workspace/checkpoint\n    state, does not prove a model executed, and never replaces the Evaluator or formal gate.\n\n",
+    zh: "\n  roll delta preflight --delegation <id> --stage builder [--json]\n    Builder 完成最后一次 green TCR 提交后、正式校验前运行此只读自检。它不写事件或\n    lease/帧/工作区/检查点状态，不证明模型执行，也绝不替代 Evaluator 或正式闸门。\n\n",
   },
   "delta.help.metrics": {
     en: "\n  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]\n    Read immutable event and delivery truth. It never selects a rig, changes priority, or merges.\n\n",
     zh: "\n  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]\n    只读不可变事件和交付真相；绝不选择模型组合、改变优先级或合并。\n\n",
   },
   "delta.help.builder_receipt": {
-    en: "\n  Managed Builder handoff:\n    Save `roll delta preflight --delegation <id> --stage builder --json` stdout outside the managed frame.\n    Then run validate with `--preflight-receipt <path>`; a missing, stale, or malformed receipt writes no lifecycle event.\n",
-    zh: "\n  受管 Builder 交接：\n    把 `roll delta preflight --delegation <id> --stage builder --json` 的 stdout 保存在受管帧外。\n    随后用 `--preflight-receipt <path>` 运行 validate；收据缺失、过期或格式损坏时不写生命周期事件。\n",
+    en: "\n  Managed Builder handoff:\n    Save `roll delta preflight --delegation <id> --stage builder --json` stdout outside the managed frame.\n    A red preflight is repaired in the same frame, then preflight runs green before one formal validate\n    with `--preflight-receipt <path>`; a missing, stale, or malformed receipt writes no lifecycle event.\n",
+    zh: "\n  受管 Builder 交接：\n    把 `roll delta preflight --delegation <id> --stage builder --json` 的 stdout 保存在受管帧外。\n    预检失败在同一帧修复、预检通过后，才用 `--preflight-receipt <path>` 做一次正式 validate；\n    收据缺失、过期或格式损坏时不写生命周期事件。\n",
   },
   "delta.status.orphan_header": {
     en: "Uncommitted frames:",

@@ -200,19 +200,28 @@ raw chat. The Builder is the sole worktree writer; Designer, Evaluator, and Peer
 are read-only except for their own artifact directory. Peer is optional advisory
 input to the Evaluator, never a substitute for it.
 
-Before handing materials to an independent Evaluator, the Builder runs
+After its final green TCR commit and before its one formal Builder validation,
+the Builder runs
 `roll delta preflight --delegation <id> --stage builder --json` as a read-only
 self-check: it applies the same structural checks as formal validation
 (prepared context, managed workspace identity and detached heads, manifest and
 output digests, containment, identity/attestation, and Builder evidence format)
 but appends no event and changes no lease, frame, workspace, or checkpoint. A
 failed preflight is a local diagnostic the Builder can repair in the same
-delegation/frame. Save its JSON output outside the managed frame, then pass it
-immediately to `roll delta validate --delegation <id> --stage builder
+delegation/frame. It emits no lifecycle success and does not prove that a model
+executed; it never replaces formal fail-closed validation or the independent
+Evaluator. Save its JSON output outside the managed frame, then pass it
+to `roll delta validate --delegation <id> --stage builder
 --preflight-receipt <path>`. The formal gate compares that receipt with fresh
 heads and artifact bytes before it can advance the delegation; a missing,
 malformed, stale, or mismatched receipt writes no lifecycle event, so the
 Builder can preflight again.
+
+**Worked Builder handoff:** `red preflight → repair in the same frame → green
+preflight → formal validate`. For example, a missing Builder evidence file makes
+preflight red; the Builder adds that file in the current frame, reruns preflight,
+and only then supplies the green receipt to the one formal validate. This is
+local repair, not a blocked delegation and not an automatic retry or fallback.
 
 **Honest boundaries — these are stated by the protocol and must not be
 overclaimed:**

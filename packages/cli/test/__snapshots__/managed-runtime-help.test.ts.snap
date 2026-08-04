@@ -69,9 +69,9 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
     Validate a role-stage submission through the protocol-validator boundary.
 
   roll delta preflight --delegation <id> --stage builder [--json]
-    Read-only Builder self-check: the same structural checks as formal
-    validation, with no events and no lease/frame/workspace/checkpoint writes.
-    Formal roll delta validate remains the only lifecycle gate.
+    After the Builder's final green TCR commit, run this read-only self-check
+    before formal validation. It writes no events or lease/frame/workspace/checkpoint
+    state, does not prove a model executed, and never replaces the Evaluator or formal gate.
 
 
   roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
@@ -90,7 +90,8 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
 
   Managed Builder handoff:
     Save \`roll delta preflight --delegation <id> --stage builder --json\` stdout outside the managed frame.
-    Then run validate with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
+    A red preflight is repaired in the same frame, then preflight runs green before one formal validate
+    with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
 ",
     "dispatch": "Usage: roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>
        roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>
@@ -177,8 +178,8 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
     经过协议校验边界验证角色阶段提交。
 
   roll delta preflight --delegation <id> --stage builder [--json]
-    只读建造者自检：与正式校验相同的结构检查，不写任何事件，也不改动
-    lease/帧/工作区/检查点。正式 roll delta validate 仍是唯一生命周期门。
+    Builder 完成最后一次 green TCR 提交后、正式校验前运行此只读自检。它不写事件或
+    lease/帧/工作区/检查点状态，不证明模型执行，也绝不替代 Evaluator 或正式闸门。
 
 
   roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
@@ -197,7 +198,8 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
 
   受管 Builder 交接：
     把 \`roll delta preflight --delegation <id> --stage builder --json\` 的 stdout 保存在受管帧外。
-    随后用 \`--preflight-receipt <path>\` 运行 validate；收据缺失、过期或格式损坏时不写生命周期事件。
+    预检失败在同一帧修复、预检通过后，才用 \`--preflight-receipt <path>\` 做一次正式 validate；
+    收据缺失、过期或格式损坏时不写生命周期事件。
 ",
     "dispatch": "用法：roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>
        roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>

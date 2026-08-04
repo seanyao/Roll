@@ -246,6 +246,13 @@ AC 状态、无豁免可视卡缺截图，都会拒合。PR body 里的 `Roll-Ev
 样本会明确显示；缺失或矛盾事实保持不完整，绝不会变成零或成功。它绝不选择模型组合、
 改变 backlog 顺序或合并 PR。
 
+### Delta Builder 预检
+
+Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builder validate 前，运行
+`roll delta preflight --delegation <id> --stage builder --json`。预检只读、可在同一帧修复，
+不产生生命周期成功，也不证明模型执行，更不替代独立 Evaluator 或正式的 fail-closed 校验。
+流程是：预检失败 → 在同一帧修复 → 预检通过 → 正式 validate；它不是自动重试或 fallback。
+
 `roll supervisor metrics [--json]` 是配套的只读流程投影。它从事件账本推导逐卡与聚合的排队、依赖、首个动作、合并、PR/CI 和对账耗时；终端输出会写明观察窗口、样本量、`nearest-rank` 百分位算法以及每一项缺失的上游事实，JSON 保留同样的不确定性。依赖等待会区分“未完成依赖阻塞”和“依赖已满足但尚未派发”。`handoff_ready` 仍然只是交接，绝不会被显示为已交付。
 完整的[交付指标词典](guide/zh/delivery-metrics.md)列出两条命令的来源事实、分子/分母、
 时间边界、未知行为与建议性边界；artifact 缺失不是关于模型调用的证据。
