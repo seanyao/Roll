@@ -5,8 +5,13 @@ Seven dimensions are continuously reconciled against truth anchors. A backlog
 cycle events, and release-gate events are the facts. The dimensions are:
 ① code ↔ backlog claims · ② cards (every live backlog row owns
 `features/<epic>/<ID>/spec.md`; evidence links never dangle; card-era delivered
-stories with ACs own a `latest/<ID>-report.html`; pre-card-era Done rows are
-counted, not failed) · ③ docs (changelog / features / guide / README / --help)
+stories with ACs own a `latest/<ID>-report.html`; a manually completed card
+without ACs or a report must include a `manual:` reason in its Done status. A
+same-ID record that was already Done before the rule is counted rather than
+failed only when the tracked `.roll/policy/manual-done-epoch.json` baseline and
+every later committed backlog state prove it stayed Done continuously; a missing,
+damaged, or disconnected record blocks release clearly) ·
+③ docs (changelog / features / guide / README / --help)
 · ④ tests · ⑤ locale parity (guide en↔zh + i18n keys) · ⑥ site ·
 ⑦ truth-live (`ensureDeliveriesFresh` + `queryStoryDelivery` must prove each
 release-delta story is actually delivered, with PR refs matching the Done row

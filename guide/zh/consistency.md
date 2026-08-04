@@ -4,7 +4,10 @@
 merge 证据、验收报告、cycle 终态事件、发版闸事件才是事实。七个维度为：
 ① 代码 ↔ backlog 声明 · ② 卡片（每条活卡必须拥有
 `features/<epic>/<ID>/spec.md`，证据链接不许悬空；卡片制之后已交付且带 AC
-的故事必须拥有 `latest/<ID>-report.html`；卡片制之前的历史 Done 行只计数不拦截）·
+的故事必须拥有 `latest/<ID>-report.html`；没有验收项和报告的人工完成卡必须在
+Done 状态写 `manual:` 原因。规则启用前已经完成的同 ID 历史记录，只有受版本控制的
+`.roll/policy/manual-done-epoch.json` 基线和之后每一次已提交的 backlog 状态都证明它一直
+保持完成时，才只计数不拦截；记录缺失、损坏或与当前历史断开时会明确阻断发版）·
 ③ 文档（changelog / features / guide / README / --help）· ④ 测试 ·
 ⑤ locale 对等（guide en↔zh + i18n key）· ⑥ 网站 · ⑦ 真相活体
 （`ensureDeliveriesFresh` + `queryStoryDelivery` 必须证明发布增量里的每张卡

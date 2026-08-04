@@ -507,6 +507,121 @@ export function checkTruthLive(projectDir: string): DimResult {
 // card-era Done rows with ACs but no report are a hard gap. The one manual
 // exception (a card with no AC block and no report) must say why in the Done
 // status rather than silently turning into a green release check.
+const MANUAL_DONE_EPOCH_PATH = join("policy", "manual-done-epoch.json");
+const MANUAL_DONE_EPOCH_SCHEMA_VERSION = 1;
+
+interface ManualDoneEpoch {
+  schemaVersion: number;
+  baselineMetaCommit: string;
+  backlogPath: string;
+}
+
+type ManualDoneEpochResult =
+  | { ok: true; historicalDoneIds: Set<string> }
+  | { ok: false; gap: string };
+
+function doneIdsInBacklog(backlog: string): Set<string> {
+  const doneIds = new Set<string>();
+  for (const line of backlog.split("\n")) {
+    const row = /^\|\s*\[?((?:US|FIX|REFACTOR|IDEA)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\]?/.exec(line);
+    const id = row?.[1] ?? "";
+    if (id !== "" && line.includes(STATUS_MARKER.done)) doneIds.add(id);
+  }
+  return doneIds;
+}
+
+function readManualDoneEpoch(projectDir: string): ManualDoneEpochResult {
+  const metaDir = join(projectDir, ".roll");
+  const epochPath = join(metaDir, MANUAL_DONE_EPOCH_PATH);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readText(epochPath));
+  } catch {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch is missing or invalid (.roll/policy/manual-done-epoch.json) — restore the tracked record before release",
+    };
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch is invalid (.roll/policy/manual-done-epoch.json) — restore schemaVersion, baselineMetaCommit, and backlogPath",
+    };
+  }
+
+  const epoch = parsed as Partial<ManualDoneEpoch>;
+  if (
+    epoch.schemaVersion !== MANUAL_DONE_EPOCH_SCHEMA_VERSION ||
+    typeof epoch.baselineMetaCommit !== "string" ||
+    !/^[0-9a-f]{40}$/i.test(epoch.baselineMetaCommit) ||
+    epoch.backlogPath !== "backlog.md"
+  ) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch is invalid — use schemaVersion 1, a full baselineMetaCommit SHA, and backlogPath \"backlog.md\"",
+    };
+  }
+
+  const baseline = gitCapture(metaDir, ["rev-parse", "--verify", `${epoch.baselineMetaCommit}^{commit}`])?.trim();
+  if (baseline === undefined || baseline === "") {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch baseline cannot be resolved — restore the referenced roll-meta history or update the tracked epoch record deliberately",
+    };
+  }
+  try {
+    execFileSync("git", ["-C", metaDir, "merge-base", "--is-ancestor", baseline, "HEAD"], { stdio: "ignore" });
+  } catch {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch baseline is not an ancestor of current roll-meta history — restore the correct tracked epoch record before release",
+    };
+  }
+
+  const baselineBacklog = gitCapture(metaDir, ["show", `${baseline}:${epoch.backlogPath}`]);
+  if (baselineBacklog === null) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch baseline backlog cannot be read — restore backlog.md at the recorded baseline or repair the tracked epoch record",
+    };
+  }
+
+  // A card is historical only if it stayed Done through every later committed
+  // backlog state. Baseline membership alone would let Done → Todo → Done evade
+  // the policy, even though the second completion is new work.
+  const historicalDoneIds = doneIdsInBacklog(baselineBacklog);
+  const postEpochCommits = gitCapture(metaDir, ["log", "--format=%H", `${baseline}..HEAD`, "--", epoch.backlogPath]);
+  if (postEpochCommits === null) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy history cannot be read after its baseline — restore roll-meta history before release",
+    };
+  }
+  for (const commit of postEpochCommits.split("\n").filter((value) => value !== "")) {
+    const commitBacklog = gitCapture(metaDir, ["show", `${commit}:${epoch.backlogPath}`]);
+    if (commitBacklog === null) {
+      return {
+        ok: false,
+        gap:
+          "manual Done policy history contains an unreadable backlog state — restore roll-meta history before release",
+      };
+    }
+    const doneIds = doneIdsInBacklog(commitBacklog);
+    for (const id of historicalDoneIds) {
+      if (!doneIds.has(id)) historicalDoneIds.delete(id);
+    }
+    if (historicalDoneIds.size === 0) break;
+  }
+  return { ok: true, historicalDoneIds };
+}
+
 function checkCards(projectDir: string): DimResult {
   const backlog = join(projectDir, ".roll", "backlog.md");
   const featuresDir = join(projectDir, ".roll", "features");
@@ -528,6 +643,9 @@ function checkCards(projectDir: string): DimResult {
     return { status: "pass", gaps: [], note: "features/ unreadable — skipped" };
   }
 
+  const epoch = readManualDoneEpoch(projectDir);
+  if (!epoch.ok) return { status: "fail", gaps: [epoch.gap] };
+
   const hasAcBlock = (epic: string, id: string): boolean => {
     try {
       const text = readText(join(featuresDir, epic, id, "spec.md"));
@@ -540,6 +658,7 @@ function checkCards(projectDir: string): DimResult {
   const gaps: string[] = [];
   /** FIX-1513: track explicit manual exceptions for observability. */
   const manualExceptionCards: string[] = [];
+  const historicalExceptionCards: string[] = [];
   let doneNoReportNoAc = 0;
   let doneNoFolder = 0;
   for (const line of readText(backlog).split("\n")) {
@@ -548,10 +667,20 @@ function checkCards(projectDir: string): DimResult {
     const id = row[1] ?? "";
     if (!cardEpic.has(id)) {
       // LIVE rows must own a card folder (a split that writes rows without
-      // cards breaks every link downstream). Pre-card-era ✅ Done rows are
-      // legitimate history — counted, not failed.
-      if (line.includes(STATUS_MARKER.done)) doneNoFolder += 1;
-      else gaps.push(`Live backlog row ${id} has no card folder (features/<epic>/${id}/spec.md)`);
+      // cards breaks every link downstream). A pre-policy Done row is
+      // legitimate history only when the immutable epoch proves this exact ID
+      // was already Done; a later row cannot use manual: to evade the folder
+      // contract.
+      if (line.includes(STATUS_MARKER.done) && epoch.historicalDoneIds.has(id)) {
+        doneNoFolder += 1;
+        historicalExceptionCards.push(id);
+      } else if (line.includes(STATUS_MARKER.done)) {
+        gaps.push(
+          `Done backlog row ${id} has no card folder (features/<epic>/${id}/spec.md) and cannot use \`manual:\` after the policy epoch`,
+        );
+      } else {
+        gaps.push(`Live backlog row ${id} has no card folder (features/<epic>/${id}/spec.md)`);
+      }
       continue;
     }
     // Evidence links must not dangle.
@@ -566,6 +695,8 @@ function checkCards(projectDir: string): DimResult {
       if (!existsSync(join(featuresDir, epic, id, "latest", `${id}-report.html`))) {
         if (hasAcBlock(epic, id)) {
           gaps.push(`Done backlog row ${id} has ACs but no attest report`);
+        } else if (epoch.historicalDoneIds.has(id)) {
+          historicalExceptionCards.push(id);
         } else {
           const status = line.split("|").map((cell) => cell.trim()).at(-2) ?? line;
           const manualReason = /\bmanual:\s*(\S(?:.*\S)?)/i.exec(status)?.[1]?.trim();
@@ -583,7 +714,10 @@ function checkCards(projectDir: string): DimResult {
   }
   const result: DimResult = { status: gaps.length === 0 ? "pass" : "fail", gaps };
   const notes: string[] = [];
-  if (doneNoFolder > 0) notes.push(`${doneNoFolder} pre-card-era Done rows without a card folder`);
+  if (historicalExceptionCards.length > 0) {
+    notes.push(`${historicalExceptionCards.length} historical Done rows predate the manual-Done policy`);
+  }
+  if (doneNoFolder > 0) notes.push(`${doneNoFolder} historical Done rows without a card folder`);
   if (doneNoReportNoAc > 0) {
     notes.push(`${doneNoReportNoAc} Done rows without AC blocks accepted with a manual explanation: ${manualExceptionCards.join(", ")}`);
   }
