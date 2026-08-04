@@ -264,9 +264,7 @@ export function registerAll(): void {
     return agentCommand(args);
   }, { help: "Usage: roll agent [migrate [--dry-run]|list|cast]\n  View Agent Scope roles, migrate legacy config, list installed agents, or print role casting.\n查看 Agent Scope 角色、迁移旧配置、列出 installed agent，或打印角色分工。" });
   registerPorted("agents", agentListCommand, { hidden: true }); // US-AGENT-048: bash-oracle `roll agents` alias for `roll agent list`
-  // `pair`: v3-native Cross-Agent Pairing (US-PAIR-001). `pair init` scaffolds
-  // legacy pairing compatibility commands. No bash fallback
-  // (v2 had no pairing).
+  // `pair`: its retired command surface has no v3 route or bash fallback.
   registerPorted("pair", removedTopLevel("pair"));
   // `peer`: v3-native one-shot heterogeneous peer review adapter (FIX-255).
   // This is a product-level command, distinct from cycle `pair` gates, and does

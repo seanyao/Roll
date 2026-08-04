@@ -211,16 +211,9 @@ export async function executeCaptureFactsCommand(
       // a heterogeneous one-way review. runPairing records timeout/error outcomes
       // without blocking the cycle.
       //
-      // US-PAIR-004 multi-stage: pairing fires at EVERY enabled stage
-      // (design/test/code/cycle), each independently opt-out via pairing.yaml
-      // `stages`. MVP-pragmatic: all enabled stages are invoked from this single
-      // capture hook — a true per-phase pre-code hook for design/test is a larger
-      // refactor (the loop has no distinct design/test phase boundary yet), so the
-      // diff a design-stage peer sees is the same cycle diff. The stage plumbing is
-      // real (each stage selects its own peer, writes its own evidence, stamps its
-      // own events); narrowing the per-stage context/diff is a future refinement.
-      // Every stage preserves the PAIR-003 invariants (timeout / non-blocking /
-      // cost / file-absent=off) since they all route through runPairing.
+      // Runtime pairing has one live review stage: code. A scoped
+      // `story.evaluate` binding enables it; legacy pairing.yaml stage lists are
+      // migration-only input and cannot alter runtime triggering.
       {
         // US-PAIR-006: per-peer track record from the event stream drives the
         // ε-greedy hit-rate preference. Best-effort: an unreadable/absent events
@@ -254,8 +247,7 @@ export async function executeCaptureFactsCommand(
           // US-CYCLE-008: high-tier → parallel review panel; else serial default.
           ...(evalFanout !== undefined ? { fanout: evalFanout } : {}),
         };
-        // Iterate the enabled stages (config order). file-absent/disabled → [] →
-        // the loop body never runs, so a repo without pairing.yaml is untouched.
+        // A missing scoped evaluator binding yields no live review stage.
         // US-CYCLE-008: a tier-blocked cycle dispatches NO evaluators (fail-loud).
         for (const stage of tierInfo.blocked ? [] : enabledPairingStages(ports.repoCwd)) {
           // E4: the pairing reviewer diffs + reviews the delivery in the execution
@@ -265,7 +257,7 @@ export async function executeCaptureFactsCommand(
       }
       // FIX-362: peer-gate runs HERE — AFTER the pairing review wrote its evidence
       // (.pair.json), so a genuinely hetero-reviewed delivery reads as `consulted`
-      // and is NOT blocked. When pairing is OFF (no pairing.yaml) no evidence exists,
+      // and is NOT blocked. Without a scoped evaluator binding no evidence exists,
       // so the gate's own retryPeerConsult fallback runs (single-agent path, unchanged).
       // US-CYCLE-008: on a tier-blocked cycle the peer gate (and its retry consult,
       // which SPAWNS a peer) must not run. A non-blocking stub keeps peerBlocked=false.

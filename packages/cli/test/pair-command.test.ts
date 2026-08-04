@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -40,12 +40,11 @@ function run(args: string[], before?: (cwd: string) => void): { code: number; st
 }
 
 describe("roll pair — scoped evaluator configuration", () => {
-  it("retires pair init and never writes a legacy pairing file", () => {
-    const result = run(["init", "--force"]);
+  it("has no pair-init compatibility branch", () => {
+    const result = run(["init"]);
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("retired");
-    expect(result.stderr).toContain("defaults.story.roles.evaluate");
-    expect(existsSync(join(result.cwd, ".roll", "pairing.yaml"))).toBe(false);
+    expect(result.stderr).toContain("unknown pair subcommand: init");
+    expect(result.stderr).not.toContain("`roll pair init` is retired");
   });
 
   it("does not read a legacy pairing pool for status", () => {

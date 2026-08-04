@@ -44,19 +44,10 @@ export function pairCommand(args: string[]): number | Promise<number> {
     process.stdout.write(HELP);
     return 0;
   }
-  if ((args[0] === "legacy" && args[1] === "init") || args[0] === "init") return pairInit();
   if (args[0] === "status") return pairStatus(args.slice(1));
   if (args[0] === "score") return pairScore(args.slice(1));
   process.stderr.write(`[roll] unknown pair subcommand: ${args[0]}\n`);
   process.stderr.write(HELP);
-  return 1;
-}
-
-function pairInit(): number {
-  process.stderr.write(
-    "[roll] `roll pair init` is retired. Bind reviewers with .roll/agents.yaml defaults.story.roles.evaluate.\n" +
-      "[roll] `roll pair init` 已退役；请在 .roll/agents.yaml 的 defaults.story.roles.evaluate 绑定评审者。\n",
-  );
   return 1;
 }
 

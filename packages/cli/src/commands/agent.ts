@@ -124,7 +124,7 @@ function viewCommand(deps: AgentCommandDeps): number {
   out.push(
     "",
     "  Role bindings are authored in ~/.roll/agents.yaml and .roll/agents.yaml.",
-    "  roll agent migrate [--dry-run]  — convert legacy defaults/routes/pairing to roll-agents/v1",
+    "  roll agent migrate [--dry-run]  — convert legacy defaults/routes and enabled code reviewer pools; score/design/test/cycle pairing settings are retired",
     "  roll agent list                 — show installed agents",
     "",
   );

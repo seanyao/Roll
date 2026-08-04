@@ -37,6 +37,10 @@ defaults:
 `.roll/pairing.yaml` 不再是运行时输入；scoped `evaluate` role 是结对候选的唯一来源。
 静态配置列公平候选，auth/network/VPN/account 等运行时失败只在本次 resolution 中跳过候选。
 
+一次性迁移时，只有启用的旧 `code` stage 会把其中具备代码复查能力的候选迁入
+`defaults.story.roles.evaluate`。旧的 `score`、`design`、`test`、`cycle` 配置语义已废弃：
+仅有 score 的条目绝不会开启代码复查，Review Score 仍独立于这个废弃文件而必跑。
+
 ## 看它做了什么 —— 可观测性
 
 Loop cycle evidence 和角色视图会显示结对池（谁能结对、其厂商、被声明的能力，
@@ -149,9 +153,10 @@ roll effort --json
 
 ## 阶段
 
-`code` 和 `score` 是默认——异构搭档复检交付的改动，另一位给完成的 cycle 打分。
-`design`、`test`、`cycle` 把同一套机制扩到其它检查点；想要更早或更广的第二双
-眼睛时在 `stages` 里开启。
+运行中的代码复查阶段只有 `code`：配置了 `story.evaluate` 时，由异构搭档复检
+交付的改动。Review Score 是完成 cycle 后必跑的独立检查，不再作为 pairing stage 配置。
+`roll agent migrate` 只会把启用的旧 `code` 复查池迁入 `.roll/agents.yaml`；旧的
+`score`、`design`、`test`、`cycle` 条目已废弃，因为它们没有 scoped 代码复查对应项。
 
 ## Review Score —— 同行打分，绝不让作者给自己打分
 

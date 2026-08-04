@@ -42,6 +42,12 @@ defaults:
 only source for pairing candidates. Static config lists fair candidates; runtime
 auth/network/VPN/account failures skip candidates only for the current resolution.
 
+During the one-time migration, an enabled legacy `code` stage migrates only its
+code-capable reviewer pool to `defaults.story.roles.evaluate`. Legacy `score`,
+`design`, `test`, and `cycle` configuration is retired: score-only entries never
+enable code review, and Review Score remains mandatory independently of this
+retired file.
+
 ## Seeing what it does — observability
 
 Loop cycle evidence and role views show the pool (who can pair, their vendor,
@@ -177,10 +183,12 @@ pairing emits `pair:score` (score, verdict, cost) and writes
 
 ## Stages
 
-`code` and `score` are the defaults — a heterogeneous peer reviews the
-delivered diff, and another scores the finished cycle. `design`, `test`, and
-`cycle` extend the same mechanism to other checkpoints; enable them in
-`stages` when you want earlier or broader second eyes.
+The live code-review stage is `code`: a heterogeneous peer reviews the
+delivered diff when `story.evaluate` is configured. Review Score is a separate,
+mandatory finished-cycle check, so it is not configured as a pairing stage.
+`roll agent migrate` carries only enabled legacy `code` reviewer pools into
+`.roll/agents.yaml`; legacy `score`, `design`, `test`, and `cycle` entries are
+retired because they have no scoped code-review equivalent.
 
 ## Review Score — a peer grades the cycle, never the author
 

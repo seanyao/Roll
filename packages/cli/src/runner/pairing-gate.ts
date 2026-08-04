@@ -750,7 +750,7 @@ export function scoreTimeoutMsFor(agent: string): number {
  * cycle's Review Score: a fresh-session peer reads the delivery summary and
  * writes the `scoring: pair` Review Score note. The working agent NEVER grades its own work.
  *
- *   • MANDATORY: NOT gated on `.roll/pairing.yaml` (enabled / stages⊇score). A
+ *   • MANDATORY: NOT gated on the optional code-review configuration. A
  *     delivery always owes a Review Score; the executor calls this every cycle.
  *   • SAME-VENDOR fresh session qualifies (selectPairingCandidates stage="score"
  *     drops the heterogeneity filter) — independence = a separately spawned
@@ -1264,7 +1264,7 @@ export interface RetryPeerConsultResult {
  * FIX-293 — re-attempt the peer consultation ONCE when the peer gate blocks a
  * high-complexity delivery that shipped with no peer review.
  *
- * Unlike {@link runPairing} this is NOT gated on `.roll/pairing.yaml`: the peer
+ * Unlike {@link runPairing} this is NOT gated on the scoped code-review binding: the peer
  * gate is the always-on, agent-agnostic safety mechanism (pairing is the opt-in
  * enhancement), so the block-triggered retry must fire whether or not pairing is
  * configured. It runs the SAME `reviewPeer` consult path the pairing gate uses,
