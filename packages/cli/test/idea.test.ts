@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseBacklog } from "@roll/core";
 import { describe, expect, it } from "vitest";
-import { ideaCommand } from "../src/commands/idea.js";
+import { ideaCommand, type IdeaCommandDeps } from "../src/commands/idea.js";
 
 /** Run ideaCommand against a throwaway project with the given backlog. */
 function run(
@@ -59,6 +59,7 @@ function runWithProjSetup(
   args: string[],
   backlog: string,
   setup?: (proj: string) => void,
+  deps?: IdeaCommandDeps,
 ): { status: number; stdout: string; stderr: string; backlog: string | null; proj: string } {
   const proj = mkdtempSync(join(tmpdir(), "roll-idea-proj-"));
   mkdirSync(join(proj, ".roll"), { recursive: true });
@@ -82,7 +83,7 @@ function runWithProjSetup(
   let status: number;
   let after: string | null = null;
   try {
-    status = ideaCommand(args);
+    status = ideaCommand(args, deps);
     after = readFileSync(path, "utf8");
   } finally {
     process.stdout.write = rOut;
@@ -179,6 +180,103 @@ describe("FIX-1481 — id allocation folds in the remote authoritative backlog",
 });
 
 describe("ideaCommand (E2E golden path)", () => {
+  it.each([
+    ["us", ["--type", "us", "add", "a", "release", "check", "that", "avoids", "failure"], "US-RELEASE-001", "us"],
+    ["fix", ["--type", "fix", "add", "a", "release", "check", "that", "avoids", "failure"], "FIX-001", "bug"],
+    ["idea", ["--type", "idea", "add", "a", "release", "check", "that", "avoids", "failure"], "IDEA-001", "idea"],
+  ] as const)("explicit --type %s chooses its card family", (_type, args, id, expectedType) => {
+    const r = runWithProj(args as string[], EMPTY);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(id);
+    expect(r.stdout).toContain(expectedType === "us" ? "user story" : expectedType);
+    const card = join(r.proj, ".roll", "features", "release-management", id, "spec.md");
+    expect(readFileSync(card, "utf8")).toContain(`type: ${expectedType}`);
+    rmSync(r.proj, { recursive: true, force: true });
+  });
+
+  it("emits one machine-readable success record with the final family and ID", () => {
+    const r = runWithProj(["--json", "--type", "us", "add", "a", "release", "check", "that", "avoids", "failure"], EMPTY);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, id: "US-RELEASE-001", family: "US", type: "us" });
+    expect(r.stdout).not.toContain("📝");
+    rmSync(r.proj, { recursive: true, force: true });
+  });
+
+  it("explicit US overrides Chinese failure wording and the no-flag path stays a FIX", () => {
+    const forced = runWithProj(["--type", "us", "新增检查", "避免失败"], EMPTY);
+    expect(forced.status).toBe(0);
+    expect(forced.stdout).toContain("US-UNCATEGORIZED-001");
+    expect(forced.backlog).toContain("[US-UNCATEGORIZED-001]");
+    const legacy = run(["新增检查", "避免失败"], EMPTY);
+    expect(legacy.status).toBe(0);
+    expect(legacy.stdout).toContain("FIX-001");
+    rmSync(forced.proj, { recursive: true, force: true });
+  });
+
+  it("refuses invalid or missing explicit types before creating any state", () => {
+    for (const args of [["--type", "story", "add", "one"], ["--type", "add", "one"], ["--type=", "add", "one"]]) {
+      const r = runWithProj(args, EMPTY);
+      expect(r.status).toBe(1);
+      expect(r.backlog).toBe(EMPTY);
+      expect(existsSync(join(r.proj, ".roll", "index.json"))).toBe(false);
+      rmSync(r.proj, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a machine-readable invalid-type result before creating state", () => {
+    const r = runWithProj(["--json", "--type", "story", "add", "one"], EMPTY);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stderr)).toEqual({ ok: false, error: "invalid-type", allowedTypes: ["us", "fix", "idea"] });
+    expect(r.backlog).toBe(EMPTY);
+    rmSync(r.proj, { recursive: true, force: true });
+  });
+
+  it("refuses a fresh remote collision for an explicit US without partial state", () => {
+    let calls = 0;
+    const r = runWithDeps(["--type", "us", "add", "a", "release", "check"], EMPTY, () => {
+      calls += 1;
+      return calls === 1 ? [] : ["US-RELEASE-001"];
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("US-RELEASE-001");
+    expect(r.backlog).toBe(EMPTY);
+  });
+
+  it("rolls a card, row, and index back when index refresh fails", () => {
+    const r = runWithProjSetup(
+      ["--type", "us", "add", "a", "release", "check"],
+      EMPTY,
+      undefined,
+      { generateIndex: () => { throw new Error("disk full"); } },
+    );
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("nothing was recorded");
+    expect(r.backlog).toBe(EMPTY);
+    expect(existsSync(join(r.proj, ".roll", "features", "release-management", "US-RELEASE-001"))).toBe(false);
+    expect(existsSync(join(r.proj, ".roll", "index.json"))).toBe(false);
+    rmSync(r.proj, { recursive: true, force: true });
+  });
+
+  it("keeps a rival card directory when this invocation loses the final rename race", () => {
+    const r = runWithProjSetup(
+      ["--type", "us", "add", "a", "release", "check"],
+      EMPTY,
+      undefined,
+      {
+        renameCard: (_from, to) => {
+          mkdirSync(to, { recursive: true });
+          writeFileSync(join(to, "spec.md"), "owned by rival", "utf8");
+          throw new Error("EEXIST");
+        },
+      },
+    );
+    const rivalSpec = join(r.proj, ".roll", "features", "release-management", "US-RELEASE-001", "spec.md");
+    expect(r.status).toBe(1);
+    expect(r.backlog).toBe(EMPTY);
+    expect(readFileSync(rivalSpec, "utf8")).toBe("owned by rival");
+    rmSync(r.proj, { recursive: true, force: true });
+  });
+
   it("captures an idea: classifies, numbers, appends a parseable Todo row (exit 0)", () => {
     const r = run(["add", "a", "dark", "mode", "toggle"], EMPTY);
     expect(r.status).toBe(0);

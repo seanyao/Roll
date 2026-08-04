@@ -267,7 +267,7 @@ with `roll loop resume` when ready.
 | `roll design [--from-file <path>] [--agent <name>] [--verbose\|--raw]` | Launch `$roll-design` with bounded live progress, handoff, and an optional `roll loop go --review auto` continuation when new Todo cards are created |
 | `roll doctor [skills\|tools\|language\|repair-protection]` | Diagnose install health, skills, tools, permissions, language drift, and stale main-checkout write protection |
 | `roll help [--lang en\|zh] [name]` | View built-in Charter / guide docs; `roll --help` prints CLI usage |
-| `roll idea "<one-sentence description>"` | Capture and classify a new backlog card |
+| `roll idea [--type us\|fix\|idea] "<one-sentence description>"` | Capture a backlog card; use `--type us` when a new user story mentions a failure it will prevent |
 | `roll init` | Diagnose this directory and route setup/onboarding |
 | `roll loop <on\|off [--all]\|go\|watch\|runs\|cycles\|cycle\|alert\|…>` | Run, observe, stop, and maintain the autonomous executor |
 | `roll next` | Continue init/onboard with one best next command |

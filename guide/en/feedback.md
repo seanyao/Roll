@@ -10,11 +10,15 @@ Roll keeps two feedback paths deliberately separate:
 ```bash
 roll idea "Safari login fails after the session cookie expires"
 roll idea "Add dark mode to the story report archive"
+roll idea --type us "Add a release check that avoids unsupported green lights"
 ```
 
 `roll idea` classifies the note, assigns the next ID, infers the epic, mints
 the card folder, appends the backlog row, and refreshes the index. It is the
 normal project-owner entry for turning quick feedback into tracked Roll work.
+Use `--type us`, `--type fix`, or `--type idea` when you want to choose the
+card family yourself. The explicit choice wins over words such as “fails”; the
+command leaves nothing behind if it cannot safely create the whole card.
 
 ## GitHub Issues
 

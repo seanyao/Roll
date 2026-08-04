@@ -6,8 +6,10 @@ import {
   inferEpic,
   lintIdeaDescription,
   nextIdeaId,
+  nextUsId,
   planIdea,
   prefixForKind,
+  usEpicCode,
 } from "../src/backlog/idea.js";
 
 function item(id: string, status = "📋 Todo", desc = "d"): BacklogItem {
@@ -66,6 +68,19 @@ describe("nextIdeaId", () => {
   });
 });
 
+describe("nextUsId", () => {
+  it("allocates inside one valid US family without consuming IDEA/FIX ids", () => {
+    const items = [item("IDEA-999"), item("FIX-999"), item("US-CLI-004"), item("US-LOOP-010")];
+    expect(nextUsId(items, "CLI")).toBe("US-CLI-005");
+    expect(nextUsId(items, "UNCATEGORIZED")).toBe("US-UNCATEGORIZED-001");
+  });
+
+  it("maps inferred directory slugs to stable single-token US codes", () => {
+    expect(usEpicCode("release-management")).toBe("RELEASE");
+    expect(usEpicCode(undefined)).toBe("UNCATEGORIZED");
+  });
+});
+
 describe("lintIdeaDescription", () => {
   it("passes a plain one-sentence description", () => {
     expect(lintIdeaDescription("make the dashboard load faster on first paint")).toEqual([]);
@@ -103,6 +118,12 @@ describe("planIdea", () => {
   it("surfaces lint violations in the plan", () => {
     const p = planIdea([], "wire up the `module` properly");
     expect(p.violations).toContain("code-fence");
+  });
+
+  it("lets an explicit US choice override English and Chinese failure wording", () => {
+    const items = [item("US-RELEASE-002"), item("FIX-009"), item("IDEA-002")];
+    expect(planIdea(items, "add a release check that avoids failure", "us", "release-management").id).toBe("US-RELEASE-003");
+    expect(planIdea(items, "新增检查避免失败", "us", "release-management").kind).toBe("us");
   });
 });
 

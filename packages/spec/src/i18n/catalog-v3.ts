@@ -279,9 +279,13 @@ export const v3Catalog: Catalog = {
     en: "idea",
     zh: "想法",
   },
+  "ideav3.kind_us": {
+    en: "user story",
+    zh: "用户故事",
+  },
   "ideav3.usage": {
-    en: "Usage: roll idea <description>",
-    zh: "用法：roll idea <描述>",
+    en: "Usage: roll idea [--type us|fix|idea] <description>",
+    zh: "用法：roll idea [--type us|fix|idea] <描述>",
   },
   "ideav3.empty": {
     en: "Provide a short description to capture",
@@ -298,6 +302,22 @@ export const v3Catalog: Catalog = {
   "ideav3.conflict": {
     en: "Backlog changed on disk — re-run to capture",
     zh: "待办文件已变更 — 请重试以记录",
+  },
+  "ideav3.type_missing": {
+    en: "Choose a type after --type: us, fix, or idea",
+    zh: "请在 --type 后选择 us、fix 或 idea",
+  },
+  "ideav3.type_invalid": {
+    en: "--type accepts only us, fix, or idea",
+    zh: "--type 只接受 us、fix 或 idea",
+  },
+  "ideav3.write_failed": {
+    en: "Could not create the card safely — nothing was recorded",
+    zh: "无法安全创建卡片 — 未记录任何内容",
+  },
+  "ideav3.rollback_failed": {
+    en: "Card creation failed and its rollback also needs attention",
+    zh: "创建卡片失败，回退也需要处理",
   },
 
   // `releasev3.*` — the read-only release-guidance command (US-PORT-004). `roll

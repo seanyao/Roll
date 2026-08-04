@@ -18,6 +18,10 @@ import type { BacklogItem } from "./store.js";
 /** Classification of a captured line: a defect or a forward-looking idea. */
 export type IdeaKind = "bug" | "idea";
 
+/** An explicit capture may also mint a user story instead of using the legacy
+ * bug/idea classifier. */
+export type CaptureKind = IdeaKind | "us";
+
 /** ID family prefix per kind: bugs → FIX, ideas → IDEA. */
 export type IdeaPrefix = "FIX" | "IDEA";
 
@@ -108,6 +112,42 @@ export function nextIdeaId(items: readonly BacklogItem[], prefix: IdeaPrefix): s
   return `${prefix}-${String(max + 1).padStart(3, "0")}`;
 }
 
+/** Allocate within one US epic code.  Unlike IDEA/FIX, US ids include the
+ * family code, so US-CLI-001 and US-LOOP-001 are distinct safe sequences. */
+export function nextUsId(items: readonly BacklogItem[], epicCode: string): string {
+  const escaped = epicCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^US-${escaped}-(\\d+)`, "i");
+  let max = 0;
+  for (const it of items) {
+    const m = re.exec(it.id);
+    if (m === null) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `US-${epicCode.toUpperCase()}-${String(max + 1).padStart(3, "0")}`;
+}
+
+/** Stable, single-token US family codes.  The backlog parser deliberately
+ * accepts US-<CODE>-<number>, so a multi-word directory slug must not leak
+ * into a new id. */
+export function usEpicCode(epic: string | undefined): string {
+  const codes: Record<string, string> = {
+    "cli-simplification": "CLI",
+    "loop-engine": "LOOP",
+    "skill-ecosystem": "SKILL",
+    "delivery-dossier": "DOSSIER",
+    "acceptance-evidence": "EVID",
+    documentation: "DOC",
+    "release-management": "RELEASE",
+    "bash-endgame": "BUILD",
+    "cross-agent-pairing": "PAIR",
+    "backlog-lifecycle": "BACKLOG",
+    "engineering-infrastructure": "CI",
+    uncategorized: "UNCATEGORIZED",
+  };
+  return codes[epic ?? "uncategorized"] ?? "UNCATEGORIZED";
+}
+
 const FILENAME_RE = /[A-Za-z_][A-Za-z0-9_.-]*\.(sh|bash|yaml|yml|json|js|ts|tsx|py|rb|go|rs|c|cpp|h)\b/;
 const PATH_RE = /[A-Za-z_][A-Za-z0-9_.-]*\/[A-Za-z0-9_./-]+/;
 const FUNCTION_RE = /(?:\b_[a-zA-Z][a-zA-Z0-9_]+\b|\b[A-Za-z_][A-Za-z0-9_]+\(\))/;
@@ -133,8 +173,8 @@ export function lintIdeaDescription(desc: string): string[] {
 
 /** A capture plan: the classification, assigned id, and any lint violations. */
 export interface IdeaPlan {
-  kind: IdeaKind;
-  prefix: IdeaPrefix;
+  kind: CaptureKind;
+  prefix: IdeaPrefix | "US";
   id: string;
   violations: string[];
 }
@@ -170,13 +210,18 @@ export function inferEpic(text: string): string | undefined {
 }
 
 /** Compose classify → next-id → lint into a single plan over the parsed rows. */
-export function planIdea(items: readonly BacklogItem[], text: string): IdeaPlan {
-  const kind = classifyIdea(text);
-  const prefix = prefixForKind(kind);
+export function planIdea(
+  items: readonly BacklogItem[],
+  text: string,
+  explicitKind?: CaptureKind,
+  epic?: string,
+): IdeaPlan {
+  const kind = explicitKind ?? classifyIdea(text);
+  const prefix = kind === "us" ? "US" : prefixForKind(kind);
   return {
     kind,
     prefix,
-    id: nextIdeaId(items, prefix),
+    id: kind === "us" ? nextUsId(items, usEpicCode(epic)) : nextIdeaId(items, prefixForKind(kind)),
     violations: lintIdeaDescription(text),
   };
 }
