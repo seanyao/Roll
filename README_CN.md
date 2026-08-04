@@ -241,7 +241,14 @@ AC 状态、无豁免可视卡缺截图，都会拒合。PR body 里的 `Roll-Ev
 
 `roll supervisor live` 是已交付的 CLI-first 多角色看板。它默认打印一帧快照，适合脚本和快速查看；`roll supervisor live --watch` 会让同一个看板保持打开，并从同一条事件驱动 view model 原地刷新。浏览器/TUI 版 Supervisor Live Console 仍是未来工作，必须复用这个 view model。
 
+`roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]`
+从不可变事件和交付事实只读推导尝试数、耗时、TCR、重新交接和组合多样性。窗口和百分位
+样本会明确显示；缺失或矛盾事实保持不完整，绝不会变成零或成功。它绝不选择模型组合、
+改变 backlog 顺序或合并 PR。
+
 `roll supervisor metrics [--json]` 是配套的只读流程投影。它从事件账本推导逐卡与聚合的排队、依赖、首个动作、合并、PR/CI 和对账耗时；终端输出会写明观察窗口、样本量、`nearest-rank` 百分位算法以及每一项缺失的上游事实，JSON 保留同样的不确定性。依赖等待会区分“未完成依赖阻塞”和“依赖已满足但尚未派发”。`handoff_ready` 仍然只是交接，绝不会被显示为已交付。
+完整的[交付指标词典](guide/zh/delivery-metrics.md)列出两条命令的来源事实、分子/分母、
+时间边界、未知行为与建议性边界；artifact 缺失不是关于模型调用的证据。
 
 ## 规则注册表与文档漂移
 

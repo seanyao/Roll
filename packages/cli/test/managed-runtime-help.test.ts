@@ -61,9 +61,11 @@ describe("US-LOOP-129 managed-runtime help", () => {
     expect(en.delta).toContain("managed workspace");
     expect(en.worktree).toContain("managed WorkspaceSet");
     expect(en.supervisor).toContain("DeliveryRun truth");
+    expect(en.supervisor).toContain("never routes work, changes priority, or merges");
     expect(zh.delta).toContain("受管工作区");
     expect(zh.worktree).toContain("受管 WorkspaceSet");
     expect(zh.supervisor).toContain("DeliveryRun 真相");
+    expect(zh.supervisor).toContain("绝不路由工作、改变优先级或合并");
     expect(en.worktree).not.toMatch(/[\u4e00-\u9fff]/);
     expect(zh.worktree).not.toContain("Usage:");
     expect({ en, zh }).toMatchSnapshot();
@@ -117,5 +119,42 @@ describe("US-LOOP-129 active documentation contract", () => {
         expect(text, `${surface} must not publish ${recipe.source}`).not.toMatch(recipe);
       }
     }
+  });
+});
+
+describe("US-DELTA-014 metric documentation contract", () => {
+  it("publishes complete bilingual metric dictionaries without retired causal claims", () => {
+    const surfaces = [
+      "guide/en/delivery-metrics.md",
+      "guide/zh/delivery-metrics.md",
+      "README.md",
+      "README_CN.md",
+    ];
+    const retiredClaims = [
+      /missing artifacts? (?:prove|means?) (?:that )?an? model (?:did not )?run/i,
+      /metrics? (?:automatically )?(?:route|select|prioriti[sz]e|merge)/i,
+      /指标.*(?:自动|直接).*(?:路由|选择|优先级|合并)/,
+      /缺失.*artifact.*(?:证明|表示).*模型.*(?:未)?执行/,
+    ];
+
+    for (const surface of surfaces) {
+      const text = readFileSync(resolve(projectRoot, surface), "utf8");
+      for (const claim of retiredClaims) {
+        expect(text, `${surface} must not publish ${claim.source}`).not.toMatch(claim);
+      }
+    }
+
+    const en = readFileSync(resolve(projectRoot, "guide/en/delivery-metrics.md"), "utf8");
+    const zh = readFileSync(resolve(projectRoot, "guide/zh/delivery-metrics.md"), "utf8");
+    const readmeZh = readFileSync(resolve(projectRoot, "README_CN.md"), "utf8");
+    expect(en).toContain("# Delivery metrics dictionary");
+    expect(en).toContain("`roll delta metrics [");
+    expect(en).toContain("`roll supervisor metrics [");
+    expect(en).toContain("not proof of a model invocation");
+    expect(zh).toContain("# 交付指标词典");
+    expect(zh).toContain("`roll delta metrics [");
+    expect(zh).toContain("`roll supervisor metrics [");
+    expect(zh).toContain("不是模型调用的证明");
+    expect(readmeZh).toContain("guide/zh/delivery-metrics.md");
   });
 });

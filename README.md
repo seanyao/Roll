@@ -131,6 +131,9 @@ Honest boundaries the protocol states and never overclaims:
   Its window and percentile samples are shown explicitly; missing or
   contradictory facts stay marked incomplete rather than becoming a zero or a
   success. It never selects a model, changes backlog order, or merges a PR.
+  See the [delivery metrics dictionary](guide/en/delivery-metrics.md) for every
+  Delta and Supervisor source fact, denominator, time boundary, and unknown
+  behavior.
 
 Every delegation has a Supervisor: a loop is a chain of cycles running inside a
 host session, so it has a main session and full sub-agent capability like any
@@ -365,6 +368,10 @@ observation window, sample sizes, `nearest-rank` percentiles, and every missing
 upstream fact; JSON preserves the same uncertainty. Dependency wait keeps
 blocked-by-not-Done separate from satisfied-but-not-dispatched. A
 `handoff_ready` fact remains a handoff only — it is never a Delivered claim.
+The [delivery metrics dictionary](guide/en/delivery-metrics.md) and its
+[Chinese counterpart](guide/zh/delivery-metrics.md) also document the causal
+limits of attempt outcomes and why a missing artifact is not evidence about a
+model invocation.
 
 All Roll-owned delivery workspaces live under `.roll/loop/worktrees/` as one
 managed WorkspaceSet per DeliveryRun; submodule worktrees are explicit members.
