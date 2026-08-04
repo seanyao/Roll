@@ -34,7 +34,7 @@
 | guide/en/practices/engineering-common-sense.md | Roll Engineering Common Sense Checklist | guide | 2026-05-27 |
 | guide/en/pricing.md | Pricing — Cost Visibility & Price Snapshots | guide | 2026-05-24 |
 | guide/en/project-setup.md | Roll — Project Setup | guide | 2026-05-28 |
-| guide/en/skills.md | Roll Skill Selection Guide | guide | 2026-05-19 |
+| [guide/en/skills.md](en/skills.md#roll-browse--external-page-acquisition) | Roll Skill Selection Guide (including roll-browse) | guide | 2026-08-04 |
 | guide/en/test-isolation.md | Roll — Test Isolation (roll test) | guide | 2026-05-28 |
 | guide/en/tools.md | Roll — Tools & Policy | guide | 2026-06-19 |
 | guide/en/testing.md | Roll — Testing Workflow | guide | 2026-05-23 |
@@ -65,7 +65,7 @@
 | guide/zh/pr-review.md | Roll — PR 评审 | guide | 2026-05-19 |
 | guide/zh/pricing.md | Pricing — 成本可见性与价格快照 | guide | 2026-05-24 |
 | guide/zh/project-setup.md | Roll — 项目初始化 | guide | 2026-05-28 |
-| guide/zh/skills.md | Roll 技能选择指南 | guide | 2026-05-19 |
+| [guide/zh/skills.md](zh/skills.md#roll-browse--获取外部网页资料) | Roll 技能选择指南（含 roll-browse） | guide | 2026-08-04 |
 | guide/zh/test-isolation.md | Roll — 测试隔离（roll test）| guide | 2026-05-28 |
 | guide/zh/tools.md | Roll — 工具与策略 | guide | 2026-06-19 |
 | guide/zh/testing.md | Roll — 测试工作流 | guide | 2026-05-23 |

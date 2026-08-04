@@ -14,6 +14,25 @@
 | **"并行跑多个 Action"** | `roll-build` | 拆分 Action 后自动判断是否并行 |
 | **"交付了什么 / 队列里还有什么？"** | `roll status` / `roll loop cycle` / Story 报告 | CLI-first 交付状态、cycle 轨迹和按 Story 收口的证据 |
 | **"调试这个页面"** | `roll-debug` | 深度诊断，采集日志/网络/DOM |
+| **"获取外部网页"** / **"遇到反爬页面或 CAPTCHA 需要协助"** | `roll-browse` | 隔离地获取外部资料，可由 owner 接手；它不做项目诊断，也不产生验收证据 |
+
+## roll-browse —— 获取外部网页资料
+
+`roll-browse` 只用于获取外部网页资料，例如遇到反爬页面或需要 owner 协助的
+CAPTCHA。只运行它规定的 `browse.sh` 包装脚本；返回内容只能作为笔记，不能当作
+交付证据。
+
+它有四条硬边界：
+
+- 禁止 Chrome mode、owner 的浏览器档案、cookie 和 CDP 连接。
+- 外部获取的结果绝不能作为验收证据或视觉验收证据。
+- Roll 不会自动安装或升级 browser-act；缺少工具时会停止，并告诉 owner 安装来源。
+- 登录接手使用由 owner 控制的 URL 凭据。Roll 不会接收、保存、转发或处理该 URL
+  或任何凭据。
+
+要处理本项目拥有的网页，请用 `roll-debug`：它诊断项目的控制台、网络、DOM 和源码。
+`roll-browse` 只获取外部网页资料。归属优先于保护：即使自有的预发布页面在登录墙后，
+也仍是 `roll-debug` 的场景，不应改用 `roll-browse`。
 
 ## 支撑技能
 
@@ -119,8 +138,8 @@ review-score: mean 7.8 / min 4 / redo 2 (last 14)
 低置信交付——两者都提示该轮 cycle 值得回看。mean 和 min 覆盖整个
 窗口，避免一次糟糕 cycle 被平均掩盖。
 
-The trend line shows mean, minimum, and `redo` count (regression
-verdicts plus low-confidence "ok"s) for the last 14 Review Score notes.
+趋势行展示最近 14 条 Review Score 笔记的平均分、最低分和 `redo` 数量；`redo`
+包括 `regression` 判定与低置信度的 `ok` 判定。
 
 这些笔记是 `.roll/` 的一部分，跟代码一起提交，质量轨迹在不同机器、
 不同协作者之间都可复现，从项目历史里直接可见。
