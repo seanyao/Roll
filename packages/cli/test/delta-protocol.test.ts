@@ -2965,7 +2965,7 @@ describe("US-DELTA-003 — regression: concurrent harness is deterministic", () 
 // ── Concurrent subprocess lease contention (III.1 / AC2) ────────────────────
 
 describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () => {
-  it("exactly one wins when two workers prepare same story under barrier", async () => {
+  it("exactly one persisted allocation when two workers prepare same story under barrier", async () => {
     const dir = setupMinimalProject("US-DELTA-CONCURRENT", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONCURRENT", "local-preset");
 
@@ -3025,29 +3025,45 @@ describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () =
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
-    // Exactly one must succeed (code 0), exactly one must fail (code 1)
-    const codes = [r1.code, r2.code].sort();
-    expect(codes).toEqual([0, 1]);
+    // FIX-1509 — the barrier releases both workers together, but it cannot
+    // guarantee both reach the lease claim at the same instant: one worker may
+    // fully finish before the other starts its check. Two outcomes are correct:
+    //   - contention: one wins (0), the other is refused with builder_lease_conflict (1)
+    //   - idempotent resume: both succeed (0), the second reporting the SAME
+    //     persisted delegationId it found durably prepared by the first.
+    // What must NEVER happen: two different delegationIds, two frames, two
+    // prepared events, or two leases.
+    const results = [r1, r2];
+    const successes = results.filter((r) => r.code === 0);
+    const failures = results.filter((r) => r.code !== 0);
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    expect(failures.length).toBeLessThanOrEqual(1);
 
-    // Winner has valid prepare output
-    const winner = r1.code === 0 ? r1 : r2;
-    const loser = r1.code === 0 ? r2 : r1;
-    let winnerParsed: Record<string, unknown>;
-    try {
-      winnerParsed = JSON.parse(winner.stdout.trim().split("\n").pop()!);
-    } catch {
-      // The winner's stdout might include tsx output; try parsing the last JSON line
-      const lines = winner.stdout.trim().split("\n");
-      const jsonLine = lines.find(l => l.startsWith("{"));
-      if (jsonLine) winnerParsed = JSON.parse(jsonLine);
-      else throw new Error(`Cannot parse winner stdout: ${winner.stdout}`);
+    const parseResult = (r: { code: number; stdout: string; stderr: string }): Record<string, unknown> => {
+      try {
+        return JSON.parse(r.stdout.trim().split("\n").pop()!) as Record<string, unknown>;
+      } catch {
+        // The worker's stdout might include tsx output; try parsing the last JSON line
+        const jsonLine = r.stdout.trim().split("\n").find(l => l.startsWith("{"));
+        if (jsonLine) return JSON.parse(jsonLine) as Record<string, unknown>;
+        throw new Error(`Cannot parse worker stdout: ${r.stdout}`);
+      }
+    };
+    const parsed = successes.map(parseResult);
+    for (const p of parsed) {
+      expect(p.ok).toBe(true);
+      expect(typeof p.delegationId).toBe("string");
     }
-    expect(winnerParsed.ok).toBe(true);
-    expect(typeof winnerParsed.delegationId).toBe("string");
+    // Every success reports the ONE persisted delegation identity.
+    const delegationId = parsed[0]!.delegationId as string;
+    for (const p of parsed) {
+      expect(p.delegationId).toBe(delegationId);
+    }
 
-    // Loser has builder_lease_conflict error
-    const loserOutput = loser.stderr + loser.stdout;
-    expect(loserOutput).toContain("builder_lease_conflict");
+    // A refused worker must carry the explicit lease-conflict reason.
+    for (const f of failures) {
+      expect(f.stderr + f.stdout).toContain("builder_lease_conflict");
+    }
 
     // Only ONE committed frame exists
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
@@ -3055,13 +3071,18 @@ describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () =
     const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
     const preparedEvents = events.filter((l: string) => { try { return JSON.parse(l).type === "delta:prepared"; } catch { return false; }});
     expect(preparedEvents.length).toBe(1);
-    expect(JSON.parse(preparedEvents[0]!).delegationId).toBe(winnerParsed.delegationId);
+    expect(JSON.parse(preparedEvents[0]!).delegationId).toBe(delegationId);
 
-    // Only ONE lease entry exists, bound to winner's delegationId
+    // Only ONE frame directory exists, for that same delegation
+    const cardDir = join(dir, ".roll", "features", "delta-team", "US-DELTA-CONCURRENT");
+    const frameDirs = readdirSync(cardDir).filter((n) => n.startsWith("delta-"));
+    expect(frameDirs).toEqual([`delta-${delegationId}`]);
+
+    // Only ONE lease entry exists, bound to the persisted delegationId
     const slPath = storyLeasesPath(dir);
     const sl = readLeases(slPath);
     expect(sl["US-DELTA-CONCURRENT"]).toBeDefined();
-    expect(sl["US-DELTA-CONCURRENT"].delegationId).toBe(winnerParsed.delegationId);
+    expect(sl["US-DELTA-CONCURRENT"].delegationId).toBe(delegationId);
 
     // No temp/claim residue in loop dir
     const loopDir = join(dir, ".roll", "loop");
@@ -4273,7 +4294,7 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
 // ── Story-level concurrent barrier with ready files (III.1) ────────────────
 
 describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
-  it("both workers write ready ack; main waits for both before releasing go; exactly one winner", async () => {
+  it("both workers write ready ack; main waits for both before releasing go; exactly one persisted allocation", async () => {
     const dir = setupMinimalProject("US-DELTA-READY", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-READY", "local-preset");
 
@@ -4325,21 +4346,35 @@ describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
-    // Exactly one must succeed (code 0), exactly one must fail (code 1)
-    const codes = [r1.code, r2.code].sort();
-    expect(codes).toEqual([0, 1]);
+    // FIX-1509 — two correct outcomes: one winner + one builder_lease_conflict
+    // refusal, or both succeeding with the SAME persisted delegationId (the
+    // second worker idempotently resumed the allocation the first had already
+    // durably prepared). Never two different allocations.
+    const results = [r1, r2];
+    const successes = results.filter((r) => r.code === 0);
+    const failures = results.filter((r) => r.code !== 0);
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    expect(failures.length).toBeLessThanOrEqual(1);
 
-    // Winner has valid output, loser has builder_lease_conflict
-    const winner = r1.code === 0 ? r1 : r2;
-    const loser = r1.code === 0 ? r2 : r1;
-    const winnerOut = winner.stdout.trim();
-    const jsonLine = winnerOut.split("\n").find(l => l.startsWith("{"));
-    expect(jsonLine).toBeDefined();
-    const winnerParsed = JSON.parse(jsonLine!);
-    expect(winnerParsed.ok).toBe(true);
+    const parsed = successes.map((r) => {
+      const jsonLine = r.stdout.trim().split("\n").find(l => l.startsWith("{"));
+      expect(jsonLine).toBeDefined();
+      return JSON.parse(jsonLine!) as Record<string, unknown>;
+    });
+    for (const p of parsed) {
+      expect(p.ok).toBe(true);
+      expect(typeof p.delegationId).toBe("string");
+    }
+    // Every success reports the ONE persisted delegation identity.
+    const delegationId = parsed[0]!.delegationId as string;
+    for (const p of parsed) {
+      expect(p.delegationId).toBe(delegationId);
+    }
 
-    const loserOutput = loser.stderr + loser.stdout;
-    expect(loserOutput).toContain("builder_lease_conflict");
+    // A refused worker must carry the explicit lease-conflict reason.
+    for (const f of failures) {
+      expect(f.stderr + f.stdout).toContain("builder_lease_conflict");
+    }
 
     // Only ONE committed frame + ONE lease
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
@@ -4347,11 +4382,18 @@ describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
     const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
     const preparedEvents = events.filter((l: string) => { try { return JSON.parse(l).type === "delta:prepared"; } catch { return false; }});
     expect(preparedEvents.length).toBe(1);
+    expect(JSON.parse(preparedEvents[0]!).delegationId).toBe(delegationId);
+
+    // Only ONE frame directory exists, for that same delegation
+    const cardDir = join(dir, ".roll", "features", "delta-team", "US-DELTA-READY");
+    const frameDirs = readdirSync(cardDir).filter((n) => n.startsWith("delta-"));
+    expect(frameDirs).toEqual([`delta-${delegationId}`]);
 
     const slPath = storyLeasesPath(dir);
     const sl = readLeases(slPath);
     expect(sl["US-DELTA-READY"]).toBeDefined();
     expect(sl["US-DELTA-READY"].source).toBe("host-delegation");
+    expect(sl["US-DELTA-READY"].delegationId).toBe(delegationId);
 
     // Cleanup: release the lease
     releaseHostDelegationLease(dir, "US-DELTA-READY", sl["US-DELTA-READY"].delegationId, sl["US-DELTA-READY"].runId);
