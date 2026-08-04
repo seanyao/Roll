@@ -67,6 +67,10 @@ export interface ReleaseFlowDeps {
   clean: (cwd: string) => boolean;
   synced: (cwd: string) => boolean;
   tagExists: (cwd: string, tag: string) => boolean;
+  /** The checked-out, post-sync main SHA. Every tag target is explicit. */
+  headSha: (cwd: string) => string;
+  /** Read-only Git/GitHub evidence for an interrupted old release. */
+  recovery: ReleaseRecoveryDeps;
   readChangelog: (cwd: string) => string;
   writeChangelog: (cwd: string, text: string) => void;
   bumpVersion: (cwd: string, version: string) => void;
@@ -102,7 +106,7 @@ export interface ReleaseFlowDeps {
   ) => boolean;
   syncMain: (cwd: string) => boolean;
   consistencyGate: (cwd: string) => Promise<boolean> | boolean;
-  tag: (cwd: string, tag: string, version: string) => void;
+  tag: (cwd: string, tag: string, version: string, targetSha: string) => void;
   pushTag: (cwd: string, tag: string) => void;
   /**
    * FIX-368: record the just-pushed release as a `release:gate` FACT in the
@@ -114,11 +118,47 @@ export interface ReleaseFlowDeps {
    * a bookkeeping append. The default impl swallows every error. Optional so a
    * test can omit it; the flow guards the call regardless.
    */
-  recordReleaseFact?: (cwd: string, tag: string) => void;
+  recordReleaseFact?: (cwd: string, tag: string, targetSha: string) => void;
   confirm: (tag: string) => boolean;
   now: () => Date;
   /** Step progress sink (stdout in production; recorded in tests). */
   onStep?: (step: ReleaseStep, detail: string) => void;
+}
+
+/** A read-only fact source. Recovery never treats a failed query as absence. */
+export type ReleaseRecoveryFact<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: string };
+
+/** Minimal GitHub PR facts required to prove an old release really merged. */
+export interface ReleaseRecoveryPr {
+  number: number;
+  title: string;
+  state: string;
+  mergeSha: string | undefined;
+}
+
+/**
+ * Read-only seams for FIX-1514. They keep every Git/GitHub/tag observation
+ * deterministic in tests and make failed observations explicit in production.
+ */
+export interface ReleaseRecoveryDeps {
+  listReleasePrs: (cwd: string) => ReleaseRecoveryFact<ReadonlyArray<ReleaseRecoveryPr>>;
+  remoteTagExists: (cwd: string, tag: string) => ReleaseRecoveryFact<boolean>;
+  readFileAt: (cwd: string, sha: string, path: "package.json" | "CHANGELOG.md") => ReleaseRecoveryFact<string>;
+}
+
+export type ReleaseRecoveryResult =
+  | { status: "none" }
+  | { status: "recovered"; tag: string; version: string; targetSha: string }
+  | { status: "blocked"; reason: string };
+
+interface ReleaseRecoveryActions {
+  packageName: (cwd: string) => string;
+  recovery: ReleaseRecoveryDeps;
+  tag: (cwd: string, tag: string, version: string, targetSha: string) => void;
+  pushTag: (cwd: string, tag: string) => void;
+  recordReleaseFact?: (cwd: string, tag: string, targetSha: string) => void;
 }
 
 function git(cwd: string, args: string[]): string {
@@ -140,6 +180,101 @@ function ghSync(cwd: string, args: string[]): { code: number; stdout: string; st
       stderr: err.stderr != null ? String(err.stderr) : "",
     };
   }
+}
+
+function recoveryTagFromTitle(title: string): { tag: string; version: string } | undefined {
+  const match = /^Release: (v[^\s]+)$/.exec(title.trim());
+  if (match === null) return undefined;
+  const tag = match[1] ?? "";
+  const version = tag.replace(/^v/, "");
+  return tag === "v" || version === "" ? undefined : { tag, version };
+}
+
+function validSha(value: string | undefined): value is string {
+  return value !== undefined && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function packageIdentity(text: string): { name: string; version: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    const name = typeof record["name"] === "string" ? record["name"].trim() : "";
+    const version = typeof record["version"] === "string" ? record["version"].trim() : "";
+    return name === "" || version === "" ? undefined : { name, version };
+  } catch {
+    return undefined;
+  }
+}
+
+function changelogHasRelease(text: string, tag: string): boolean {
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^## ${escaped}(?:\\s+—\\s+\\d{4}-\\d{2}-\\d{2})?\\s*$`, "m").test(text);
+}
+
+/**
+ * Recover only one fully-proven old release. A zero-candidate result is not an
+ * error: it means there is no unfinished release and the ordinary flow can run.
+ * Every other uncertain state blocks before a local tag, file write, CI run, or
+ * publish action.
+ */
+export function recoverMergedRelease(cwd: string, actions: ReleaseRecoveryActions): ReleaseRecoveryResult {
+  const prFacts = actions.recovery.listReleasePrs(cwd);
+  if (!prFacts.ok) return { status: "blocked", reason: `release PR facts unreadable: ${prFacts.reason}` };
+
+  const unfinished: Array<{ pr: ReleaseRecoveryPr; tag: string; version: string }> = [];
+  for (const pr of prFacts.value) {
+    const release = recoveryTagFromTitle(pr.title);
+    if (release === undefined) continue;
+    const tagFact = actions.recovery.remoteTagExists(cwd, release.tag);
+    if (!tagFact.ok) return { status: "blocked", reason: `remote tag facts unreadable for ${release.tag}: ${tagFact.reason}` };
+    if (!tagFact.value) unfinished.push({ pr, ...release });
+  }
+
+  if (unfinished.length === 0) return { status: "none" };
+  if (unfinished.length !== 1) return { status: "blocked", reason: `expected exactly one unfinished release, found ${unfinished.length}` };
+
+  const candidate = unfinished[0];
+  if (candidate === undefined) return { status: "blocked", reason: "unfinished release selection failed" };
+  if (candidate.pr.state !== "MERGED") {
+    return { status: "blocked", reason: `release PR #${candidate.pr.number} is not merged (${candidate.pr.state})` };
+  }
+  if (!validSha(candidate.pr.mergeSha)) {
+    return { status: "blocked", reason: `release PR #${candidate.pr.number} has no readable merge SHA` };
+  }
+
+  const packageFact = actions.recovery.readFileAt(cwd, candidate.pr.mergeSha, "package.json");
+  if (!packageFact.ok) return { status: "blocked", reason: `package identity unreadable: ${packageFact.reason}` };
+  const oldPackage = packageIdentity(packageFact.value);
+  const expectedPackage = actions.packageName(cwd).trim();
+  if (oldPackage === undefined || expectedPackage === "" || oldPackage.name !== expectedPackage) {
+    return { status: "blocked", reason: "package identity does not match the current project" };
+  }
+  if (oldPackage.version !== candidate.version) {
+    return { status: "blocked", reason: `version identity does not match ${candidate.tag}` };
+  }
+
+  const changelogFact = actions.recovery.readFileAt(cwd, candidate.pr.mergeSha, "CHANGELOG.md");
+  if (!changelogFact.ok) return { status: "blocked", reason: `CHANGELOG identity unreadable: ${changelogFact.reason}` };
+  if (!changelogHasRelease(changelogFact.value, candidate.tag)) {
+    return { status: "blocked", reason: `CHANGELOG identity does not contain ${candidate.tag}` };
+  }
+
+  // Re-read the remote tag immediately before the first mutation: a concurrent
+  // maintainer wins, and we leave both Git and files untouched.
+  const finalTagFact = actions.recovery.remoteTagExists(cwd, candidate.tag);
+  if (!finalTagFact.ok) return { status: "blocked", reason: `remote tag facts unreadable for ${candidate.tag}: ${finalTagFact.reason}` };
+  if (finalTagFact.value) return { status: "blocked", reason: `tag ${candidate.tag} already exists` };
+
+  actions.tag(cwd, candidate.tag, candidate.version, candidate.pr.mergeSha);
+  actions.pushTag(cwd, candidate.tag);
+  try {
+    actions.recordReleaseFact?.(cwd, candidate.tag, candidate.pr.mergeSha);
+  } catch {
+    // The tag is already irreversible; bookkeeping stays best-effort exactly as
+    // in the ordinary release flow.
+  }
+  return { status: "recovered", tag: candidate.tag, version: candidate.version, targetSha: candidate.pr.mergeSha };
 }
 
 /**
@@ -361,6 +496,67 @@ function repoSlugSync(cwd: string): string | undefined {
   const r = ghSync(cwd, ["repo", "view", "--json", "owner,name", "--jq", '.owner.login + "/" + .name']);
   const v = r.code === 0 ? r.stdout.trim() : "";
   return v === "" ? undefined : v;
+}
+
+function readStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Production recovery facts. Every failed read remains a failed fact. */
+function realReleaseRecoveryDeps(): ReleaseRecoveryDeps {
+  return {
+    listReleasePrs: (cwd) => {
+      const result = ghSync(cwd, [
+        "pr", "list", "--state", "all", "--base", "main", "--limit", "100",
+        "--json", "number,title,state,mergeCommit",
+      ]);
+      if (result.code !== 0) {
+        const detail = (result.stderr || result.stdout).trim() || "gh pr list failed";
+        return { ok: false, reason: detail };
+      }
+      try {
+        const parsed: unknown = JSON.parse(result.stdout);
+        if (!Array.isArray(parsed)) return { ok: false, reason: "gh pr list returned a non-array" };
+        const prs: ReleaseRecoveryPr[] = [];
+        for (const value of parsed) {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false, reason: "gh pr list returned an invalid PR" };
+          const record = value as Record<string, unknown>;
+          const number = record["number"];
+          const title = readStringField(record, "title");
+          const state = readStringField(record, "state");
+          const merge = record["mergeCommit"];
+          const mergeSha =
+            typeof merge === "object" && merge !== null && !Array.isArray(merge)
+              ? readStringField(merge as Record<string, unknown>, "oid")
+              : undefined;
+          if (typeof number !== "number" || !Number.isInteger(number) || title === undefined || state === undefined) {
+            return { ok: false, reason: "gh pr list returned an incomplete PR" };
+          }
+          prs.push({ number, title, state, mergeSha });
+        }
+        return { ok: true, value: prs };
+      } catch {
+        return { ok: false, reason: "gh pr list returned invalid JSON" };
+      }
+    },
+    remoteTagExists: (cwd, tag) => {
+      try {
+        const refs = git(cwd, ["ls-remote", "--tags", "--refs", "origin", `refs/tags/${tag}`]);
+        return { ok: true, value: refs !== "" };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    readFileAt: (cwd, sha, path) => {
+      if (!validSha(sha)) return { ok: false, reason: "invalid commit SHA" };
+      try {
+        return { ok: true, value: git(cwd, ["show", `${sha}:${path}`]) };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  };
 }
 
 /**
@@ -770,6 +966,14 @@ export function realReleaseDeps(): ReleaseFlowDeps {
         return true; // unknowable → treat as a collision, never overwrite
       }
     },
+    headSha: (cwd) => {
+      try {
+        return git(cwd, ["rev-parse", "HEAD"]);
+      } catch {
+        return "";
+      }
+    },
+    recovery: realReleaseRecoveryDeps(),
     readChangelog: (cwd) => readFileSync(join(cwd, "CHANGELOG.md"), "utf8"),
     writeChangelog: (cwd, text) => writeFileSync(join(cwd, "CHANGELOG.md"), text, "utf8"),
     bumpVersion: (cwd, version) => {
@@ -928,8 +1132,8 @@ export function realReleaseDeps(): ReleaseFlowDeps {
       const code = await runConsistencyCheck(["check"], "roll release");
       return code === 0;
     },
-    tag: (cwd, tagName, version) => {
-      git(cwd, ["tag", "-a", tagName, "-m", `release v${version}`]);
+    tag: (cwd, tagName, version, targetSha) => {
+      git(cwd, ["tag", "-a", tagName, targetSha, "-m", `release v${version}`]);
     },
     pushTag: (cwd, tagName) => {
       git(cwd, ["push", "origin", tagName]);
@@ -973,6 +1177,7 @@ export interface ReleaseRunResult {
   step?: ReleaseStep;
   reason?: string;
   tag?: string;
+  recovered?: boolean;
 }
 
 /**
@@ -1012,6 +1217,25 @@ async function runReleaseFlowInner(
   if (deps.branch(cwd) !== "main") return abort("plan", "not on main");
   if (!deps.clean(cwd)) return abort("plan", "working tree dirty");
   if (!deps.synced(cwd)) return abort("plan", "main is behind origin — pull first");
+
+  // FIX-1514: a previous release may have merged after this process timed out.
+  // Before planning a new version, recover exactly one fully-proven old release.
+  // Dry-run remains side-effect free and therefore only previews the normal flow.
+  if (!opts.dryRun) {
+    const recovered = recoverMergedRelease(cwd, {
+      packageName: deps.packageName,
+      recovery: deps.recovery,
+      tag: deps.tag,
+      pushTag: deps.pushTag,
+      recordReleaseFact: deps.recordReleaseFact,
+    });
+    if (recovered.status === "blocked") return abort("plan", `release recovery stopped: ${recovered.reason}`);
+    if (recovered.status === "recovered") {
+      step("tag-push", `recovered ${recovered.tag} at ${recovered.targetSha}`);
+      return { status: "released", tag: recovered.tag, recovered: true };
+    }
+  }
+
   const d = deps.now();
   const date: ReleaseDate = { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
   // FIX-1247: anchor the version to THIS project's scheme — only roll itself
@@ -1081,8 +1305,10 @@ async function runReleaseFlowInner(
   step("sync-main", "main up to date");
 
   if (deps.tagExists(cwd, plan.tag)) return abort("tag-push", `tag ${plan.tag} appeared concurrently`);
+  const targetSha = deps.headSha(cwd);
+  if (!validSha(targetSha)) return abort("tag-push", "current main SHA unreadable");
   mark("tag-push");
-  deps.tag(cwd, plan.tag, plan.nextVersion);
+  deps.tag(cwd, plan.tag, plan.nextVersion, targetSha);
   deps.pushTag(cwd, plan.tag);
   step("tag-push", plan.tag);
   // FIX-368: the release is now IRREVERSIBLE (the v* tag is pushed → publish).
@@ -1090,7 +1316,7 @@ async function runReleaseFlowInner(
   // and guarded so a bookkeeping failure can never turn a completed release into
   // an abort. (The default dep already swallows; this double-guards a custom dep.)
   try {
-    deps.recordReleaseFact?.(cwd, plan.tag);
+    deps.recordReleaseFact?.(cwd, plan.tag, targetSha);
   } catch {
     /* never let release-fact bookkeeping affect the completed release */
   }
