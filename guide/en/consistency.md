@@ -42,6 +42,10 @@ The acceptance-evidence gate is `hard` by default. `loop_safety.attest_gate: sof
 is an explicit project policy for migration windows; consistency still reports
 missing or dangling evidence so the gap cannot disappear silently.
 
+The site dimension checks the surviving public top-level command mentions in
+site copy and resolves `guide/<lang>/*.md` links. It does not verify that every
+completed story has a site page.
+
 The truth-live dimension is the anti-false-Done guard. It first rebuilds the
 delivery projection from `runs.jsonl` plus first-parent `main` merge commits,
 then calls `queryStoryDelivery()` for every story id found in the release delta.

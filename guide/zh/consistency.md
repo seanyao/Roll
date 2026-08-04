@@ -35,6 +35,9 @@ General → Pull Requests）；没开则发版会带着诚实的错误停下，�
 验收证据闸默认是 `hard`。`loop_safety.attest_gate: soft` 是显式项目策略，
 只用于迁移窗口；一致性检查仍会报告缺失或悬空的证据，避免缺口静默消失。
 
+网站维度只检查 site 文案里仍存活的公开顶层命令引用，并解析
+`guide/<lang>/*.md` 链接；它不会核对每个已完成故事是否都有网站页面。
+
 真相活体维度是防“假 Done”闸。它先从 `runs.jsonl` 和 first-parent `main`
 merge commit 重建交付投影，再对发布增量里的每个 story id 调
 `queryStoryDelivery()`。backlog markdown 只是人的声明；`deliveries.jsonl`

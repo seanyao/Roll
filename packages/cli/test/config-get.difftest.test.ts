@@ -85,22 +85,20 @@ describe("frozen: roll config (read) render", () => {
         "stdout": "Usage: roll config <key>                 print current value + source
              roll config --list                list all config keys
              roll config <key> <value> [--global|--project]   set a value
-                                                                        统一调度配置
+                                                                        配置读写
       Read / list / set config keys without hand-editing yaml.
       Default write scope is --project (.roll/local.yaml); --global writes
-      ~/.roll/config.yaml. The dream time keys below are INACTIVE — they are still
-      stored and printed, but nothing reads them.
+      ~/.roll/config.yaml. Legacy dream-time keys are INACTIVE — reads, writes, and
+      --list disclose that nothing reads them.
       读 / 列 / 写配置 key，免去手工编辑 yaml。默认写 --project
-      （.roll/local.yaml）；--global 写 ~/.roll/config.yaml。下面的 dream 时刻 key
-      已**失效**：仍然会存、会打印，但没有任何东西读它们。
+      （.roll/local.yaml）；--global 写 ~/.roll/config.yaml。历史 dream 时刻 key
+      已**失效**：读、写、--list 都会说明没有任何东西读它们。
 
-      Supported keys (range):
+      Legacy inactive keys (range):
         loop_dream_hour                0-23    (inactive) stored hour, unread
         loop_dream_minute              0-59    (inactive) stored minute, unread
 
-      Compact facade (write multiple keys at once):
-        roll config dream-time 03:20              loop_dream_hour + loop_dream_minute
-        (this writes values nothing reads — run "roll dream run-once" for a scan)
+      Run "roll dream run-once" when you want a scan.
 
       Language (REFACTOR-049: roll lang → roll config lang):
         roll config lang                          show current language + source
@@ -112,8 +110,6 @@ describe("frozen: roll config (read) render", () => {
         roll config integration_branch
         roll config --list
         roll config publish_mode local
-        roll config loop_dream_hour 3 --global
-        roll config dream-time 03:20
       ",
       }
     `);

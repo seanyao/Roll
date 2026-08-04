@@ -1007,6 +1007,9 @@ function checkHelp(command: string): string {
     bilingual, site, truth-live) and produce a verdict-first table. Any failing
     dimension aborts the release.
     跑七维一致性、判定优先输出；任一维失败即中止发版。
+    Site checks cover surviving top-level command mentions and guide links only;
+    story-to-site coverage is not configured.
+    site 检查只覆盖仍存活的顶层命令引用和指南链接；不核对每张故事是否上站。
 
   ${command} check                # verdict-first seven-dimension table
   ${command} check --json         # machine-readable JSON (same computation)
