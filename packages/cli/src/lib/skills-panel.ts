@@ -86,6 +86,7 @@ export function defaultSkillsPanelDeps(projectPath: string): SkillsPanelDeps {
 
 const GROUP_OF: Record<string, SkillGroup> = {
   "roll-build": "delivery",
+  "roll-browse": "delivery",
   "roll-fix": "delivery",
   "roll-design": "delivery",
   "roll-idea": "delivery",
