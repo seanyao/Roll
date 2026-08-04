@@ -86,11 +86,35 @@ describe("consistency cards dimension", () => {
     expect(r.overall).toBe("fail");
   });
 
-  it("Done with folder but no AC block: report requirement is exempt", () => {
+  it("FIX-1513: Done with folder but no AC block and no manual explanation → fail", () => {
     const p = project(["| FIX-10 | z | ✅ Done |"], [["e", "FIX-10", false, false]]);
     const r = runJson(p);
-    expect(r.dimensions["cards"]?.status).toBe("pass");
-    expect(r.dimensions["cards"]?.note).toContain("without AC blocks exempt");
+    expect(r.dimensions["cards"]?.status).toBe("fail");
+    expect(r.dimensions["cards"]?.gaps[0]).toContain("add a non-empty `manual:` explanation");
+    expect(r.overall).toBe("fail");
+  });
+
+  it("FIX-1513: a blank manual explanation does not open the exception", () => {
+    const p = project(["| FIX-10 | z | ✅ Done · manual:    |"], [["e", "FIX-10", false, false]]);
+    const r = runJson(p);
+    expect(r.dimensions["cards"]?.status).toBe("fail");
+    expect(r.dimensions["cards"]?.gaps[0]).toContain("add a non-empty `manual:` explanation");
+  });
+
+  it("FIX-1513: a manual note outside the Done status does not open the exception", () => {
+    const p = project(["| FIX-10 | manual: catalog cleanup | ✅ Done |"], [["e", "FIX-10", false, false]]);
+    const r = runJson(p);
+    expect(r.dimensions["cards"]?.status).toBe("fail");
+  });
+
+  it("FIX-1513: Done with folder but no AC block and a manual explanation → pass", () => {
+    const p = project(
+      ["| FIX-10 | z | ✅ Done · manual: This was a catalog-only cleanup with no product behavior |"],
+      [["e", "FIX-10", false, false]],
+    );
+    const r = runJson(p);
+    expect(r.dimensions["cards"]).toMatchObject({ status: "pass", gaps: [] });
+    expect(r.dimensions["cards"]?.note).toContain("manual explanation");
   });
 
   it("FIX-1216: Done with folder + `## AC` format (modern) still detected as having ACs", () => {

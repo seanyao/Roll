@@ -504,7 +504,9 @@ export function checkTruthLive(projectDir: string): DimResult {
 // shapes observed 2026-06-08: a story split that wrote backlog rows with no
 // card folders (broken links), and a ✅ Done row carrying an evidence link to
 // a report that was never produced. Pre-card-era Done rows remain informational;
-// card-era Done rows with ACs but no report are a hard gap.
+// card-era Done rows with ACs but no report are a hard gap. The one manual
+// exception (a card with no AC block and no report) must say why in the Done
+// status rather than silently turning into a green release check.
 function checkCards(projectDir: string): DimResult {
   const backlog = join(projectDir, ".roll", "backlog.md");
   const featuresDir = join(projectDir, ".roll", "features");
@@ -536,8 +538,8 @@ function checkCards(projectDir: string): DimResult {
   };
 
   const gaps: string[] = [];
-  /** FIX-1216: track exempt card IDs for observability. */
-  const exemptCards: string[] = [];
+  /** FIX-1513: track explicit manual exceptions for observability. */
+  const manualExceptionCards: string[] = [];
   let doneNoReportNoAc = 0;
   let doneNoFolder = 0;
   for (const line of readText(backlog).split("\n")) {
@@ -565,8 +567,16 @@ function checkCards(projectDir: string): DimResult {
         if (hasAcBlock(epic, id)) {
           gaps.push(`Done backlog row ${id} has ACs but no attest report`);
         } else {
-          doneNoReportNoAc += 1;
-          exemptCards.push(id);
+          const status = line.split("|").map((cell) => cell.trim()).at(-2) ?? line;
+          const manualReason = /\bmanual:\s*(\S(?:.*\S)?)/i.exec(status)?.[1]?.trim();
+          if (manualReason === undefined || manualReason === "") {
+            gaps.push(
+              `Done backlog row ${id} has neither ACs nor an attest report — add a non-empty \`manual:\` explanation to the Done status`,
+            );
+          } else {
+            doneNoReportNoAc += 1;
+            manualExceptionCards.push(id);
+          }
         }
       }
     }
@@ -574,7 +584,9 @@ function checkCards(projectDir: string): DimResult {
   const result: DimResult = { status: gaps.length === 0 ? "pass" : "fail", gaps };
   const notes: string[] = [];
   if (doneNoFolder > 0) notes.push(`${doneNoFolder} pre-card-era Done rows without a card folder`);
-  if (doneNoReportNoAc > 0) notes.push(`${doneNoReportNoAc} Done rows without AC blocks exempt from attest report: ${exemptCards.join(", ")}`);
+  if (doneNoReportNoAc > 0) {
+    notes.push(`${doneNoReportNoAc} Done rows without AC blocks accepted with a manual explanation: ${manualExceptionCards.join(", ")}`);
+  }
   if (notes.length > 0) result.note = `${notes.join("; ")} (informational)`;
   return result;
 }
