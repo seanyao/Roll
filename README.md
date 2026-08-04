@@ -126,6 +126,11 @@ Honest boundaries the protocol states and never overclaims:
   project config.
 - **Host-guided cost is `? (host_unobservable)`** — never estimated, priced, or
   zeroed.
+- **`roll delta metrics` is read-only.** It derives counts, timing, TCR facts,
+  redelegation, and rig diversity from immutable event and delivery records.
+  Its window and percentile samples are shown explicitly; missing or
+  contradictory facts stay marked incomplete rather than becoming a zero or a
+  success. It never selects a model, changes backlog order, or merges a PR.
 
 Every delegation has a Supervisor: a loop is a chain of cycles running inside a
 host session, so it has a main session and full sub-agent capability like any

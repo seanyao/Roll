@@ -73,6 +73,10 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
     validation, with no events and no lease/frame/workspace/checkpoint writes.
     Formal roll delta validate remains the only lifecycle gate.
 
+
+  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
+    Read immutable event and delivery truth. It never selects a rig, changes priority, or merges.
+
   roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
     owner_redelegate transfers the reservation to the named successor; the successor
@@ -174,6 +178,10 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
   roll delta preflight --delegation <id> --stage builder [--json]
     只读建造者自检：与正式校验相同的结构检查，不写任何事件，也不改动
     lease/帧/工作区/检查点。正式 roll delta validate 仍是唯一生命周期门。
+
+
+  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
+    只读不可变事件和交付真相；绝不选择模型组合、改变优先级或合并。
 
   roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。

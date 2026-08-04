@@ -32,10 +32,10 @@ import {
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
 import { managedWorkspaceOperationId } from "../lib/managed-workspace-operation.js";
 import { renderDeltaBanner, renderDeltaPhaseBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
-import { EventBus, attemptCauseFromBlockReason, projectDelegationStatus, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type ObservedBuilderHead } from "@roll/core";
-import type { DelegationResolution, DeltaArtifactManifest, DeltaAttemptOutcomeEvent, DeltaRoleAvailabilityObservedEvent, ManagedWorkspaceSet, RollEvent } from "@roll/spec";
+import { EventBus, attemptCauseFromBlockReason, projectDelegationStatus, projectDeltaMetrics, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type DeltaDeliveryFact, type DeltaMetrics, type ObservedBuilderHead } from "@roll/core";
+import { parseEventLine, type DelegationResolution, type DeltaArtifactManifest, type DeltaAttemptOutcomeEvent, type DeltaRoleAvailabilityObservedEvent, type ManagedWorkspaceSet, type RollEvent } from "@roll/spec";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve, sep, relative } from "node:path";
 
@@ -294,7 +294,7 @@ export async function deltaCommand(args: string[]): Promise<number> {
   if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
     const usage = T("delta.help.usage").replace(
       "\n  roll delta conclude",
-      `${T("delta.help.preflight")}  roll delta conclude`,
+      `${T("delta.help.preflight")}${T("delta.help.metrics")}  roll delta conclude`,
     );
     process.stdout.write(usage + T("delta.help.builder_receipt"));
     return 0;
@@ -312,10 +312,181 @@ export async function deltaCommand(args: string[]): Promise<number> {
       return concludeCommand(args.slice(1));
     case "status":
       return statusCommand(args.slice(1));
+    case "metrics":
+      return metricsCommand(args.slice(1));
     default:
       process.stderr.write(`${T("delta.error.unknown_subcommand", sub)}\n`);
       return 1;
   }
+}
+
+// ── US-DELTA-013 — read-only delivery metrics ───────────────────────────────
+
+type MetricsFlags = "json" | "from" | "to" | "from-ts" | "to-ts";
+
+function parseMetricsTs(value: string | true | undefined, flag: string): number | { error: string } | undefined {
+  if (value === undefined) return undefined;
+  if (value === true || value.trim() === "") return { error: `${flag} requires an epoch-ms number or ISO timestamp` };
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue)) return numberValue;
+  const isoValue = Date.parse(value);
+  return Number.isFinite(isoValue) ? isoValue : { error: `${flag} must be an epoch-ms number or ISO timestamp` };
+}
+
+function metricFiles(loopPath: string, name: string): string[] {
+  if (!existsSync(loopPath)) return [];
+  const pattern = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\.(\\d+))?$`);
+  return readdirSync(loopPath)
+    .flatMap((entry) => {
+      const matched = pattern.exec(entry);
+      return matched === null ? [] : [{ path: join(loopPath, entry), rotation: matched[1] === undefined ? 0 : Number(matched[1]) }];
+    })
+    .sort((a, b) => b.rotation - a.rotation || a.path.localeCompare(b.path))
+    .map((entry) => entry.path);
+}
+
+function readMetricEvents(loopPath: string): { events: RollEvent[]; diagnostics: string[] } {
+  const events: RollEvent[] = [];
+  const diagnostics: string[] = [];
+  for (const path of metricFiles(loopPath, "events.ndjson")) {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      diagnostics.push(`cannot read event ledger ${path}`);
+      continue;
+    }
+    for (const [index, raw] of text.split("\n").entries()) {
+      if (raw.trim() === "") continue;
+      const event = parseEventLine(raw);
+      if (event === null) diagnostics.push(`invalid event ledger line ${path}:${index + 1} (metrics incomplete)`);
+      else events.push(event);
+    }
+  }
+  return { events, diagnostics };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readMetricDeliveries(loopPath: string): { deliveries: DeltaDeliveryFact[]; diagnostics: string[] } {
+  const deliveries: DeltaDeliveryFact[] = [];
+  const diagnostics: string[] = [];
+  for (const path of metricFiles(loopPath, "deliveries.jsonl")) {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      diagnostics.push(`cannot read delivery ledger ${path}`);
+      continue;
+    }
+    for (const [index, raw] of text.split("\n").entries()) {
+      if (raw.trim() === "") continue;
+      let row: unknown;
+      try {
+        row = JSON.parse(raw);
+      } catch {
+        diagnostics.push(`invalid delivery ledger line ${path}:${index + 1} (merge fact unavailable)`);
+        continue;
+      }
+      if (!isRecord(row) || typeof row["storyId"] !== "string" || row["storyId"] === "") {
+        diagnostics.push(`invalid delivery record ${path}:${index + 1} (merge fact unavailable)`);
+        continue;
+      }
+      const mergedAt = row["mergedAt"];
+      const mergedAtMs = isRecord(mergedAt) && mergedAt["present"] === true && typeof mergedAt["value"] === "number" && Number.isFinite(mergedAt["value"])
+        ? mergedAt["value"]
+        : undefined;
+      deliveries.push({
+        storyId: row["storyId"],
+        ...(typeof row["lifecycleState"] === "string" ? { lifecycleState: row["lifecycleState"] } : {}),
+        ...(mergedAtMs === undefined ? {} : { mergedAtMs }),
+      });
+    }
+  }
+  return { deliveries, diagnostics };
+}
+
+function formatMetricMs(value: number | null): string {
+  if (value === null) return "?";
+  return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(2)}s`;
+}
+
+function formatMetricRate(value: number | null): string {
+  return value === null ? "?" : `${(value * 100).toFixed(1)}%`;
+}
+
+export function renderDeltaMetrics(report: DeltaMetrics, language = lang()): string {
+  const zh = language === "zh";
+  const window = report.window.fromTs === undefined && report.window.toTs === undefined
+    ? (zh ? "全部已记录事件时间" : "all observed event time")
+    : `${report.window.fromTs ?? "…"}..${report.window.toTs ?? "…"}`;
+  const samples = report.phaseSamples;
+  const title = zh ? "Delta 团队交付指标（只读）" : "Delta delivery metrics (read-only)";
+  const labels = zh
+    ? [
+      `窗口：${window}（按事件记录时间）`,
+      `样本：${report.cards} 张卡，${report.attempts} 次尝试，${report.mergedCards} 张已合并`,
+      `首次合并：${formatMetricRate(report.firstPassMergeRate.value)}（${report.firstPassMergeRate.numerator}/${report.firstPassMergeRate.denominator}）`,
+      `重新交接：${formatMetricRate(report.redelegateRate.value)}（${report.redelegateRate.numerator}/${report.redelegateRate.denominator}）`,
+      `建造耗时：${formatMetricMs(samples.builder.totalMs)}；样本 ${samples.builder.sampleSize}，P50 ${formatMetricMs(samples.builder.p50Ms)}，P95 ${formatMetricMs(samples.builder.p95Ms)}`,
+      `评审耗时：${formatMetricMs(samples.evaluator.totalMs)}；样本 ${samples.evaluator.sampleSize}，P50 ${formatMetricMs(samples.evaluator.p50Ms)}，P95 ${formatMetricMs(samples.evaluator.p95Ms)}`,
+      `合并尾段：${formatMetricMs(samples.mergeTail.totalMs)}；样本 ${samples.mergeTail.sampleSize}，P50 ${formatMetricMs(samples.mergeTail.p50Ms)}，P95 ${formatMetricMs(samples.mergeTail.p95Ms)}`,
+      `TCR：回合 ${report.tcr.rounds ?? "?"}，绿 ${report.tcr.green ?? "?"}，红 ${report.tcr.red ?? "?"}，测试耗时 ${formatMetricMs(report.tcr.testWallMs)}`,
+      `百分位算法：nearest-rank；数据${report.incomplete ? `不完整（${report.diagnostics.length} 条提示）` : "完整"}`,
+    ]
+    : [
+      `window: ${window} (observed event time)`,
+      `sample: ${report.cards} cards, ${report.attempts} attempts, ${report.mergedCards} merged cards`,
+      `first-pass merge: ${formatMetricRate(report.firstPassMergeRate.value)} (${report.firstPassMergeRate.numerator}/${report.firstPassMergeRate.denominator})`,
+      `redelegated: ${formatMetricRate(report.redelegateRate.value)} (${report.redelegateRate.numerator}/${report.redelegateRate.denominator})`,
+      `builder wall: ${formatMetricMs(samples.builder.totalMs)}; sample ${samples.builder.sampleSize}, P50 ${formatMetricMs(samples.builder.p50Ms)}, P95 ${formatMetricMs(samples.builder.p95Ms)}`,
+      `evaluator wall: ${formatMetricMs(samples.evaluator.totalMs)}; sample ${samples.evaluator.sampleSize}, P50 ${formatMetricMs(samples.evaluator.p50Ms)}, P95 ${formatMetricMs(samples.evaluator.p95Ms)}`,
+      `merge tail: ${formatMetricMs(samples.mergeTail.totalMs)}; sample ${samples.mergeTail.sampleSize}, P50 ${formatMetricMs(samples.mergeTail.p50Ms)}, P95 ${formatMetricMs(samples.mergeTail.p95Ms)}`,
+      `TCR: rounds ${report.tcr.rounds ?? "?"}, green ${report.tcr.green ?? "?"}, red ${report.tcr.red ?? "?"}, test wall ${formatMetricMs(report.tcr.testWallMs)}`,
+      `percentiles: nearest-rank; data ${report.incomplete ? `incomplete (${report.diagnostics.length} diagnostics)` : "complete"}`,
+    ];
+  return `${[title, "", ...labels.map((label) => `  ${label}`)].join("\n")}\n`;
+}
+
+function metricsCommand(args: string[]): number {
+  const known = new Set<MetricsFlags>(["json", "from", "to", "from-ts", "to-ts"]);
+  const duplicate = detectDuplicateFlags(args, known);
+  const parsed = parseArgs(args);
+  if (duplicate !== null || parsed.positional.length > 0 || Object.keys(parsed.flags).some((flag) => !known.has(flag as MetricsFlags))) {
+    process.stderr.write("Usage: roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]\n");
+    return 1;
+  }
+  if (parsed.flags["from"] !== undefined && parsed.flags["from-ts"] !== undefined || parsed.flags["to"] !== undefined && parsed.flags["to-ts"] !== undefined) {
+    process.stderr.write("Use only one of --from/--from-ts and --to/--to-ts.\n");
+    return 1;
+  }
+  const from = parseMetricsTs(parsed.flags["from"] ?? parsed.flags["from-ts"], "--from");
+  const to = parseMetricsTs(parsed.flags["to"] ?? parsed.flags["to-ts"], "--to");
+  const parseError = typeof from === "object" ? from : typeof to === "object" ? to : undefined;
+  if (parseError !== undefined) {
+    process.stderr.write(`${parseError.error}\n`);
+    return 1;
+  }
+  const fromTs = typeof from === "number" ? from : undefined;
+  const toTs = typeof to === "number" ? to : undefined;
+  if (fromTs !== undefined && toTs !== undefined && fromTs > toTs) {
+    process.stderr.write("--from must be before or equal to --to.\n");
+    return 1;
+  }
+  const loopPath = join(process.cwd(), ".roll", "loop");
+  const eventInput = readMetricEvents(loopPath);
+  const deliveryInput = readMetricDeliveries(loopPath);
+  const report = projectDeltaMetrics({
+    events: eventInput.events,
+    deliveries: deliveryInput.deliveries,
+    window: { ...(fromTs === undefined ? {} : { fromTs }), ...(toTs === undefined ? {} : { toTs }) },
+    sourceDiagnostics: [...eventInput.diagnostics, ...deliveryInput.diagnostics],
+  });
+  if (parsed.flags["json"] === true) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  else process.stdout.write(renderDeltaMetrics(report));
+  return 0;
 }
 
 // ── Prepare ──────────────────────────────────────────────────────────────────

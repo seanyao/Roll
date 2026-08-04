@@ -1,0 +1,105 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-013 — roll delta metrics command > emits a stable single-language EN panel and does not write the ledgers 1`] = `
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "Delta delivery metrics (read-only)
+
+  window: all observed event time (observed event time)
+  sample: 1 cards, 1 attempts, 1 merged cards
+  first-pass merge: 100.0% (1/1)
+  redelegated: 0.0% (0/1)
+  builder wall: 4.10s; sample 1, P50 4.10s, P95 4.10s
+  evaluator wall: 2.10s; sample 1, P50 2.10s, P95 2.10s
+  merge tail: 2.00s; sample 1, P50 2.00s, P95 2.00s
+  TCR: rounds 1, green 1, red 0, test wall 50ms
+  percentiles: nearest-rank; data complete
+",
+}
+`;
+
+exports[`US-DELTA-013 — roll delta metrics command > emits a stable single-language ZH panel 1`] = `
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "Delta 团队交付指标（只读）
+
+  窗口：全部已记录事件时间（按事件记录时间）
+  样本：1 张卡，1 次尝试，1 张已合并
+  首次合并：100.0%（1/1）
+  重新交接：0.0%（0/1）
+  建造耗时：4.10s；样本 1，P50 4.10s，P95 4.10s
+  评审耗时：2.10s；样本 1，P50 2.10s，P95 2.10s
+  合并尾段：2.00s；样本 1，P50 2.00s，P95 2.00s
+  TCR：回合 1，绿 1，红 0，测试耗时 50ms
+  百分位算法：nearest-rank；数据完整
+",
+}
+`;
+
+exports[`US-DELTA-013 — roll delta metrics command > emits the versioned JSON contract and honors an empty window 1`] = `
+{
+  "attempts": 0,
+  "cards": 0,
+  "diagnostics": [],
+  "firstPassMergeRate": {
+    "denominator": 0,
+    "numerator": 0,
+    "reason": "no_eligible_sample",
+    "value": null,
+  },
+  "incomplete": false,
+  "mergedCards": 0,
+  "outcomeCauses": {},
+  "percentileAlgorithm": "nearest-rank",
+  "phaseSamples": {
+    "builder": {
+      "p50Ms": null,
+      "p95Ms": null,
+      "sampleSize": 0,
+      "totalMs": null,
+    },
+    "evaluator": {
+      "p50Ms": null,
+      "p95Ms": null,
+      "sampleSize": 0,
+      "totalMs": null,
+    },
+    "mergeTail": {
+      "p50Ms": null,
+      "p95Ms": null,
+      "sampleSize": 0,
+      "totalMs": null,
+    },
+  },
+  "phaseWallMs": {
+    "builder": null,
+    "evaluator": null,
+    "mergeTail": null,
+  },
+  "redelegateRate": {
+    "denominator": 0,
+    "numerator": 0,
+    "reason": "no_eligible_sample",
+    "value": null,
+  },
+  "rigs": [],
+  "schema": "roll.delta.metrics.v1",
+  "schemaVersion": 1,
+  "tcr": {
+    "completeRounds": 0,
+    "green": null,
+    "incompleteAttempts": 0,
+    "incompleteRounds": 0,
+    "red": null,
+    "rounds": null,
+    "testWallMs": null,
+  },
+  "window": {
+    "fromTs": 50000,
+    "toTs": 60000,
+  },
+  "windowBasis": "observed_event_time",
+}
+`;
