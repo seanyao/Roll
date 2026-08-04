@@ -1,0 +1,275 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-LOOP-130 — roll supervisor metrics > emits stable JSON for handoff-only, merged-but-unattested, fully reconciled, and partial history 1`] = `
+{
+  "aggregates": {
+    "dependencyWait": {
+      "p50Ms": 100,
+      "p95Ms": 100,
+      "sampleSize": 1,
+      "totalMs": 100,
+    },
+    "dispatchToMergeLead": {
+      "p50Ms": 40,
+      "p95Ms": 40,
+      "sampleSize": 2,
+      "totalMs": 80,
+    },
+    "firstActionLatency": {
+      "p50Ms": 10,
+      "p95Ms": 10,
+      "sampleSize": 2,
+      "totalMs": 20,
+    },
+    "prCiTail": {
+      "p50Ms": 10,
+      "p95Ms": 10,
+      "sampleSize": 2,
+      "totalMs": 20,
+    },
+    "queueWait": {
+      "p50Ms": 110,
+      "p95Ms": 110,
+      "sampleSize": 1,
+      "totalMs": 110,
+    },
+    "reconciliationLag": {
+      "p50Ms": 10,
+      "p95Ms": 10,
+      "sampleSize": 1,
+      "totalMs": 10,
+    },
+  },
+  "cards": [
+    {
+      "delivery": "not_delivered",
+      "dependencyState": "blocked_by_not_done",
+      "dependencyWaitMs": 100,
+      "dispatchToMergeLeadMs": null,
+      "firstActionLatencyMs": null,
+      "handoffReady": false,
+      "incompleteFacts": [
+        "first-action latency unavailable: missing dispatch or first-action observation",
+        "dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence",
+        "PR/CI tail unavailable: missing PR-open and CI-or-main observation",
+        "reconciliation lag unavailable: missing main merge or reconciliation observation",
+        "recorded main merge evidence unavailable",
+        "attestation state unavailable",
+      ],
+      "prCiTailMs": null,
+      "queueWaitMs": 110,
+      "reconciliationLagMs": null,
+      "storyId": "US-BLOCKED",
+      "truth": {
+        "attestation": "unavailable",
+        "backlog": "not_done",
+        "consistency": "incomplete",
+        "recordedMainMerge": "unavailable",
+      },
+    },
+    {
+      "delivery": "not_delivered",
+      "dependencyState": "not_applicable",
+      "dependencyWaitMs": null,
+      "dispatchToMergeLeadMs": null,
+      "firstActionLatencyMs": null,
+      "handoffReady": false,
+      "incompleteFacts": [
+        "queue wait unavailable: missing ranked-ready or dispatch observation",
+        "first-action latency unavailable: missing dispatch or first-action observation",
+        "dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence",
+        "PR/CI tail unavailable: missing PR-open and CI-or-main observation",
+        "reconciliation lag unavailable: missing main merge or reconciliation observation",
+        "recorded main merge evidence unavailable",
+        "attestation state unavailable",
+      ],
+      "prCiTailMs": null,
+      "queueWaitMs": null,
+      "reconciliationLagMs": null,
+      "storyId": "US-DEP",
+      "truth": {
+        "attestation": "unavailable",
+        "backlog": "not_done",
+        "consistency": "incomplete",
+        "recordedMainMerge": "unavailable",
+      },
+    },
+    {
+      "delivery": "delivered",
+      "dependencyState": "not_applicable",
+      "dependencyWaitMs": null,
+      "dispatchToMergeLeadMs": 40,
+      "firstActionLatencyMs": 10,
+      "handoffReady": false,
+      "incompleteFacts": [
+        "queue wait unavailable: missing ranked-ready or dispatch observation",
+      ],
+      "prCiTailMs": 10,
+      "queueWaitMs": null,
+      "reconciliationLagMs": 10,
+      "storyId": "US-FULL",
+      "truth": {
+        "attestation": "recorded",
+        "backlog": "done",
+        "consistency": "consistent",
+        "recordedMainMerge": "confirmed",
+      },
+    },
+    {
+      "delivery": "not_delivered",
+      "dependencyState": "not_applicable",
+      "dependencyWaitMs": null,
+      "dispatchToMergeLeadMs": null,
+      "firstActionLatencyMs": null,
+      "handoffReady": true,
+      "incompleteFacts": [
+        "queue wait unavailable: missing ranked-ready or dispatch observation",
+        "first-action latency unavailable: missing dispatch or first-action observation",
+        "dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence",
+        "PR/CI tail unavailable: missing PR-open and CI-or-main observation",
+        "reconciliation lag unavailable: missing main merge or reconciliation observation",
+        "recorded main merge evidence unavailable",
+        "attestation state unavailable",
+        "handoff_ready observed: not a main merge, attestation verdict, or Delivered claim",
+      ],
+      "prCiTailMs": null,
+      "queueWaitMs": null,
+      "reconciliationLagMs": null,
+      "storyId": "US-HANDOFF",
+      "truth": {
+        "attestation": "unavailable",
+        "backlog": "not_done",
+        "consistency": "incomplete",
+        "recordedMainMerge": "unavailable",
+      },
+    },
+    {
+      "delivery": "delivered",
+      "dependencyState": "not_applicable",
+      "dependencyWaitMs": null,
+      "dispatchToMergeLeadMs": 40,
+      "firstActionLatencyMs": 10,
+      "handoffReady": false,
+      "incompleteFacts": [
+        "queue wait unavailable: missing ranked-ready or dispatch observation",
+        "reconciliation lag unavailable: missing main merge or reconciliation observation",
+        "attestation state unavailable",
+      ],
+      "prCiTailMs": 10,
+      "queueWaitMs": null,
+      "reconciliationLagMs": null,
+      "storyId": "US-MERGED",
+      "truth": {
+        "attestation": "unavailable",
+        "backlog": "done",
+        "consistency": "inconsistent",
+        "recordedMainMerge": "confirmed",
+      },
+    },
+    {
+      "delivery": "not_delivered",
+      "dependencyState": "not_yet_dispatched",
+      "dependencyWaitMs": null,
+      "dispatchToMergeLeadMs": null,
+      "firstActionLatencyMs": null,
+      "handoffReady": false,
+      "incompleteFacts": [
+        "queue wait unavailable: missing ranked-ready or dispatch observation",
+        "first-action latency unavailable: missing dispatch or first-action observation",
+        "dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence",
+        "PR/CI tail unavailable: missing PR-open and CI-or-main observation",
+        "reconciliation lag unavailable: missing main merge or reconciliation observation",
+        "dependency wait incomplete: dependencies are Done but dispatch boundary is unavailable",
+        "recorded main merge evidence unavailable",
+        "attestation state unavailable",
+      ],
+      "prCiTailMs": null,
+      "queueWaitMs": null,
+      "reconciliationLagMs": null,
+      "storyId": "US-PARTIAL",
+      "truth": {
+        "attestation": "unavailable",
+        "backlog": "not_done",
+        "consistency": "incomplete",
+        "recordedMainMerge": "unavailable",
+      },
+    },
+  ],
+  "dependencyStates": {
+    "blocked_by_not_done": 1,
+    "not_yet_dispatched": 1,
+    "unknown": 0,
+  },
+  "diagnostics": [],
+  "incomplete": true,
+  "observationWindow": {
+    "fromTs": 90,
+    "toTs": 700,
+  },
+  "percentileAlgorithm": "nearest-rank",
+  "sampleSize": 6,
+  "schema": "roll.supervisor.metrics.v1",
+  "schemaVersion": 1,
+  "truthConsistency": {
+    "checked": 2,
+    "consistent": 1,
+    "incomplete": 4,
+    "inconsistent": 1,
+  },
+  "windowBasis": "observed_event_time",
+}
+`;
+
+exports[`US-LOOP-130 — roll supervisor metrics > renders a frozen EN read-only terminal projection without writing the ledger 1`] = `
+{
+  "code": 0,
+  "err": "",
+  "out": "Supervisor metrics (read-only)
+
+  window: 90..600 (observed event time)
+  sample: 6 cards; truth checked 2 (1 consistent, 1 inconsistent, 4 incomplete)
+  queue wait: 110ms; sample 1, P50 110ms, P95 110ms
+  dependency wait: 100ms; sample 1, P50 100ms, P95 100ms
+  first-action latency: 20ms; sample 2, P50 10ms, P95 10ms
+  dispatch-to-merge lead: 80ms; sample 2, P50 40ms, P95 40ms
+  PR/CI tail: 20ms; sample 2, P50 10ms, P95 10ms
+  reconciliation lag: 10ms; sample 1, P50 10ms, P95 10ms
+  dependency states: blocked-by-not-Done 1, satisfied-not-dispatched 1, unknown 0
+  percentiles: nearest-rank; data incomplete (0 source diagnostics; every missing fact is listed per card)
+  Note: handoff_ready is not Delivered, a main merge, or an attest verdict.
+  incomplete facts [US-BLOCKED]: first-action latency unavailable: missing dispatch or first-action observation; dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence; PR/CI tail unavailable: missing PR-open and CI-or-main observation; reconciliation lag unavailable: missing main merge or reconciliation observation; recorded main merge evidence unavailable; attestation state unavailable
+  incomplete facts [US-DEP]: queue wait unavailable: missing ranked-ready or dispatch observation; first-action latency unavailable: missing dispatch or first-action observation; dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence; PR/CI tail unavailable: missing PR-open and CI-or-main observation; reconciliation lag unavailable: missing main merge or reconciliation observation; recorded main merge evidence unavailable; attestation state unavailable
+  incomplete facts [US-FULL]: queue wait unavailable: missing ranked-ready or dispatch observation
+  incomplete facts [US-HANDOFF]: queue wait unavailable: missing ranked-ready or dispatch observation; first-action latency unavailable: missing dispatch or first-action observation; dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence; PR/CI tail unavailable: missing PR-open and CI-or-main observation; reconciliation lag unavailable: missing main merge or reconciliation observation; recorded main merge evidence unavailable; attestation state unavailable; handoff_ready observed: not a main merge, attestation verdict, or Delivered claim
+  incomplete facts [US-MERGED]: queue wait unavailable: missing ranked-ready or dispatch observation; reconciliation lag unavailable: missing main merge or reconciliation observation; attestation state unavailable
+  incomplete facts [US-PARTIAL]: queue wait unavailable: missing ranked-ready or dispatch observation; first-action latency unavailable: missing dispatch or first-action observation; dispatch-to-merge lead unavailable: missing dispatch or recorded main merge evidence; PR/CI tail unavailable: missing PR-open and CI-or-main observation; reconciliation lag unavailable: missing main merge or reconciliation observation; dependency wait incomplete: dependencies are Done but dispatch boundary is unavailable; recorded main merge evidence unavailable; attestation state unavailable
+",
+}
+`;
+
+exports[`US-LOOP-130 — roll supervisor metrics > renders a frozen ZH terminal projection in one language 1`] = `
+{
+  "code": 0,
+  "err": "",
+  "out": "Supervisor 指标（只读）
+
+  窗口：90..600（按事件记录时间）
+  样本：6 张卡；真相核对 2（一致 1，不一致 1，不完整 4）
+  排队等待: 110ms; 样本 1, P50 110ms, P95 110ms
+  依赖等待: 100ms; 样本 1, P50 100ms, P95 100ms
+  首个动作延迟: 20ms; 样本 2, P50 10ms, P95 10ms
+  派发至合并: 80ms; 样本 2, P50 40ms, P95 40ms
+  PR/CI 尾段: 20ms; 样本 2, P50 10ms, P95 10ms
+  对账滞后: 10ms; 样本 1, P50 10ms, P95 10ms
+  依赖状态：未完成阻塞 1，已满足未派发 1，未知 0
+  百分位算法：nearest-rank；数据不完整（0 条来源提示；逐卡列出缺失事实）
+  注意：handoff_ready 不是已交付、main 合并或 attest 裁定。
+  缺失事实 [US-BLOCKED]: 首个动作延迟不可用: 缺少派发或首个动作观察; 派发至合并耗时不可用: 缺少派发或已记录的 main 合并证据; PR/CI 尾段不可用: 缺少 PR 打开及 CI 或 main 观察; 对账滞后不可用: 缺少 main 合并或对账观察; 已记录的 main 合并证据不可用; attest 状态不可用
+  缺失事实 [US-DEP]: 排队等待不可用: 缺少已排序就绪或派发观察; 首个动作延迟不可用: 缺少派发或首个动作观察; 派发至合并耗时不可用: 缺少派发或已记录的 main 合并证据; PR/CI 尾段不可用: 缺少 PR 打开及 CI 或 main 观察; 对账滞后不可用: 缺少 main 合并或对账观察; 已记录的 main 合并证据不可用; attest 状态不可用
+  缺失事实 [US-FULL]: 排队等待不可用: 缺少已排序就绪或派发观察
+  缺失事实 [US-HANDOFF]: 排队等待不可用: 缺少已排序就绪或派发观察; 首个动作延迟不可用: 缺少派发或首个动作观察; 派发至合并耗时不可用: 缺少派发或已记录的 main 合并证据; PR/CI 尾段不可用: 缺少 PR 打开及 CI 或 main 观察; 对账滞后不可用: 缺少 main 合并或对账观察; 已记录的 main 合并证据不可用; attest 状态不可用; 已观察到 handoff_ready：它不是 main 合并、attest 裁定或已交付声明
+  缺失事实 [US-MERGED]: 排队等待不可用: 缺少已排序就绪或派发观察; 对账滞后不可用: 缺少 main 合并或对账观察; attest 状态不可用
+  缺失事实 [US-PARTIAL]: 排队等待不可用: 缺少已排序就绪或派发观察; 首个动作延迟不可用: 缺少派发或首个动作观察; 派发至合并耗时不可用: 缺少派发或已记录的 main 合并证据; PR/CI 尾段不可用: 缺少 PR 打开及 CI 或 main 观察; 对账滞后不可用: 缺少 main 合并或对账观察; 依赖等待不完整: 依赖已完成但派发边界不可用; 已记录的 main 合并证据不可用; attest 状态不可用
+",
+}
+`;

@@ -358,6 +358,14 @@ the same board open and redraws it in-place from the same event-backed view
 model. A browser/TUI Supervisor Live Console remains future work and must reuse
 that view model.
 
+`roll supervisor metrics [--json]` is the companion read-only flow projection.
+It derives per-card and aggregate queue, dependency, first-action, merge, PR/CI,
+and reconciliation lag from the event ledger. Its terminal output names the
+observation window, sample sizes, `nearest-rank` percentiles, and every missing
+upstream fact; JSON preserves the same uncertainty. Dependency wait keeps
+blocked-by-not-Done separate from satisfied-but-not-dispatched. A
+`handoff_ready` fact remains a handoff only — it is never a Delivered claim.
+
 All Roll-owned delivery workspaces live under `.roll/loop/worktrees/` as one
 managed WorkspaceSet per DeliveryRun; submodule worktrees are explicit members.
 `handoff_ready` preserves its Story reservation and workspace and is never

@@ -35,6 +35,7 @@ import {
   parseBacklog,
   parseRollScoreArtifact,
   projectCollabStream,
+  projectSupervisorMetrics,
   queryStoryDelivery,
   renderReport,
   repairedPrNumbers,
@@ -46,7 +47,7 @@ import {
   type FreshnessPort,
 } from "@roll/core";
 import type { CastRoleName, CollabStreamView, CycleRoleSummary, EventSource, RollEvent, RollGoal, SupervisorInput } from "@roll/spec";
-import { parseGoalYaml, resolveLang } from "@roll/spec";
+import { parseEventLine, parseGoalYaml, resolveLang } from "@roll/spec";
 import { reduceStatusCheckRollup, type StatusCheckRollupEntry } from "@roll/infra";
 import { detectNoProgressStall, type NoProgressStall } from "../lib/goal-recovery.js";
 import { execFileSync } from "node:child_process";
@@ -69,7 +70,7 @@ const SUPERVISOR_LIVE_WATCH_MIN_INTERVAL_MS = 250;
 const SUPERVISOR_DELIVERY_STALE_AFTER_MS = 5 * 60 * 1000;
 
 export const SUPERVISOR_USAGE = [
-  "Usage: roll supervisor [status|observe|advise|next|why|live|journal|health|route|repair-evidence] [--json]",
+  "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|journal|health|route|repair-evidence] [--json]",
   "  status           observe + advise summary (alias for no subcommand)",
   "  observe          structured project facts (backlog, truth coverage, PRs, release readiness)",
   "  advise           Supervisor decisions (advisory; persistent changes need owner confirmation)",
@@ -78,6 +79,7 @@ export const SUPERVISOR_USAGE = [
   "  live             read-only Supervisor live board with Designer/Builder/Evaluator panes and shared DeliveryRun truth",
   "  live --watch     redraw the role board in-place until Ctrl-C; use --interval <sec>",
   "  live --collab    follow the multi-cycle collaboration stream; add --once for a snapshot",
+  "  metrics          read-only queue, dependency, delivery, and reconciliation lag projection",
   "  journal          structured supervisor narrative stream: list/record decisions, verifications, rescues",
   "  health           agent toolchain health: auth/network/setup/worktree classification and routing",
   "  route            Role route trace: --role builder|designer|evaluator|peer_reviewer [--story <id>]",
@@ -88,7 +90,7 @@ export function supervisorUsage(): string {
   const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
   return zh
     ? [
-      "用法：roll supervisor [status|observe|advise|next|why|live|journal|health|route|repair-evidence] [--json]",
+      "用法：roll supervisor [status|observe|advise|next|why|live|metrics|journal|health|route|repair-evidence] [--json]",
       "  status           observe + advise 摘要（无子命令的别名）",
       "  observe          项目结构化事实（backlog、真相覆盖、PR、发布就绪度）",
       "  advise           Supervisor 建议（持久化更改需 owner 确认）",
@@ -96,6 +98,7 @@ export function supervisorUsage(): string {
       "  live             只读实时面板：Designer/Builder/Evaluator 和共同 DeliveryRun 真相",
       "  live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>",
       "  live --collab    跟随多周期协作流；加 --once 读取快照",
+      "  metrics          只读投影：排队、依赖、交付与对账耗时",
       "  journal          Supervisor 叙事流：列出/记录决策、验证、救援",
       "  health           agent 工具链健康：auth/network/setup/worktree 分类与路由",
       "  route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]",
@@ -768,6 +771,98 @@ function readSupervisorEvents(projectPath: string): RollEvent[] {
   return [];
 }
 
+function readSupervisorMetricEvents(projectPath: string): { events: RollEvent[]; diagnostics: string[] } {
+  const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
+  if (!existsSync(eventsPath)) return { events: [], diagnostics: ["event ledger unavailable: .roll/loop/events.ndjson"] };
+  try {
+    const events: RollEvent[] = [];
+    const diagnostics: string[] = [];
+    for (const [index, raw] of readFileSync(eventsPath, "utf8").split("\n").entries()) {
+      if (raw.trim() === "") continue;
+      const event = parseEventLine(raw);
+      if (event === null) diagnostics.push(`invalid event ledger line ${eventsPath}:${index + 1} (metrics incomplete)`);
+      else events.push(event);
+    }
+    return { events, diagnostics };
+  } catch {
+    return { events: [], diagnostics: [`cannot read event ledger ${eventsPath}`] };
+  }
+}
+
+function formatSupervisorMetricMs(value: number | null): string {
+  if (value === null) return "?";
+  return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(2)}s`;
+}
+
+function formatSupervisorIncompleteFact(value: string, zh: boolean): string {
+  if (!zh) return value;
+  const translations: ReadonlyArray<readonly [string, string]> = [
+    ["queue wait unavailable", "排队等待不可用"], ["first-action latency unavailable", "首个动作延迟不可用"],
+    ["dispatch-to-merge lead unavailable", "派发至合并耗时不可用"], ["PR/CI tail unavailable", "PR/CI 尾段不可用"],
+    ["reconciliation lag unavailable", "对账滞后不可用"], ["dependency wait unavailable", "依赖等待不可用"],
+    ["dependency wait incomplete", "依赖等待不完整"], ["recorded main merge evidence unavailable", "已记录的 main 合并证据不可用"],
+    ["backlog status unavailable", "backlog 状态不可用"], ["attestation state unavailable", "attest 状态不可用"],
+    ["handoff_ready observed: not a main merge, attestation verdict, or Delivered claim", "已观察到 handoff_ready：它不是 main 合并、attest 裁定或已交付声明"],
+    ["missing ranked-ready or dispatch observation", "缺少已排序就绪或派发观察"], ["missing dispatch or first-action observation", "缺少派发或首个动作观察"],
+    ["missing dispatch or recorded main merge evidence", "缺少派发或已记录的 main 合并证据"], ["missing PR-open and CI-or-main observation", "缺少 PR 打开及 CI 或 main 观察"],
+    ["missing main merge or reconciliation observation", "缺少 main 合并或对账观察"], ["missing dependency-block observation timestamp", "缺少依赖阻塞观察时间戳"],
+    ["blocked-by-not-Done has no later dispatch observation", "未完成依赖阻塞后没有后续派发观察"], ["dependencies are Done but dispatch boundary is unavailable", "依赖已完成但派发边界不可用"],
+    ["backlog card unavailable: dependency state unknown", "backlog 卡片不可用：依赖状态未知"], ["timestamp inversion", "时间戳倒置"],
+  ];
+  return translations.reduce((text, [from, to]) => text.replace(from, to), value);
+}
+
+export function renderSupervisorMetrics(report: ReturnType<typeof projectSupervisorMetrics>, language = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] })): string {
+  const zh = language === "zh";
+  const window = report.observationWindow.fromTs === null
+    ? (zh ? "无已记录事件" : "no observed events")
+    : `${report.observationWindow.fromTs}..${report.observationWindow.toTs}`;
+  const a = report.aggregates;
+  const line = (label: string, value: { readonly sampleSize: number; readonly totalMs: number | null; readonly p50Ms: number | null; readonly p95Ms: number | null }): string =>
+    `${label}: ${formatSupervisorMetricMs(value.totalMs)}; ${zh ? "样本" : "sample"} ${value.sampleSize}, P50 ${formatSupervisorMetricMs(value.p50Ms)}, P95 ${formatSupervisorMetricMs(value.p95Ms)}`;
+  const lines = zh
+    ? [
+      `窗口：${window}（按事件记录时间）`,
+      `样本：${report.sampleSize} 张卡；真相核对 ${report.truthConsistency.checked}（一致 ${report.truthConsistency.consistent}，不一致 ${report.truthConsistency.inconsistent}，不完整 ${report.truthConsistency.incomplete}）`,
+      line("排队等待", a.queueWait), line("依赖等待", a.dependencyWait), line("首个动作延迟", a.firstActionLatency),
+      line("派发至合并", a.dispatchToMergeLead), line("PR/CI 尾段", a.prCiTail), line("对账滞后", a.reconciliationLag),
+      `依赖状态：未完成阻塞 ${report.dependencyStates.blocked_by_not_done}，已满足未派发 ${report.dependencyStates.not_yet_dispatched}，未知 ${report.dependencyStates.unknown}`,
+      `百分位算法：nearest-rank；数据${report.incomplete ? `不完整（${report.diagnostics.length} 条来源提示；逐卡列出缺失事实）` : "完整"}`,
+      "注意：handoff_ready 不是已交付、main 合并或 attest 裁定。",
+    ]
+    : [
+      `window: ${window} (observed event time)`,
+      `sample: ${report.sampleSize} cards; truth checked ${report.truthConsistency.checked} (${report.truthConsistency.consistent} consistent, ${report.truthConsistency.inconsistent} inconsistent, ${report.truthConsistency.incomplete} incomplete)`,
+      line("queue wait", a.queueWait), line("dependency wait", a.dependencyWait), line("first-action latency", a.firstActionLatency),
+      line("dispatch-to-merge lead", a.dispatchToMergeLead), line("PR/CI tail", a.prCiTail), line("reconciliation lag", a.reconciliationLag),
+      `dependency states: blocked-by-not-Done ${report.dependencyStates.blocked_by_not_done}, satisfied-not-dispatched ${report.dependencyStates.not_yet_dispatched}, unknown ${report.dependencyStates.unknown}`,
+      `percentiles: nearest-rank; data ${report.incomplete ? `incomplete (${report.diagnostics.length} source diagnostics; every missing fact is listed per card)` : "complete"}`,
+      "Note: handoff_ready is not Delivered, a main merge, or an attest verdict.",
+    ];
+  const incomplete = report.cards.flatMap((card) => card.incompleteFacts.length === 0
+    ? []
+    : [`  ${zh ? "缺失事实" : "incomplete facts"} [${card.storyId}]: ${card.incompleteFacts.map((fact) => formatSupervisorIncompleteFact(fact, zh)).join("; ")}`]);
+  const sourceDiagnostics = report.diagnostics.map((diagnostic) => `  ${zh ? "来源提示" : "source diagnostic"}: ${formatSupervisorIncompleteFact(diagnostic, zh)}`);
+  return `${[zh ? "Supervisor 指标（只读）" : "Supervisor metrics (read-only)", "", ...lines.map((value) => `  ${value}`), ...sourceDiagnostics, ...incomplete].join("\n")}\n`;
+}
+
+function supervisorMetricsCommand(args: readonly string[], projectPath: string): number {
+  const invalid = args.find((arg) => arg !== "metrics" && arg !== "--json" && arg !== "--no-color");
+  if (invalid !== undefined) {
+    process.stderr.write("Usage: roll supervisor metrics [--json]\n");
+    return 1;
+  }
+  const backlogPath = join(projectPath, ".roll", "backlog.md");
+  const backlog = existsSync(backlogPath)
+    ? parseBacklog(readFileSync(backlogPath, "utf8")).map((card) => ({ id: card.id, status: card.status, dependsOn: depsOf(card.desc) }))
+    : [];
+  const input = readSupervisorMetricEvents(projectPath);
+  const report = projectSupervisorMetrics({ events: input.events, backlog, sourceDiagnostics: input.diagnostics });
+  if (args.includes("--json")) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  else process.stdout.write(renderSupervisorMetrics(report));
+  return 0;
+}
+
 function cycleEventId(ev: RollEvent): string | undefined {
   return "cycleId" in ev && typeof (ev as { cycleId?: unknown }).cycleId === "string"
     ? (ev as { cycleId: string }).cycleId
@@ -1185,11 +1280,12 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   let sub = args.find((a) => !a.startsWith("-"));
   // `status` is an alias for the default observe + advise summary.
   if (sub === "status") sub = undefined;
-  if (sub !== undefined && !["observe", "advise", "next", "why", "live", "journal", "health", "route", "repair-evidence"].includes(sub)) {
+  if (sub !== undefined && !["observe", "advise", "next", "why", "live", "metrics", "journal", "health", "route", "repair-evidence"].includes(sub)) {
     process.stderr.write(supervisorUsage() + "\n");
     return 1;
   }
   const projectPath = process.cwd();
+  if (sub === "metrics") return supervisorMetricsCommand(args, projectPath);
   if (sub === "journal") {
     return supervisorJournalCommand(args, projectPath);
   }

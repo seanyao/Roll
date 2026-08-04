@@ -241,6 +241,8 @@ AC 状态、无豁免可视卡缺截图，都会拒合。PR body 里的 `Roll-Ev
 
 `roll supervisor live` 是已交付的 CLI-first 多角色看板。它默认打印一帧快照，适合脚本和快速查看；`roll supervisor live --watch` 会让同一个看板保持打开，并从同一条事件驱动 view model 原地刷新。浏览器/TUI 版 Supervisor Live Console 仍是未来工作，必须复用这个 view model。
 
+`roll supervisor metrics [--json]` 是配套的只读流程投影。它从事件账本推导逐卡与聚合的排队、依赖、首个动作、合并、PR/CI 和对账耗时；终端输出会写明观察窗口、样本量、`nearest-rank` 百分位算法以及每一项缺失的上游事实，JSON 保留同样的不确定性。依赖等待会区分“未完成依赖阻塞”和“依赖已满足但尚未派发”。`handoff_ready` 仍然只是交接，绝不会被显示为已交付。
+
 ## 规则注册表与文档漂移
 
 [`policy/rules.yaml`](policy/rules.yaml) 是已注册 redline、doc-drift 模式以及源码到文档映射的唯一机器可读权威。README、指南、验证说明和生成的[职责地图](docs/maps/)只解释这份注册表，不再声明第二份策略。`node scripts/audit-rules.mjs` 报告的是**已注册 N** 条规则仍然有效；这不是“仓库所有可能规则均已覆盖”的声明。

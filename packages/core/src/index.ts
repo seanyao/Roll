@@ -71,6 +71,7 @@ export * from "./supervisor/delivery-run-board.js";
 export * from "./supervisor/repair-evidence.js";
 export * from "./supervisor/agent-health.js";
 export * from "./supervisor/journal.js";
+export * from "./supervisor/metrics.js";
 export * from "./loop/cycle-role-summary.js";
 export * from "./observe/collab-view.js";
 export * from "./loop/morning-report.js";
