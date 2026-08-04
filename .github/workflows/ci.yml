@@ -31,6 +31,10 @@ jobs:
           submodules: recursive
       # No `version:` — pnpm/action-setup reads `packageManager` from package.json.
       - uses: pnpm/action-setup@v4
+      # Self-hosted runners expose PNPM_HOME but do not always retain it in PATH
+      # after the setup action. GITHUB_PATH applies it to every later step.
+      - name: Keep pnpm available to later steps
+        run: echo "$PNPM_HOME" >> "$GITHUB_PATH"
       - uses: actions/setup-node@v6
         with:
           node-version: 22
