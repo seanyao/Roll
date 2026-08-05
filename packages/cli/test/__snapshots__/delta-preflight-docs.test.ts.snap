@@ -7,7 +7,7 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
     "zh": undefined,
   },
   "help": {
-    "en": "Usage: roll delta <prepare|validate|conclude|status|help>
+    "en": "Usage: roll delta <prepare|validate|conclude|recover-held|status|help>
 
   Delta Team (host-guided) = the current host main session (implicit Supervisor)
   plus host-native Designer/Builder/Evaluator sub-agent sessions, driven through
@@ -59,6 +59,9 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
     owner_redelegate transfers the reservation to the named successor; the successor
     takes over with roll delta prepare --continuation-run <name>.
 
+  roll delta recover-held --delegation <old-id> --continuation-run <name> --confirm <old-id> [--json]
+    Explicitly recover only a legacy owner_hold reservation incorrectly named to this successor.
+
   roll delta status [--story <id>|--delegation <id>] [--json]
     Read-only delegation status projection from event truth.
 
@@ -70,7 +73,7 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
     A red preflight is repaired in the same frame, then preflight runs green before one formal validate
     with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
 ",
-    "zh": "用法：roll delta <prepare|validate|conclude|status|help>
+    "zh": "用法：roll delta <prepare|validate|conclude|recover-held|status|help>
 
   Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native
   能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Roll 从不
@@ -115,6 +118,9 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
     记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。
     owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
     --continuation-run <name> 接手。
+
+  roll delta recover-held --delegation <旧委派-id> --continuation-run <继任名称> --confirm <旧委派-id> [--json]
+    仅在明确确认后恢复历史 owner_hold 暂缓记录中被错误改名给该继任者的预留。
 
   roll delta status [--story <id>|--delegation <id>] [--json]
     从事件真相只读投影委派状态。

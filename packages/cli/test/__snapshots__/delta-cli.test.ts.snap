@@ -1,7 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`US-DELTA-003 — delta CLI parser and help > roll delta help is localized to zh when ROLL_LANG=zh 1`] = `
-"用法：roll delta <prepare|validate|conclude|status|help>
+"用法：roll delta <prepare|validate|conclude|recover-held|status|help>
 
   Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native
   能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Roll 从不
@@ -47,6 +47,9 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help is localiz
     owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
     --continuation-run <name> 接手。
 
+  roll delta recover-held --delegation <旧委派-id> --continuation-run <继任名称> --confirm <旧委派-id> [--json]
+    仅在明确确认后恢复历史 owner_hold 暂缓记录中被错误改名给该继任者的预留。
+
   roll delta status [--story <id>|--delegation <id>] [--json]
     从事件真相只读投影委派状态。
 
@@ -61,7 +64,7 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help is localiz
 `;
 
 exports[`US-DELTA-003 — delta CLI parser and help > roll delta help prints EN usage with all subcommands and exits 0 1`] = `
-"Usage: roll delta <prepare|validate|conclude|status|help>
+"Usage: roll delta <prepare|validate|conclude|recover-held|status|help>
 
   Delta Team (host-guided) = the current host main session (implicit Supervisor)
   plus host-native Designer/Builder/Evaluator sub-agent sessions, driven through
@@ -112,6 +115,9 @@ exports[`US-DELTA-003 — delta CLI parser and help > roll delta help prints EN 
     Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
     owner_redelegate transfers the reservation to the named successor; the successor
     takes over with roll delta prepare --continuation-run <name>.
+
+  roll delta recover-held --delegation <old-id> --continuation-run <name> --confirm <old-id> [--json]
+    Explicitly recover only a legacy owner_hold reservation incorrectly named to this successor.
 
   roll delta status [--story <id>|--delegation <id>] [--json]
     Read-only delegation status projection from event truth.

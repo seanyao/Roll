@@ -292,10 +292,16 @@ export async function deltaCommand(args: string[]): Promise<number> {
 
   // Help
   if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
-    const usage = T("delta.help.usage").replace(
+    const recoveryHelp = lang() === "zh"
+      ? "\n  roll delta recover-held --delegation <旧委派-id> --continuation-run <继任名称> --confirm <旧委派-id> [--json]\n    仅在明确确认后恢复历史 owner_hold 暂缓记录中被错误改名给该继任者的预留。\n"
+      : "\n  roll delta recover-held --delegation <old-id> --continuation-run <name> --confirm <old-id> [--json]\n    Explicitly recover only a legacy owner_hold reservation incorrectly named to this successor.\n";
+    const usage = T("delta.help.usage")
+      .replace("prepare|validate|conclude|status|help", "prepare|validate|conclude|recover-held|status|help")
+      .replace("\n  roll delta status", `${recoveryHelp}\n  roll delta status`)
+      .replace(
       "\n  roll delta conclude",
       `${T("delta.help.preflight")}${T("delta.help.metrics")}  roll delta conclude`,
-    );
+      );
     process.stdout.write(usage + T("delta.help.builder_receipt"));
     return 0;
   }
@@ -310,6 +316,8 @@ export async function deltaCommand(args: string[]): Promise<number> {
       return validateCommand(args.slice(1));
     case "conclude":
       return concludeCommand(args.slice(1));
+    case "recover-held":
+      return recoverHeldCommand(args.slice(1));
     case "status":
       return statusCommand(args.slice(1));
     case "metrics":
@@ -2246,6 +2254,93 @@ function validateCommand(args: string[]): number {
 
 // ── Conclude ─────────────────────────────────────────────────────────────────
 
+/**
+ * FIX-1517 — append one explicit authorization for the one historical state
+ * where an owner_hold terminal's live reservation was incorrectly renamed to a
+ * successor.  This command deliberately never touches a lease or frame; the
+ * existing continuation pickup CAS remains the only takeover operation.
+ */
+function recoverHeldCommand(args: string[]): number {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    const usage = lang() === "zh"
+      ? "用法：roll delta recover-held --delegation <旧委派-id> --continuation-run <继任名称> --confirm <旧委派-id> [--json]\n\n只处理一类历史矛盾：旧交付已明确 owner_hold，但仍在保留的交付预留被错误写成了指定继任名称。--confirm 必须与旧委派 id 完全一致。命令只追加确认恢复记录；下一步仍需由同名继任者运行 roll delta prepare --continuation-run 接手。\n"
+      : "Usage: roll delta recover-held --delegation <old-id> --continuation-run <name> --confirm <old-id> [--json]\n\nRecovers only the legacy contradiction where an explicitly owner_hold old delivery still has a reservation incorrectly named to the specified successor. --confirm must exactly match the old delegation id. This appends an authorization only; the named successor must still run roll delta prepare --continuation-run to take over.\n";
+    process.stdout.write(usage);
+    return 0;
+  }
+  const { positional, flags } = parseArgs(args);
+  const json = flags["json"] === true;
+  const knownFlags = new Set(["delegation", "continuation-run", "confirm", "json"]);
+  const refuse = (error: string, detail: string): number => {
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error, detail }) + "\n");
+    else process.stderr.write(`Recovery refused: ${detail}\n`);
+    return 1;
+  };
+  const duplicate = detectDuplicateFlags(args, knownFlags);
+  if (duplicate) return refuse("duplicate_flag", T("delta.error.duplicate_flag", `--${duplicate}`));
+  if (positional.length > 0) return refuse("unexpected_positional", T("delta.error.unexpected_positional", positional[0]!));
+  for (const key of Object.keys(flags)) {
+    if (!knownFlags.has(key)) return refuse("unknown_flag", T("delta.error.unknown_flag", `--${key}`));
+  }
+  const delegationId = flags["delegation"];
+  const continuationRunId = flags["continuation-run"];
+  const confirmation = flags["confirm"];
+  if (typeof delegationId !== "string" || delegationId === "") return refuse("missing_required", "recover-held requires --delegation <old-delegation-id>");
+  if (typeof continuationRunId !== "string" || continuationRunId === "") return refuse("missing_required", "recover-held requires --continuation-run <successor-name>");
+  if (typeof confirmation !== "string" || confirmation === "") return refuse("missing_required", "recover-held requires --confirm <old-delegation-id>");
+  if (confirmation !== delegationId) return refuse("confirmation_mismatch", "--confirm must exactly match --delegation before a held reservation can be recovered");
+
+  const cwd = process.cwd();
+  const eventsPath = join(cwd, ".roll", "loop", "events.ndjson");
+  const bus = getEventBus();
+  const events = existsSync(eventsPath) ? bus.readEvents(eventsPath) : [];
+  const preparations = events.filter((event) => event.type === "delta:prepared"
+    && event.delegationId === delegationId);
+  if (preparations.length !== 1) return refuse("recovery_not_available", "the old delegation must have exactly one managed preparation");
+  const prepared = preparations[0]! as Record<string, unknown>;
+  if (preparedWorkspaceSchema(prepared) !== "managed-v2" || typeof prepared.storyId !== "string" || typeof prepared.runId !== "string") {
+    return refuse("recovery_not_available", "the old delegation is not a complete managed-v2 preparation");
+  }
+  const storyId = prepared.storyId;
+  const runId = prepared.runId;
+  const terminals = events.filter((event) => event.type === "delta:terminal"
+    && event.delegationId === delegationId
+    && event.storyId === storyId
+    && event.runId === runId) as Array<Extract<RollEvent, { type: "delta:terminal" }>>;
+  if (terminals.length !== 1) return refuse("recovery_not_available", "the old delegation must have exactly one terminal decision");
+  const terminal = terminals[0]!;
+  if (terminal.outcome !== "handoff_ready" || terminal.terminalBinding !== "handoff_only" || terminal.deliveryDisposition !== "owner_hold") {
+    return refuse("recovery_not_available", "the old delegation was not explicitly concluded as owner_hold");
+  }
+  const lease = readLeases(join(cwd, ".roll", "loop", "leases"))[storyId];
+  if (lease?.source !== "delivery-reservation" || lease.delegationId !== delegationId || lease.runId !== continuationRunId) {
+    return refuse("recovery_not_available", "the live reservation does not name this exact held delegation and successor");
+  }
+  const recoveries = events.filter((event) => event.type === "delta:hold_recovered"
+    && event.delegationId === delegationId && event.storyId === storyId);
+  const typedRecoveries = recoveries as Array<Extract<RollEvent, { type: "delta:hold_recovered" }>>;
+  if (typedRecoveries.length > 1) return refuse("recovery_not_available", "the legacy held delegation already has conflicting recovery evidence");
+  if (typedRecoveries.length === 1) {
+    const recovery = typedRecoveries[0]!;
+    if (recovery.runId !== runId || recovery.continuationRunId !== continuationRunId || recovery.confirmation !== "explicit") {
+      return refuse("recovery_not_available", "the legacy held delegation was already recovered for a different identity");
+    }
+  } else {
+    bus.appendEvent(eventsPath, {
+      type: "delta:hold_recovered",
+      delegationId,
+      storyId,
+      runId,
+      continuationRunId,
+      confirmation: "explicit",
+      ts: Date.now(),
+    });
+  }
+  if (json) process.stdout.write(JSON.stringify({ ok: true, delegationId, storyId, continuationRunId, recovery: "owner_hold_confirmed" }) + "\n");
+  else process.stdout.write(`Held delivery ${delegationId} is confirmed for '${continuationRunId}'. Next: roll delta prepare ${storyId} --continuation-run ${continuationRunId}\n`);
+  return 0;
+}
+
 function concludeCommand(args: string[]): number {
   const { positional, flags } = parseArgs(args);
   const json = flags["json"] === true;
@@ -2402,11 +2497,50 @@ function concludeCommand(args: string[]): number {
     else process.stderr.write(`Conclude failed: ${detail}\n`);
     return 1;
   }
+  if (disposition !== "owner_redelegate" && continuationRun !== undefined) {
+    const detail = "--continuation-run is only valid with owner_redelegate";
+    if (json) process.stderr.write(JSON.stringify({ ok: false, error: "invalid_value", detail }) + "\n");
+    else process.stderr.write(`Conclude failed: ${detail}\n`);
+    return 1;
+  }
+
+  const runId = (preparedEvent.runId as string) ?? `delta-${delegationId}`;
+  // A terminal decision is an immutable fact.  Check it before any promotion,
+  // activity row, transfer, or other write.  An exact retry remains available
+  // for crash recovery; every changed disposition/successor is refused.
+  const recordedTerminals = delegationEvents.filter((event) => event.type === "delta:terminal") as Array<Record<string, unknown>>;
+  if (recordedTerminals.length > 0) {
+    const prior = recordedTerminals.length === 1 ? recordedTerminals[0]! : undefined;
+    const sameRun = preparedWorkspaceSchema(preparedEvent) === "managed-v2"
+      ? prior?.runId === runId
+      : prior?.runId === undefined;
+    const sameContinuation = disposition === "owner_redelegate"
+      ? prior?.continuationRunId === continuationRun
+      : prior?.continuationRunId === undefined;
+    const exactRetry = prior?.outcome === "handoff_ready"
+      && prior.terminalBinding === "handoff_only"
+      && prior.deliveryDisposition === disposition
+      && sameRun
+      && sameContinuation;
+    // Preserve FIX-1502's more specific read-only diagnosis for an old
+    // redelegator after its named successor has already taken over.  It still
+    // reaches no write: the lease admission below rejects it as superseded.
+    const alreadyAdopted = prior?.deliveryDisposition === "owner_redelegate"
+      && typeof prior.continuationRunId === "string"
+      && events.some((event) => event.type === "delta:prepared"
+        && (event as Record<string, unknown>).continuation !== undefined
+        && ((event as Record<string, unknown>).continuation as Record<string, unknown>).fromDelegationId === delegationId);
+    if (!exactRetry && !alreadyAdopted) {
+      const detail = `Delegation ${delegationId} already has an immutable terminal decision`;
+      if (json) process.stderr.write(JSON.stringify({ ok: false, error: "terminal_immutable", detail }) + "\n");
+      else process.stderr.write(`Conclude failed: ${detail}\n`);
+      return 1;
+    }
+  }
 
   // Verify lease identity match BEFORE writing terminal event.
   // If the lease entry has a mismatched delegationId/runId, fail-loud with
   // non-zero exit and do NOT write terminal.
-  const runId = (preparedEvent.runId as string) ?? `delta-${delegationId}`;
   const slDir = join(cwd, ".roll", "loop", "leases");
   const leases = readLeases(slDir);
   const leaseEntry = leases[storyId];

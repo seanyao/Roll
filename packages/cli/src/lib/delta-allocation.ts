@@ -559,24 +559,53 @@ function persistedContinuation(preparationPath: string): DeltaContinuationProven
 }
 
 /**
- * Find the immutable `owner_redelegate` terminal that names exactly this
- * successor for exactly this delegation.  Events are append-only, so a pickup
- * may verify its provenance against the recorded handoff every time.
+ * Find the immutable authorization that names exactly this successor for this
+ * delegation.  Normal redelegation remains unchanged.  FIX-1517 additionally
+ * accepts one explicit recovery event only when it can re-prove the exact
+ * managed-v2 owner_hold terminal it authorizes; a bare recovery-looking row is
+ * never enough to borrow a reservation.
  */
-function findRedelegationTerminal(
+function findContinuationAuthorization(
   eventsPath: string,
   storyId: string,
   fromDelegationId: string,
   continuationRunId: string,
 ): Record<string, unknown> | undefined {
   try {
-    return readFileSync(eventsPath, "utf8").split("\n").map((line) => {
+    const events = readFileSync(eventsPath, "utf8").split("\n").map((line) => {
       try { return JSON.parse(line) as Record<string, unknown>; } catch { return undefined; }
-    }).find((event) => event?.type === "delta:terminal"
+    }).filter((event): event is Record<string, unknown> => event !== undefined);
+    const redelegation = events.find((event) => event.type === "delta:terminal"
       && event.storyId === storyId
       && event.delegationId === fromDelegationId
       && event.deliveryDisposition === "owner_redelegate"
       && event.continuationRunId === continuationRunId);
+    if (redelegation !== undefined) return redelegation;
+
+    const recoveries = events.filter((event) => event.type === "delta:hold_recovered"
+      && event.storyId === storyId
+      && event.delegationId === fromDelegationId
+      && event.continuationRunId === continuationRunId
+      && event.confirmation === "explicit"
+      && typeof event.runId === "string");
+    if (recoveries.length !== 1) return undefined;
+    const recovery = recoveries[0]!;
+    const prepared = events.filter((event) => event.type === "delta:prepared"
+      && event.storyId === storyId
+      && event.delegationId === fromDelegationId
+      && event.workspaceSchema === 2
+      && event.runId === recovery.runId);
+    const terminals = events.filter((event) => event.type === "delta:terminal"
+      && event.storyId === storyId
+      && event.delegationId === fromDelegationId
+      && event.runId === recovery.runId);
+    if (prepared.length !== 1 || terminals.length !== 1) return undefined;
+    const terminal = terminals[0]!;
+    return terminal.outcome === "handoff_ready"
+      && terminal.terminalBinding === "handoff_only"
+      && terminal.deliveryDisposition === "owner_hold"
+      ? recovery
+      : undefined;
   } catch {
     return undefined;
   }
@@ -651,7 +680,7 @@ async function prepareContinuationPickup(
     }
     // The recorded handoff must still exist: an unverifiable pickup identity
     // is refused exactly like a fresh pickup.
-    if (findRedelegationTerminal(eventsPath, storyId, continuation.fromDelegationId, continuationRunId) === undefined) {
+    if (findContinuationAuthorization(eventsPath, storyId, continuation.fromDelegationId, continuationRunId) === undefined) {
       throw new PrepareError(
         "continuation_not_verifiable",
         `Story ${storyId}: the pickup for '${continuationRunId}' cannot be matched to a recorded redelegation`,
@@ -679,14 +708,14 @@ async function prepareContinuationPickup(
   // The occupancy and the recorded redelegation must agree on the same card,
   // the same source delegation, and the same successor name.
   const fromDelegationId = current.delegationId;
-  const terminal = findRedelegationTerminal(eventsPath, storyId, fromDelegationId, continuationRunId);
-  if (terminal === undefined) {
+  const authorization = findContinuationAuthorization(eventsPath, storyId, fromDelegationId, continuationRunId);
+  if (authorization === undefined) {
     throw new PrepareError(
       "continuation_not_verifiable",
       `Story ${storyId}: the reservation naming '${continuationRunId}' cannot be matched to a recorded redelegation`,
     );
   }
-  const fromRunId = typeof terminal.runId === "string" ? terminal.runId : `delta-${fromDelegationId}`;
+  const fromRunId = typeof authorization.runId === "string" ? authorization.runId : `delta-${fromDelegationId}`;
   const continuation: DeltaContinuationProvenance = { fromDelegationId, fromRunId, continuationRunId };
 
   // Crash-before-swap resume: a frame that already durably recorded THIS

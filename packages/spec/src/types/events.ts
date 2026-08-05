@@ -821,6 +821,18 @@ export type RollEvent =
       ts: number;
     }
   | {
+      /** FIX-1517 — explicit authorization to recover one legacy held lease. */
+      type: "delta:hold_recovered";
+      delegationId: string;
+      storyId: string;
+      /** The immutable run that was previously concluded owner_hold. */
+      runId: string;
+      /** The only successor name authorized to use the existing pickup CAS. */
+      continuationRunId: string;
+      confirmation: "explicit";
+      ts: number;
+    }
+  | {
       /** Durable closure of a host-Delta delivery reservation after main truth. */
       type: "delta:reservation_closed";
       delegationId: string;

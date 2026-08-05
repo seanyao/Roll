@@ -6159,6 +6159,133 @@ describe("FIX-1502 — prepare --continuation-run picks up a redelegated task", 
   });
 });
 
+// ── FIX-1517 — owner-confirmed recovery of a legacy held reservation ───────
+
+describe("FIX-1517 — recover-held only authorizes the exact legacy contradiction", () => {
+  const SUCCESSOR = "successor-alice";
+
+  async function heldFixture(storyId: string): Promise<{
+    dir: string;
+    resPath: string;
+    storyId: string;
+    delegationId: string;
+    runId: string;
+    eventsPath: string;
+  }> {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const resPath = writeResolutionTemplate(dir, storyId, "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+    const runId = `delta-${delegationId}`;
+    const held = await tsRunCwd([
+      "conclude", "--delegation", delegationId, "--delivery-disposition", "owner_hold", "--json",
+    ], dir);
+    expect(held.code).toBe(0);
+    // This is the historical contradiction: only the current lease was once
+    // incorrectly renamed.  The event ledger is otherwise untouched.
+    setLease(storyLeasesPath(dir), storyId, {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId: SUCCESSOR,
+    });
+    return { dir, resPath, storyId, delegationId, runId, eventsPath: join(dir, ".roll", "loop", "events.ndjson") };
+  }
+
+  function prepareArgs(fx: Awaited<ReturnType<typeof heldFixture>>): string[] {
+    return [
+      "prepare", fx.storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", fx.resPath,
+      "--continuation-run", SUCCESSOR, "--json",
+    ];
+  }
+
+  it("requires a byte-matching confirmation, records one recovery, then permits only the named pickup", async () => {
+    const fx = await heldFixture("FIX-1517-HAPPY");
+    const before = readFileSync(fx.eventsPath, "utf8");
+    const refused = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", "different", "--json",
+    ], fx.dir);
+    expect(refused.code).toBe(1);
+    expect(parseStderrJsonTail(refused.stderr).error).toBe("confirmation_mismatch");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(before);
+
+    const recovered = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(recovered.code).toBe(0);
+    expect(JSON.parse(recovered.stdout)).toEqual({
+      ok: true, delegationId: fx.delegationId, storyId: fx.storyId,
+      continuationRunId: SUCCESSOR, recovery: "owner_hold_confirmed",
+    });
+    const recoveredEvents = readFileSync(fx.eventsPath, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(recoveredEvents.filter((event) => event.type === "delta:hold_recovered")).toHaveLength(1);
+    expect(recoveredEvents.filter((event) => event.type === "delta:terminal")).toHaveLength(1);
+
+    const again = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(again.code).toBe(0);
+    expect(readFileSync(fx.eventsPath, "utf8").trim().split("\n").filter((line) => line.includes("delta:hold_recovered"))).toHaveLength(1);
+
+    const pickedUp = await tsRunCwd(prepareArgs(fx), fx.dir);
+    expect(pickedUp.code).toBe(0);
+    expect(JSON.parse(pickedUp.stdout).continuation).toEqual({
+      fromDelegationId: fx.delegationId, fromRunId: fx.runId, continuationRunId: SUCCESSOR,
+    });
+  });
+
+  it("refuses another successor or a recovery after the named successor picked up without writes", async () => {
+    const fx = await heldFixture("FIX-1517-NARROW");
+    const wrong = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", "successor-bob",
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(wrong.code).toBe(1);
+    expect(parseStderrJsonTail(wrong.stderr).error).toBe("recovery_not_available");
+    const recovered = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(recovered.code).toBe(0);
+    expect((await tsRunCwd(prepareArgs(fx), fx.dir)).code).toBe(0);
+    const before = readFileSync(fx.eventsPath, "utf8");
+    const afterPickup = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(afterPickup.code).toBe(1);
+    expect(parseStderrJsonTail(afterPickup.stderr).error).toBe("recovery_not_available");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(before);
+  });
+
+  it("does not let conclude change an already recorded terminal decision", async () => {
+    const fx = await heldFixture("FIX-1517-IMMUTABLE");
+    const before = readFileSync(fx.eventsPath, "utf8");
+    const changed = await tsRunCwd([
+      "conclude", "--delegation", fx.delegationId, "--delivery-disposition", "owner_continue", "--json",
+    ], fx.dir);
+    expect(changed.code).toBe(1);
+    expect(parseStderrJsonTail(changed.stderr).error).toBe("terminal_immutable");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(before);
+  });
+
+  it("explains the explicit confirmation and next named pickup in help", async () => {
+    const dir = setupMinimalProject("FIX-1517-HELP", "delta-team");
+    const help = await tsRunCwd(["recover-held", "--help"], dir);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain("--confirm <old-id>");
+    expect(help.stdout).toContain("owner_hold");
+    expect(help.stdout).toContain("prepare --continuation-run");
+    expect(help.stdout).not.toContain(dir);
+  });
+});
+
 // ── US-DELTA-015 — Builder preflight + checkpoint refactor ──────────────────
 
 describe("US-DELTA-015 — Builder preflight and formal checkpoint ownership", () => {

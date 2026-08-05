@@ -120,6 +120,13 @@ before formal `roll delta validate --stage builder --preflight-receipt <path>`.
 The formal validation remains fail-closed and is not replaced by preflight; the
 independent Evaluator still reviews the formally validated handoff.
 
+If an old delivery was explicitly put on hold but its still-live reservation
+was historically renamed to a successor, the owner may use the deliberately
+narrow `roll delta recover-held` command. It requires repeating the old
+delegation id as confirmation, records that recovery without rewriting history,
+and still requires that exact named successor to run the ordinary continuation
+pickup. It is not a general release or takeover command.
+
 Honest boundaries the protocol states and never overclaims:
 
 - **Terminal binding is Option C, handoff-only.** A valid Evaluator report reaches

@@ -488,6 +488,11 @@ Roll 有两种有名字的交付拓扑，二者不同，且都不同于健康修
 - **Host-guided 成本不可观测（`? (host_unobservable)`）。** 绝不估算、定价或写零；
   host-guided 委派不写 `runs.jsonl` usage 行、不派生每角色/总成本。
 
+历史恢复边界 / Legacy recovery boundary：若旧委派已经明确 `owner_hold`，但仍在保留的
+交付预留曾被错误改名给后继，owner 才可使用 `roll delta recover-held`。它要求重复旧委派 id
+作为明确确认，只追加恢复授权事实、不改写历史，也仍要由该同名后继走普通 continuation pickup。
+它不是通用释放、强占或借用预留入口。
+
 委派总有 Supervisor / Every delegation has a Supervisor：loop 是宿主会话内的 cycle
 连续链，与任何交付一样拥有主会话与完整 sub-agent 能力。trigger 轴只有一个取值，
 不存在准入禁令——solo / Delta Team / Full Delta Team 三种拓扑对 loop 一律可用。Host-guided
