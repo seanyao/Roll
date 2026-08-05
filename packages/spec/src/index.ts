@@ -1,4 +1,5 @@
 export * from "./rules.js";
+export * from "./rules-inventory.js";
 export * from "./types/delta-team.js";
 export * from "./types/managed-workspace.js";
 export * from "./i18n/index.js";

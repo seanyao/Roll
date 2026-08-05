@@ -23,7 +23,7 @@
  * markers = 0; 1 = one or more audit findings; 2 = the audit itself failed
  * (registry missing/malformed, @roll/spec not built).
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -39,11 +39,12 @@ const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", "
 const RL_MARKER_PATTERN = /\bRL-[A-Z]+-\d{3}\b/g;
 
 function parseArgs(argv) {
-  const options = { root: repoRoot, json: false };
+  const options = { root: repoRoot, json: false, inventory: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--root") options.root = path.resolve(argv[++i]);
     else if (arg === "--json") options.json = true;
+    else if (arg === "--inventory") options.inventory = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -54,6 +55,12 @@ async function loadParser() {
   if (!existsSync(dist)) {
     throw new Error("@roll/spec not built — run `pnpm -r build` first (canonical source: packages/spec/src/rules.ts)");
   }
+  return import(pathToFileURL(dist).href);
+}
+
+async function loadInventorySpec() {
+  const dist = path.join(repoRoot, "packages", "spec", "dist", "index.js");
+  if (!existsSync(dist)) throw new Error("@roll/spec not built — run `pnpm -r build` first (canonical source: packages/spec/src/rules-inventory.ts)");
   return import(pathToFileURL(dist).href);
 }
 
@@ -166,8 +173,41 @@ async function runAudit(root) {
   return { ok: findings.length === 0, findings, registered: registry.rules.length };
 }
 
+function inventoryFs(root) {
+  return {
+    list(directory) {
+      if (!existsSync(directory)) throw new Error(`inventory root does not exist: ${directory}`);
+      return readdirSync(directory).map((name) => {
+        const stat = lstatSync(path.join(directory, name));
+        return { name, kind: stat.isSymbolicLink() ? "symlink" : stat.isDirectory() ? "directory" : "file" };
+      });
+    },
+    read(file) { return readFileSync(file, "utf8"); },
+    realpath(file) { return file; },
+  };
+}
+
+async function runInventoryAudit(root) {
+  const inventoryPath = path.join(root, "policy", "rules-inventory.yaml");
+  const rulesPath = path.join(root, "policy", "rules.yaml");
+  if (!existsSync(inventoryPath) || !existsSync(rulesPath)) throw new Error("policy/rules.yaml and policy/rules-inventory.yaml are required for --inventory");
+  const { auditRulesInventory, inventoryReportFails, parseRulesInventory, parseRulesV2 } = await loadInventorySpec();
+  const inventory = parseRulesInventory(readFileSync(inventoryPath, "utf8"));
+  if (!inventory.ok) throw new Error(`policy/rules-inventory.yaml failed to parse: ${inventory.error.message}`);
+  const rules = parseRulesV2(readFileSync(rulesPath, "utf8"));
+  if (!rules.ok) throw new Error(`policy/rules.yaml must be v2 for --inventory: ${rules.error.message}`);
+  const report = auditRulesInventory(inventory.value, rules.value, inventoryFs(root), root);
+  return { report, ok: !inventoryReportFails(report) };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.inventory) {
+    const outcome = await runInventoryAudit(options.root);
+    process.stdout.write(JSON.stringify(outcome.report, null, 2) + "\n");
+    if (!outcome.ok) process.exitCode = 1;
+    return;
+  }
   const report = await runAudit(options.root);
   if (options.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
