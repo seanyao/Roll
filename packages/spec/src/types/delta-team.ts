@@ -330,3 +330,69 @@ export interface DeltaContinuationProvenance {
   /** Named successor the reservation was transferred to. */
   continuationRunId: string;
 }
+
+// ── US-DELTA-017 — machine-local rig readiness diagnostics ─────────────────
+
+/** Immutable readiness observation file schema. This is not Delta lifecycle state. */
+export const RIG_READINESS_SNAPSHOT_SCHEMA = "roll-delta-rig-readiness/v1" as const;
+/** Mutable pointer schema for the latest complete readiness observation. */
+export const RIG_READINESS_LATEST_SCHEMA = "roll-delta-rig-readiness-latest/v1" as const;
+/** Versioned, machine-local configured-model to adapter mapping schema. */
+export const RIG_ADAPTERS_SCHEMA = "roll-delta-rig-adapters/v1" as const;
+
+export const RIG_PROBE_REASON_CODES = [
+  "probe_passed", "adapter_missing", "adapter_model_selection_unsupported",
+  "auth_required", "quota_exhausted", "rate_limited", "network_unreachable",
+  "model_rejected", "probe_timeout", "probe_failed", "probe_output_unverified",
+  "cache_missing", "cache_stale", "cache_incompatible",
+] as const;
+export type RigProbeReasonCode = (typeof RIG_PROBE_REASON_CODES)[number];
+
+export interface RigAdapterMapping {
+  /** Exact configured key; it is never trimmed, parsed, or otherwise normalized. */
+  readonly configuredModelId: string;
+  readonly adapter: string;
+  /** Opaque CLI model selection value. */
+  readonly cliModelId: string;
+}
+
+export interface RigReadinessCandidate {
+  readonly adapter: string;
+  readonly configuredModelId: string;
+  readonly cliModelId: string;
+  readonly roles: readonly string[];
+  readonly presetIds: readonly string[];
+}
+
+export interface RigProbeObservation {
+  readonly adapter: string;
+  readonly configuredModelId: string;
+  readonly cliModelId: string;
+  readonly outcome: "ready" | "blocked" | "unknown";
+  readonly reasonCode: RigProbeReasonCode;
+  readonly detail: string;
+  readonly latencyMs?: number;
+}
+
+export interface RigReadinessSnapshot {
+  readonly schema: typeof RIG_READINESS_SNAPSHOT_SCHEMA;
+  readonly refreshId: string;
+  readonly candidateFingerprint: string;
+  /** Authoritative freshness timestamp. */
+  readonly observedAt: string;
+  readonly observations: readonly RigProbeObservation[];
+}
+
+export interface RigReadinessLatest {
+  readonly schema: typeof RIG_READINESS_LATEST_SCHEMA;
+  readonly refreshId: string;
+  readonly candidateFingerprint: string;
+  /** Pointer publication metadata; never use this to calculate freshness. */
+  readonly publishedAt: string;
+}
+
+export interface RigReadinessLimits {
+  readonly probeTimeoutMs: number;
+  readonly maxConcurrency: number;
+  readonly freshnessTtlMs: number;
+}
