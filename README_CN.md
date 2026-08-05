@@ -30,6 +30,9 @@ macOS 上通过 npm 安装时，会顺手从 `seanyao/roll-capture` 最新 GitHu
 安装 `Roll Capture.app` 到 `~/Applications`，用于物理截图。CI、headless、非 macOS、
 离线下载失败或 `ROLL_SKIP_CAPTURE_INSTALL=1` 都会静默跳过且不让安装失败；`roll setup`
 和 `roll doctor tools` 会继续报告同一套就绪度与修复路径。
+要更新已安装的 Capture.app，请运行 `roll setup --update-capture`。命令会先显示
+已安装版本、可用版本和目标位置，只有输入 `y` 才替换；无人值守脚本必须明确给出
+`--yes`。拒绝、下载失败或替换失败都会保留原来的 App。
 
 ## 使用
 
@@ -192,7 +195,7 @@ roll loop go
 | `roll next` | 接续 init/onboard，只给一个最合适的下一步 |
 | `roll north [--json] [--no-color]` | 北极星终端面板：自主运行时长、交付率、修复税和归因错误 |
 | `roll release [--dry-run\|--showcase]` | 发版计划/流程与 golden-path showcase 支撑 |
-| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup skills\|offboard` | 安装/同步约定，修复 Roll Capture.app 就绪度，或移除 Roll 管理的项目产物 |
+| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup --update-capture [--yes]` / `roll setup skills\|offboard` | 安装/同步约定；经明确确认安全更新 Roll Capture.app；修复就绪度，或移除 Roll 管理的项目产物 |
 | `roll status [ci\|pulse] [--json]` | 项目健康、CI 状态和交付脉搏 |
 | `roll test [--where] [--reset]` | 通过隔离适配器运行测试 |
 | `roll update` | 升级全局 Roll 并重新同步约定 |

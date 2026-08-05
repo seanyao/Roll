@@ -388,7 +388,7 @@ export function registerAll(): void {
     }
     if (args[0] === "offboard") return offboardCommand(args.slice(1));
     return setupCommand(args);
-  }, { help: "Usage: roll setup [-f|--force] [--reselect] [--no-capture-install]\n       roll setup skills [args...]\n       roll setup offboard [args...]\n  Install or re-sync Roll conventions/templates for this machine; use -f to force refresh; --no-capture-install skips Roll Capture.app repair.\n本机安装或重新同步 Roll 模板与约定；-f 强制刷新；--no-capture-install 跳过 Roll Capture.app 修复。" });
+  }, { help: "Usage: roll setup [-f|--force] [--reselect] [--no-capture-install]\n       roll setup --update-capture [--yes]\n       roll setup skills [args...]\n       roll setup offboard [args...]\n  Install or re-sync Roll conventions/templates for this machine; use -f to force refresh; --no-capture-install skips Roll Capture.app repair. --update-capture checks for a newer Roll Capture.app and replaces it only after y or --yes.\n本机安装或重新同步 Roll 模板与约定；-f 强制刷新；--no-capture-install 跳过 Roll Capture.app 修复。--update-capture 只检查新版，只有输入 y 或明确给出 --yes 才替换。" });
   // `ci`: the READ surface is TS (no-flag / `--timeout=N` status report:
   // gh-absent warn, not-a-git-repo err, gh-run-list failure, no-runs note, and
   // the per-run "<name>: <status>/<conclusion>" listing). The `--wait` CI gate

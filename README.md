@@ -38,6 +38,11 @@ sudo/root shells, offline downloads, or `ROLL_SKIP_CAPTURE_INSTALL=1` skip this
 step without failing install; when skipped under sudo/root, re-run `roll setup`
 as a regular user so the app installs into that user's `~/Applications`.
 `roll setup` and `roll doctor tools` report the same readiness and repair path.
+To update an already installed Capture.app, run `roll setup --update-capture`.
+It shows the installed version, available release, and destination first, then
+replaces the app only when you enter `y`; use `--yes` only for intentional
+non-interactive automation. A refusal, failed download, or failed replacement
+keeps the existing app intact.
 
 ## Use
 
@@ -280,7 +285,7 @@ with `roll loop resume` when ready.
 | `roll next` | Continue init/onboard with one best next command |
 | `roll north [--json] [--no-color]` | North-star terminal panel for autonomy, delivery rate, fix tax, and attribution errors |
 | `roll release [--dry-run\|--showcase]` | Release planning/flow plus golden-path showcase support |
-| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup skills\|offboard` | Install/sync conventions, repair Roll Capture.app readiness, or remove Roll-owned project artifacts |
+| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup --update-capture [--yes]` / `roll setup skills\|offboard` | Install/sync conventions, safely update Roll Capture.app after explicit confirmation, repair readiness, or remove Roll-owned project artifacts |
 | `roll status [ci\|pulse] [--json]` | Project health, CI state, and delivery pulse |
 | `roll test [--where] [--reset]` | Run tests through the isolation adapter |
 | `roll update` | Upgrade the global Roll install and re-sync conventions |
