@@ -1,3 +1,6 @@
+/**
+ * @responsibility Normalizes per-agent signals into the standard activity signal model.
+ */
 import { agentNormalizerKind } from "../agent/specs.js";
 
 /**

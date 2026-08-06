@@ -85,7 +85,7 @@ describe("strict v2 rule parser", () => {
 describe("inventory parser and pure auditor", () => {
   it("has deterministic exact-exclusion and ignored-include precedence", () => {
     const report = auditRulesInventory(parsed(parseRulesInventory(INVENTORY)), parsed(parseRulesV2(V2)), memory({
-      "packages/core/src/attest/live.ts": "// @responsibility live\nexport {};",
+      "packages/core/src/attest/live.ts": "/**\n * @responsibility live\n */\nexport {};",
       "packages/core/src/attest/legacy.ts": "export {};",
       "packages/core/src/attest/readme.md": "readme",
     }));
@@ -93,6 +93,24 @@ describe("inventory parser and pure auditor", () => {
     expect(report.excluded).toEqual([{ coverageSetId: "maps-core", path: "packages/core/src/attest/legacy.ts", reason: "migration fixture" }]);
     expect(report.ignored_by_include).toEqual([{ coverageSetId: "maps-core", path: "packages/core/src/attest/readme.md" }]);
     expect(inventoryReportFails(report)).toBe(false);
+  });
+
+  // US-RULE-011 — responsibilityCount counts ` * @responsibility` lines inside
+  // the FIRST JSDoc header block only; a declaration anywhere else is not one.
+  it.each([
+    ["JSDoc header with one declaration counts 1", "/**\n * @responsibility live\n */\nexport {};", "covered"],
+    ["JSDoc header with two declarations counts 2", "/**\n * @responsibility first\n * @responsibility second\n */\nexport {};", "missing:multiple @responsibility declarations"],
+    ["declaration outside the header counts 0", "// @responsibility live\nexport {};", "missing:missing @responsibility"],
+    ["no header counts 0", "export {};", "missing:missing @responsibility"],
+  ])("%s", (_name, source, expected) => {
+    const report = auditRulesInventory(parsed(parseRulesInventory(INVENTORY)), parsed(parseRulesV2(V2)), memory({ "packages/core/src/attest/live.ts": source }));
+    if (expected === "covered") expect(report.covered).toEqual([{ coverageSetId: "maps-core", path: "packages/core/src/attest/live.ts" }]);
+    else {
+      const [bucket, reason] = expected.split(":");
+      expect(report.missing).toEqual([{ coverageSetId: "maps-core", path: "packages/core/src/attest/live.ts", reason }]);
+      expect(report.covered).toEqual([]);
+      expect(bucket).toBe("missing");
+    }
   });
 
   it("fails loudly for an unclassified candidate and illegal same-purpose overlap", () => {

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Rebuilds the deliveries projection cache from runs and git facts.
  * FIX-389a — Projection engine: rebuild deliveries.jsonl from runs+git facts.
  *
  * deliveries.jsonl is a REBUILDABLE CACHE — never independently authoritative.

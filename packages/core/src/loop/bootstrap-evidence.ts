@@ -1,4 +1,5 @@
 /**
+ * @responsibility Gates bootstrap on verified pending-delivery evidence manifests.
  * FIX-1272 — Pending-delivery evidence manifest + bootstrap artifact gate.
  *
  * The loop's bootstrap gate must never mistake a runner's verified

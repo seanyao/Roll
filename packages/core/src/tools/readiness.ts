@@ -1,3 +1,6 @@
+/**
+ * @responsibility Derives tool readiness from declared requirements and resolutions.
+ */
 import type { ToolDeclaration, ToolReadiness, ToolRequirement, ToolRequirementResolution } from "@roll/spec";
 
 export type ToolRequirementResolver = (requirement: ToolRequirement) => ToolRequirementResolution;

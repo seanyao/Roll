@@ -1,4 +1,5 @@
 /**
+ * @responsibility Folds Delta attempt events into a read model that never invents claims.
  * US-DELTA-012 — append-only Delta attempt facts.
  *
  * This is deliberately a read model. It never turns a missing artifact into an

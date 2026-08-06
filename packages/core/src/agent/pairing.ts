@@ -1,4 +1,5 @@
 /**
+ * @responsibility Selects cross-agent pairing candidates from a qualified heterogeneous pool.
  * US-PAIR-001 — Cross-Agent Pairing candidate selection (pure).
  *
  * The primitive of cross-agent collaboration is the PAIR: a working agent gets

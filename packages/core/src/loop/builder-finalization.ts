@@ -1,4 +1,5 @@
 /**
+ * @responsibility Turns raw builder-exit facts into a finalization verdict.
  * FIX-1068 — Builder finalization hard gate.
  *
  * Adapter-agnostic pure logic that turns the raw worktree/branch facts captured

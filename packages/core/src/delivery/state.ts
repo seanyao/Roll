@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects a cycle's delivery state from its event stream.
  * US-DELIV-001 — delivery lifecycle state projection.
  *
  * A cycle's `deliveryState` (design §3.1) is a PURE PROJECTION of the event

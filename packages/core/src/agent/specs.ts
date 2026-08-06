@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the agent spec vocabulary: normalizer kinds, usage extractors, roster and scaffold seeds.
+ */
 // claude is KEPT here (harness): the loop runs inside Claude Code and claude is
 // used for harness cost/activity normalization, even though it is NOT a member of
 // the orchestrated agent POOL (see registry.ts). So "claude"/"claude-stream"

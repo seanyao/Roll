@@ -1,4 +1,5 @@
 /**
+ * @responsibility Provides the default Node child-process implementation of the delivery ExecPort.
  * Default Node child-process implementation of the {@link ExecPort} the delivery
  * domain (pr.ts / tcr.ts) uses to run `gh` / git invocations.
  *

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves recursive agent scope and role bindings.
  * US-V4-016 — pure resolver for recursive Agent Scope / Role bindings.
  *
  * The resolver does not spawn agents and does not mutate config. Runtime health

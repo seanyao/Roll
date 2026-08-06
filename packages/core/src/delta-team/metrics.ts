@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects immutable Delta delivery metrics from the event ledger.
  * US-DELTA-013 — immutable Delta delivery metrics.
  *
  * This is intentionally a read model: callers supply the event ledger and the

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Enforces the TCR test-and-commit freshness gate for every commit.
  * TCRPipeline — TS port of the v2 TCR (Test && Commit || Revert) enforcement
  * path: the per-cycle hard validation that a story produced ≥1 `tcr:` commit,
  * and the git pre-commit freshness gate that keeps every commit backed by a

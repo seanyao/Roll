@@ -1,3 +1,6 @@
+/**
+ * @responsibility Ranks backlog items into a deterministic pick order.
+ */
 import { createHash } from "node:crypto";
 import type { BacklogItem } from "./store.js";
 

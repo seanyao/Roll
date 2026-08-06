@@ -1,4 +1,5 @@
 /**
+ * @responsibility Emits runner-observed cycle signal facts during the build phase.
  * US-LOOP-076 (folds in FIX-310) — the RUNNER-OBSERVED cycle signal source.
  *
  * THE BLACK-BOX KILLER. Before this, a cycle's build/TCR phase emitted ZERO

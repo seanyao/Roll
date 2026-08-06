@@ -1,4 +1,5 @@
 /**
+ * @responsibility Conducts the inner cycle: pick, route, run, deliver and reconcile in order.
  * CycleOrchestrator — TS port of the v2 loop "inner cycle runner" (US-LOOP-001).
  *
  * This is the COMPOSITION card: nearly every building block already exists as a

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Determines delivery truth from layered merge signals.
  * US-DELIV-002 — layered reconcile-from-main: the heart of the delivery
  * reconciler epic. A PURE function that determines delivery truth from
  * layered signals (design §3.3, §4).

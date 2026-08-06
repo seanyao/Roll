@@ -1,4 +1,5 @@
 /**
+ * @responsibility Downgrades scope on the reviewer's independent too-big signal.
  * Review-triggered resize (US-AGENT-041) — the PURE decision core for the
  * reviewer-triggered self-downgrade. US-AGENT-008's downgrade only fired on the
  * BUILDER's own "too big" pre-flight; in practice the reliable "scope too large"

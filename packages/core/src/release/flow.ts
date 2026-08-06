@@ -1,4 +1,5 @@
 /**
+ * @responsibility Orders the one release flow with every irreversible step behind an earlier gate.
  * US-REL-007 / RL-REL-010 — the ONE release flow's pure pieces. `roll release` is the only
  * release command: it owns version bump → changelog fold → package gate →
  * commit-push → consistency gate → release PR → merge → tag push, in that order,

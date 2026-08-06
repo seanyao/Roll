@@ -1,4 +1,5 @@
 /**
+ * @responsibility Quantifies shadow drift between declared fact sources before any fix.
  * US-TRUTH-002 — Shadow Consistency Audit (pure rules over snapshots).
  *
  * Quantifies real drift between the fact sources declared in US-TRUTH-000's

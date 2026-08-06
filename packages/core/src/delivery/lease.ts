@@ -1,4 +1,5 @@
 /**
+ * @responsibility Consults the one-card-one-lease delivery claim before dispatch.
  * US-DELIV-005 — one-card-one-lease: the picker's delivery-lease consult.
  *
  * Root cause addressed: same-card fan-out waste (the ir-pipeline failure — 3

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves configured agent models and fails loud when a required model is missing.
  * FIX-1249 — agent model is CONFIG-DRIVEN, not a source-baked runtime default.
  *
  * `.roll/agents.yaml` (the `rigs:` + `routing:` map, or a legacy inline slot) is

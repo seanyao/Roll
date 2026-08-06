@@ -1,4 +1,5 @@
 /**
+ * @responsibility Owns the parent-only contract for parallel skill dispatch children.
  * US-LOOP-127 — the parent-owned contract for parallel Skill dispatch.
  *
  * A dispatch child is deliberately not a second DeliveryRun.  The shared

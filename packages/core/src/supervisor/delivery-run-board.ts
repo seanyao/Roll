@@ -1,4 +1,5 @@
 /**
+ * @responsibility Composes the one honest Supervisor presentation model for delivery runs.
  * US-LOOP-128 — one honest Supervisor presentation model for DeliveryRuns.
  *
  * The board deliberately composes the managed-workspace and Delta projections

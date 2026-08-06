@@ -1,3 +1,6 @@
+/**
+ * @responsibility Classifies switcher rows into real projects vs temp/roll-meta fixtures for project switching.
+ */
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, sep } from "node:path";

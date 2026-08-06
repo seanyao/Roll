@@ -1,4 +1,5 @@
 /**
+ * @responsibility Captures fast roll idea entries into the backlog with lint-gated descriptions.
  * roll idea — fast backlog capture (US-PORT-003, TS port).
  *
  * v2 had NO `roll idea` CLI command: capture lived entirely in the roll-idea

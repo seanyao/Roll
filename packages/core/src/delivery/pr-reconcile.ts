@@ -1,4 +1,5 @@
 /**
+ * @responsibility Polls pending PRs into an updated local operator view.
  * FIX-1052 — Pending PR polling reconciler.
  *
  * After a cycle records `published_pending_merge` with a PR number, the local

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Normalizes the v3/v4 project agent route profile into one typed shape.
  * US-V4-003 — pure normalizer for the project route profile (`.roll/agents.yaml`).
  *
  * Both the v3 slot form and the v4 rig/routing/execution-profile form load into

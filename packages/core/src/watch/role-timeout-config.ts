@@ -1,4 +1,5 @@
 /**
+ * @responsibility Declares per-role spawn-watchdog timeout caps.
  * US-CYCLE-002 — per-role spawn-watchdog timeout caps, CONFIG-DRIVEN (FIX-1249).
  *
  * A supervisor delegates to sequential heterogeneous subagents (designer,

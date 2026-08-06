@@ -1,3 +1,6 @@
+/**
+ * @responsibility Analyzes cycle activity segments from the event stream.
+ */
 import type { RollEvent, CycleActivityEvent } from "@roll/spec";
 import type { ActivityKind, ActivitySignal, Segment } from "./activity-signal.js";
 import { signalKindForMarker } from "./signals.js";

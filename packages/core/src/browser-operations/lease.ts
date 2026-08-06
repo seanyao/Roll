@@ -1,4 +1,5 @@
 /**
+ * @responsibility Owns browser lease approval, binding and exactly-once release semantics.
  * US-BROW-008a — BrowserLease aggregate.
  *
  * Owns owner approval, lease binding, and exactly-once release semantics for

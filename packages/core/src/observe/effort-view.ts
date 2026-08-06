@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects the read-only effort view per isolation tier and review gate.
  * US-PAIR-016 — the read-only effort view: for each (gate x achieved isolation
  * tier) cell, what it cost and what it caught.
  *

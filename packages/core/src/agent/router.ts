@@ -1,4 +1,5 @@
 /**
+ * @responsibility Routes backlog stories to agents by complexity tier with in-tier nudges.
  * AgentRouter — TS port of the v2 tier/complexity routing engine the loop uses
  * to pick which agent runs a backlog story.
  *

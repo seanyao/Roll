@@ -1,4 +1,5 @@
 /**
+ * @responsibility Folds parsed agent usage into per-cycle cost records with guardrails.
  * CostTracker — TS port of the v2 `lib/agent_usage/` plugin contract: parse each
  * agent's usage output into tokens + model + list cost, and fold a parsed usage
  * into the per-cycle {@link CycleCost} record budget guardrails gate on (I11).

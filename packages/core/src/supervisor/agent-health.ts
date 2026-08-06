@@ -1,4 +1,5 @@
 /**
+ * @responsibility Classifies agent toolchain health issues with recommended actions.
  * US-V4-022 — Supervisor agent toolchain health classification.
  *
  * Pure functions that turn observed agent signals (warnings, auth/network blocks,

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Provides the default Node filesystem implementation of the EventStore port.
  * Default Node filesystem implementation of the {@link EventStore} port the
  * event-bus write side (bus.ts) uses to append events / upsert run rows.
  *

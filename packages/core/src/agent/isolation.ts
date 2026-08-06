@@ -1,4 +1,5 @@
 /**
+ * @responsibility Computes rig isolation tiers from resolved models, never agent names.
  * US-PAIR-012 — how far apart two rig assignments actually are.
  *
  * The problem this replaces: heterogeneity used to be computed from the AGENT

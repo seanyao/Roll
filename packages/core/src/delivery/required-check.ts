@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides the required checks that gate self-merged delivery paths.
  * FIX-1487 — the one judgement both self-driven merge paths use.
  *
  * roll merges its own PRs in two places (`release.ts` for the release PR,

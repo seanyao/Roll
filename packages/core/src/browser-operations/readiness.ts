@@ -1,4 +1,5 @@
 /**
+ * @responsibility Derives honest browser environment readiness verdicts per lane.
  * US-BROW-003 — BrowserEnvironmentReadiness aggregate.
  *
  * Pure verdict logic over dependency observations. It NEVER performs IO: probes

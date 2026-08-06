@@ -1,4 +1,5 @@
 /**
+ * @responsibility Selects the cheapest sufficient execution profile from risk signals.
  * US-V4-004 — pure Story execution-profile selection.
  *
  * Roll picks the CHEAPEST SUFFICIENT profile from a story's risk signals before

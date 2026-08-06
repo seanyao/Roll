@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides alert file mechanics: append, dedup, consume and notify.
  * Alert Loop — pure decision layer for ALERT file mechanics: append, dedup,
  * consume, and the notify push (US-LOOP-005 / v2 US-AUTO-046, US-LOOP-062a,
  * FIX-065/151).

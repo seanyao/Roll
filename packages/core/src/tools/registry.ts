@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the tool registry vocabulary: costs, deps, events and declarations.
+ */
 import type {
   ToolCost,
   ToolDeclaration,

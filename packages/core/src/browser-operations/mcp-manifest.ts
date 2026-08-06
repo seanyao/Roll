@@ -1,4 +1,5 @@
 /**
+ * @responsibility Declares the versioned minimum tool manifest for the managed DevTools session.
  * US-BROW-016 — versioned minimum tool manifest for the managed DevTools MCP
  * session.
  *

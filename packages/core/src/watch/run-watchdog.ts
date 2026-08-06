@@ -1,4 +1,5 @@
 /**
+ * @responsibility Watches git-state liveness of a subagent run in its own worktree.
  * US-CYCLE-001 — shared run-watchdog: git-state liveness for ANY subagent run,
  * observed on the run's OWN working directory (its worktree), not the main
  * checkout. FIX-1477 put "git state = progress" into the loop runner's

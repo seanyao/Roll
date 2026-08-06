@@ -1,4 +1,5 @@
 /**
+ * @responsibility Maps review gates to the required rig isolation distance in one effort table.
  * US-PAIR-013 — the effort table: for each review gate, how far the reviewer
  * must be from the builder.
  *

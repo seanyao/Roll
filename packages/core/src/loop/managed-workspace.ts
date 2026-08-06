@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects workspace lifecycle facts and conservatively releases workspaces.
  * US-LOOP-122 — pure Execution projection and conservative release selector.
  *
  * This module folds only workspace lifecycle facts. Delivery merge and attest

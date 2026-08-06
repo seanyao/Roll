@@ -1,4 +1,5 @@
 /**
+ * @responsibility Validates Delta artifact manifests: digests, containment and role write-access.
  * US-DELTA-004 — enforce artifact-only Delta role handoffs.
  *
  * Pure validators for the v2 `DeltaArtifactManifest` protocol: digest

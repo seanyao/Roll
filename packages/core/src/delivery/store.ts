@@ -1,4 +1,5 @@
 /**
+ * @responsibility Appends delivery records to the deliveries store atomically.
  * DeliveryStore — US-TRUTH-014 append-only deliveries.jsonl store.
  *
  * Every delivery produces one {@link DeliveryRecord} (US-TRUTH-013). This module

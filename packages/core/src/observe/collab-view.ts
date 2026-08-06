@@ -1,4 +1,5 @@
 /**
+ * @responsibility Derives handoff, escalation and supervisor stance from one cycle's facts.
  * US-OBS-038 — Collab projection base (collab-view.v1).
  *
  * Derives handoffs, escalations, and supervisor stance from a single cycle's

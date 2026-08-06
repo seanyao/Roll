@@ -1,4 +1,5 @@
 /**
+ * @responsibility Plans release versions and flow under calver and semver schemes.
  * roll release — version + flow planning (US-PORT-004, TS port).
  *
  * TWO version schemes live here (FIX-1247):

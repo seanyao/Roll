@@ -1,4 +1,5 @@
 /**
+ * @responsibility Packages repair-round inputs into a checksummed warm-start briefing.
  * US-CYCLE-007 — repair-round warm-start briefing.
  *
  * When a cycle is re-dispatched after evaluator findings (a REPAIR round), a

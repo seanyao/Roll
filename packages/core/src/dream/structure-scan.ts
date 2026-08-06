@@ -1,3 +1,6 @@
+/**
+ * @responsibility Scans repository structure into architecture-health findings.
+ */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";

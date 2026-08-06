@@ -1,4 +1,5 @@
 /**
+ * @responsibility Folds TCR round observations into per-round telemetry and proof.
  * US-DELTA-011 — TCR round observation: precise test/commit timing facts.
  *
  * The TCR execution boundary (`roll test` + the git commit hook) appends the

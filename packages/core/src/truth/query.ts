@@ -1,4 +1,5 @@
 /**
+ * @responsibility Queries story delivery truth deterministically from delivery records.
  * US-TRUTH-016 / US-TRUTH-015 AC3 — queryStoryDelivery: the single deterministic
  * query entry point for delivery truth.
  *

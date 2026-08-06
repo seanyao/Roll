@@ -1,3 +1,6 @@
+/**
+ * @responsibility Composes morning report rows from cycle events.
+ */
 import { eventTsMs, type RollEvent } from "@roll/spec";
 
 export interface MorningRunRow {

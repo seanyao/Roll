@@ -1,4 +1,5 @@
 /**
+ * @responsibility Provides filesystem-backed mutual exclusion for browser leases.
  * US-BROW-005 — filesystem-backed exclusion for browser leases.
  *
  * Events audit a lease after the fact; this lock is the mutual-exclusion

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Declares the evaluator artifact contract for verified execution.
  * US-V4-005 — the Evaluator artifact contract for `verified` (and `designed`)
  * execution: a fresh-session Evaluator role consumes the Builder's evidence via
  * artifact refs and writes `eval-report.md` + `artifact-manifest.json`.

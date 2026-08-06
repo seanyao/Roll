@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects supervisor flow metrics as a read-only event projection.
  * US-LOOP-130 — Supervisor flow metrics are a read-only event projection.
  *
  * A missing boundary is never turned into zero elapsed time or a delivery

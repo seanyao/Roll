@@ -1,4 +1,5 @@
 /**
+ * @responsibility Maps GitHub issues into backlog rows and feature-stub acceptance criteria.
  * `roll backlog sync` — pure GitHub-issues→backlog mapping core (US-PORT-019
  * port of lib/github_sync.py, US-SYNC-001..006). Single direction: GitHub
  * issues become `.roll/backlog.md` rows + feature-stub AC.

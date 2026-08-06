@@ -1,4 +1,5 @@
 /**
+ * @responsibility Derives one conclusion per question from declared snapshots.
  * US-TRUTH-003 — Truth Selectors: pure derivation over declared snapshots.
  *
  * One conclusion per question — story delivered? cycle outcome? evidence

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Reads and rewrites backlog table rows with optimistic locking.
  * BacklogStore — TS port of the v2 backlog read/mark path.
  *
  * v2 oracle (frozen bash, /bin/roll):

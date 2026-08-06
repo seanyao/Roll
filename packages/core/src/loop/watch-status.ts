@@ -1,3 +1,6 @@
+/**
+ * @responsibility Projects watch status summaries with durable cycle lookup fallback.
+ */
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { analyzeCycleActivity, type CycleActivityAnalysis } from "./cycle-activity.js";
 

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Ranks role candidates by capability against the cast role requirements.
+ */
 import type {
   AgentCapabilityProfile,
   AgentHealthSignal,

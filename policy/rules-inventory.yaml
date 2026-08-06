@@ -7,6 +7,31 @@
 version: 1
 
 coverage_sets:
+  # US-RULE-011 — one responsibility coverage set for the whole core source
+  # tree. Coverage boundary = packages/core/src wholesale: `**/*.ts` matches
+  # any depth (index.ts included), so any new core file is auto-in-scope and
+  # must carry a header @responsibility declaration or a literal reasoned
+  # exclusion. Exactly three exclusions, all pure-barrel re-export files.
+  - id: maps-core
+    purpose: responsibility
+    roots:
+      - packages/core/src
+    include:
+      - "**/*.ts"
+    allow_overlap_with: []
+    exclude:
+      - path: packages/core/src/index.ts
+        reason: "pure barrel re-export of the core public API; ownership lives in the exported modules"
+        owner: core
+        review_by: US-RULE-011
+      - path: packages/core/src/browser-operations/index.ts
+        reason: "pure barrel re-export; ownership lives in the exported browser-operations modules"
+        owner: browser-operations
+        review_by: US-RULE-011
+      - path: packages/core/src/tools/index.ts
+        reason: "pure barrel re-export; ownership lives in the exported tools modules"
+        owner: tools
+        review_by: US-RULE-011
   - id: rule-candidates
     purpose: rule-candidate
     roots:

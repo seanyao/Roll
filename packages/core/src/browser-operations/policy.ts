@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves browser role/lane/action policy before any transport is selected.
  * US-BROW-001 AC3 — Browser operation policy resolver.
  *
  * Resolve role/lane/action policy BEFORE any transport is selected.

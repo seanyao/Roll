@@ -1,4 +1,5 @@
 /**
+ * @responsibility Derives machine-local Delta rig readiness contracts.
  * US-DELTA-017 — pure machine-local Delta rig readiness contracts.
  *
  * This module deliberately has no filesystem, clock, process, or Delta

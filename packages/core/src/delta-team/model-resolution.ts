@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves role-to-model assignments deterministically from preset and constraints.
  * US-DELTA-002 — Deterministic model resolution.
  *
  * Pure ranking algorithm that resolves role→model assignments from a preset,

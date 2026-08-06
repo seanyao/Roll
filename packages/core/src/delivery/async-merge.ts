@@ -1,4 +1,5 @@
 /**
+ * @responsibility Attaches PR auto-merge and confirms merges on the git plane.
  * US-CYCLE-009 — async delivery: take PR merge + reconcile OFF the critical path.
  *
  * The cycle runner, after opening a PR, ATTACHES auto-merge and RETURNS

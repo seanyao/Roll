@@ -1,4 +1,5 @@
 /**
+ * @responsibility Normalizes the roll-agents/v1 agent scope schema.
  * US-V4-015 — pure normalizer for `roll-agents/v1`.
  *
  * This is the new Agent-domain schema, separate from the legacy route-profile

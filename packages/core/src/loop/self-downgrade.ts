@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides self-downgrade and chain-depth caps from scope signals.
  * Self-downgrade (US-AGENT-042) — the PURE decision core behind the
  * `roll loop self-downgrade` command and the loop's terminal reconcile.
  *

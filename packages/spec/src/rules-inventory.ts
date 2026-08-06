@@ -99,7 +99,10 @@ function pathMatchesSurface(pattern: string, file: string): boolean { return pat
 function item(coverageSetId: string, path: string, more: Omit<AuditItem, "coverageSetId" | "path"> = {}): AuditItem { return { coverageSetId, path, ...more }; }
 function sort(items: readonly AuditItem[]): readonly AuditItem[] { return [...items].sort((a, b) => `${a.coverageSetId}\u0000${a.path}\u0000${a.marker ?? ""}`.localeCompare(`${b.coverageSetId}\u0000${b.path}\u0000${b.marker ?? ""}`)); }
 function isSystemDirectory(path: string): boolean { const parts = path.split("/"); return parts.some((part, index) => SYSTEM_DIRS.has(part) || (part === ".roll" && parts[index + 1] === "loop" && parts[index + 2] === "worktrees")); }
-function responsibilityCount(source: string): number { return [...source.matchAll(/^\s*(?:\/\/|#|\/\*)\s*@responsibility\b/gm)].length; }
+const RESPONSIBILITY_HEADER = /^\s*\/\*\*[\s\S]*?\*\//;
+const RESPONSIBILITY_DECLARATION = /^\s*\*[ \t]*@responsibility(?:[ \t]+(.*))?[ \t]*$/gm;
+/** Counts `@responsibility` declaration lines inside the FIRST JSDoc header block only (US-RULE-011). */
+function responsibilityCount(source: string): number { return [...(RESPONSIBILITY_HEADER.exec(source)?.[0] ?? "").matchAll(RESPONSIBILITY_DECLARATION)].length; }
 
 export function auditRulesInventory(inventory: RulesInventory, rules: ParsedRulesV2, fs: InventoryFileSystem, repositoryRoot = ""): RulesInventoryReport {
   const report = Object.fromEntries(buckets.map((bucket) => [bucket, [] as AuditItem[]])) as Record<AuditBucket, AuditItem[]>;

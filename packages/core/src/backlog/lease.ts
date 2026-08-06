@@ -1,4 +1,5 @@
 /**
+ * @responsibility Owns the story lease vocabulary that distinguishes picked from preempted cards.
  * Story lease — who claimed the card and when.
  *
  * FIX-1211: a lease distinguishes "the loop picked this" from "a human (or

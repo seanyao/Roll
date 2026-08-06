@@ -1,3 +1,6 @@
+/**
+ * @responsibility Decides peer-review verdicts from mode, candidates and reviewer selection.
+ */
 import { heterogeneousByModel, type ModelResolver } from "./isolation.js";
 import { agentVendor, isHeterogeneous } from "./pairing.js";
 import { agentIsKnown, canonicalAgentName } from "./registry.js";

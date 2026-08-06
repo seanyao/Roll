@@ -1,4 +1,5 @@
 /**
+ * @responsibility Picks the next workable backlog story in fixed type-prefix order.
  * StoryPicker — TS port of the v2 "pick the next workable story" path.
  *
  * v2 oracle (frozen bash, bin/roll):

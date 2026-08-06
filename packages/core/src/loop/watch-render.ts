@@ -1,3 +1,6 @@
+/**
+ * @responsibility Renders watch output rows from parsed events.
+ */
 import { parseEventLine, type RollEvent } from "@roll/spec";
 
 export type WatchMode = "status" | "events" | "raw-events";

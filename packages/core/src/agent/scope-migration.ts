@@ -1,4 +1,5 @@
 /**
+ * @responsibility Plans the migration from legacy agent config to roll-agents/v1.
  * US-V4-017 — migration planner from legacy agent config to `roll-agents/v1`.
  *
  * Pure planner only: callers decide whether to write the returned target files.

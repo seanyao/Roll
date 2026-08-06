@@ -1,4 +1,5 @@
 /**
+ * @responsibility Classifies card-level delivery-time CI truth from this card's own PR checks.
  * US-EVID-033 — card-level delivery-time CI truth (PURE classification).
  *
  * The legacy `ci` lane in an evidence manifest is `gh run list --limit 1` — the

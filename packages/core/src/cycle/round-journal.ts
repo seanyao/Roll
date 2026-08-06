@@ -1,4 +1,5 @@
 /**
+ * @responsibility Appends per-card per-round mechanical facts to the round journal.
  * US-CYCLE-004 — round-journal: a per-card, per-round, append-only mechanical
  * ledger of who did what for how long with what outcome. "Observe before you
  * optimize": every later efficiency lever needs a baseline, a comparison window

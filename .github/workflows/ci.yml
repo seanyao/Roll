@@ -56,9 +56,10 @@ jobs:
       # registered. Runs after build (needs @roll/spec's compiled parser) and
       # before the workspace test command, per the story's AC.
       - run: node scripts/audit-rules.mjs
-      # US-RULE-005 — maps are source-derived developer documentation. Regenerate
-      # them in CI so a source-header change cannot leave a hand-edited/stale map.
-      - run: node scripts/gen-module-maps.mjs && git diff --exit-code docs/maps/
+      # US-RULE-005 / US-RULE-011 — maps are source-derived developer
+      # documentation. --check verifies without writing: bad declaration,
+      # stale map bytes, missing inventory and overlap are distinct findings.
+      - run: node scripts/gen-module-maps.mjs --check
       # The root gate builds the workspace, runs the role-taxonomy audit and
       # orphan-snapshot guard, then executes every package's Vitest suite.
       # `npm pack` runs root prepack from inside npm. Keep action-setup's pnpm

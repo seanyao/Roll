@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides the narrow sweep of stranded loop/cycle remote branches.
  * Remote branch GC — narrow "delete stranded loop/cycle-* remote branches"
  * decision (US-LOOP-097, "方案 1 窄 D").
  *

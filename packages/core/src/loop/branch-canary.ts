@@ -1,4 +1,5 @@
 /**
+ * @responsibility Verdicts on branch and worktree leak counts.
  * Branch-leak canary (US-LOOP-096) — pure verdict.
  *
  * After US-LOOP-094/095 the healthy steady state is ~0-1 loop worktrees and 0

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Selects the final goal reviewer through the shared ranked peer-review primitive.
+ */
 import type { GoalReviewMode } from "@roll/spec";
 import { selectPeerReviewers } from "./peer-review.js";
 

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects current feature delivery truth from already-read observations.
  * US-DELTA-020 — pure, current-truth feature delivery projection.
  *
  * This module deliberately accepts already-read observations. It joins

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Normalizes and validates browser operation origins against the allowlist.
  * US-BROW-001 AC2 — Origin normalizer and validator.
  *
  * Normalize and validate origin before adapter invocation:

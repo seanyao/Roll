@@ -1,4 +1,5 @@
 /**
+ * @responsibility Gates pushes on freshly produced acceptance evidence for this cycle.
  * US-DELIV-004 / RL-DELIV-010 — push-time evidence gate (fail-loud).
  *
  * Design .roll/features/delivery-reconciler/delivery-reconciler-design.md

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Validates tool inputs against JSON schema with typed errors.
+ */
 import type { JsonSchema, JsonSchemaTypeName } from "@roll/spec";
 
 export interface SchemaValidationResult {

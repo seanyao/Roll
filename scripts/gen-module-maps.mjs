@@ -1,45 +1,114 @@
 #!/usr/bin/env node
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+/**
+ * US-RULE-005 / US-RULE-011 — module responsibility map generator.
+ *
+ * Coverage boundary = `policy/rules-inventory.yaml` (one schema, the spec
+ * parser): every `purpose: responsibility` coverage set drives discovery.
+ * Source header is authority: a file's FIRST JSDoc block must carry exactly
+ * one ` * @responsibility <one sentence>.` line, or the file must be a
+ * literal, reasoned exclusion in the inventory. `docs/maps/*.md` are the only
+ * rendered artifacts — never hand-edited; write mode regenerates + repairs,
+ * `--check` verifies without writing.
+ *
+ * Usage: node scripts/gen-module-maps.mjs [--root <dir>] [--check] [--json]
+ *   write (default): mkdir -p docs/maps, write every expected map, delete
+ *     orphan `docs/maps/*.md` not produced by any responsibility set; stdout
+ *     `generated N module maps`.
+ *   --check: never writes. exit 0 → `module maps ok: N maps fresh`; exit 1 →
+ *     each finding to stderr as `kind: message` (sorted, deterministic).
+ *   --json (check or write): stdout a single JSON
+ *     `{ ok, findings: [{kind,message}], maps: [{context,file,rows}] }`.
+ *
+ * Deterministic: no timestamps, no absolute paths, contexts sorted
+ * alphabetically, files sorted per context, findings sorted.
+ *
+ * The script needs `@roll/spec` built (CI builds first; scripts/test-ts.sh
+ * builds before the suites). `ROLL_SPEC_DIST` overrides the spec dist path
+ * (tests simulate an unbuilt spec with it).
+ */
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const DOMAINS = ["attest", "reconcile", "evals", "policy"];
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const DECLARATION = /^\s*\*[ \t]*@responsibility(?:[ \t]+(.*))?[ \t]*$/gm;
+const HEADER = /^\s*\/\*\*[\s\S]*?\*\//;
+/** Deterministic finding order: matches the documented taxonomy table order. */
+const KIND_ORDER = ["missing inventory", "bad declaration", "stale map", "overlap"];
+
+function rel(root, file) {
+  return relative(root, file).split(sep).join("/");
+}
 
 function fail(message) {
   throw new Error(`gen-module-maps: ${message}`);
 }
 
-function sourceFiles(root, domain) {
-  const directory = join(root, "packages/core/src", domain);
-  let entries;
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch {
-    fail(`missing declared domain directory: ${relative(root, directory)}`);
+class FindingError extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.kind = kind;
   }
-  const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-    .map((entry) => join(directory, entry.name))
-    .sort();
-  if (files.length === 0) fail(`declared domain has no TypeScript files: ${relative(root, directory)}`);
+}
+
+function finding(kind, message) {
+  return { kind, message };
+}
+
+function sortFindings(findings) {
+  return [...findings].sort((a, b) => {
+    const kindOrder = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
+    return kindOrder !== 0 ? kindOrder : a.message.localeCompare(b.message);
+  });
+}
+
+async function loadSpec() {
+  const dist = process.env.ROLL_SPEC_DIST || join(REPO_ROOT, "packages", "spec", "dist", "index.js");
+  if (!existsSync(dist)) {
+    fail("@roll/spec not built — run `pnpm -r build` first (canonical source: packages/spec/src/rules-inventory.ts)");
+  }
+  return import(pathToFileURL(dist).href);
+}
+
+function collectTsFiles(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...collectTsFiles(full));
+    else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(full);
+  }
   return files;
 }
 
-function responsibility(root, file) {
-  const rel = relative(root, file).replaceAll("\\", "/");
-  const header = /^\s*\/\*\*[\s\S]*?\*\//.exec(readFileSync(file, "utf8"))?.[0];
-  if (header === undefined) fail(`${rel}: missing source header with @responsibility declaration`);
+function declarationFor(root, file, push) {
+  const repoRel = rel(root, file);
+  const header = HEADER.exec(readFileSync(file, "utf8"))?.[0];
+  if (header === undefined) {
+    push(`bad declaration`, `${repoRel}: missing source header with @responsibility declaration`);
+    return undefined;
+  }
   const declarations = [...header.matchAll(DECLARATION)];
-  if (declarations.length === 0) fail(`${rel}: missing @responsibility declaration`);
-  if (declarations.length > 1) fail(`${rel}: duplicate @responsibility declaration`);
+  if (declarations.length === 0) {
+    push("bad declaration", `${repoRel}: missing @responsibility declaration`);
+    return undefined;
+  }
+  if (declarations.length > 1) {
+    push("bad declaration", `${repoRel}: duplicate @responsibility declaration`);
+    return undefined;
+  }
   const text = declarations[0]?.[1]?.trim() ?? "";
-  if (text === "") fail(`${rel}: malformed @responsibility declaration`);
+  if (text === "") {
+    push("bad declaration", `${repoRel}: malformed @responsibility declaration`);
+    return undefined;
+  }
   return text;
 }
 
-function render(domain, entries) {
-  const rows = entries.map(({ file, text }) => `| \`${file}\` | ${text} |`).join("\n");
+function render(context, rows) {
+  const rowLines = rows.map(({ file, text }) => `| \`${file}\` | ${text} |`).join("\n");
   return [
-    `# ${domain} module responsibility map`,
+    `# ${context} module responsibility map`,
     "",
     "<!-- GENERATED by scripts/gen-module-maps.mjs; DO NOT EDIT. -->",
     "",
@@ -47,37 +116,216 @@ function render(domain, entries) {
     "",
     "| File | Responsibility |",
     "| --- | --- |",
-    rows,
+    rowLines,
     "",
   ].join("\n");
 }
 
-export function generateModuleMaps(root) {
-  const maps = DOMAINS.map((domain) => {
-    const entries = sourceFiles(root, domain).map((file) => ({
-      file: relative(join(root, "packages/core/src", domain), file).replaceAll("\\", "/"),
-      text: responsibility(root, file),
-    }));
-    return { domain, content: render(domain, entries) };
-  });
-  const outputDirectory = join(root, "docs/maps");
-  mkdirSync(outputDirectory, { recursive: true });
-  for (const map of maps) writeFileSync(join(outputDirectory, `${map.domain}.md`), map.content);
+/**
+ * Shared pipeline: load+parse inventory → responsibility sets → recursive
+ * discovery per root → exclusions → declarations → overlap → per-context maps.
+ * Returns `{ maps, findings }`; hard findings (missing inventory / bad
+ * declaration / overlap / stale exclusion) are collected here and the caller
+ * decides whether to throw or report.
+ */
+async function computeMaps(root, push) {
+  const mapsDir = join(root, "docs", "maps");
+
+  const inventoryPath = join(root, "policy", "rules-inventory.yaml");
+  if (!existsSync(inventoryPath)) {
+    push("missing inventory", "policy/rules-inventory.yaml not found");
+    return { maps: [], mapsDir };
+  }
+  const spec = await loadSpec();
+  const parsed = spec.parseRulesInventory(readFileSync(inventoryPath, "utf8"));
+  if (!parsed.ok) {
+    push("missing inventory", `policy/rules-inventory.yaml failed to parse: ${parsed.error.message}`);
+    return { maps: [], mapsDir };
+  }
+  const sets = parsed.value.coverageSets.filter((set) => set.purpose === "responsibility");
+  if (sets.length === 0) {
+    push("missing inventory", "no responsibility coverage set declared");
+    return { maps: [], mapsDir };
+  }
+
+  const records = [];
+  const coveredBy = new Map();
+  const contextSets = new Map();
+  for (const set of sets) {
+    for (const setRoot of set.roots) {
+      const rootPath = join(root, setRoot);
+      if (!existsSync(rootPath) || !statSync(rootPath).isDirectory()) {
+        push("missing inventory", `declared responsibility root does not exist: ${setRoot}`);
+        continue;
+      }
+      const files = collectTsFiles(rootPath).sort();
+      if (files.length === 0) {
+        push("missing inventory", `declared responsibility root has no TypeScript files: ${setRoot}`);
+        continue;
+      }
+      for (const file of files) {
+        const repoRel = rel(root, file);
+        const fromRoot = rel(rootPath, file);
+        if (!set.include.some((pattern) => spec.includeMatches(pattern, fromRoot))) continue;
+        if (set.exclude.some((entry) => entry.path === repoRel)) continue;
+        const text = declarationFor(root, file, push);
+        if (text === undefined) continue;
+        const context = dirname(fromRoot) === "." ? "core" : dirname(fromRoot).split(sep).join("/");
+        const contextDir = join(rootPath, context === "core" ? "." : context);
+        records.push({
+          set: set.id,
+          context,
+          file: rel(contextDir, file),
+          repoRel,
+          text,
+        });
+        if (!coveredBy.has(repoRel)) coveredBy.set(repoRel, []);
+        coveredBy.get(repoRel).push(set.id);
+        if (!contextSets.has(context)) contextSets.set(context, new Set());
+        contextSets.get(context).add(set.id);
+      }
+    }
+    for (const entry of set.exclude) {
+      if (!existsSync(join(root, entry.path))) {
+        push("missing inventory", `exclusion path does not exist: ${entry.path}`);
+      }
+    }
+  }
+
+  for (const [repoRelPath, setIds] of coveredBy) {
+    for (let left = 0; left < setIds.length; left += 1) {
+      for (let right = left + 1; right < setIds.length; right += 1) {
+        const a = sets.find((set) => set.id === setIds[left]);
+        const b = sets.find((set) => set.id === setIds[right]);
+        if (!a || !b) continue;
+        if (a.allowOverlapWith.includes(b.id) && b.allowOverlapWith.includes(a.id)) continue;
+        push("overlap", `${repoRelPath} covered by ${a.id} and ${b.id} without allow_overlap_with`);
+      }
+    }
+  }
+  for (const [context, ids] of contextSets) {
+    if (ids.size > 1) {
+      push("overlap", `duplicate map name: docs/maps/${context}.md (context "${context}" from sets ${[...ids].sort().join(", ")})`);
+    }
+  }
+
+  const maps = [...contextSets.keys()]
+    .sort()
+    .map((context) => {
+      const rows = records
+        .filter((record) => record.context === context)
+        .map(({ file, text }) => ({ file, text }))
+        .sort((a, b) => a.file.localeCompare(b.file));
+      return { context, file: `docs/maps/${context}.md`, rows, content: render(context, rows) };
+    });
+  return { maps, mapsDir };
+}
+
+function mapContentBytes(maps) {
+  return new Map(maps.map((map) => [map.file, map.content]));
+}
+
+/** Write mode: throws on the first hard finding, then writes + prunes orphans. */
+export async function generateModuleMaps(root) {
+  const findings = [];
+  const { maps, mapsDir } = await computeMaps(root, (kind, message) => findings.push(finding(kind, message)));
+  const first = sortFindings(findings)[0];
+  if (first) throw new FindingError(first.kind, first.message);
+  mkdirSync(mapsDir, { recursive: true });
+  const expected = mapContentBytes(maps);
+  for (const entry of readdirSync(mapsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    const mapFile = `docs/maps/${entry.name}`;
+    if (!expected.has(mapFile)) rmSync(join(mapsDir, entry.name));
+  }
+  for (const map of maps) writeFileSync(join(root, map.file), map.content);
   return maps;
 }
 
-function cli() {
-  const args = process.argv.slice(2);
-  if (args.length !== 0 && (args.length !== 2 || args[0] !== "--root")) fail("usage: node scripts/gen-module-maps.mjs [--root <directory>]");
-  const maps = generateModuleMaps(resolve(args[1] ?? process.cwd()));
-  process.stdout.write(`generated ${maps.length} module maps\n`);
+/** Check mode: never writes; reports every finding (including stale/orphan). */
+export async function checkModuleMaps(root) {
+  const findings = [];
+  const { maps, mapsDir } = await computeMaps(root, (kind, message) => findings.push(finding(kind, message)));
+  if (findings.length === 0) {
+    const expected = mapContentBytes(maps);
+    const onDisk = new Set();
+    if (existsSync(mapsDir)) {
+      for (const entry of readdirSync(mapsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+        const mapFile = `docs/maps/${entry.name}`;
+        onDisk.add(mapFile);
+        const current = readFileSync(join(mapsDir, entry.name), "utf8");
+        if (expected.has(mapFile)) {
+          if (current !== expected.get(mapFile)) {
+            findings.push(finding("stale map", `map out of date: ${mapFile}`));
+          }
+        } else {
+          findings.push(finding("stale map", `orphan map output: ${mapFile}`));
+        }
+      }
+    }
+    for (const mapFile of expected.keys()) {
+      if (!onDisk.has(mapFile)) {
+        findings.push(finding("stale map", `map out of date: ${mapFile}`));
+      }
+    }
+  }
+  const sorted = sortFindings(findings);
+  return {
+    ok: sorted.length === 0,
+    findings: sorted,
+    maps: maps.map(({ context, file, rows }) => ({ context, file, rows })),
+  };
+}
+
+function parseArgs(argv) {
+  const options = { root: undefined, check: false, json: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--root") options.root = argv[++index];
+    else if (arg === "--check") options.check = true;
+    else if (arg === "--json") options.json = true;
+    else fail(`usage: node scripts/gen-module-maps.mjs [--root <directory>] [--check] [--json] (unknown argument: ${arg})`);
+  }
+  return options;
+}
+
+async function cli() {
+  const options = parseArgs(process.argv.slice(2));
+  const root = resolve(options.root ?? process.cwd());
+
+  if (options.check) {
+    const result = await checkModuleMaps(root);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({ ok: result.ok, findings: result.findings, maps: result.maps })}\n`);
+    } else if (result.ok) {
+      process.stdout.write(`module maps ok: ${result.maps.length} maps fresh\n`);
+    } else {
+      for (const item of result.findings) process.stderr.write(`${item.kind}: ${item.message}\n`);
+    }
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  const maps = await generateModuleMaps(root);
+  if (options.json) {
+    process.stdout.write(
+      `${JSON.stringify({ ok: true, findings: [], maps: maps.map(({ context, file, rows }) => ({ context, file, rows })) })}\n`,
+    );
+  } else {
+    process.stdout.write(`generated ${maps.length} module maps\n`);
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    cli();
+    await cli();
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    if (error instanceof FindingError) {
+      process.stderr.write(`${error.kind}: ${error.message}\n`);
+    } else {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    }
     process.exitCode = 1;
   }
 }

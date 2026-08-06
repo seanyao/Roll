@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides the parallel-cycle scheduling plan.
  * US-V4-009 — Supervisor parallel-cycle scheduling (PURE decision).
  *
  * SCOPE NOTE (v4.0 vs v4.1): this module is the minimal, SAFE deliverable for

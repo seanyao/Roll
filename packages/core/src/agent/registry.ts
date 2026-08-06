@@ -1,4 +1,5 @@
 /**
+ * @responsibility Owns agent identity, availability and slot-config decision logic.
  * AgentRegistry — TS port of the v2 agent identity / availability / slot-config
  * path. Pure decision logic with all I/O (filesystem, PATH probing, clock)
  * injected so it is unit-testable and oracle-diffable without touching a real

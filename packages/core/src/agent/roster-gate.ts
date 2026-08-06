@@ -1,3 +1,6 @@
+/**
+ * @responsibility Guards the expected agent roster and forbidden position tokens.
+ */
 import { AGENTS, REMOVED_AGENTS } from "./specs.js";
 
 export const EXPECTED_AGENT_ROSTER = ["claude", "kimi", "codex", "pi", "agy", "reasonix", "cursor"] as const;

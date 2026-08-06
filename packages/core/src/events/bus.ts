@@ -1,4 +1,5 @@
 /**
+ * @responsibility Appends terminal and delivery facts atomically to the immutable event stream.
  * EventBus (write side) — TS port of the v2 loop's event-append + runs.jsonl
  * upsert primitives. The published language (BC7, I8): every loop appends
  * RollEvents to events.ndjson; all state rebuilds from this stream, no cache.
