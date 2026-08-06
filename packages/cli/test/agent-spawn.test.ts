@@ -204,10 +204,10 @@ describe("cursor is a builder again (reverses the FIX-1257 config-only downgrade
       .filter((s) => s !== "");
   }
 
-  it.skipIf(!hasProjectConfig)("project agents.yaml includes cursor in the builder (execute) pool", () => {
+  it.skipIf(!hasProjectConfig)("project agents.yaml excludes codex and keeps cursor in the builder (execute) pool", () => {
     const yaml = readFileSync(projectAgentsYaml, "utf8");
     const builders = poolAgents(yaml, "execute");
-    expect(builders).toContain("codex");
+    expect(builders).not.toContain("codex");
     expect(builders).toContain("claude");
     expect(builders).toContain("cursor");
   });

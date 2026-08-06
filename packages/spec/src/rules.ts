@@ -378,6 +378,7 @@ export function parseRulesV2(text: string): Result<ParsedRulesV2, RulesParseErro
   if (gatesUnknown) return v2Error(gatesUnknown);
   if (doc.gates.doc_drift !== "soft" && doc.gates.doc_drift !== "hard") return v2Error("registry.gates.doc_drift: must be soft or hard");
   if (!Array.isArray(doc.rules)) return v2Error("registry.rules: must be an array");
+  if (doc.rules.length === 0) return v2Error("registry.rules: must be a non-empty array (empty registry is not permitted)");
   const ids = new Set<string>(); const rules: V2Rule[] = [];
   for (let index = 0; index < doc.rules.length; index += 1) {
     const raw = doc.rules[index]; const context = `rules[${index}]`;

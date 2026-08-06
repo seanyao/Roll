@@ -18,20 +18,24 @@ function tmpRoot(): string {
   return dir;
 }
 
-const REGISTRY = `version: 1
+const REGISTRY = `version: 2
 gates:
   doc_drift: soft
 rules:
   - id: RL-TCR-001
     kind: redline
     statement: fixture redline
+    owner_domain: guardrails
+    severity: block
     enforcement:
-      - point: src/enforce.ts
+      - path: src/enforce.ts
         marker: "RL-TCR-001"
     verification:
-      test: test/sample.test.ts
-      marker: "RL-TCR-001"
-    trigger_report: block
+      - path: test/sample.test.ts
+        marker: "RL-TCR-001"
+    docs:
+      - path: docs/sample.md
+        marker: "RL-TCR-001"
 doc_surfaces: []
 `;
 
@@ -50,10 +54,22 @@ function writeVerificationTest(root: string, relPath = "test/sample.test.ts", co
   writeFileSync(join(root, relPath), content);
 }
 
+function writeDocs(root: string, content = "// RL-TCR-001 documentation anchor\n") {
+  mkdirSync(join(root, "docs"), { recursive: true });
+  writeFileSync(join(root, "docs/sample.md"), content);
+}
+
+function writeInventory(root: string) {
+  mkdirSync(join(root, "policy"), { recursive: true });
+  writeFileSync(join(root, "policy/rules-inventory.yaml"), "version: 1\ncoverage_sets: []\ncandidates: []\n");
+}
+
 function writeFullFixture(root: string) {
   writeRegistry(root);
   writeEnforcementPoint(root);
   writeVerificationTest(root);
+  writeDocs(root);
+  writeInventory(root);
 }
 
 function run(root: string): { ok: boolean; output: string } {
@@ -90,7 +106,7 @@ describe("audit-rules fixture matrix", () => {
 
   it("fails when the registry is empty (zero rules)", () => {
     const root = tmpRoot();
-    writeRegistry(root, "version: 1\ngates:\n  doc_drift: soft\nrules: []\ndoc_surfaces: []\n");
+    writeRegistry(root, "version: 2\ngates:\n  doc_drift: soft\nrules: []\ndoc_surfaces: []\n");
 
     const result = run(root);
 
@@ -103,11 +119,13 @@ describe("audit-rules fixture matrix", () => {
     const root = tmpRoot();
     writeRegistry(root);
     writeVerificationTest(root);
+    writeDocs(root);
+    writeInventory(root);
 
     const result = run(root);
 
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("missing enforcement point: src/enforce.ts");
+    expect(result.output).toContain("missing enforcement anchor: src/enforce.ts");
   });
 
   it("fails when an enforcement point exists but lacks its marker", () => {
@@ -115,6 +133,8 @@ describe("audit-rules fixture matrix", () => {
     writeRegistry(root);
     writeEnforcementPoint(root, "// no marker here\n");
     writeVerificationTest(root);
+    writeDocs(root);
+    writeInventory(root);
 
     const result = run(root);
 
@@ -126,11 +146,13 @@ describe("audit-rules fixture matrix", () => {
     const root = tmpRoot();
     writeRegistry(root);
     writeEnforcementPoint(root);
+    writeDocs(root);
+    writeInventory(root);
 
     const result = run(root);
 
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("missing verification test file: test/sample.test.ts");
+    expect(result.output).toContain("missing verification anchor: test/sample.test.ts");
   });
 
   it("fails when a verification test exists but lacks its marker", () => {
@@ -138,6 +160,8 @@ describe("audit-rules fixture matrix", () => {
     writeRegistry(root);
     writeEnforcementPoint(root);
     writeVerificationTest(root, "test/sample.test.ts", "// no marker here\n");
+    writeDocs(root);
+    writeInventory(root);
 
     const result = run(root);
 
@@ -149,16 +173,18 @@ describe("audit-rules fixture matrix", () => {
     const root = tmpRoot();
     writeRegistry(
       root,
-      REGISTRY.replace("test: test/sample.test.ts", "test: src/not-a-test-path.ts"),
+      REGISTRY.replace("      - path: test/sample.test.ts", "      - path: src/not-a-test-path.ts"),
     );
     writeEnforcementPoint(root);
+    writeDocs(root);
+    writeInventory(root);
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src/not-a-test-path.ts"), "// RL-TCR-001 anchor, wrong path shape\n");
 
     const result = run(root);
 
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("verification.test path is not discoverable by vitest");
+    expect(result.output).toContain("verification anchor path is not discoverable by vitest");
   });
 
   it("fails on an unregistered RL- marker found in loose source", () => {
