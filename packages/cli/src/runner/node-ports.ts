@@ -159,6 +159,135 @@ function scopedStoryExecuteRoute(
   return null;
 }
 
+// ── US-CYCLE-013 F2 — the real executable latest-main check ─────────────────
+
+/** The freshness probe test-command time budget (ms). Mirrors the attest lane's
+ *  long command allowance; a bounded probe can never hang the resumed tail. */
+export const FRESHNESS_TEST_TIMEOUT_MS = 900_000;
+
+/**
+ * US-CYCLE-013 §5 — run ONE recorded deliverable command in the temporary
+ * verification worktree via `sh -lc "<cmd>"`, bounded by `timeoutMs`. A
+ * non-zero exit is a failing test (`test_failed`); a timeout kill is `timeout`.
+ * The command is allowlist-filtered by the caller (deliverableCmdsForStory) —
+ * never raw agent-controlled input.
+ */
+async function runFreshnessTestCmd(cmd: string, cwd: string, timeoutMs: number): Promise<"ok" | "test_failed" | "timeout"> {
+  try {
+    await execFileAsync("sh", ["-lc", cmd], { cwd, timeout: timeoutMs, encoding: "utf8" });
+    return "ok";
+  } catch (err) {
+    const e = err as { killed?: boolean; code?: number | null; signal?: string | null };
+    // execFile kills the child on timeout: `killed: true` (code/signal null).
+    if (e.killed === true || (e.code === null && e.signal !== undefined)) return "timeout";
+    return "test_failed";
+  }
+}
+
+export interface FreshnessProbeResult {
+  verdict: "continue" | "conflict" | "test_failed" | "unknown" | "timeout";
+  evidenceRefs: string[];
+}
+
+/**
+ * US-CYCLE-013 §5 — the REAL probe in a TEMPORARY verification worktree:
+ *   1. refuse when `worktreePath` already exists (recovery_required, fail closed
+ *      → `unknown`);
+ *   2. `git worktree add --detach <worktreePath> <head>` — the temp verify tree
+ *      is created from the recorded `builderHead` (never W-A, never main);
+ *   3. `git merge-base --is-ancestor <base> <onto>` — non-zero ⇒ main was
+ *      rewritten ⇒ verdict `conflict` (fail closed);
+ *   4. `git -C <worktreePath> rebase --onto <onto> <base> <head>` — non-zero ⇒
+ *      `conflict` (never auto-resolve; no second attempt);
+ *   5. each `testCmd` entry runs under `sh -lc` bounded by
+ *      `timeoutMs ?? FRESHNESS_TEST_TIMEOUT_MS`; non-zero ⇒ `test_failed`,
+ *      timeout ⇒ `timeout`;
+ *   6. success ⇒ `continue` with `evidenceRefs = [<rebased head sha>]`;
+ *   7. `finally`: always `git worktree remove --force <worktreePath>` +
+ *      `worktree prune --expire now` (the pinned candidate, when any, lives in
+ *      the durable pin ref, never in the temp tree). Any plumbing failure
+ *      (missing refs, add failure) ⇒ `unknown`.
+ */
+export async function verifyRebaseTemp(
+  repoCwd: string,
+  base: string,
+  head: string,
+  onto: string,
+  worktreePath: string,
+  testCmd: readonly string[] = [],
+  timeoutMs?: number,
+): Promise<FreshnessProbeResult> {
+  const timeout = timeoutMs ?? FRESHNESS_TEST_TIMEOUT_MS;
+  // 1. Never reuse / clobber an existing checkout — fail closed.
+  if (existsSync(worktreePath)) {
+    return { verdict: "unknown", evidenceRefs: [] };
+  }
+  // Resolve the refs up front: a missing ref is a plumbing failure (unknown),
+  // NOT a main-rewrite conflict.
+  for (const ref of [base, head, onto]) {
+    const resolved = await git(["rev-parse", "--verify", `${ref}^{commit}`], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (resolved.code !== 0 || resolved.stdout.trim() === "") {
+      return { verdict: "unknown", evidenceRefs: [] };
+    }
+  }
+  try {
+    // 2. The temp verify tree is created from the RECORDED builderHead.
+    const add = await git(["worktree", "add", "--detach", worktreePath, head], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (add.code !== 0) {
+      return { verdict: "unknown", evidenceRefs: [] };
+    }
+    // 3. main-rewrite check (fail closed on non-ancestor).
+    const ancestor = await git(["merge-base", "--is-ancestor", base, onto], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (ancestor.code !== 0) {
+      return { verdict: "conflict", evidenceRefs: [] };
+    }
+    // 4. Rebase base..head onto the new main tip — never auto-resolve.
+    const rebase = await git(["rebase", "--onto", onto, base, head], worktreePath).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (rebase.code !== 0) {
+      return { verdict: "conflict", evidenceRefs: [] };
+    }
+    // 5. Run the recorded deliverable commands (allowlist-filtered upstream).
+    for (const cmd of testCmd) {
+      const outcome = await runFreshnessTestCmd(cmd, worktreePath, timeout);
+      if (outcome === "timeout") return { verdict: "timeout", evidenceRefs: [] };
+      if (outcome === "test_failed") return { verdict: "test_failed", evidenceRefs: [] };
+    }
+    // 6. Success: evidence is the TRUE rebased head.
+    const headResult = await git(["rev-parse", "HEAD"], worktreePath).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (headResult.code !== 0 || headResult.stdout.trim() === "") {
+      return { verdict: "unknown", evidenceRefs: [] };
+    }
+    return { verdict: "continue", evidenceRefs: [headResult.stdout.trim()] };
+  } finally {
+    // 7. The verify tree is temporary — always removed + pruned.
+    await git(["worktree", "remove", "--force", worktreePath], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    await git(["worktree", "prune", "--expire", "now"], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+  }
+}
+
+/** US-CYCLE-013 §5 — create a durable, IMMUTABLE pin ref
+ *  `refs/roll/rebase-candidates/<cycle>/<attempt>` at the rebased head.
+ *  `git update-ref <ref> <sha> ""` — the empty oldvalue means the ref MUST NOT
+ *  already exist (the pin is immutable by construction). Non-zero ⇒ `{ code }`. */
+export async function createPinRef(repoCwd: string, ref: string, sha: string): Promise<{ code: number }> {
+  try {
+    await execFileAsync("git", ["update-ref", ref, sha, ""], { cwd: repoCwd, encoding: "utf8" });
+    return { code: 0 };
+  } catch (err) {
+    return { code: (err as { code?: number }).code ?? 1 };
+  }
+}
+
+/** US-CYCLE-013 §5 — check a candidate pin out (detached) in an owned workspace. */
+export async function checkoutPin(worktreeCwd: string, ref: string): Promise<{ code: number }> {
+  try {
+    await execFileAsync("git", ["checkout", "--detach", ref], { cwd: worktreeCwd, encoding: "utf8" });
+    return { code: 0 };
+  } catch (err) {
+    return { code: (err as { code?: number }).code ?? 1 };
+  }
+}
+
 /**
  * Build the real Node-backed {@link Ports} bundle. The agent spawn defaults to
  * {@link realAgentSpawn} (claude argv); tests override `agentSpawn` (+ the github
@@ -395,6 +524,18 @@ export function nodePorts(opts: {
         } catch {
           return undefined;
         }
+      },
+      // US-CYCLE-013 F2 — the REAL executable latest-main check (see the
+      // module-level implementations above; the GitPort interface carries no
+      // timeoutMs, so the default 900s budget applies on this seam).
+      async verifyRebaseTemp(repoCwd, base, head, onto, worktreePath, testCmd) {
+        return verifyRebaseTemp(repoCwd, base, head, onto, worktreePath, testCmd);
+      },
+      async createPinRef(repoCwd, ref, sha) {
+        return createPinRef(repoCwd, ref, sha);
+      },
+      async checkoutPin(worktreeCwd, ref) {
+        return checkoutPin(worktreeCwd, ref);
       },
     },
     github: {

@@ -1,7 +1,7 @@
 /**
  * @responsibility Runs the `roll loop go` subcommand, starting a loop cycle over the routed next card.
  */
-import { EventBus, parseBacklog, ensureDeliveriesFresh, nodeExecPort, queryStoryDelivery, assessBootstrapArtifacts, readPendingDeliveryEvidenceManifests, type AuditPrEvidence, type FreshnessPort, type PendingDeliveryEvidenceManifest, type StoryDeliveryTruth, type StoryTruth } from "@roll/core";
+import { EventBus, parseBacklog, ensureDeliveriesFresh, nodeExecPort, projectCycleHandoff, projectHandoffCapacity, queryStoryDelivery, assessBootstrapArtifacts, readPendingDeliveryEvidenceManifests, type AuditPrEvidence, type FreshnessPort, type PendingDeliveryEvidenceManifest, type StoryDeliveryTruth, type StoryTruth } from "@roll/core";
 import {
   GOAL_REVIEW_MODES,
   GOAL_SCHEMA_VERSION,
@@ -30,6 +30,8 @@ import { runPeerReview, spawnPeerReviewAgent, type SpawnPeerReviewResult } from 
 import { guideExternalToolSetup, silentPreinstallChromium } from "../lib/external-tools.js";
 import { loopControlRunnerReadout, rollBin, staleLoopRunnerMessage } from "./loop-runner-readout.js";
 import { screenLockedCycleIds } from "../runner/screen-lock-events.js";
+import { handoffEnabled, withHandoffMutex } from "../runner/run-cycle.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * FIX-906: node fs-backed {@link FreshnessPort} for `ensureDeliveriesFresh`.
@@ -91,6 +93,12 @@ export interface RunOnceInput {
    * scoped card even while autonomous scheduling is paused. See {@link GOAL_GUIDED_ENV}.
    */
   guided?: boolean;
+  /**
+   * US-CYCLE-013: resume the retained tail of this exact cycle instead of
+   * starting a new build (the scheduler promoted a ready holder). Threaded to
+   * the run-once child via ROLL_LOOP_GO_RESUME.
+   */
+  resumeCycleId?: string;
 }
 
 export interface StartTmuxInput {
@@ -633,6 +641,10 @@ function loopGoHelp(): string {
     "  dead-loop breaker   A card is skipped after consecutive no-progress cycles; the whole goal STOPS after K consecutive no-progress cycles (a loud ALERT) — an unmergeable card can never spin forever.",
     "  timebox             Stops only at a cycle boundary and records a goal:gate_tripped event.",
     "",
+    "Durable build/tail handoff (US-CYCLE-013):",
+    "  With `ROLL_CYCLE_HANDOFF_V1=1`, one completed build waits in its retained workspace while the next card builds; a third card queues. See guide/loop.md.",
+    "  设置 `ROLL_CYCLE_HANDOFF_V1=1` 后，一张完成构建的卡会在其保留工作目录中等待，同时下一张卡开始构建；第三张卡进入队列。详见 guide/loop.md。",
+    "",
     "Review modes:",
     "  auto    Default. Try heterogeneous reviewers in ranked order; degrade to self review only after every heterogeneous candidate fails or when no other provider is installed.",
     "  hetero  Strict-diversity mode: require an alternate-provider reviewer; unavailable reviewers block completion.",
@@ -817,6 +829,10 @@ export function buildRunOnceChildEnv(input: RunOnceInput, base: NodeJS.ProcessEn
     // inherited ambient "1" cannot survive into an unguided child. Fail closed
     // to "0" — isGuidedRunOnce treats anything but "1" as not guided.
     [GOAL_GUIDED_ENV]: input.guided === true ? "1" : "0",
+    // US-CYCLE-013: a scheduler-promoted tail resume. Unset on every call (the
+    // "0" sentinel) so an inherited ambient value cannot survive into a child
+    // that should build instead.
+    ROLL_LOOP_GO_RESUME: input.resumeCycleId ?? "",
   };
 }
 
@@ -834,6 +850,146 @@ function realRunOnce(input: RunOnceInput): Promise<number> {
     child.on("exit", (code) => resolve(code ?? 1));
     child.on("error", () => resolve(1));
   });
+}
+
+// ── US-CYCLE-013 — scheduler mutex + FIFO admission (default off) ────────────
+
+/** The project-wide scheduler lock file (distinct from the per-run inner.lock). */
+export const HANDOFF_LOCK_FILE = "handoff.lock";
+
+/** The next monotonic FIFO queue sequence (max existing + 1; 1 when empty). */
+export function nextHandoffQueueSequence(eventsPath: string): number {
+  let max = 0;
+  for (const ev of new EventBus().readEvents(eventsPath)) {
+    if ((ev.type === "cycle:queued" || ev.type === "cycle:queue_rejected") && ev.queueSequence > max) {
+      max = ev.queueSequence;
+    }
+    if (ev.type === "cycle:admitted" && ev.queueSequence > max) {
+      max = ev.queueSequence;
+    }
+  }
+  return max + 1;
+}
+
+export type HandoffSchedulerDecision =
+  | { decision: "promoted"; cycleId: string }
+  | { decision: "admit"; storyId: string }
+  | { decision: "queued"; storyId: string; requestedByCycleId: string; queueSequence: number; reason: "build_slot_full" | "tail_slot_full" | "delivery_lease_held" | "recovery_required" }
+  | { decision: "noop" }
+  | { decision: "admission_unknown"; heldByPid?: number };
+
+export interface HandoffSchedulerInput {
+  eventsPath: string;
+  lockPath: string;
+  nowSec: number;
+  /** The card the scheduler is about to spawn (when known). */
+  nextStory?: { storyId: string; requestedByCycleId: string };
+}
+
+/**
+ * US-CYCLE-013 — the scheduler's atomic decision, run UNDER the handoff mutex
+ * (append + fsync is the linearization point):
+ *   1. promote the oldest ready holder to `cycle:builder_handoff` when the tail
+ *      is free (BEFORE any queued new build may claim the build slot);
+ *   2. with a build-slot holder (building or ready) and a visible next card,
+ *      append one fenced `cycle:queued` (monotonic queueSequence);
+ *   3. otherwise report `admit` — the run-once child performs the durable
+ *      `cycle:admitted` append with its allocated workspace under the mutex.
+ * If the lock cannot be acquired (staleness proof fails) → `admission_unknown`,
+ * fail closed, NO decision event is written.
+ */
+export function handoffSchedulerDecision(input: HandoffSchedulerInput): HandoffSchedulerDecision {
+  const outcome = withHandoffMutex(input.lockPath, () => {
+    const bus = new EventBus();
+    const events = bus.readEvents(input.eventsPath);
+    const capacity = projectHandoffCapacity(events);
+    // 1. Promote the oldest ready holder when the tail is free.
+    if (capacity.readyHolderCycleId !== undefined && capacity.tailCycleId === undefined) {
+      const view = projectCycleHandoff(events, capacity.readyHolderCycleId);
+      if (view?.identity !== undefined && view.readyKey !== undefined) {
+        bus.appendEventSynced(input.eventsPath, {
+          type: "cycle:builder_handoff",
+          eventId: randomUUID(),
+          idempotencyKey: `handoff:${view.identity.storyId}:${view.identity.attempt}:${view.identity.fence}`,
+          identity: view.identity,
+          previousReadyKey: view.readyKey,
+          next: "evaluate_or_test",
+          ts: input.nowSec * 1000,
+        });
+        return { decision: "promoted", cycleId: view.identity.cycleId } as const;
+      }
+    }
+    // 2. A build-slot holder exists → the next card queues (FIFO sequence).
+    if (capacity.buildHolderCycleId !== undefined) {
+      if (input.nextStory !== undefined) {
+        const nextStory = input.nextStory;
+        // F1-4 — idempotent queued append: a card already LIVE in the queue
+        // keeps its FIFO position (the projection dedupes by storyId, last fact
+        // wins — re-appending with a fresh monotonic sequence would silently
+        // push the card to the back of the FIFO on every scheduler tick). A new
+        // `cycle:queued` is appended only when the card is not already queued.
+        const existing = capacity.queue.find((q) => q.storyId === nextStory.storyId);
+        if (existing !== undefined) {
+          return {
+            decision: "queued",
+            storyId: existing.storyId,
+            requestedByCycleId: existing.cycleId,
+            queueSequence: existing.queueSequence,
+            reason: existing.reason as Extract<HandoffSchedulerDecision, { decision: "queued" }>["reason"],
+          } as const;
+        }
+        const queueSequence = nextHandoffQueueSequence(input.eventsPath);
+        bus.appendEventSynced(input.eventsPath, {
+          type: "cycle:queued",
+          eventId: randomUUID(),
+          idempotencyKey: `queue:${nextStory.storyId}:${queueSequence}`,
+          storyId: nextStory.storyId,
+          requestedByCycleId: nextStory.requestedByCycleId,
+          queueSequence,
+          reason: "build_slot_full",
+          ts: input.nowSec * 1000,
+        });
+        return { decision: "queued", storyId: nextStory.storyId, requestedByCycleId: nextStory.requestedByCycleId, queueSequence, reason: "build_slot_full" } as const;
+      }
+      return { decision: "noop" } as const;
+    }
+    // 3. Capacity available → admit (the run-once child performs the durable
+    //    `cycle:admitted` append with its allocated workspace + fresh fence).
+    if (input.nextStory !== undefined) {
+      return { decision: "admit", storyId: input.nextStory.storyId } as const;
+    }
+    return { decision: "noop" } as const;
+  });
+  if (!outcome.ok) return { decision: "admission_unknown", heldByPid: outcome.heldByPid };
+  return outcome.value;
+}
+
+/** Did the just-run cycle stop at a durable handoff (builder_ready, no terminal)? */
+export function runHandedOffSince(eventsPath: string, cycleId: string): boolean {
+  const events = new EventBus().readEvents(eventsPath);
+  let readyAt = -1;
+  let terminalAt = -1;
+  events.forEach((ev, index) => {
+    if (ev.type === "cycle:builder_ready" && "identity" in ev && ev.identity?.cycleId === cycleId) readyAt = index;
+    // The handoff lifecycle's terminal facts (a build handoff is NEVER a
+    // cycle:end): cleanup_completed releases, serial_recovery blocks.
+    if ((ev.type === "cycle:cleanup_completed" || ev.type === "cycle:serial_recovery") && ev.cycleId === cycleId) terminalAt = index;
+  });
+  return readyAt !== -1 && readyAt > terminalAt;
+}
+
+/** The cycleId of the newest durable builder_ready without a following cycle:end. */
+export function latestHandedOffCycleId(eventsPath: string): string | undefined {
+  const events = new EventBus().readEvents(eventsPath);
+  let latest: string | undefined;
+  for (let index = 0; index < events.length; index += 1) {
+    const ev = events[index]!;
+    if (ev.type === "cycle:builder_ready" && "identity" in ev && ev.identity?.cycleId !== undefined && ev.identity.cycleId !== "") {
+      latest = ev.identity.cycleId;
+    }
+  }
+  if (latest === undefined) return undefined;
+  return runHandedOffSince(eventsPath, latest) ? latest : undefined;
 }
 
 function writeGoal(path: string, goal: RollGoal): void {
@@ -2158,7 +2314,36 @@ async function runGoWorker(id: ProjectId, opts: GoOptions, deps: LoopGoDeps): Pr
       if (stopRequested) break;
       if (!guided && existsSync(pauseMarkerPath(id.path, id.slug))) continue;
       const before = readRunSnapshot(runsPath(id.path));
-      await deps.runOnce({ projectPath: id.path, allowedCards, ...(guided ? { guided: true } : {}) });
+      // US-CYCLE-013 — scheduler mutex + FIFO admission (behind the flag): the
+      // decision runs UNDER the handoff lock and appends exactly one fsynced
+      // decision event (promote a ready holder / queue the next card). A
+      // promoted tail is handed to run-once as a resume; an admitted card builds.
+      let resumeCycleId: string | undefined;
+      if (handoffEnabled()) {
+        const lockPath = join(rt, HANDOFF_LOCK_FILE);
+        const nextStory = allowedCards.length > 0 ? { storyId: allowedCards[0]!, requestedByCycleId: sid } : undefined;
+        const decision = handoffSchedulerDecision({ eventsPath: evPath, lockPath, nowSec: deps.nowSec(), nextStory });
+        if (decision.decision === "promoted") {
+          resumeCycleId = decision.cycleId;
+        } else if (decision.decision === "queued") {
+          process.stdout.write(
+            `roll loop go: handoff queue seq=${decision.queueSequence} ${decision.storyId} — ${decision.reason}; awaiting a free slot\n`,
+          );
+          // F1-3 — a `queued` verdict NEVER hands the card to the runner: the
+          // go worker waits for a free slot (the sleep avoids a hot spin) and
+          // continues WITHOUT calling deps.runOnce. Skipping the post-runOnce
+          // block (usage update, no-cycle-terminal check) is correct: no cycle
+          // ran this tick, and the queued card is legitimate progress being
+          // waited on, not a no-progress event.
+          await (deps.sleep ?? ((ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))))(INNER_LOCK_WAIT_MS);
+          continue;
+        } else if (decision.decision === "admission_unknown") {
+          process.stdout.write(
+            `roll loop go: handoff admission_unknown — scheduler mutex held (pid ${decision.heldByPid ?? "?"}); fail closed, no parallel decision\n`,
+          );
+        }
+      }
+      await deps.runOnce({ projectPath: id.path, allowedCards, ...(guided ? { guided: true } : {}), ...(resumeCycleId !== undefined ? { resumeCycleId } : {}) });
       goal = updateUsage(id.path, goal, baseline, initialUsage, deps.nowIso());
       writeGoal(gPath, goal);
       const after = readRunSnapshot(runsPath(id.path));
@@ -2244,7 +2429,11 @@ async function runGoWorker(id: ProjectId, opts: GoOptions, deps: LoopGoDeps): Pr
         stopReason = "pause_marker";
         break;
       }
-      if (after.summary.cycles <= before.summary.cycles) {
+      // US-CYCLE-013: a durable handoff appends NO runs row (it is a non-terminal
+      // builder_ready) — the cycles-count check below would misread it as "no
+      // cycle terminal". A handed-off build IS progress: skip the stop.
+      const handedOffRun = handoffEnabled() && latestHandedOffCycleId(evPath) !== undefined;
+      if (!handedOffRun && after.summary.cycles <= before.summary.cycles) {
         stopReason = noCycleTerminalReason(id.path, id.slug, startedSec);
         break;
       }

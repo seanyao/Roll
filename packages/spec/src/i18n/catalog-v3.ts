@@ -1275,4 +1275,56 @@ export const v3Catalog: Catalog = {
     en: "surface %s: %s",
     zh: "文档面 %s:%s",
   },
+  // `handoff.*` — US-CYCLE-013 durable build/tail handoff (ROLL_CYCLE_HANDOFF_V1=1).
+  // Literal state names + queue/freshness/upgrade copy for `roll loop status`,
+  // run-once and `roll loop go`. States are snapshotted, never inferred from
+  // publish / merge-wait / reconcile / cleanup phases.
+  "handoff.state.building": {
+    en: "building",
+    zh: "构建中",
+  },
+  "handoff.state.ready_tail_full": {
+    en: "builder complete — tail capacity full",
+    zh: "构建完成——tail 容量已满",
+  },
+  "handoff.state.waiting_tail": {
+    en: "waiting for evaluation/test",
+    zh: "等待评审或测试",
+  },
+  "handoff.state.serial_recovery": {
+    en: "serial recovery required",
+    zh: "需要串行恢复",
+  },
+  "handoff.queue.awaiting_capacity": {
+    en: "queued — awaiting build/tail capacity",
+    zh: "已排队——等待构建或 tail 容量",
+  },
+  "handoff.freshness.continue": {
+    en: "latest-main check passed; continuing on rebased attempt",
+    zh: "最新主干检查通过；在 rebase 后的新 attempt 上继续",
+  },
+  "handoff.freshness.conflict": {
+    en: "latest-main check failed (conflict); returning to serial",
+    zh: "最新主干检查失败（冲突）；退回串行",
+  },
+  "handoff.freshness.test_failed": {
+    en: "latest-main check failed (tests); returning to serial",
+    zh: "最新主干检查失败（测试）；退回串行",
+  },
+  "handoff.freshness.unknown": {
+    en: "latest-main check unknown; returning to serial",
+    zh: "最新主干检查未知；退回串行",
+  },
+  "handoff.freshness.timeout": {
+    en: "latest-main check timed out; returning to serial",
+    zh: "最新主干检查超时；退回串行",
+  },
+  "handoff.resume.entry": {
+    en: "resuming retained tail for cycle %s in workspace %s",
+    zh: "恢复 cycle %s 的保留 tail（工作目录 %s）",
+  },
+  "handoff.upgrade_required": {
+    en: "upgrade_required — repo events use cycle-handoff/v1; install the current roll",
+    zh: "需要升级——事件流使用 cycle-handoff/v1；请安装当前版本 roll",
+  },
 };

@@ -140,6 +140,26 @@ export interface GitPort {
    *  unknown branch (the caller simply drops the pin). Optional so fakes that do
    *  not implement it keep the pre-US-CYCLE-009 (unpinned) behavior. */
   remoteBranchTip?(repoCwd: string, branch: string): Promise<string | undefined>;
+  /** US-CYCLE-013 §5 — the executable latest-main check: rebase the recorded
+   *  builderHead onto `onto` (main's new tip) in a TEMPORARY verification
+   *  worktree and run the recorded test command. Returns the verdict + evidence
+   *  refs. `conflict`/`test_failed`/`unknown`/`timeout` route to serial
+   *  recovery; only `continue` may pin a rebased candidate. Optional — the
+   *  freshness path is behind ROLL_CYCLE_HANDOFF_V1=1 (default off). */
+  verifyRebaseTemp?(
+    repoCwd: string,
+    base: string,
+    head: string,
+    onto: string,
+    worktreePath: string,
+    testCmd: string[],
+  ): Promise<{ verdict: "continue" | "conflict" | "test_failed" | "unknown" | "timeout"; evidenceRefs: string[] }>;
+  /** US-CYCLE-013 §5 — create a durable, immutable pin ref
+   *  `refs/roll/rebase-candidates/<cycle>/<sourceAttempt>` at the rebased head.
+   *  Optional — freshness path only. */
+  createPinRef?(repoCwd: string, ref: string, sha: string): Promise<{ code: number }>;
+  /** US-CYCLE-013 §5 — check a candidate pin out in an owned workspace. */
+  checkoutPin?(worktreeCwd: string, ref: string): Promise<{ code: number }>;
 }
 
 /** GitHub facet — the publish-plan executor + slug resolution. */
@@ -172,6 +192,16 @@ export interface ProcessPort {
 export interface EventsPort {
   ensureEventFiles(eventsPath: string, runsPath: string): void;
   appendEvent(eventsPath: string, event: RollEvent): void;
+  /**
+   * US-CYCLE-013 — fsynced append for scheduler decision events (admission /
+   * promotion / queue). The durable append is the linearization point; the
+   * injected store must fsync before returning (fail loud otherwise).
+   */
+  appendEventSynced?(eventsPath: string, event: RollEvent): void;
+  /** US-CYCLE-013 — read the durable event stream (handoff projections + the
+   *  resumed-tail validation read it). Absent ⇒ the driver falls back to a real
+   *  EventBus read. */
+  readHandoffEvents?(eventsPath: string): RollEvent[];
   upsertRun(runsPath: string, key: RunKey, row: Record<string, unknown>): void;
   appendAlert(alertsPath: string, message: string): void;
 }

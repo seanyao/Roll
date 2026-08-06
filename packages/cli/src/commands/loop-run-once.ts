@@ -15,13 +15,13 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { EventBus, assessBacklog, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, projectCycleHandoff, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
 import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
 import { isOwnerHeld, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce } from "../runner/index.js";
+import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, handoffEnabled, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce, runTailOnce } from "../runner/index.js";
 import { clearCardFailure, recordCardFailure } from "../runner/skip-cards.js";
 import { addPendingPublish, removePendingPublish } from "../runner/pending-publish.js";
 import { autoRecoverEnabled, clearSelfHeal, selfHealBudget } from "../runner/selfheal-budget.js";
@@ -51,7 +51,9 @@ import { requireNetwork, tcpConnect } from "../lib/require-network.js";
 import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
-import { resolveLang, t, v3Catalog } from "@roll/spec";
+import { resolveLang, t, v3Catalog, type RollEvent } from "@roll/spec";
+import { handoffUpgradeMessage, handoffUpgradeRequired } from "./loop-runner-readout.js";
+import { deliverableCmdsForStory } from "../runner/attest-gate.js";
 import { resolveCurrent } from "./lang.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
@@ -782,15 +784,195 @@ export function buildLoopRouteDeps(projectPath: string): RouteDeps {
 
 /** `roll loop run-once --help` usage. Bilingual on separate lines (EN then ZH). */
 export const RUN_ONCE_USAGE =
-  "Usage: roll loop run-once [--dry-run] [--race]\n" +
+  "Usage: roll loop run-once [--dry-run] [--race] [--resume <cycleId>]\n" +
   "  Run ONE loop cycle now: pick a Todo card, build it through TCR, run the\n" +
   "  gates (attest + peer), and publish a PR. Exits when the cycle terminates.\n" +
   "  --dry-run   Print the command plan only — no git / gh / agent side effects.\n" +
   "  --race      Opt in to same-card parallel racing (default: one-card-one-lease).\n" +
   "              The first merge atomically supersedes the remaining siblings.\n" +
+  "  --resume <cycleId>\n" +
+  "              US-CYCLE-013: resume the RETAINED tail of a handed-off cycle\n" +
+  "              (evaluation/test → publish → cleanup) in its recorded workspace.\n" +
+  "              With ROLL_CYCLE_HANDOFF_V1=1 a run with no --resume auto-resumes\n" +
+  "              the single live handoff when one exists.\n" +
   "立即跑一个 loop 周期:选一张 Todo 卡,经 TCR 建造,过闸(验收+同行评审),发 PR。\n" +
   "  --dry-run   只打印命令计划——不动 git / gh / agent。\n" +
-  "  --race      显式开同卡并行竞速(默认一卡一租约);首个 merge 原子取消其余 sibling。";
+  "  --race      显式开同卡并行竞速(默认一卡一租约);首个 merge 原子取消其余 sibling。\n" +
+  "  --resume <cycleId>\n" +
+  "              US-CYCLE-013:在记录的保留工作目录中恢复已交接卡的 tail\n" +
+  "              (评审/测试 → 发布 → 清理)。设置 ROLL_CYCLE_HANDOFF_V1=1 且存在\n" +
+  "              唯一存活 handoff 时,不带 --resume 的 run-once 会自动恢复它。";
+
+// ── US-CYCLE-013 — retained-tail resume helpers ──────────────────────────────
+
+/** Parse `--resume <cycleId>` (or the go-driver's ROLL_LOOP_GO_RESUME env). */
+function resumeCycleFromArgs(args: string[]): string | undefined {
+  const envResume = (process.env["ROLL_LOOP_GO_RESUME"] ?? "").trim();
+  if (envResume !== "") return envResume;
+  const idx = args.indexOf("--resume");
+  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  const value = args[idx + 1]?.trim() ?? "";
+  return value === "" ? undefined : value;
+}
+
+/**
+ * The ONE live handoff cycle to auto-resume (flag on): a cycle whose handoff
+ * projection is `waiting_for_evaluation_or_test` or
+ * `builder_validated_waiting_for_tail` (tail free ⇒ the scheduler promotes).
+ * `undefined` when zero or multiple live handoffs exist — a single live
+ * handoff is the only unambiguous auto-resume target.
+ */
+export function singleLiveHandoffCycleId(eventsPath: string): string | undefined {
+  const events = new EventBus().readEvents(eventsPath);
+  const cycleIds = [...new Set(
+    events
+      .filter((ev): ev is RollEvent & { type: "cycle:admitted" } => ev.type === "cycle:admitted")
+      .map((ev) => ("identity" in ev ? ev.identity?.cycleId : "") as string)
+      .filter((id) => id !== ""),
+  )];
+  const live: string[] = [];
+  for (const cid of cycleIds) {
+    const view = projectCycleHandoff(events, cid);
+    if (view !== undefined && (view.state === "waiting_for_evaluation_or_test" || view.state === "builder_validated_waiting_for_tail")) {
+      live.push(cid);
+    }
+  }
+  return live.length === 1 ? live[0] : undefined;
+}
+
+/**
+ * Run the retained tail of one handed-off cycle to its terminal, in the cycle's
+ * RECORDED workspace (never inferred from a directory name). Prints the
+ * bilingual resume entry, then drives runTailOnce with the executable
+ * latest-main check wired when the flag is on.
+ */
+async function runResumedTail(
+  projectPath: string,
+  rt: string,
+  alertsPath: string,
+  resumeCycleId: string,
+  skillBody: string,
+  routeDeps: RouteDeps,
+): Promise<number> {
+  const eventsPath = join(rt, "events.ndjson");
+  const view = projectCycleHandoff(new EventBus().readEvents(eventsPath), resumeCycleId);
+  if (view?.identity === undefined) {
+    process.stderr.write(`loop run-once: --resume ${resumeCycleId} — no live handoff record; refusing\n`);
+    return 1;
+  }
+  const identity = view.identity;
+  const resumePaths: RunnerPaths = {
+    eventsPath,
+    runsPath: join(rt, "runs.jsonl"),
+    alertsPath,
+    lockPath: join(rt, "inner.lock"),
+    heartbeatPath: join(rt, "heartbeat"),
+    // The recorded workspace identity names `cycle-<cycleId>` — the only path
+    // construction allowed (the resume is event-driven, never directory-driven).
+    worktreePath: join(rt, "worktrees", `cycle-${resumeCycleId}`),
+  };
+  const ports = nodePorts({ repoCwd: projectPath, paths: resumePaths, skillBody, routeDeps });
+  const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+  const workspaceKey = identity.workspace.members[0]?.workspaceKey ?? "";
+  process.stdout.write(`loop run-once: ${t(v3Catalog, lang, "handoff.resume.entry", resumeCycleId, workspaceKey)}\n`);
+  const result = await runTailOnce({
+    ports,
+    ctx: { cycleId: resumeCycleId, branch: identity.branch, loop: "ci" as never },
+    identity,
+    checkFreshness: makeFreshnessCheck(ports, eventsPath, rt),
+  });
+  if (!result.ran && result.refused !== undefined) {
+    process.stdout.write(`loop run-once: resume ${resumeCycleId} refused (${result.refused}); no serial duplicate started\n`);
+    return 1;
+  }
+  if (result.recoveryRecorded === true) {
+    process.stdout.write(`loop run-once: resume ${resumeCycleId} → serial_recovery (leases retained); explicit recovery required\n`);
+    return 0;
+  }
+  process.stdout.write(`loop run-once: resume ${resumeCycleId} → ${result.terminal ?? "unknown"}\n`);
+  return 0;
+}
+
+/**
+ * US-CYCLE-013 §5 — the executable latest-main check for a resumed tail: fires
+ * ONLY on a durable predecessor `delivery:merge_confirmed`/`delivery:reconciled`
+ * whose merge SHA is known (an open PR or awaiting_merge never counts). Probes
+ * in a temporary verification worktree from the recorded builderHead; `continue`
+ * pins a rebased candidate, the failure verdicts cancel the tail — either way
+ * the tail routes to serial_recovery with leases retained.
+ *
+ * US-CYCLE-013 F2 — the probe is REAL: the card's recorded `deliverable_cmd`
+ * (allowlist-filtered via {@link deliverableCmdsForStory}, the SAME security
+ * policy as the attest lane — arbitrary agent-controlled shell never runs) is
+ * executed in the temporary verification worktree, and a `continue` verdict
+ * creates the durable, immutable pin
+ * `refs/roll/rebase-candidates/<cycleId>/<attempt>` at the TRUE rebased head
+ * (pin failure ⇒ `unknown`, fail closed — no pin, no continuation).
+ */
+export function makeFreshnessCheck(ports: ReturnType<typeof nodePorts>, eventsPath: string, rt: string): (identity: import("@roll/spec").HandoffIdentity) => Promise<import("../runner/run-cycle.js").FreshnessCheckResult | undefined> {
+  return async (identity) => {
+    const events = new EventBus().readEvents(eventsPath);
+    let admittedTs = -1;
+    for (const ev of events) {
+      if (ev.type === "cycle:admitted" && "identity" in ev && ev.identity?.cycleId === identity.cycleId && ev.ts > admittedTs) {
+        admittedTs = ev.ts;
+      }
+    }
+    let predecessor: { mergeSha: string } | undefined;
+    for (const ev of events) {
+      if (
+        (ev.type === "delivery:merge_confirmed" || ev.type === "delivery:reconciled") &&
+        ev.cycleId !== identity.cycleId &&
+        typeof ev.mergeCommit === "string" &&
+        ev.mergeCommit !== "" &&
+        ev.ts > admittedTs
+      ) {
+        predecessor = { mergeSha: ev.mergeCommit };
+      }
+    }
+    if (predecessor === undefined) return undefined;
+    const base = {
+      predecessorMergeSha: predecessor.mergeSha,
+      recordedBaseSha: identity.baseSha,
+      builderHead: identity.builderHead,
+      evidenceRefs: [] as string[],
+    };
+    if (ports.git.verifyRebaseTemp === undefined || ports.git.createPinRef === undefined) {
+      // No probe port ⇒ the merge fact cannot be verified ⇒ unknown (fail closed).
+      return { ...base, verdict: "unknown" as const };
+    }
+    // F2 — the card's recorded deliverable_cmd, AFTER the roll read-only
+    // allowlist (rejected commands are never executed; [] when none declared).
+    const recordedCmds = deliverableCmdsForStory(join(rt, "worktrees", `cycle-${identity.cycleId}`), identity.storyId);
+    const verifyWorktree = join(rt, `verify-${identity.cycleId}-${Date.now()}`);
+    try {
+      const probe = await ports.git.verifyRebaseTemp(
+        ports.repoCwd,
+        identity.baseSha,
+        identity.builderHead,
+        predecessor.mergeSha,
+        verifyWorktree,
+        recordedCmds,
+      );
+      if (probe.verdict === "continue") {
+        const rebasedHead = probe.evidenceRefs[0];
+        if (rebasedHead === undefined || rebasedHead === "") {
+          return { ...base, verdict: "unknown" as const };
+        }
+        // F2 — the durable, immutable pin: a `continue` without a pin is no
+        // continuation at all (fail closed).
+        const pin = await ports.git.createPinRef(ports.repoCwd, `refs/roll/rebase-candidates/${identity.cycleId}/${identity.attempt}`, rebasedHead);
+        if (pin.code !== 0) {
+          return { ...base, verdict: "unknown" as const };
+        }
+        return { ...base, verdict: "continue", evidenceRefs: probe.evidenceRefs, candidateHead: rebasedHead };
+      }
+      return { ...base, verdict: probe.verdict, evidenceRefs: probe.evidenceRefs };
+    } catch {
+      return { ...base, verdict: "unknown" as const };
+    }
+  };
+}
 
 /**
  * The `loop run-once` entry. Returns a process exit code (0 ok).
@@ -808,6 +990,9 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   // racing. It is carried to the pick_story handler via env (the default —
   // one-card-one-lease — needs no signal).
   if (args.includes("--race")) process.env["ROLL_LOOP_RACE"] = "1";
+  // US-CYCLE-013: explicit `--resume <cycleId>` (or the go-driver's
+  // ROLL_LOOP_GO_RESUME) resumes a retained tail instead of starting a build.
+  const resumeCycleId = resumeCycleFromArgs(args);
 
   // FIX-1209: preflight — detect and heal core.worktree contamination BEFORE
   // resolving project identity. The harness systematically writes core.worktree
@@ -820,7 +1005,9 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   const coreWorktreeHeal = checkCoreWorktreeContamination(identityRoot);
 
   const id = await projectIdentity(identityRoot);
-  const cycleId = makeCycleId();
+  // US-CYCLE-013: a resume reuses the handed-off cycle's id (its retained
+  // workspace + lease); a fresh build mints a new cycle id.
+  const cycleId = resumeCycleId ?? makeCycleId();
 
   // A leftover `com.roll.loop.*` plist for this project is debris worth clearing.
   //
@@ -929,6 +1116,15 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
     heartbeatPath: join(rt, "heartbeat"),
     worktreePath: join(rt, "worktrees", `cycle-${cycleId}`),
   };
+
+  // US-CYCLE-013 — old-reader gate: with the v1 handoff flag OFF (the serial
+  // runner), a project whose events carry cycle-handoff/v1 facts must be
+  // refused (`upgrade_required`) — never run/recovered as a serial duplicate.
+  if (!handoffEnabled() && handoffUpgradeRequired(id.path).required) {
+    const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+    process.stderr.write(`loop run-once: ${handoffUpgradeMessage(lang)}\n`);
+    return 1;
+  }
 
   const allowedCards = parseAllowedCardsEnv();
   if (allowedCards === undefined) {
@@ -1077,6 +1273,18 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
     routeDeps,
     ...(interactiveAgentSpawn !== undefined ? { agentSpawn: interactiveAgentSpawn } : {}),
   });
+
+  // US-CYCLE-013 — retained-tail resume. Explicit `--resume <cycleId>`, or an
+  // AUTO-resume when the flag is on and exactly one live handoff exists (the
+  // go-driver's next tick then processes the promoted tail). The resume is
+  // driven by the event-backed projection, NEVER inferred from a directory
+  // name; the RunnerPaths reuse the cycle's recorded workspace.
+  const autoResumeCycleId = handoffEnabled() ? singleLiveHandoffCycleId(paths.eventsPath) : undefined;
+  const resumeTarget = resumeCycleId ?? autoResumeCycleId;
+  if (resumeTarget !== undefined) {
+    return runResumedTail(id.path, rt, alertsPath, resumeTarget, skillBody, routeDeps);
+  }
+
   const ports =
     allowedCards === undefined
       ? basePorts
@@ -1133,13 +1341,39 @@ export async function loopRunOnceCommand(args: string[]): Promise<number> {
   const disposeSignals = installCycleSignalTeardown(paths, cycleId, branch, id.path, rt);
   let result;
   try {
-    result = await runCycleOnce({ ports, ctx });
+    result = await runCycleOnce({ ports, ctx, handoff: handoffEnabled() });
   } finally {
     disposeSignals();
   }
   if (!result.ran) {
     process.stdout.write(
       `loop run-once: another cycle holds the inner lock (pid ${result.heldByPid ?? "?"}); skipped\n`,
+    );
+    return 0;
+  }
+  // US-CYCLE-013 F1 — durable admission refused (build slot occupied by another
+  // holder under the scheduler mutex, or admission_unknown): the Builder never
+  // spawned and no parallel build started. Returns 1 (mirrors the resume
+  // refusal) — a direct concurrent `roll loop run-once` cannot bypass the
+  // scheduler.
+  if (result.admissionBlocked !== undefined) {
+    process.stdout.write(
+      `loop run-once: admission refused (${result.admissionBlocked}) — no parallel build started\n`,
+    );
+    return 1;
+  }
+  // US-CYCLE-013: a durable handoff is a NON-terminal stop — the build is
+  // complete but the tail (evaluation/test/publish) runs later in the retained
+  // workspace. `roll loop status` shows `builder complete — tail capacity full`.
+  if (result.handedOff === true) {
+    process.stdout.write(
+      `loop run-once: cycle ${cycleId} → handed off (builder_ready); tail retained; evaluation/test/publish resume later in the recorded workspace\n`,
+    );
+    return 0;
+  }
+  if (result.recoveryRecorded === true) {
+    process.stdout.write(
+      `loop run-once: cycle ${cycleId} → serial_recovery (leases retained); explicit recovery required; no automatic deletion\n`,
     );
     return 0;
   }

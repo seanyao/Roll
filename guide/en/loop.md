@@ -1497,3 +1497,61 @@ Then confirm with `roll doctor` — the leftover-lane section disappears when th
 last plist is gone.
 
 之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。
+
+## Two-slot handoff (US-CYCLE-013)
+
+Behind `ROLL_CYCLE_HANDOFF_V1=1` (default off), a completed build becomes a
+**durable, resumable handoff** instead of burning its review/test/publish/merge
+tail inside the same uninterruptible run.
+
+- One completed build **waits in its retained workspace** (state
+  `builder complete — tail capacity full`) while the **next card builds** in its
+  own workspace.
+- A **third card queues** (FIFO, with a readable reason) — at most one waiting
+  tail and one build-slot holder exist at any time.
+- A card that passed Builder validation is **never selected again and never
+  re-built**: it holds its story delivery lease and its immutable workspace
+  until its own tail reaches a terminal, identity-checked cleanup.
+
+The durable facts live in `.roll/loop/events.ndjson` as the `cycle-handoff/v1`
+family (`cycle:admitted` → `cycle:builder_ready` → `cycle:builder_handoff` →
+`cycle:tail_started/completed` → `cycle:cleanup_completed`). A process restart
+after a green, committed build resumes the tail (`roll loop run-once --resume
+<cycleId>`, or an auto-resume when exactly one live handoff exists) and **never
+runs Builder again**; a restart before the append keeps today's abort/recovery
+semantics.
+
+**Latest-main check (REAL):** after a predecessor merges, the downstream tail must
+pass a real "based on latest main" check before it continues. The probe runs
+`git merge-base --is-ancestor` (main rewritten ⇒ `conflict`, fail closed) and a
+`git rebase --onto <new tip> <recorded base> <builder head>` in a **temporary
+verification worktree** created from the recorded builder head, then executes the
+card's recorded `deliverable_cmd` (allowlist-filtered by the same roll read-only
+policy as the attest lane — rejected commands never run) bounded by a 900s
+budget. `continue` creates the durable, immutable pin
+`refs/roll/rebase-candidates/<cycle>/<attempt>` at the **true rebased head** and
+records `cycle:rebased_attempt_planned`; `conflict` / `test_failed` / `timeout` /
+`unknown` **return to serial safely** (`cycle:serial_recovery`) with the story +
+workspace + leases preserved and no half-finished state left behind. The
+temporary verify tree is always removed afterwards; the pinned candidate lives
+only in the durable pin ref (recovery may check it out via the documented
+`checkoutPin` primitive).
+
+**Execution-enforced admission:** the capacity preconditions hold **under the
+scheduler mutex** — a direct concurrent `roll loop run-once` is refused
+(`loop run-once: admission refused (build_slot_full) — no parallel build
+started`, exit 1) and the go worker **never hands a queued card to the runner**:
+on a `queued` verdict it prints the queue line and waits for a free slot instead
+of starting a build. A queued card is appended once (idempotent — its FIFO
+position never silently moves).
+
+**Reading `roll loop status`:** with the flag on, the dashboard adds a **HANDOFF**
+section whose states are literal — `building`, `builder complete — tail capacity
+full` (the ready holder sits ABOVE the queue, never inside it), `waiting for
+evaluation/test`, `serial recovery required` (no automatic deletion). Queue rows
+show the position, `seq=`, the reason, and the next action.
+
+**Rollback:** first drain/recover every v1 handoff to `terminal` or an explicit
+`cycle:serial_recovery`, then unset the flag. Feature-off without a drain fails
+loud (`upgrade_required`) rather than running a serial duplicate. File-overlap
+admission between two cards is a separate story (US-CYCLE-010).

@@ -103,11 +103,13 @@
  * existing ports/plans so the adapter dispatches them 1:1.
  */
 import type { AgentId, BuilderFinalizationFacts, CycleCost, CyclePhase, ExecutionProfile, FailureClass, ModelId, TerminalOutcome } from "@roll/spec";
+import type { FreshnessVerdict, HandoffIdentity } from "@roll/spec";
 import { cycleCurrency } from "../cost/tracker.js";
 import type { RollEvent } from "@roll/spec";
 import { builderFinalizationReady, finalizeBuilder, handoffKindFor } from "./builder-finalization.js";
 import { adversarialNextStep, adversarialDegradeDecision, type AdversarialFailure, type AdversarialRunSummary } from "./adversarial.js";
 import { nextWaitAction, type WaitAction } from "../delivery/pr.js";
+import { handoffReadyKey } from "./handoff.js";
 
 // ── v2 terminal vocabulary (six-state model) ─────────────────────────────────
 
@@ -983,6 +985,14 @@ export interface CycleState {
   terminal?: V2CycleStatus;
   /** True when `phase === "cleanup"` and a terminal status is stamped. */
   done: boolean;
+  /** US-CYCLE-013 — the walk stopped at a durable `cycle:builder_ready`
+   *  (build handed off; NO terminal written; workspace + lease retained). */
+  handedOff?: boolean;
+  /** US-CYCLE-013 — the walk stopped at a durable non-terminal
+   *  `cycle:serial_recovery` (leases retained; explicit recovery required). */
+  recoveryRecorded?: boolean;
+  /** US-CYCLE-013 — the resumed tail's identity (tail-mode walk). */
+  tailIdentity?: HandoffIdentity;
 }
 
 /**
@@ -1003,11 +1013,37 @@ export type CycleEvent =
   // exited. `newHole`/`attackTest` are meaningful only for attacker rounds;
   // `elapsedSec` lets the pure termination check enforce the total timeout.
   | { type: "role_exited"; role: AdversarialRoleName; exit: number; timedOut: boolean; newHole?: boolean; attackTest?: string; elapsedSec?: number }
-  | { type: "facts_captured"; facts: CapturedFacts }
+  | { type: "facts_captured"; facts: CapturedFacts; handoff?: { identity: HandoffIdentity; readyKey: string; tailFree: boolean } }
   | { type: "published"; result: PublishResult }
   | { type: "merge_polled"; state: string; elapsedSec: number } // sync merge-wait.
   | { type: "reconciled" }
-  | { type: "cleaned" };
+  | { type: "cleaned" }
+  // US-CYCLE-013 — durable build/tail handoff transitions. The driver confirms
+  // the durable `cycle:builder_ready` append (`handoff_recorded`), resumes a
+  // promoted tail (`tail_resumed`), routes a freshness verdict (`freshness_result`),
+  // and reports the tail's publish outcome (`tail_event`).
+  | { type: "handoff_recorded" }
+  | { type: "tail_resumed"; identity: HandoffIdentity }
+  | {
+      type: "freshness_result";
+      verdict: FreshnessVerdict;
+      predecessorMergeSha: string;
+      recordedBaseSha: string;
+      builderHead: string;
+      evidenceRefs?: readonly string[];
+      /** US-CYCLE-013 F2 — the TRUE rebased head on `continue` (the durable pin
+       *  `refs/roll/rebase-candidates/<cycle>/<attempt>` points at it); unset on
+       *  the failure verdicts. */
+      candidateHead?: string;
+    }
+  | {
+      type: "tail_event";
+      kind: "tail_completed" | "tail_failed";
+      /** The classifyPublish terminal when `tail_completed` (published/done/orphan). */
+      status?: V2CycleStatus;
+      reason?: "repair_required" | "child_failure" | "freshness_conflict" | "freshness_test_failed" | "freshness_unknown" | "freshness_timeout" | "identity_mismatch";
+      evidenceRefs?: readonly string[];
+    };
 
 /** The stepper result: the next state + the ordered commands to perform. */
 export interface StepResult {
@@ -1036,6 +1072,10 @@ const EVENT_VALID_PHASES: Record<Exclude<CycleEvent["type"], "start">, CyclePhas
   merge_polled: ["merge-wait", "publish"],
   reconciled: ["reconcile"],
   cleaned: ["cleanup"],
+  handoff_recorded: ["reconcile"],
+  tail_resumed: ["publish"],
+  freshness_result: ["publish", "merge-wait"],
+  tail_event: ["publish"],
 };
 
 /** Build a cycle:end RollEvent for a terminal status. */
@@ -1588,10 +1628,202 @@ export function cycleStep(state: CycleState, event: CycleEvent): StepResult {
               : [];
         return terminate(next, status, [gateEvent, ...extra]);
       }
+      // US-CYCLE-013 — durable build handoff (ROLL_CYCLE_HANDOFF_V1=1): a
+      // `built` capture with a handoff identity stops the walk at a NON-terminal
+      // `cycle:builder_ready` instead of entering the publish ladder. The ready
+      // holder retains the build slot + workspace + story lease; `cycle:end` is
+      // NEVER evidence of this transition (the terminal remains the tail's
+      // cleanup completion). The driver appends the ready fact under the
+      // scheduler mutex (fsynced) and feeds `handoff_recorded` back.
+      if (event.handoff !== undefined) {
+        const { identity, tailFree } = event.handoff;
+        const readyKey = (event.handoff.readyKey !== "" ? event.handoff.readyKey : handoffReadyKey(identity)) as `ready:${string}:${number}:${string}`;
+        const readyEvent: RollEvent = {
+          type: "cycle:builder_ready",
+          eventId: "",
+          idempotencyKey: readyKey,
+          identity,
+          reason: tailFree ? "promotion_pending" : "tail_capacity_full",
+          ts: 0,
+        };
+        return {
+          state: {
+            ...next,
+            handedOff: true,
+            ctx: { ...next.ctx, storyId: identity.storyId },
+          },
+          commands: [gateEvent, { kind: "emit_event", event: readyEvent }],
+        };
+      }
       // built → publish ladder.
       return {
         state: { ...next, phase: "publish" },
         commands: [gateEvent, { kind: "publish_pr", branch: state.ctx.branch, docOnly: false }],
+      };
+    }
+
+    // US-CYCLE-013 — durable build handoff: a `built` capture with a valid
+    // handoff identity stops the walk at a NON-terminal `cycle:builder_ready`.
+    // The ready holder still occupies the one build slot; `cycle:end` is never
+    // evidence of this transition (the terminal remains cleanup completion).
+    // The runner's driver appends the ready fact under the scheduler mutex
+    // (fsynced) and feeds `handoff_recorded` back; the scheduler later promotes
+    // the ready holder to `cycle:builder_handoff` when the tail frees.
+    case "handoff_recorded": {
+      if (state.handedOff !== true) return { state, commands: [] };
+      return { state, commands: [] };
+    }
+
+    case "tail_resumed": {
+      const identity = event.identity;
+      const tailStart: RollEvent = {
+        type: "cycle:tail_started",
+        eventId: "",
+        idempotencyKey: `tail_started:${identity.cycleId}:${identity.attempt}:${identity.fence}`,
+        cycleId: identity.cycleId,
+        attempt: identity.attempt,
+        fence: identity.fence,
+        ts: 0,
+      };
+      return {
+        state: { ...state, phase: "publish", tailIdentity: identity, ctx: { ...state.ctx, storyId: identity.storyId, branch: identity.branch } },
+        commands: [
+          { kind: "emit_event", event: tailStart },
+          { kind: "publish_pr", branch: identity.branch, docOnly: false },
+        ],
+      };
+    }
+
+    case "freshness_result": {
+      // Any verdict routes the tail to serial_recovery with all leases retained:
+      // `continue` pins a NEW owned attempt (rebased_attempt_planned); the
+      // failure verdicts cancel the tail (tail_cancelled) first. The old
+      // handoff/evaluation authority is invalidated either way.
+      const identity = state.tailIdentity;
+      if (identity === undefined) return { state, commands: [] };
+      const freshness: RollEvent = {
+        type: "cycle:main_freshness",
+        eventId: "",
+        idempotencyKey: `freshness:${identity.cycleId}:${identity.fence}`,
+        cycleId: identity.cycleId,
+        fence: identity.fence,
+        predecessorMergeSha: event.predecessorMergeSha,
+        recordedBaseSha: event.recordedBaseSha,
+        builderHead: event.builderHead,
+        verdict: event.verdict,
+        evidenceRefs: event.evidenceRefs ?? [],
+        ts: 0,
+      };
+      const commands: CycleCommand[] = [{ kind: "emit_event", event: freshness }];
+      if (event.verdict === "continue") {
+        commands.push({
+          kind: "emit_event",
+          event: {
+            type: "cycle:rebased_attempt_planned",
+            eventId: "",
+            idempotencyKey: `rebased_planned:${identity.cycleId}:${identity.attempt}`,
+            cycleId: identity.cycleId,
+            sourceAttempt: identity.attempt,
+            sourceFence: identity.fence,
+            candidateRef: `refs/roll/rebase-candidates/${identity.cycleId}/${identity.attempt}`,
+            // US-CYCLE-013 F2 — the planned attempt carries the TRUE rebased
+            // head (the pinned candidate), falling back to the recorded
+            // builderHead only when the probe did not surface a rebased head.
+            candidateHead: event.candidateHead ?? event.builderHead,
+            predecessorMergeSha: event.predecessorMergeSha,
+            evidenceRefs: event.evidenceRefs ?? [],
+            ts: 0,
+          },
+        });
+      } else {
+        commands.push({
+          kind: "emit_event",
+          event: {
+            type: "cycle:tail_cancelled",
+            eventId: "",
+            idempotencyKey: `tail_cancelled:${identity.cycleId}:${identity.attempt}:${identity.fence}:freshness`,
+            cycleId: identity.cycleId,
+            attempt: identity.attempt,
+            fence: identity.fence,
+            reason: `freshness_${event.verdict}`,
+            ts: 0,
+          },
+        });
+      }
+      commands.push({
+        kind: "emit_event",
+        event: {
+          type: "cycle:serial_recovery",
+          eventId: "",
+          idempotencyKey: `recovery:${identity.cycleId}:${identity.attempt}:${identity.fence}:freshness`,
+          cycleId: identity.cycleId,
+          attempt: identity.attempt,
+          fence: identity.fence,
+          reason: `freshness_${event.verdict}`,
+          ts: 0,
+        },
+      });
+      return {
+        state: { ...state, phase: "publish", recoveryRecorded: true },
+        commands,
+      };
+    }
+
+    case "tail_event": {
+      const identity = state.tailIdentity;
+      if (identity === undefined) return { state, commands: [] };
+      if (event.kind === "tail_completed") {
+        const status = event.status ?? "published";
+        const tailCompleted: RollEvent = {
+          type: "cycle:tail_completed",
+          eventId: "",
+          idempotencyKey: `tail_completed:${identity.cycleId}:${identity.attempt}:${identity.fence}`,
+          cycleId: identity.cycleId,
+          attempt: identity.attempt,
+          fence: identity.fence,
+          ...(event.evidenceRefs !== undefined ? { evidenceRefs: event.evidenceRefs } : {}),
+          ts: 0,
+        };
+        // The ordinary terminal: publish/merge-wait → cleanup → cycle:end.
+        return terminate({ ...state, phase: "publish" }, status, [
+          { kind: "emit_event", event: tailCompleted },
+          { kind: "cleanup_environment" },
+          { kind: "cleanup_worktree", branch: identity.branch, bundleUnpushed: false },
+        ]);
+      }
+      // tail_failed → cancellation + serial_recovery; leases retained (the
+      // runner never deletes the workspace or releases the story lease here).
+      const reason = event.reason ?? "repair_required";
+      const cancel: RollEvent = {
+        type: "cycle:tail_cancelled",
+        eventId: "",
+        idempotencyKey: `tail_cancelled:${identity.cycleId}:${identity.attempt}:${identity.fence}:${reason}`,
+        cycleId: identity.cycleId,
+        attempt: identity.attempt,
+        fence: identity.fence,
+        reason,
+        ts: 0,
+      };
+      const recovery: RollEvent = {
+        type: "cycle:serial_recovery",
+        eventId: "",
+        idempotencyKey: `recovery:${identity.cycleId}:${identity.attempt}:${identity.fence}:${reason}`,
+        cycleId: identity.cycleId,
+        attempt: identity.attempt,
+        fence: identity.fence,
+        reason,
+        ts: 0,
+      };
+      return {
+        state: { ...state, phase: "publish", recoveryRecorded: true },
+        commands: [
+          { kind: "emit_event", event: cancel },
+          { kind: "emit_event", event: recovery },
+          {
+            kind: "append_alert",
+            message: `cycle ${identity.cycleId}: tail failed (${reason}) — serial recovery required; workspace + story lease retained; no automatic deletion`,
+          },
+        ],
       };
     }
 

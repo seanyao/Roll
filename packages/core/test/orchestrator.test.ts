@@ -1556,3 +1556,182 @@ describe("US-LOOP-102 — adversarial-pairing subsequence (verified/designed)", 
     expect(emittedEvents(commands)).toEqual(["cycle:start"]);
   });
 });
+
+// ── US-CYCLE-013 — durable build/tail handoff stepper (matrix #2, #17) ───────
+
+const HAN_WS = {
+  schema: 1 as const,
+  runId: "c-hand",
+  storyId: "US-HAND",
+  kind: "cycle" as const,
+  topology: "solo" as const,
+  members: [{
+    repositoryId: "repo-id",
+    workspaceKey: "cycle-c-hand",
+    relativeLocator: "cycle-c-hand",
+    checkoutRef: { kind: "detached" as const, head: "base-sha" },
+    publishRef: "refs/heads/loop/cycle-c-hand",
+  }],
+};
+
+const HAN_IDENTITY = {
+  schema: "cycle-handoff/v1" as const,
+  cycleId: "c-hand",
+  storyId: "US-HAND",
+  workspace: HAN_WS,
+  branch: "loop/cycle-c-hand",
+  builderHead: "head-sha",
+  baseSha: "base-sha",
+  builderEvidenceRefs: ["ev-1"],
+  builderValidationRef: "builder-validation:c-hand:1",
+  profile: "standard" as const,
+  attempt: 1,
+  fence: "fence-1",
+};
+
+const BUILT_FACTS = { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 2 };
+
+describe("US-CYCLE-013 — build handoff stepper (facts_captured + handoff)", () => {
+  it("a built capture with handoff data emits builder_ready and stops NON-terminal (handedOff)", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    state = cycleStep(state, { type: "preflight_done" }).state;
+    state = cycleStep(state, { type: "story_picked", storyId: "US-HAND" }).state;
+    state = cycleStep(state, { type: "worktree_created" }).state;
+    state = cycleStep(state, { type: "route_resolved", agent: "claude", model: "opus" }).state;
+    state = cycleStep(state, { type: "agent_exited", exit: 0, timedOut: false }).state;
+    const result = cycleStep(state, {
+      type: "facts_captured",
+      facts: BUILT_FACTS,
+      handoff: { identity: HAN_IDENTITY, readyKey: "ready:US-HAND:1:fence-1", tailFree: false },
+    });
+    expect(result.state.handedOff).toBe(true);
+    expect(result.state.done).toBe(false); // NOT a terminal — no cycle:end
+    const emits = result.commands.filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event");
+    const ready = emits.find((c) => c.event.type === "cycle:builder_ready");
+    expect(ready).toBeDefined();
+    if (ready !== undefined && ready.event.type === "cycle:builder_ready") {
+      expect(ready.event.reason).toBe("tail_capacity_full");
+      expect(ready.event.identity.cycleId).toBe("c-hand");
+      expect(ready.event.idempotencyKey).toBe("ready:US-HAND:1:fence-1");
+    }
+    expect(result.commands.some((c) => c.kind === "emit_event" && c.event.type === "cycle:end")).toBe(false);
+  });
+
+  it("a tail-free built capture emits builder_ready with promotion_pending", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    state = cycleStep(state, { type: "preflight_done" }).state;
+    state = cycleStep(state, { type: "story_picked", storyId: "US-HAND" }).state;
+    state = cycleStep(state, { type: "worktree_created" }).state;
+    state = cycleStep(state, { type: "route_resolved", agent: "claude", model: "opus" }).state;
+    state = cycleStep(state, { type: "agent_exited", exit: 0, timedOut: false }).state;
+    const result = cycleStep(state, {
+      type: "facts_captured",
+      facts: BUILT_FACTS,
+      handoff: { identity: HAN_IDENTITY, readyKey: "ready:US-HAND:1:fence-1", tailFree: true },
+    });
+    const ready = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:builder_ready");
+    if (ready !== undefined && ready.event.type === "cycle:builder_ready") {
+      expect(ready.event.reason).toBe("promotion_pending");
+    }
+    expect(result.state.handedOff).toBe(true);
+  });
+
+  it("handoff_recorded is an inert confirmation (no duplicate ready append)", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    state = cycleStep(state, { type: "preflight_done" }).state;
+    state = cycleStep(state, { type: "story_picked", storyId: "US-HAND" }).state;
+    state = cycleStep(state, { type: "worktree_created" }).state;
+    state = cycleStep(state, { type: "route_resolved", agent: "claude", model: "opus" }).state;
+    state = cycleStep(state, { type: "agent_exited", exit: 0, timedOut: false }).state;
+    state = cycleStep(state, {
+      type: "facts_captured",
+      facts: BUILT_FACTS,
+      handoff: { identity: HAN_IDENTITY, readyKey: "ready:US-HAND:1:fence-1", tailFree: false },
+    }).state;
+    const confirm = cycleStep(state, { type: "handoff_recorded" });
+    expect(confirm.commands).toEqual([]);
+    expect(confirm.state.handedOff).toBe(true);
+  });
+});
+
+describe("US-CYCLE-013 — tail-mode stepper (tail_resumed → tail_event)", () => {
+  function tailState(): CycleState {
+    return {
+      ...initialCycleState({ ...CTX, cycleId: "c-hand", branch: "loop/cycle-c-hand", storyId: "US-HAND" }),
+      phase: "publish",
+      tailIdentity: HAN_IDENTITY,
+    };
+  }
+
+  it("tail_resumed emits cycle:tail_started + publish_pr (evaluation/publish tail)", () => {
+    const result = cycleStep(tailState(), { type: "tail_resumed", identity: HAN_IDENTITY });
+    const kinds = result.commands.map((c) => c.kind);
+    expect(kinds).toContain("emit_event");
+    expect(kinds).toContain("publish_pr");
+    const started = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:tail_started");
+    expect(started).toBeDefined();
+    if (started !== undefined && started.event.type === "cycle:tail_started") {
+      expect(started.event.cycleId).toBe("c-hand");
+      expect(started.event.fence).toBe("fence-1");
+    }
+  });
+
+  it("tail_event tail_completed drives the ordinary terminal (cleanup + cycle:end), never a second build", () => {
+    const result = cycleStep(tailState(), { type: "tail_event", kind: "tail_completed", status: "published" });
+    expect(result.state.done).toBe(true);
+    expect(result.state.terminal).toBe("published");
+    const completed = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:tail_completed");
+    expect(completed).toBeDefined();
+    expect(result.commands.some((c) => c.kind === "cleanup_worktree")).toBe(true);
+    expect(result.commands.some((c) => c.kind === "emit_event" && c.event.type === "cycle:end")).toBe(true);
+  });
+
+  it("tail_event tail_failed cancels into serial_recovery with leases retained (no cycle:end)", () => {
+    const result = cycleStep(tailState(), { type: "tail_event", kind: "tail_failed", reason: "repair_required" });
+    expect(result.state.recoveryRecorded).toBe(true);
+    expect(result.state.done).toBe(false);
+    const cancelled = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:tail_cancelled");
+    expect(cancelled).toBeDefined();
+    const recovery = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:serial_recovery");
+    expect(recovery).toBeDefined();
+    expect(result.commands.some((c) => c.kind === "emit_event" && c.event.type === "cycle:end")).toBe(false);
+    expect(result.commands.some((c) => c.kind === "cleanup_worktree")).toBe(false);
+  });
+
+  it("freshness_result conflict routes the tail to serial_recovery (main_freshness + tail_cancelled + serial_recovery)", () => {
+    const result = cycleStep(tailState(), {
+      type: "freshness_result",
+      verdict: "conflict",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+    });
+    expect(result.state.recoveryRecorded).toBe(true);
+    const types = result.commands.filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event").map((c) => c.event.type);
+    expect(types).toContain("cycle:main_freshness");
+    expect(types).toContain("cycle:tail_cancelled");
+    expect(types).toContain("cycle:serial_recovery");
+    const freshness = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:main_freshness");
+    if (freshness !== undefined && freshness.event.type === "cycle:main_freshness") {
+      expect(freshness.event.verdict).toBe("conflict");
+    }
+  });
+
+  it("freshness_result continue pins a rebased attempt (main_freshness + rebased_attempt_planned)", () => {
+    const result = cycleStep(tailState(), {
+      type: "freshness_result",
+      verdict: "continue",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+    });
+    const types = result.commands.filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event").map((c) => c.event.type);
+    expect(types).toContain("cycle:main_freshness");
+    expect(types).toContain("cycle:rebased_attempt_planned");
+    expect(types).toContain("cycle:serial_recovery");
+    expect(result.state.recoveryRecorded).toBe(true);
+  });
+});

@@ -586,3 +586,153 @@ describe("parseEventLine (I8: readers skip bad lines, never crash)", () => {
     }
   });
 });
+
+// ── US-CYCLE-013 — cycle-handoff/v1 event family (schema round-trip + strict parse) ──
+import { parseCycleHandoffEvent, parseHandoffIdentity, type CycleHandoffEvent, type HandoffIdentity } from "../src/types/events.js";
+import type { ManagedWorkspaceSet } from "../src/types/managed-workspace.js";
+
+const HAN_WS: ManagedWorkspaceSet = {
+  schema: 1,
+  runId: "c1",
+  storyId: "US-1",
+  kind: "cycle",
+  topology: "solo",
+  members: [{
+    repositoryId: "repo-id",
+    workspaceKey: "cycle-c1",
+    relativeLocator: "cycle-c1",
+    checkoutRef: { kind: "detached", head: "base-sha" },
+    publishRef: "refs/heads/loop/cycle-c1",
+  }],
+};
+
+const HAN_ID: HandoffIdentity = {
+  schema: "cycle-handoff/v1",
+  cycleId: "c1",
+  storyId: "US-1",
+  workspace: HAN_WS,
+  branch: "loop/cycle-c1",
+  builderHead: "head-sha",
+  baseSha: "base-sha",
+  builderEvidenceRefs: ["ev-1"],
+  builderValidationRef: "builder-validation:c1:1",
+  profile: "standard",
+  attempt: 1,
+  fence: "fence-1",
+};
+
+describe("US-CYCLE-013 — cycle-handoff/v1 schema round-trip + strict parse (matrix #1)", () => {
+  it("round-trips a valid builder_ready through parseEventLine and the strict parser", () => {
+    const ready: CycleHandoffEvent = {
+      type: "cycle:builder_ready",
+      eventId: "ev-1",
+      idempotencyKey: "ready:US-1:1:fence-1",
+      identity: HAN_ID,
+      reason: "tail_capacity_full",
+      ts: 1_780_000_000,
+    };
+    const parsedLine = parseEventLine(JSON.stringify(ready));
+    expect(parsedLine?.type).toBe("cycle:builder_ready");
+    const strict = parseCycleHandoffEvent(ready);
+    expect(strict).not.toBeNull();
+    expect(strict?.type).toBe("cycle:builder_ready");
+  });
+
+  it("round-trips the whole family (admitted → ready → handoff → tail → cleanup)", () => {
+    const events: CycleHandoffEvent[] = [
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:c1:1", identity: HAN_ID, queueSequence: 1, ts: 1 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-1:1:fence-1", identity: HAN_ID, reason: "promotion_pending", ts: 2 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-1:1:fence-1", identity: HAN_ID, previousReadyKey: "ready:US-1:1:fence-1", next: "evaluate_or_test", ts: 3 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", ts: 4 },
+      { type: "cycle:tail_completed", eventId: "e5", idempotencyKey: "tail_completed:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", evidenceRefs: ["ev"], ts: 5 },
+      { type: "cycle:cleanup_started", eventId: "e6", idempotencyKey: "cleanup_started:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", ts: 6 },
+      { type: "cycle:cleanup_completed", eventId: "e7", idempotencyKey: "cleanup_completed:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", releasedWorkspace: true, ts: 7 },
+    ];
+    for (const ev of events) {
+      const line = parseEventLine(JSON.stringify(ev));
+      expect(line, `${ev.type} parses leniently`).not.toBeNull();
+      expect(parseCycleHandoffEvent(ev), `${ev.type} passes the strict parser`).not.toBeNull();
+    }
+    const queued: CycleHandoffEvent = {
+      type: "cycle:queued",
+      eventId: "e8",
+      idempotencyKey: "queue:US-2:2",
+      storyId: "US-2",
+      requestedByCycleId: "c2",
+      queueSequence: 2,
+      reason: "build_slot_full",
+      ts: 8,
+    };
+    expect(parseCycleHandoffEvent(queued)).not.toBeNull();
+    const freshness: CycleHandoffEvent = {
+      type: "cycle:main_freshness",
+      eventId: "e9",
+      idempotencyKey: "freshness:c1:fence-1",
+      cycleId: "c1",
+      fence: "fence-1",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+      verdict: "conflict",
+      evidenceRefs: [],
+      ts: 9,
+    };
+    expect(parseCycleHandoffEvent(freshness)).not.toBeNull();
+    const rebased: CycleHandoffEvent = {
+      type: "cycle:rebased_attempt_validated",
+      eventId: "e10",
+      idempotencyKey: "rebased_validated:c1:1",
+      cycleId: "c1",
+      sourceAttempt: 1,
+      sourceFence: "fence-1",
+      candidateRef: "refs/roll/rebase-candidates/c1/1",
+      candidateHead: "r1",
+      predecessorMergeSha: "m1",
+      identity: HAN_ID,
+      validationRef: "v1",
+      evidenceRefs: ["ev"],
+      ts: 10,
+    };
+    expect(parseCycleHandoffEvent(rebased)).not.toBeNull();
+  });
+
+  it("rejects malformed / v0 payloads (missing fields, wrong shapes, bad verdicts)", () => {
+    expect(parseHandoffIdentity({ ...HAN_ID, schema: "cycle-handoff/v0" })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, fence: "" })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, attempt: 0 })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, profile: "wild" })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, workspace: { ...HAN_WS, members: [] } })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, builderEvidenceRefs: ["ok", 42] })).toBeNull();
+    const ready = { type: "cycle:builder_ready", eventId: "e1", idempotencyKey: "ready:US-1:1:fence-1", identity: HAN_ID, reason: "tail_capacity_full", ts: 1 };
+    expect(parseCycleHandoffEvent({ ...ready, idempotencyKey: "admit:c1:1" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, reason: "wrong" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, ts: "1" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, eventId: "" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, type: "cycle:unknown_handoff" })).toBeNull();
+    const freshness = {
+      type: "cycle:main_freshness",
+      eventId: "e9",
+      idempotencyKey: "freshness:c1:fence-1",
+      cycleId: "c1",
+      fence: "fence-1",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+      verdict: "maybe",
+      evidenceRefs: [],
+      ts: 9,
+    };
+    expect(parseCycleHandoffEvent(freshness)).toBeNull();
+    const tailCancelled = { type: "cycle:tail_cancelled", eventId: "e4", idempotencyKey: "x", cycleId: "c1", attempt: 1, fence: "fence-1", reason: "stale_fence", ts: 4 };
+    expect(parseCycleHandoffEvent(tailCancelled)).not.toBeNull();
+    expect(parseCycleHandoffEvent({ ...tailCancelled, reason: "not_a_reason" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...tailCancelled, idempotencyKey: "" })).toBeNull();
+  });
+
+  it("old events (pre-v1) still parse through parseEventLine unchanged (matrix #1/#16)", () => {
+    const legacy = '{"type":"cycle:end","cycleId":"c-old","outcome":"delivered","cost":{"cycleId":"c-old","agent":"a","model":"m","tokensIn":0,"tokensOut":0,"estimatedCost":0,"revertCount":0,"effectiveCost":0,"currency":"USD"},"ts":1}';
+    const parsed = parseEventLine(legacy);
+    expect(parsed?.type).toBe("cycle:end");
+    expect(parseCycleHandoffEvent(parsed)).toBeNull(); // not a handoff row
+  });
+});

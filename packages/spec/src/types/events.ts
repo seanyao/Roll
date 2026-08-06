@@ -32,6 +32,7 @@ import type { BlockCause, FailureClass, TerminalEvent, TerminalOutcome } from ".
 import type { TaskLevel } from "./story.js";
 import type { BuilderFinalizationFacts, BuilderFinalizationVerdict } from "./builder.js";
 import type { WorktreeLifecycleEvent } from "./managed-workspace.js";
+import { normalizeManagedWorkspaceSet, type ManagedWorkspaceSet } from "./managed-workspace.js";
 
 /**
  * US-PAIR-014 — why a recorded cost figure is what it is.
@@ -859,7 +860,15 @@ export type RollEvent =
       ts: number;
     }
   | DeltaAttemptOutcomeEvent
-  | DeltaRoleAvailabilityObservedEvent;
+  | DeltaRoleAvailabilityObservedEvent
+  // US-CYCLE-013 — durable build/tail handoff (schema cycle-handoff/v1).
+  // A completed build becomes a durable, resumable handoff instead of burning
+  // its review/test/publish/merge tail inside the same uninterruptible run.
+  // All of these live behind ROLL_CYCLE_HANDOFF_V1=1 (default off); an older
+  // reader refuses a v1-affected cycle (`upgrade_required`) rather than
+  // misreading the events. Unknown/new shapes remain parseable forever via the
+  // lenient parseEventLine; the strict per-type parser is parseCycleHandoffEvent.
+  | CycleHandoffEvent;
 
 /**
  * US-DELTA-012 — immutable, bounded explanation of one terminal delivery
@@ -899,9 +908,313 @@ export interface DeltaRoleAvailabilityObservedEvent {
   readonly ts: number;
 }
 
+// ── US-CYCLE-013 — cycle-handoff/v1 event family ─────────────────────────────
+// Durable build/tail handoff: a completed build becomes a resumable handoff
+// instead of burning its review/test/publish/merge tail inside the same run.
+// Semantics pinned here (also in code comments):
+//   - `cycle:builder_ready` is the durable, non-terminal Builder-complete fact,
+//     written only after the Builder evidence/TCR validator accepts the committed
+//     head and BEFORE any capacity decision. `cycle:end` is never evidence of
+//     this transition. The ready holder still occupies the one build slot.
+//   - `cycle:builder_handoff` is a separate, later atomic promotion from that
+//     ready fact into the unique tail slot (releases build + acquires tail in
+//     one fold). Sole writer: the scheduler under the project-wide mutex.
+//   - `cycle:admitted` is appended by the scheduler/runner under the mutex with
+//     a fresh fence; the worker spawns only after the durable append.
+//   - `cycle:cleanup_completed` is the only fact that releases the workspace
+//     lease and story delivery lease for the handoff path.
+//   - A repeated event with the same idempotency key is a no-op; same key with a
+//     different payload is `handoff:conflict` and blocks that cycle.
+// The writer replays the affected cycle before appending. Unknown schemas/events
+// are retained by generic readers; an older runner refuses the v1-affected cycle
+// (`upgrade_required`) rather than misreading them.
+
+/** The exact allocated immutable identity of one admitted cycle build. */
+export interface HandoffIdentity {
+  readonly schema: "cycle-handoff/v1";
+  readonly cycleId: string;
+  readonly storyId: string;
+  /** Exact allocated immutable workspace identity (sole creator: the allocator). */
+  readonly workspace: ManagedWorkspaceSet;
+  readonly branch: string;
+  /** Commit verified after Builder TCR. */
+  readonly builderHead: string;
+  /** Integration/main SHA at allocation. */
+  readonly baseSha: string;
+  readonly builderEvidenceRefs: readonly string[];
+  readonly builderValidationRef: string;
+  readonly profile: "standard" | "verified" | "designed";
+  /** 1-based attempt for this story's delivery (fresh attempt ⇒ fresh fence). */
+  readonly attempt: number;
+  /** Fresh random fence per admission. */
+  readonly fence: string;
+}
+
+export interface CycleBuilderHandoffEvent {
+  readonly type: "cycle:builder_handoff";
+  readonly eventId: string;
+  readonly idempotencyKey: `handoff:${string}:${number}:${string}`;
+  readonly identity: HandoffIdentity;
+  /** The exact `ready:<storyId>:<attempt>:<fence>` key being promoted. */
+  readonly previousReadyKey: string;
+  readonly next: "evaluate_or_test";
+  readonly ts: number;
+}
+
+export interface CycleBuilderReadyEvent {
+  readonly type: "cycle:builder_ready";
+  readonly eventId: string;
+  readonly idempotencyKey: `ready:${string}:${number}:${string}`;
+  readonly identity: HandoffIdentity;
+  readonly reason: "tail_capacity_full" | "promotion_pending";
+  readonly ts: number;
+}
+
+export interface CycleAdmissionEvent {
+  readonly type: "cycle:admitted";
+  readonly eventId: string;
+  readonly idempotencyKey: `admit:${string}:${number}`;
+  readonly identity: HandoffIdentity;
+  readonly source?: "freshness_rebase";
+  readonly queueSequence: number;
+  readonly ts: number;
+}
+
+/** Tail lifecycle facts: started/completed/cancelled + recovery + cleanup. */
+export interface CycleTailEvent {
+  readonly type:
+    | "cycle:tail_started"
+    | "cycle:tail_completed"
+    | "cycle:tail_cancelled"
+    | "cycle:serial_recovery"
+    | "cycle:cleanup_started"
+    | "cycle:cleanup_completed";
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly cycleId: string;
+  readonly attempt: number;
+  readonly fence: string;
+  readonly reason?: string;
+  readonly evidenceRefs?: readonly string[];
+  readonly releasedWorkspace?: boolean;
+  readonly ts: number;
+}
+
+export type CycleTailCancelledReason =
+  | "stale_fence"
+  | "identity_mismatch"
+  | "repair_required"
+  | "freshness_conflict"
+  | "freshness_test_failed"
+  | "freshness_unknown"
+  | "freshness_timeout"
+  | "child_failure";
+
+export type CycleQueueReason =
+  | "build_slot_full"
+  | "tail_slot_full"
+  | "delivery_lease_held"
+  | "recovery_required";
+
+export interface CycleQueueEvent {
+  readonly type: "cycle:queued" | "cycle:queue_rejected";
+  readonly eventId: string;
+  readonly idempotencyKey: `queue:${string}:${number}`;
+  readonly storyId: string;
+  readonly requestedByCycleId: string;
+  readonly queueSequence: number;
+  readonly reason: CycleQueueReason;
+  readonly ts: number;
+}
+
+export type FreshnessVerdict = "continue" | "conflict" | "test_failed" | "unknown" | "timeout";
+
+export interface CycleMainFreshnessEvent {
+  readonly type: "cycle:main_freshness";
+  readonly eventId: string;
+  readonly idempotencyKey: `freshness:${string}:${string}`;
+  readonly cycleId: string;
+  readonly fence: string;
+  readonly predecessorMergeSha: string;
+  readonly recordedBaseSha: string;
+  readonly builderHead: string;
+  readonly verdict: FreshnessVerdict;
+  readonly evidenceRefs: readonly string[];
+  readonly ts: number;
+}
+
+export interface CycleRebasedAttemptEvent {
+  readonly type: "cycle:rebased_attempt_planned" | "cycle:rebased_attempt_validated";
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly cycleId: string;
+  readonly sourceAttempt: number;
+  readonly sourceFence: string;
+  readonly candidateRef: string;
+  readonly candidateHead: string;
+  readonly predecessorMergeSha: string;
+  readonly identity?: HandoffIdentity;
+  readonly validationRef?: string;
+  readonly evidenceRefs: readonly string[];
+  readonly ts: number;
+}
+
+export type CycleHandoffEvent =
+  | CycleBuilderHandoffEvent
+  | CycleBuilderReadyEvent
+  | CycleAdmissionEvent
+  | CycleTailEvent
+  | CycleQueueEvent
+  | CycleMainFreshnessEvent
+  | CycleRebasedAttemptEvent;
+
+export const CYCLE_HANDOFF_EVENT_TYPES = [
+  "cycle:builder_handoff",
+  "cycle:builder_ready",
+  "cycle:admitted",
+  "cycle:tail_started",
+  "cycle:tail_completed",
+  "cycle:tail_cancelled",
+  "cycle:serial_recovery",
+  "cycle:cleanup_started",
+  "cycle:cleanup_completed",
+  "cycle:queued",
+  "cycle:queue_rejected",
+  "cycle:main_freshness",
+  "cycle:rebased_attempt_planned",
+  "cycle:rebased_attempt_validated",
+] as const;
+
+export type CycleHandoffEventType = (typeof CYCLE_HANDOFF_EVENT_TYPES)[number];
+
+const HANDOFF_PROFILES = ["standard", "verified", "designed"] as const;
+const TAIL_CANCEL_REASONS = [
+  "stale_fence",
+  "identity_mismatch",
+  "repair_required",
+  "freshness_conflict",
+  "freshness_test_failed",
+  "freshness_unknown",
+  "freshness_timeout",
+  "child_failure",
+] as const;
+const QUEUE_REASONS = ["build_slot_full", "tail_slot_full", "delivery_lease_held", "recovery_required"] as const;
+const FRESHNESS_VERDICTS = ["continue", "conflict", "test_failed", "unknown", "timeout"] as const;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "" && value.length > 0;
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPositiveInt(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 1;
+}
+
+/** Strict runtime validation of one {@link HandoffIdentity} (schema cycle-handoff/v1). */
+export function parseHandoffIdentity(value: unknown): HandoffIdentity | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (r["schema"] !== "cycle-handoff/v1") return null;
+  if (!isNonEmptyString(r["cycleId"]) || !isNonEmptyString(r["storyId"])) return null;
+  if (!isNonEmptyString(r["branch"]) || !isNonEmptyString(r["builderHead"]) || !isNonEmptyString(r["baseSha"])) return null;
+  if (!isStringArray(r["builderEvidenceRefs"]) || !isNonEmptyString(r["builderValidationRef"])) return null;
+  if (!(HANDOFF_PROFILES as readonly unknown[]).includes(r["profile"])) return null;
+  if (!isPositiveInt(r["attempt"]) || !isNonEmptyString(r["fence"])) return null;
+  if (!normalizeManagedWorkspaceSet(r["workspace"]).ok) return null;
+  return value as HandoffIdentity;
+}
+
+/**
+ * Strict runtime parse of a `cycle:*` handoff row: every required field must be
+ * present with the right type; the identity workspace must normalize; the
+ * idempotencyKey must carry its semantic prefix. Returns null for anything else
+ * — readers skip invalid rows loudly (with a diagnostic), never coerce them into
+ * facts (mirrors parseTcrObservationEvent).
+ */
+export function parseCycleHandoffEvent(value: unknown): CycleHandoffEvent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (!isNonEmptyString(r["eventId"])) return null;
+  if (!isNonEmptyString(r["idempotencyKey"])) return null;
+  if (!isFiniteNumber(r["ts"])) return null;
+  const type = r["type"];
+  switch (type) {
+    case "cycle:builder_handoff": {
+      if (!/^handoff:.+:\d+:.+$/.test(String(r["idempotencyKey"]))) return null;
+      const identity = parseHandoffIdentity(r["identity"]);
+      if (identity === null) return null;
+      if (!isNonEmptyString(r["previousReadyKey"]) || r["next"] !== "evaluate_or_test") return null;
+      return value as CycleBuilderHandoffEvent;
+    }
+    case "cycle:builder_ready": {
+      if (!/^ready:.+:\d+:.+$/.test(String(r["idempotencyKey"]))) return null;
+      const identity = parseHandoffIdentity(r["identity"]);
+      if (identity === null) return null;
+      if (r["reason"] !== "tail_capacity_full" && r["reason"] !== "promotion_pending") return null;
+      return value as CycleBuilderReadyEvent;
+    }
+    case "cycle:admitted": {
+      if (!/^admit:.+:\d+$/.test(String(r["idempotencyKey"]))) return null;
+      const identity = parseHandoffIdentity(r["identity"]);
+      if (identity === null) return null;
+      if (r["source"] !== undefined && r["source"] !== "freshness_rebase") return null;
+      if (!isFiniteNumber(r["queueSequence"])) return null;
+      return value as CycleAdmissionEvent;
+    }
+    case "cycle:tail_started":
+    case "cycle:tail_completed":
+    case "cycle:tail_cancelled":
+    case "cycle:serial_recovery":
+    case "cycle:cleanup_started":
+    case "cycle:cleanup_completed": {
+      if (!isNonEmptyString(r["cycleId"]) || !isPositiveInt(r["attempt"]) || !isNonEmptyString(r["fence"])) return null;
+      if (r["reason"] !== undefined && !isNonEmptyString(r["reason"])) return null;
+      if (r["evidenceRefs"] !== undefined && !isStringArray(r["evidenceRefs"])) return null;
+      if (r["releasedWorkspace"] !== undefined && typeof r["releasedWorkspace"] !== "boolean") return null;
+      if (type === "cycle:tail_cancelled" && !(TAIL_CANCEL_REASONS as readonly unknown[]).includes(r["reason"])) return null;
+      if (type === "cycle:cleanup_completed" && typeof r["releasedWorkspace"] !== "boolean") return null;
+      return value as CycleTailEvent;
+    }
+    case "cycle:queued":
+    case "cycle:queue_rejected": {
+      if (!/^queue:.+:\d+$/.test(String(r["idempotencyKey"]))) return null;
+      if (!isNonEmptyString(r["storyId"]) || !isNonEmptyString(r["requestedByCycleId"])) return null;
+      if (!isFiniteNumber(r["queueSequence"])) return null;
+      if (!(QUEUE_REASONS as readonly unknown[]).includes(r["reason"])) return null;
+      return value as CycleQueueEvent;
+    }
+    case "cycle:main_freshness": {
+      if (!/^freshness:.+:.+$/.test(String(r["idempotencyKey"]))) return null;
+      if (!isNonEmptyString(r["cycleId"]) || !isNonEmptyString(r["fence"])) return null;
+      if (!isNonEmptyString(r["predecessorMergeSha"]) || !isNonEmptyString(r["recordedBaseSha"]) || !isNonEmptyString(r["builderHead"])) return null;
+      if (!(FRESHNESS_VERDICTS as readonly unknown[]).includes(r["verdict"])) return null;
+      if (!isStringArray(r["evidenceRefs"])) return null;
+      return value as CycleMainFreshnessEvent;
+    }
+    case "cycle:rebased_attempt_planned":
+    case "cycle:rebased_attempt_validated": {
+      if (!isNonEmptyString(r["cycleId"]) || !isPositiveInt(r["sourceAttempt"]) || !isNonEmptyString(r["sourceFence"])) return null;
+      if (!isNonEmptyString(r["candidateRef"]) || !isNonEmptyString(r["candidateHead"]) || !isNonEmptyString(r["predecessorMergeSha"])) return null;
+      if (r["identity"] !== undefined && parseHandoffIdentity(r["identity"]) === null) return null;
+      if (r["validationRef"] !== undefined && !isNonEmptyString(r["validationRef"])) return null;
+      if (!isStringArray(r["evidenceRefs"])) return null;
+      if (type === "cycle:rebased_attempt_validated" && (r["identity"] === undefined || r["validationRef"] === undefined)) return null;
+      return value as CycleRebasedAttemptEvent;
+    }
+    default:
+      return null;
+  }
+}
+
 /** Supervisor journal action kinds (US-OBS-048). */
-export const SUPERVISOR_JOURNAL_ACTIONS = ["decide", "verify", "rescue", "escalate", "note"] as const;
-export type SupervisorJournalAction = (typeof SUPERVISOR_JOURNAL_ACTIONS)[number];
+export const SUPERVISOR_JOURNAL_ACTIONS = ["decide", "verify", "rescue", "escalate", "note"] as const;export type SupervisorJournalAction = (typeof SUPERVISOR_JOURNAL_ACTIONS)[number];
 
 export type RollEventType = RollEvent["type"];
 

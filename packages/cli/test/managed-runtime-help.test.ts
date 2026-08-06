@@ -9,6 +9,9 @@ import { skillDispatchUsage } from "../src/commands/skill-dispatch.js";
 import { worktreeAuditUsage } from "../src/commands/worktree-audit.js";
 import { worktreeCleanupUsage } from "../src/commands/worktree-cleanup.js";
 import { worktreeUsage } from "../src/commands/index.js";
+import { loopGoCommand } from "../src/commands/loop-go.js";
+import { RUN_ONCE_USAGE } from "../src/commands/loop-run-once.js";
+import { v3Catalog } from "@roll/spec";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const originalLang = process.env["ROLL_LANG"];
@@ -225,5 +228,75 @@ describe("US-DELTA-021 — unified feature delivery view documentation contract"
     }
     expect(readFileSync(resolve(projectRoot, "guide/en/delivery-metrics.md"), "utf8")).toContain("# Feature delivery view");
     expect(readFileSync(resolve(projectRoot, "guide/zh/delivery-metrics.md"), "utf8")).toContain("# 功能交付视图");
+  });
+});
+
+// ── US-CYCLE-013 — two-slot handoff help + docs contract (same delivery) ─────
+
+async function captureLoopGoHelp(lang: "en" | "zh"): Promise<string> {
+  const output: string[] = [];
+  const write = process.stdout.write.bind(process.stdout);
+  // @ts-expect-error capture-only override
+  process.stdout.write = (chunk: string | Uint8Array): boolean => {
+    output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  };
+  try {
+    await withLang(lang, () => loopGoCommand(["--help"]));
+  } finally {
+    process.stdout.write = write;
+  }
+  return output.join("");
+}
+
+describe("US-CYCLE-013 help surface", () => {
+  it("loop go help documents ROLL_CYCLE_HANDOFF_V1 (en + zh)", async () => {
+    const en = await captureLoopGoHelp("en");
+    const zh = await captureLoopGoHelp("zh");
+    expect(en).toContain("ROLL_CYCLE_HANDOFF_V1=1");
+    expect(en).toContain("one completed build waits in its retained workspace");
+    expect(en).toContain("a third card queues");
+    expect(en).toContain("guide/loop.md");
+    expect(zh).toContain("ROLL_CYCLE_HANDOFF_V1=1");
+    expect(zh).toContain("保留工作目录中等待");
+    expect(zh).toContain("第三张卡进入队列");
+  });
+
+  it("run-once usage documents --resume <cycleId> (en + zh)", () => {
+    expect(RUN_ONCE_USAGE).toContain("--resume <cycleId>");
+    expect(RUN_ONCE_USAGE).toContain("resume the RETAINED tail of a handed-off cycle");
+    expect(RUN_ONCE_USAGE).toContain("恢复已交接卡的 tail");
+  });
+
+  it("the v3 catalog carries every handoff.* key the CLI renders", () => {
+    const keys = [
+      "handoff.state.building",
+      "handoff.state.ready_tail_full",
+      "handoff.state.waiting_tail",
+      "handoff.state.serial_recovery",
+      "handoff.queue.awaiting_capacity",
+      "handoff.freshness.continue",
+      "handoff.freshness.conflict",
+      "handoff.freshness.test_failed",
+      "handoff.freshness.unknown",
+      "handoff.freshness.timeout",
+      "handoff.resume.entry",
+      "handoff.upgrade_required",
+    ];
+    for (const key of keys) {
+      expect(v3Catalog[key], `${key} has en`).toBeDefined();
+      expect(v3Catalog[key]?.zh, `${key} has zh`).toBeDefined();
+    }
+  });
+
+  it("guide + architecture publish the two-slot handoff section", () => {
+    const en = readFileSync(resolve(projectRoot, "guide/en/loop.md"), "utf8");
+    const zh = readFileSync(resolve(projectRoot, "guide/zh/loop.md"), "utf8");
+    const arch = readFileSync(resolve(projectRoot, "docs/architecture.md"), "utf8");
+    expect(en).toContain("Two-slot handoff");
+    expect(en).toContain("ROLL_CYCLE_HANDOFF_V1");
+    expect(zh).toContain("双槽 handoff");
+    expect(zh).toContain("ROLL_CYCLE_HANDOFF_V1");
+    expect(arch).toContain("cycle-handoff/v1");
   });
 });

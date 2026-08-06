@@ -135,3 +135,37 @@ describe("US-LOOP-122 — lifecycle events remain an append-only read contract",
     expect(parseEventLine('{"type":"delta:prepared","delegationId":"old","runId":"delta-old","storyId":"US-OLD","trigger":"loop-autonomous","topology":"delta-team","qualityProfile":"verified","presetId":"p","presetSha256":"x","hostId":"host","ts":2}')?.type).toBe("delta:prepared");
   });
 });
+
+// ── US-CYCLE-013 — handoff identity workspace stays a valid ManagedWorkspaceSet
+// (matrix #15: the retained workspace is only released by a same-identity
+// successful cleanup; the set itself must survive a cycle-handoff identity).
+
+
+describe("US-CYCLE-013 — handoff workspace identity (matrix #15)", () => {
+  it("normalizes the exact allocated workspace carried inside a HandoffIdentity", () => {
+    const workspace: ManagedWorkspaceSet = {
+      schema: 1,
+      runId: "c1",
+      storyId: "US-1",
+      kind: "cycle",
+      topology: "solo",
+      members: [{
+        repositoryId: "repo-id",
+        workspaceKey: "cycle-c1",
+        relativeLocator: "cycle-c1",
+        checkoutRef: { kind: "detached", head: "base-sha" },
+        publishRef: "refs/heads/loop/cycle-c1",
+      }],
+    };
+    const normalized = normalizeManagedWorkspaceSet(workspace);
+    expect(normalized.ok).toBe(true);
+    if (normalized.ok) {
+      expect(normalized.value.members[0]?.checkoutRef.head).toBe("base-sha");
+      expect(normalized.value.members[0]?.publishRef).toBe("refs/heads/loop/cycle-c1");
+    }
+    // A broken member shape (missing detached head) is rejected — a handoff
+    // identity can never carry an unallocatable workspace.
+    const broken: ManagedWorkspaceSet = { ...workspace, members: [{ ...workspace.members[0]!, checkoutRef: { kind: "detached" } }] as unknown as [ManagedWorkspaceSet["members"][number]] };
+    expect(normalizeManagedWorkspaceSet(broken).ok).toBe(false);
+  });
+});

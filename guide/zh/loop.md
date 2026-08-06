@@ -1266,3 +1266,47 @@ done
 ```
 
 之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。
+
+## 双槽 handoff（US-CYCLE-013）
+
+设置 `ROLL_CYCLE_HANDOFF_V1=1`（默认关闭）后，一次完成的构建会变成**可恢复的持久交接点**，
+而不是在同一趟不可中断的运行里把评审/测试/发布/合并的尾巴一起烧掉。
+
+- 一张完成构建的卡会**在它保留的工作目录中等待**（状态 `构建完成——tail 容量已满`），
+  同时**下一张卡在自己的工作目录中构建**。
+- **第三张卡进入队列**（FIFO，带可读原因）——任意时刻至多存在一个等待中的 tail 和一个
+  构建槽持有者。
+- 通过 Builder 验证的卡**绝不会被再次选中、也绝不会重新构建**：它持有自己的交付租约和
+  不可变工作目录，直到自己的 tail 走到终结、并通过身份校验的清理。
+
+持久事实写在 `.roll/loop/events.ndjson` 的 `cycle-handoff/v1` 事件族里
+（`cycle:admitted` → `cycle:builder_ready` → `cycle:builder_handoff` →
+`cycle:tail_started/completed` → `cycle:cleanup_completed`）。一次绿色、已提交的构建
+之后进程重启，会恢复 tail（`roll loop run-once --resume <cycleId>`；当恰好存在一个存活
+handoff 时也会自动恢复），并且**绝不会再次运行 Builder**；append 之前的重启仍沿用今天
+的 abort/recovery 语义。
+
+**最新主干检查（真实执行）：** 前一张卡合入后，下游 tail 必须通过真实的“基于最新主干继续”检查
+才能继续。探测在**临时校验工作目录**（从记录的 builder head 创建）里执行
+`git merge-base --is-ancestor`（主干被改写 ⇒ `conflict`，安全失败）和
+`git rebase --onto <新主干 tip> <记录 base> <builder head>`，然后执行卡上记录的
+`deliverable_cmd`（与 attest 通道相同的 roll 只读 allowlist 过滤——被拒命令绝不执行），
+受 900 秒预算约束。`continue` 会在**真实 rebase 后的 head** 上创建持久、不可变的 pin
+`refs/roll/rebase-candidates/<cycle>/<attempt>` 并记录 `cycle:rebased_attempt_planned`；
+`conflict` / `test_failed` / `timeout` / `unknown` 会**安全退回串行**
+（`cycle:serial_recovery`），故事、工作目录与租约全部保留，不留半成品。临时校验树用完必删；
+被钉住的候选只存在于持久 pin ref（恢复路径可用已实现的 `checkoutPin` 原语检出）。
+
+**准入在执行层强制：** 容量前置条件在**调度互斥锁内**成立——直接并发的
+`roll loop run-once` 会被拒绝（`loop run-once: admission refused (build_slot_full) — no
+parallel build started`，退出码 1），go worker **绝不会把排队卡交给 runner**：收到
+`queued` 判定时打印队列行并等待空槽，而不是启动构建。排队卡只追加一次（幂等——它的
+FIFO 位置不会悄悄后移）。
+
+**阅读 `roll loop status`：** 开关打开后，看板会多出一节 **HANDOFF**，状态都是字面的——
+`building`、`构建完成——tail 容量已满`（ready 持有者显示在队列**上方**，绝不在队列里）、
+`等待评审或测试`、`需要串行恢复`（不会自动删除）。队列行显示位置、`seq=`、原因和下一步动作。
+
+**回滚：** 先把每个 v1 handoff 排空/恢复到 `terminal` 或显式 `cycle:serial_recovery`，
+再关闭开关。未排空就关闭会大声失败（`upgrade_required`），而不是跑出串行副本。
+两张卡是否改到同一批文件属于另一张卡（US-CYCLE-010）。

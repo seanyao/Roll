@@ -644,3 +644,45 @@ shadow audit     queryStoryDelivery()      claim vs truth drift → .roll/report
 ```
 
 `roll release consistency` 的 `truth-live` 维度是该契约的 CI/发版闸：它先运行 `ensureDeliveriesFresh()`，再用 `queryStoryDelivery()` 断言发布增量里的故事确实由结构化投影证明为 `done`，并校验 Done 行上的 PR ref 与投影一致。
+
+## US-CYCLE-013 — durable build/tail handoff（事件族 + 项目级准入互斥）
+
+`ROLL_CYCLE_HANDOFF_V1=1`（默认关闭）下，一次绿色、已提交的构建会追加一个**持久、
+可恢复的交接点**，而不是在同一趟运行里烧掉评审/测试/发布尾巴。事件族
+`cycle-handoff/v1`（`cycle:admitted` → `cycle:builder_ready` → `cycle:builder_handoff`
+→ `cycle:tail_started/completed/cancelled` → `cycle:serial_recovery` →
+`cycle:cleanup_started/completed`、`cycle:queued/queue_rejected`、
+`cycle:main_freshness`、`cycle:rebased_attempt_planned/validated`）继续写进唯一的
+`events.ndjson`；**不新建事件文件**。
+
+- **唯一真相仍是事件流（扩展 I8）**：容量图、队列、租约处置全部由纯投影
+  （`projectCycleHandoff` / `projectHandoffCapacity`）从事件流重建；没有 status 文件、
+  内存 promise、目录扫描或 backlog 修改可以授予容量。读取侧对新旧形状永远可解析；
+  旧版本 runner 见到 v1 事件对受影响的 cycle 报 `upgrade_required` 并拒绝运行/恢复，
+  绝不当作串行副本重跑。
+- **项目级准入互斥**：`<project>/.roll/loop/handoff.lock`（与 per-run `inner.lock` 区分，
+  陈旧阈值 14_400s 对齐 `INNER_LOCK_STALE_SEC`）。临界区 = 读+校验事件投影 → 选 FIFO
+  队头 → **恰好追加一个**决策事件（`cycle:admitted` / `cycle:builder_handoff` /
+  `cycle:queued`）→ **fsync** → 解锁。append 是线性化点；锁拿不到则
+  `admission_unknown`（fail closed，不写任何决策）。同一 idempotency key + 相同 payload
+  是 no-op；同 key 不同 payload 是 `handoff:conflict`（阻断该 cycle）。
+- **容量不变量**：最多一个等待/评审/发布 tail + 恰好一个构建槽持有者（`building` 或
+  `builder complete — tail capacity full`）；第三个卡 FIFO 排队。ready 持有者在
+  `roll loop status` 里显示在队列上方，绝不在队列里。文件重叠准入是 US-CYCLE-010 的事，
+  本卡不做任何“互不相交可并行”的猜测。
+- **交接语义**：`cycle:builder_ready` 是持久、非终结的 Builder 完成事实（`cycle:end`
+  永远不是该转变的证据）；`cycle:builder_handoff` 是把该 ready 事实原子提升进唯一 tail
+  槽的独立事件；`cycle:cleanup_completed` 是唯一释放 workspace 与 story 交付租约的事实。
+- **未知永远退回串行**：`conflict` / `test_failed` / `unknown` / `timeout` 产生
+  `cycle:main_freshness` 相应 verdict，再在现行 fence 下 `cycle:tail_cancelled` +
+  `cycle:serial_recovery`；不发布、不合并、不自动删工作目录、不发明 merge。
+- **准入在执行层强制（无不变量变化）**：容量前置条件在调度互斥锁**内**再校验一遍——
+  `cycle:admitted` 在构建槽被占时拒写（`build_slot_full`），`cycle:builder_handoff` 在
+  tail 被占时拒写（`tail_occupied`）；run-once 没有持久 admission 就停止（写 `aborted`
+  终态 + runs 行并释放锁，绝不 spawn Builder），go worker 对 `queued` 判定跳过
+  runOnce 等待空槽，排队卡幂等（FIFO 位置稳定）。最新主干探测是**真实执行**的：
+  在临时校验工作树里 `merge-base --is-ancestor` + `rebase --onto` + 执行 allowlist 过滤后的
+  `deliverable_cmd`（与 attest 同一安全策略），`continue` 在真实 rebase head 上创建持久
+  不可变 pin `refs/roll/rebase-candidates/<cycle>/<attempt>` 并记录
+  `rebased_attempt_planned`（carry 真实 candidateHead）；`roll loop status` 在事件流含
+  v1 事实时渲染 HANDOFF 节（字面状态、ready 持有者在队列上方、队列行带 seq/原因/下一步）。

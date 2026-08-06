@@ -150,6 +150,23 @@ export class EventBus {
     return line;
   }
 
+  /**
+   * US-CYCLE-013 — append one {@link RollEvent} with an explicit fsync before
+   * returning. Used ONLY for scheduler decision appends (admission, promotion,
+   * queueing): the durable append is the linearization point, so a crash must
+   * not lose it (all other event writes keep the plain atomic
+   * {@link appendEvent}). Fails loud when the injected store cannot fsync.
+   */
+  appendEventSynced(eventsPath: string, event: RollEvent): string {
+    const line = serializeEvent(event);
+    this.store.ensureFile(eventsPath);
+    if (this.store.appendLineSynced === undefined) {
+      throw new Error("EventBus.appendEventSynced: store does not support synced append");
+    }
+    this.store.appendLineSynced(eventsPath, line);
+    return line;
+  }
+
   /** Current size of the events file (0 when absent) — rotation awareness. */
   eventsSize(eventsPath: string): number {
     return this.store.size(eventsPath);

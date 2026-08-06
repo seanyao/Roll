@@ -2,6 +2,7 @@
  * @responsibility Handles terminal commands for the remote publish path.
  */
 import { lstatSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import {
   appendDelivery,
@@ -9,6 +10,7 @@ import {
   nodeDeliveryStore,
   planPublishDocPr,
   planPublishPr,
+  projectCycleHandoff,
   releaseStoryLease,
   projectManagedWorkspaceRun,
   type CycleCommand,
@@ -407,11 +409,69 @@ export async function executeTerminalCommand(
         /* tolerant cleanup, mirrors _worktree_cleanup */
       }
       const managed = ports.git.managedWorktreeInspect !== undefined && ports.git.managedWorktreeRelease !== undefined;
+      // US-CYCLE-013 — handoff-aware cleanup: for a cycle with a LIVE handoff
+      // identity, release is DEFERRED until the resumed tail's ordinary terminal
+      // cleanup — never release a handoff workspace merely because a new Builder
+      // starts. `cycle:cleanup_completed` is the ONLY fact that releases the
+      // workspace + story lease for the handoff path; it is appended only after
+      // the identity-checked release succeeds (a failure retains W + lease with
+      // a readable `cycle:serial_recovery` record).
+      let handoffCleanup: { attempt: number; fence: string } | undefined;
+      if (managed) {
+        const events = readLifecycleEvents(ports.paths.eventsPath);
+        const view = projectCycleHandoff(events, ctx.cycleId);
+        if (view?.identity !== undefined) {
+          const releasable = view.state === "terminal" || view.state === "publish_or_merge_wait";
+          if (!releasable) {
+            ports.events.appendAlert(
+              ports.paths.alertsPath,
+              `cycle ${ctx.cycleId}: handoff workspace release deferred — handoff still live (state ${view.state}); the resumed tail owns cleanup`,
+            );
+            return {};
+          }
+          handoffCleanup = { attempt: view.identity.attempt, fence: view.identity.fence };
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "cycle:cleanup_started",
+            eventId: randomUUID(),
+            idempotencyKey: `cleanup_started:${ctx.cycleId}:${view.identity.attempt}:${view.identity.fence}`,
+            cycleId: ctx.cycleId,
+            attempt: view.identity.attempt,
+            fence: view.identity.fence,
+            ts: eventTs(ports),
+          });
+        }
+      }
       if (managed) {
         const inspect = ports.git.managedWorktreeInspect;
         const release = ports.git.managedWorktreeRelease;
         if (inspect === undefined || release === undefined) return {};
         const events = readLifecycleEvents(ports.paths.eventsPath);
+        const appendCleanupCompleted = (releasedWorkspace: boolean): void => {
+          if (handoffCleanup === undefined) return;
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "cycle:cleanup_completed",
+            eventId: randomUUID(),
+            idempotencyKey: `cleanup_completed:${ctx.cycleId}:${handoffCleanup.attempt}:${handoffCleanup.fence}`,
+            cycleId: ctx.cycleId,
+            attempt: handoffCleanup.attempt,
+            fence: handoffCleanup.fence,
+            releasedWorkspace,
+            ts: eventTs(ports),
+          });
+        };
+        const recordCleanupRecovery = (reason: string): void => {
+          if (handoffCleanup === undefined) return;
+          ports.events.appendEvent(ports.paths.eventsPath, {
+            type: "cycle:serial_recovery",
+            eventId: randomUUID(),
+            idempotencyKey: `recovery:${ctx.cycleId}:${handoffCleanup.attempt}:${handoffCleanup.fence}:${reason}`,
+            cycleId: ctx.cycleId,
+            attempt: handoffCleanup.attempt,
+            fence: handoffCleanup.fence,
+            reason,
+            ts: eventTs(ports),
+          });
+        };
         const allocation = [...events].reverse().find((event): event is Extract<typeof event, { type: "worktree:allocated" }> => event.type === "worktree:allocated" && event.workspace.runId === ctx.cycleId);
         const primary = allocation?.workspace.members[0];
         if (allocation === undefined || primary === undefined) {
@@ -436,6 +496,7 @@ export async function executeTerminalCommand(
             && fresh.repositoryId === member.repositoryId);
           if (!ready || delivery !== "merged" || attest !== "accepted") {
             ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("preconditions")));
+            recordCleanupRecovery("cleanup_failed");
             return {};
           }
           const expectedHeads = inspections.map(({ member, inspection: fresh }) => ({
@@ -451,11 +512,13 @@ export async function executeTerminalCommand(
           fresh === undefined ? ports.git.managedWorktreeAbsent?.(repoCwd, path) ?? false : false));
         if (inspections.some(({ inspection: fresh }, index) => fresh === undefined && !absence[index])) {
           ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("inspection_unknown")));
+          recordCleanupRecovery("cleanup_failed");
           return {};
         }
         const present = inspections.filter(({ inspection: fresh }) => fresh !== undefined) as Array<typeof inspections[number] & { inspection: NonNullable<typeof inspections[number]["inspection"]> }>;
         if (present.length === 0) {
           ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:released", runId: ctx.cycleId, operationId, expectedHeads, ts: eventTs(ports) });
+          appendCleanupCompleted(true);
           if (ctx.storyId !== undefined && ctx.storyId !== "") releaseStoryLease(join(dirname(ports.paths.eventsPath), "leases"), ctx.storyId, { source: "cycle", pid: process.pid, runId: ctx.cycleId });
           return {};
         }
@@ -475,12 +538,14 @@ export async function executeTerminalCommand(
         });
         if (verdict.verdict !== "safe_to_release") {
           ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseVerdict(verdict.verdict)));
+          recordCleanupRecovery("cleanup_failed");
           return {};
         }
         for (const { member, repoCwd, path } of [...present].reverse()) {
           const expectedHead = expectedHeads.find((expected) => expected.relativeLocator === member.relativeLocator)?.head;
           if (expectedHead === undefined) {
             ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("expected_head_incomplete")));
+            recordCleanupRecovery("cleanup_failed");
             return {};
           }
           const released = await release(repoCwd, path, expectedHead, member.repositoryId, {
@@ -488,14 +553,17 @@ export async function executeTerminalCommand(
           });
           if (released.code !== 0) {
             ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("effect_refused")));
+            recordCleanupRecovery("cleanup_failed");
             return {};
           }
         }
         try {
           ports.events.appendEvent(ports.paths.eventsPath, { type: "worktree:released", runId: ctx.cycleId, operationId, expectedHeads, ts: eventTs(ports) });
+          appendCleanupCompleted(true);
           if (ctx.storyId !== undefined && ctx.storyId !== "") releaseStoryLease(join(dirname(ports.paths.eventsPath), "leases"), ctx.storyId, { source: "cycle", pid: process.pid, runId: ctx.cycleId });
         } catch {
           ports.events.appendAlert(ports.paths.alertsPath, releaseRecovery(ctx.cycleId, releaseReason("event_missing")));
+          recordCleanupRecovery("cleanup_failed");
         }
       } else {
         await ports.git.worktreeRemove(ports.repoCwd, ports.paths.worktreePath, cmd.branch, cmd.bundleUnpushed);
