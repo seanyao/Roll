@@ -11,6 +11,7 @@
  */
 import {
   BacklogStore,
+  splitBacklogRow,
   type UnstickEvent,
   applyStuckReverts,
   lintIdeaDescription,
@@ -168,7 +169,7 @@ export function lintBacklogContent(content: string): LintFinding[] {
     const line = (lines[i] ?? "").replace(/\r$/, "");
     if (!line.startsWith("|")) continue;
     if (/Story.*Description.*Status/.test(line) || line.includes("---")) continue;
-    const fields = line.split("|");
+    const fields = splitBacklogRow(line);
     const desc = (fields[2] ?? "").trim();
     if (desc === "") continue;
     const issues = lintRowIssues(desc);

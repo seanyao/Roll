@@ -180,6 +180,16 @@ describe("backlog lint — US-PORT-019", () => {
     expect(r.out).toContain("No violations");
   });
 
+  it("FIX-1522: a desc with `\\|` is linted as the full string, not truncated at the escaped pipe", () => {
+    const content = HEADER + "| [FIX-1522](x) | edit config.yaml \\| then retry | 📋 Todo |\n";
+    const findings = lintBacklogContent(content);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.sid).toBe("FIX-1522");
+    // Naive split would truncate the desc at `\|` (fields[2] = "edit config.yaml \");
+    // the shared helper keeps the whole cell.
+    expect(findings[0]?.desc).toBe("edit config.yaml \\| then retry");
+  });
+
   it("--gate flips a violation to exit 1", () => {
     seedBacklog("| [US-002](x) | uses `code` in the description | 📋 Todo |\n");
     const warn = capture(() => backlogLintCommand([]));

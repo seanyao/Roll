@@ -27,6 +27,7 @@ import {
   acForStory,
   BrowserOperationLedger,
   parseBacklog,
+  splitBacklogRow,
   CaptureBridge,
   CapturePlanner,
   captureReceiptEvidenceRef,
@@ -1197,7 +1198,7 @@ export function readBacklogRow(projectPath: string, storyId: string): { descript
   }
   for (const line of text.split("\n")) {
     if (!line.startsWith("|")) continue;
-    const cells = line.split("|").map((c) => c.trim());
+    const cells = splitBacklogRow(line).map((c) => c.trim());
     // FIX-1475: select the row by an EXACT id-cell match (link-stripped) — never
     // a substring. A prior `cells.findIndex(c => c.includes(storyId))` fallback
     // picked `US-DEMO-001-legacy` when asked for `US-DEMO-001` (worse when the

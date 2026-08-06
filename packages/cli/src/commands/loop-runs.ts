@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
 import { type Lang, resolveLang, t, v2Catalog } from "@roll/spec";
+import { splitBacklogRow } from "@roll/core";
 import { collectProjectsRegistry } from "../lib/projects-registry.js";
 import { projectSlug, sharedRoot } from "./dashboard.js";
 
@@ -123,7 +124,7 @@ function hhmm(ts: string): string {
 function backlogDesc(backlogText: string, id: string): string {
   if (!backlogText) return "";
   for (const line of backlogText.split("\n")) {
-    const cols = line.split("|");
+    const cols = splitBacklogRow(line);
     if (cols.length < 3) continue;
     const c2 = (cols[1] ?? "").trim();
     if (c2 === id || c2.startsWith(`[${id}]`)) {

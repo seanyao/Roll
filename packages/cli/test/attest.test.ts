@@ -898,6 +898,18 @@ describe("US-ATTEST-013 — self-contained card context wiring", () => {
     expect(row.status).toBe("🔨 In Progress");
   });
 
+  it("FIX-1522: readBacklogRow keeps `\\|` in the description and reads the real status cell", () => {
+    const proj = project();
+    writeFileSync(
+      join(proj, ".roll", "backlog.md"),
+      ["| Story | Description | Status |", "|--|--|--|", "| FIX-300 | fix the `a \\| b` edge | 📋 Todo |", ""].join("\n"),
+    );
+    const row = readBacklogRow(proj, "FIX-300");
+    // The escaped pipe stays in the description; status is NOT the text after it.
+    expect(row.description).toBe("fix the `a \\| b` edge");
+    expect(row.status).toBe("📋 Todo");
+  });
+
   it("buildCardContext assembles one-liner / epic / summary / status / cycle id", () => {
     const proj = project();
     writeFileSync(

@@ -20,6 +20,7 @@ import {
   CONSISTENCY_DIMENSION_LABELS,
   ensureDeliveriesFresh,
   queryStoryDelivery,
+  splitBacklogRow,
   type ConsistencyDimension,
   type ExecPort,
   type FreshnessPort,
@@ -269,7 +270,7 @@ function backlogRowFacts(backlogText: string): Map<string, { done: boolean; merg
     if (row === null) continue;
     const id = row[1] ?? "";
     if (id === "") continue;
-    const cells = line.split("|").map((cell) => cell.trim());
+    const cells = splitBacklogRow(line).map((cell) => cell.trim());
     const status = cells.at(-2) ?? line;
     facts.set(id, { done: line.includes(STATUS_MARKER.done), mergeRef: /#\d+|pull\/\d+|\bmerged\s+[0-9a-f]{7,40}\b/i.test(line), status });
   }
@@ -698,7 +699,7 @@ function checkCards(projectDir: string): DimResult {
         } else if (epoch.historicalDoneIds.has(id)) {
           historicalExceptionCards.push(id);
         } else {
-          const status = line.split("|").map((cell) => cell.trim()).at(-2) ?? line;
+          const status = splitBacklogRow(line).map((cell) => cell.trim()).at(-2) ?? line;
           const manualReason = /\bmanual:\s*(\S(?:.*\S)?)/i.exec(status)?.[1]?.trim();
           if (manualReason === undefined || manualReason === "") {
             gaps.push(

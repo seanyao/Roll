@@ -4,6 +4,7 @@
  * subcommands (lint/unstick/sync/block/defer/unblock/promote) stay on bash.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { splitBacklogRow } from "@roll/core";
 import { classifyStatus, resolveLang, t, v2Catalog } from "@roll/spec";
 import { c, pad, renderState, RESET_RAW, row, trunc } from "../render.js";
 
@@ -32,7 +33,7 @@ function parseBacklog(path: string): Item[] {
   for (const raw of readFileSync(path, "utf8").split("\n")) {
     const line = raw.replace(/\n$/, "");
     if (!line.startsWith("|")) continue;
-    const parts = line.split("|").map((p) => p.trim());
+    const parts = splitBacklogRow(line).map((p) => p.trim());
     if (parts.length < 4) continue;
     const idCell = parts[1] ?? "";
     const descCell = parts[2] ?? "";

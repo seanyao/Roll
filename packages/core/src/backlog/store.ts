@@ -87,6 +87,42 @@ function sha256(text: string): string {
 }
 
 /**
+ * Split a markdown table row on UNESCAPED pipes only.
+ *
+ * A pipe preceded by an ODD number of backslashes is an ESCAPED pipe — it stays
+ * inside the current cell (backslash + pipe preserved literally). A pipe
+ * preceded by an EVEN number of backslashes (including zero) is a column
+ * separator. `\|` therefore survives the split and a subsequent
+ * `parts.join("|")` round-trips the row byte-identically (escaped pipes are
+ * never converted in output).
+ *
+ * The caller is responsible for any CR stripping (all existing callers already
+ * strip a trailing `\r` before splitting and re-append it after joining).
+ */
+export function splitBacklogRow(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "|") {
+      // Count consecutive backslashes immediately before this pipe.
+      let bs = 0;
+      for (let j = i - 1; j >= 0 && line[j] === "\\"; j--) bs++;
+      if (bs % 2 === 1) {
+        cell += ch; // escaped pipe — stays inside the cell (backslashes already in cell)
+        continue;
+      }
+      cells.push(cell);
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell);
+  return cells;
+}
+
+/**
  * ID-token-anchored match (FIX-106 safe). Case-insensitive, like the oracle,
  * but anchored so a pattern only matches a whole id or an id whose remainder
  * starts at a `-` boundary.
@@ -108,7 +144,7 @@ export function parseBacklog(content: string): BacklogItem[] {
   for (const raw of content.split("\n")) {
     const line = raw.replace(/\r$/, "");
     if (!line.startsWith("|")) continue;
-    const parts = line.split("|");
+    const parts = splitBacklogRow(line);
     // bash gate: at least 4 '|' chars → parts.length >= 5.
     if (parts.length < 5) continue;
     const id = stripLink((parts[1] ?? "").trim());
@@ -150,7 +186,7 @@ export function appendBacklogRow(
   // append (create / self-downgrade).
   const alreadyPresent = content.split("\n").some((l) => {
     if (!l.startsWith("|")) return false;
-    const cell = (l.split("|")[1] ?? "").trim();
+    const cell = (splitBacklogRow(l)[1] ?? "").trim();
     const id = cell.replace(/^\[([^\]]+)\]\([^)]*\)$/, "$1").trim();
     return id === row.id;
   });
@@ -215,7 +251,7 @@ function markStatusWith(
     const hasCr = raw.endsWith("\r");
     const line = hasCr ? raw.slice(0, -1) : raw;
     if (!line.startsWith("|")) return raw;
-    const parts = line.split("|");
+    const parts = splitBacklogRow(line);
     if (parts.length < 5) return raw;
     const id = stripLink((parts[1] ?? "").trim());
     if (!matches(id)) return raw;
