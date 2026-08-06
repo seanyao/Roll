@@ -242,7 +242,8 @@ export async function verifyRebaseTemp(
       return { verdict: "conflict", evidenceRefs: [] };
     }
     // 4. Rebase base..head onto the new main tip — never auto-resolve.
-    const rebase = await git(["rebase", "--onto", onto, base, head], worktreePath).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    // The temporary rebase creates commits; do not depend on a host git identity.
+    const rebase = await git(["-c", "user.name=roll", "-c", "user.email=roll@local", "rebase", "--onto", onto, base, head], worktreePath).catch(() => ({ code: 1, stdout: "", stderr: "" }));
     if (rebase.code !== 0) {
       return { verdict: "conflict", evidenceRefs: [] };
     }
