@@ -173,6 +173,8 @@ export interface ManagedWorkspaceMeasures {
 
 function isAnomalousManagedMember(record: WorktreeAuditRecord): boolean {
   if (record.disposition === "orphan_reclaimable" || record.disposition === "preserved_orphan") return true;
+  // FIX-1521: released + missing is the completed teardown state, not a leak.
+  if (record.runState === "released") return record.registration !== "missing";
   if (record.registration === "missing" || record.registration === "unknown" || record.registration === "foreign") return true;
   // Pre-cutover path-classified records have no projection run state. They stay
   // readable, but cannot be mistaken for a healthy managed reservation.

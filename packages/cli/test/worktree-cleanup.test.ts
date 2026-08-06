@@ -33,6 +33,7 @@ import {
   isFullGitOid,
   isReclaimableOrphan,
   isSafelyDisposable,
+  managedWorkspaceMeasures,
   parseMergedPrMergeCommit,
   planWorktreeCleanup,
   resolveStandaloneMergedBranches,
@@ -213,6 +214,75 @@ describe("US-LOOP-123 leak safety and capacity", () => {
     expect(report.alert).toContain("Managed capacity**: 2 retained member(s)");
     expect(report.alert).toContain("delta-handoff");
     expect(report.alert.toLowerCase()).toContain("healthy handoff");
+  });
+
+  it("does not classify a released run's torn-down member as a leak", () => {
+    const measures = managedWorkspaceMeasures(auditOf([
+      rec({
+        runState: "released",
+        registration: "missing",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+      }),
+    ]));
+
+    expect(measures.leakSafetyTotal).toBe(0);
+    expect(measures.anomalousWorktrees).toEqual([]);
+    expect(measures.healthyWorktrees).toHaveLength(1);
+    expect(measures.managedCapacity).toBe(1);
+  });
+
+  it("still classifies a released-but-still-registered member as a leak", () => {
+    const measures = managedWorkspaceMeasures(auditOf([
+      rec({
+        runState: "released",
+        registration: "registered",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+      }),
+    ]));
+
+    expect(measures.leakSafetyTotal).toBe(1);
+    expect(measures.anomalousWorktrees).toHaveLength(1);
+  });
+
+  it("still counts released unknown/foreign and non-released missing members", () => {
+    for (const registration of ["unknown", "foreign"] as const) {
+      const released = managedWorkspaceMeasures(auditOf([
+        rec({ runState: "released", registration }),
+      ]));
+      expect(released.leakSafetyTotal).toBe(1);
+      expect(released.anomalousWorktrees).toHaveLength(1);
+    }
+
+    const activeMissing = managedWorkspaceMeasures(auditOf([
+      rec({ runState: "active", registration: "missing" }),
+    ]));
+    expect(activeMissing.leakSafetyTotal).toBe(1);
+    expect(activeMissing.anomalousWorktrees).toHaveLength(1);
+  });
+
+  it("keeps a healthy release-requested member healthy", () => {
+    const measures = managedWorkspaceMeasures(auditOf([
+      rec({ runState: "release_requested", registration: "registered" }),
+    ]));
+
+    expect(measures.leakSafetyTotal).toBe(0);
+    expect(measures.anomalousWorktrees).toEqual([]);
+  });
+
+  it("plans a released, torn-down member as non-anomalous capacity", () => {
+    const plan = planWorktreeCleanup(auditOf([
+      rec({
+        runState: "released",
+        registration: "missing",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+      }),
+    ]), 1);
+
+    expect(plan.leakSafetyTotal).toBe(0);
+    expect(plan.managedCapacity).toBe(1);
   });
 });
 

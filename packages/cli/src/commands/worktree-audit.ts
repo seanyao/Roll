@@ -1017,7 +1017,7 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     records,
     ephemeralBranches,
     summary,
-    ...(inspectionUnavailable || (projectionEnabled && records.some((record) => record.registration === "missing" || record.registration === "unknown"))
+    ...(inspectionUnavailable || (projectionEnabled && records.some((record) => record.registration === "unknown" || (record.registration === "missing" && record.runState !== "released")))
       ? { inspectionUnavailable: true }
       : {}),
   };

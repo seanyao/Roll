@@ -1492,6 +1492,59 @@ describe("US-LOOP-123 unavailable inspection", () => {
   });
 });
 
+describe("FIX-1521 released worktree registration", () => {
+  const workspace = {
+    schema: 1,
+    runId: "delta-fix1521",
+    storyId: "FIX-1521",
+    kind: "host_delta",
+    topology: "delta-team",
+    delegationId: "fix1521",
+    members: [{
+      repositoryId: "origin:repo",
+      workspaceKey: "delta-fix1521",
+      relativeLocator: "delta-fix1521",
+      checkoutRef: { kind: "detached", head: "head-1" },
+    }],
+  } as const;
+
+  function depsFor(events: readonly object[]): WorktreeAuditDeps {
+    return makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson")
+        ? events.map((event) => JSON.stringify(event)).join("\n")
+        : null,
+      git: (args) => args[0] === "worktree" ? porcelain([]) : "",
+    });
+  }
+
+  it("does not flag a fully released, deregistered member as inspection unavailable", () => {
+    const events = [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "worktree:release_requested", runId: "delta-fix1521", reason: "delivered", operationId: "rel-1", expectedHeads: [{ relativeLocator: "delta-fix1521", head: "head-1" }], ts: 2 },
+      { type: "worktree:released", runId: "delta-fix1521", operationId: "rel-1", expectedHeads: [{ relativeLocator: "delta-fix1521", head: "head-1" }], ts: 3 },
+    ];
+    const out = auditWorktrees(depsFor(events));
+    const released = out.records.find((record) => record.runId === "delta-fix1521");
+
+    expect(released?.runState).toBe("released");
+    expect(released?.registration).toBe("missing");
+    expect(out.inspectionUnavailable).toBeUndefined();
+  });
+
+  it("still flags a missing member whose run is not released", () => {
+    const events = [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "worktree:release_requested", runId: "delta-fix1521", reason: "delivered", operationId: "rel-1", expectedHeads: [{ relativeLocator: "delta-fix1521", head: "head-1" }], ts: 2 },
+    ];
+    const out = auditWorktrees(depsFor(events));
+    const pending = out.records.find((record) => record.runId === "delta-fix1521");
+
+    expect(pending?.runState).toBe("release_requested");
+    expect(pending?.registration).toBe("missing");
+    expect(out.inspectionUnavailable).toBe(true);
+  });
+});
+
 describe("US-LOOP-123 CLI audit snapshots", () => {
   function capture(locale: "en" | "zh", fn: () => number): string {
     const originalWrite = process.stdout.write;
