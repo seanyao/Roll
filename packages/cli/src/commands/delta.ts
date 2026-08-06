@@ -32,12 +32,19 @@ import {
 import { loadLocalPresets } from "../lib/delta-artifacts.js";
 import { managedWorkspaceOperationId } from "../lib/managed-workspace-operation.js";
 import { renderDeltaBanner, renderDeltaPhaseBanner, type DeltaBannerCopy } from "../lib/delta-banner.js";
-import { EventBus, attemptCauseFromBlockReason, projectDelegationStatus, projectDeltaMetrics, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type DeltaDeliveryFact, type DeltaMetrics, type ObservedBuilderHead } from "@roll/core";
+import { EventBus, attemptCauseFromBlockReason, projectDelegationStatus, projectDeltaMetrics, readLeases, validateDeltaManifest, promoteHostDelegationLease, transferDeliveryReservation, observeBuilderSubmission, validateBuilderSubmission, builderSubmissionSnapshotsMatch, deriveRigCandidates, type BuilderObservationResult, type BuilderSubmissionContext, type BuilderSubmissionObserver, type BuilderSubmissionSnapshot, type DeltaDeliveryFact, type DeltaMetrics, type ObservedBuilderHead } from "@roll/core";
 import { parseEventLine, type DelegationResolution, type DeltaArtifactManifest, type DeltaAttemptOutcomeEvent, type DeltaRoleAvailabilityObservedEvent, type ManagedWorkspaceSet, type RollEvent } from "@roll/spec";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
 import { join, resolve, sep, relative } from "node:path";
+import { configLang } from "./lang.js";
+import { loadRigAdapterMappings } from "../lib/rig-adapters.js";
+import { loadRigReadinessLimits } from "../lib/rig-readiness-settings.js";
+import { nodeRigStorageIo, publishRigReadinessSnapshot, readRigReadinessCache, writeRigReadinessSnapshot } from "../lib/rig-readiness-storage.js";
+import { createRigProbeAdapters, nodeRigProbeDependencies, runRigReadinessProbesWithTimeout } from "../lib/delta-rig-probe.js";
+import { renderRigReadiness } from "../lib/delta-rig-readiness.js";
 
 // ── Locale resolution ────────────────────────────────────────────────────────
 
@@ -49,8 +56,22 @@ function lang() {
   });
 }
 
+/** US-DELTA-018 adds the persisted `roll config lang` rung to this new surface. */
+function rigsLang() {
+  return resolveLang({
+    rollLang: process.env["ROLL_LANG"],
+    configLang: configLang(),
+    lcAll: process.env["LC_ALL"],
+    lang: process.env["LANG"],
+  });
+}
+
 function T(key: string, ...args: Array<string | number>): string {
   return t(v3Catalog, lang(), key, ...args);
+}
+
+function rigsT(key: string, ...args: Array<string | number>): string {
+  return t(v3Catalog, rigsLang(), key, ...args);
 }
 
 function deltaBannerCopy(): DeltaBannerCopy {
@@ -296,11 +317,11 @@ export async function deltaCommand(args: string[]): Promise<number> {
       ? "\n  roll delta recover-held --delegation <旧委派-id> --continuation-run <继任名称> --confirm <旧委派-id> [--json]\n    仅在明确确认后恢复历史 owner_hold 暂缓记录中被错误改名给该继任者的预留。\n"
       : "\n  roll delta recover-held --delegation <old-id> --continuation-run <name> --confirm <old-id> [--json]\n    Explicitly recover only a legacy owner_hold reservation incorrectly named to this successor.\n";
     const usage = T("delta.help.usage")
-      .replace("prepare|validate|conclude|status|help", "prepare|validate|conclude|recover-held|status|help")
+      .replace("prepare|validate|conclude|status|help", "prepare|validate|conclude|recover-held|rigs|status|help")
       .replace("\n  roll delta status", `${recoveryHelp}\n  roll delta status`)
       .replace(
       "\n  roll delta conclude",
-      `${T("delta.help.preflight")}${T("delta.help.metrics")}  roll delta conclude`,
+      `${T("delta.help.preflight")}${T("delta.help.metrics")}${T("delta.rigs.help")}  roll delta conclude`,
       );
     process.stdout.write(usage + T("delta.help.builder_receipt"));
     return 0;
@@ -308,6 +329,8 @@ export async function deltaCommand(args: string[]): Promise<number> {
 
   // Route to subcommand
   switch (sub) {
+    case "rigs":
+      return await rigsCommand(args.slice(1));
     case "prepare":
       return await prepareCommand(args.slice(1));
     case "preflight":
@@ -325,6 +348,69 @@ export async function deltaCommand(args: string[]): Promise<number> {
     default:
       process.stderr.write(`${T("delta.error.unknown_subcommand", sub)}\n`);
       return 1;
+  }
+}
+
+// ── US-DELTA-018 — machine-local exact-model rig readiness ─────────────────
+
+function rollHome(): string {
+  return process.env["ROLL_HOME"] ?? join(homedir(), ".roll");
+}
+
+function deriveConfiguredRigCandidates(root: string) {
+  const sources = loadLocalPresets(root).flatMap((preset) =>
+    (Object.entries(preset.roles) as Array<[string, { readonly preferredModelIds: readonly string[] }]>).flatMap(([role, preference]) =>
+      preference.preferredModelIds.map((configuredModelId) => ({ presetId: preset.id, role, configuredModelId })),
+    ),
+  );
+  return deriveRigCandidates(sources, loadRigAdapterMappings(root));
+}
+
+/** Strictly parse the intentionally small human-only `roll delta rigs` surface. */
+async function rigsCommand(args: string[]): Promise<number> {
+  const { positional, flags } = parseArgs(args);
+  const duplicate = detectDuplicateFlags(args, new Set(["refresh"]));
+  if (duplicate !== null) {
+    process.stderr.write(`${rigsT("delta.error.duplicate_flag", `--${duplicate}`)}\n`);
+    return 1;
+  }
+  if (positional.length > 0) {
+    process.stderr.write(`${rigsT("delta.error.unexpected_positional", positional[0]!)}\n`);
+    return 1;
+  }
+  for (const flag of Object.keys(flags)) {
+    if (flag !== "refresh") {
+      process.stderr.write(`${rigsT("delta.error.unknown_flag", `--${flag}`)}\n`);
+      return 1;
+    }
+  }
+  if (flags["refresh"] !== undefined && flags["refresh"] !== true) {
+    process.stderr.write(`${rigsT("delta.error.invalid_value", String(flags["refresh"]), "--refresh", "no value")}\n`);
+    return 1;
+  }
+
+  try {
+    const root = rollHome();
+    const limits = loadRigReadinessLimits(root);
+    const candidates = deriveConfiguredRigCandidates(root);
+    const storage = { io: nodeRigStorageIo, root, now: () => Date.now(), newRefreshId: () => randomUUID() };
+    if (flags["refresh"] === true) {
+      const observations = await runRigReadinessProbesWithTimeout(
+        candidates,
+        limits.maxConcurrency,
+        limits.probeTimeoutMs,
+        createRigProbeAdapters(nodeRigProbeDependencies()),
+      );
+      const snapshot = writeRigReadinessSnapshot(storage, candidates, observations);
+      publishRigReadinessSnapshot(storage, candidates, snapshot.refreshId);
+    }
+    const cache = readRigReadinessCache(storage, candidates, limits.freshnessTtlMs);
+    process.stdout.write(renderRigReadiness({ candidates, snapshot: cache.snapshot, cache: cache.status, lang: rigsLang() }));
+    return 0;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${rigsT("delta.rigs.error", detail)}\n`);
+    return 1;
   }
 }
 

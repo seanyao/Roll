@@ -63,6 +63,22 @@ describe("US-DELTA-017 — machine-local rig readiness storage", () => {
     expect(readFileSync(join(rigReadinessDirectory(deps.root), "latest.json"), "utf8")).toBe(JSON.stringify(first) + "\n");
   });
 
+  it("restores the exact previous pointer bytes when publication fails after its rename", () => {
+    const { candidates, observations, deps } = setup();
+    const first = writeRigReadinessSnapshot(deps, candidates, observations);
+    publishRigReadinessSnapshot(deps, candidates, first.refreshId);
+    const latestPath = join(rigReadinessDirectory(deps.root), "latest.json");
+    const priorBytes = readFileSync(latestPath, "utf8");
+    const secondDeps = { ...deps, newRefreshId: () => "refresh-2" };
+    const second = writeRigReadinessSnapshot(secondDeps, candidates, observations);
+    const failingPublication = {
+      ...secondDeps,
+      io: { ...nodeRigStorageIo, fsyncDir: () => { throw new Error("fsync after rename failed"); } },
+    };
+    expect(() => publishRigReadinessSnapshot(failingPublication, candidates, second.refreshId)).toThrow("fsync after rename failed");
+    expect(readFileSync(latestPath, "utf8")).toBe(priorBytes);
+  });
+
   it("classifies a malformed pointer or target as incompatible without scanning directory order", () => {
     const { candidates, observations, deps } = setup();
     const snapshot = writeRigReadinessSnapshot(deps, candidates, observations);

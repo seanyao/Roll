@@ -182,6 +182,27 @@ Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要
 唯一的 worktree 写者；Designer、Evaluator、Peer 除自己的 artifact 目录外均只读。Peer
 只是 Evaluator 的可选咨询输入，绝不替代 Evaluator。
 
+### 本机指定模型就绪状态
+
+`roll delta rigs` 是面向人的、本机诊断命令，用于查看本机 Delta preset 中引用的指定模型。
+不带标志时，它只渲染由指针选中的缓存观测：不会启动进程、联系服务、写配置或快照、追加项目
+事件，也不会修改工作区、租约、派工、角色解析或交付事实。
+
+只有在 owner 需要新的有界本机观测时，才运行 `roll delta rigs --refresh`。它派生相同的已配置
+候选，探测每个精确的 `{adapter, cliModelId}`，并且只在每个候选都有观测后发布完整快照。例如，
+Codex 映射使用精确选择器 `codex exec --model <cliModelId> ...`，绝不使用默认模型。找不到
+可执行文件会显示为**不可用**并提示安装；没有已验证安全的指定模型非交互方式的适配器也会显示为
+**不可用**，且不会执行。
+
+视图把结果分为**通过**、**不可用**和**待确认**。兼容但过期的快照是待确认/过期；指纹不匹配
+是待确认/不兼容；超时、固定令牌输出未验证或未分类失败也都是待确认。修复界面显示的问题后再刷新。
+当前的通过观测绝不证明后续长任务、交付、宿主会话新鲜度或最终角色分配；正常解析仍会应用 pin、
+排除规则、标签、成本上限和角色多样性。
+
+一次调用只使用一种语言：`ROLL_LANG` 是单进程覆盖，其后是持久化的 `roll config lang` 偏好，
+再后是 `LC_ALL`、`LANG` 和英文。中文操作者可用
+`ROLL_LANG=zh roll delta rigs --refresh` 获得完整的简体中文本机诊断。
+
 Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builder 校验前，运行
 `roll delta preflight --delegation <id> --stage builder --json` 做只读自检：它使用与正式校验
 相同的结构检查（prepared 上下文、受管工作区身份与分离 HEAD、manifest 与产物校验和、

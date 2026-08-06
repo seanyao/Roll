@@ -132,6 +132,32 @@ delegation id as confirmation, records that recovery without rewriting history,
 and still requires that exact named successor to run the ordinary continuation
 pickup. It is not a general release or takeover command.
 
+#### Local exact-model rig readiness
+
+Before asking a host to resolve a Delta role, inspect its machine-local
+diagnostic with `roll delta rigs`. This ordinary read only renders the most
+recent complete local observation: it does not start a model, write a snapshot,
+or change a workspace, lease, dispatch, resolution, or event. Use
+`roll delta rigs --refresh` only when you want bounded probes of every exact
+configured `{adapter, cliModelId}` and publication of one complete new local
+snapshot.
+
+For example, a configured Codex candidate is probed with its exact local model
+mapping (equivalent to `codex exec --model <cliModelId> ...`), not Codex's
+default model. A missing executable is shown as **blocked** with an installation
+action; an adapter without a verified safe exact-model noninteractive selector
+is also **blocked** and is not executed. **Unknown** includes stale or
+incompatible cache, timeout, unverified token output, and unclassified failure;
+refresh after fixing the actionable condition.
+
+Output follows one language per process: `ROLL_LANG` is the one-process
+override, then `roll config lang` is the persisted preference, then `LC_ALL`,
+`LANG`, and English. A `ready` observation means only that this exact model
+returned the fixed minimal token at that observation time. It never proves a
+future long task, delivery, host-session freshness, or final role assignment;
+pins, exclusions, tags, cost caps, and role diversity still make the real
+allocation decision.
+
 Honest boundaries the protocol states and never overclaims:
 
 - **Terminal binding is Option C, handoff-only.** A valid Evaluator report reaches

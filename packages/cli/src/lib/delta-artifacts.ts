@@ -21,8 +21,8 @@ import type { MachineDeltaPreset, RoleModelPreference } from "@roll/spec";
  * @returns Array of parsed MachineDeltaPreset objects.
  * @throws  If the file cannot be parsed or is structurally invalid.
  */
-export function loadLocalPresets(): MachineDeltaPreset[] {
-  const path = presetPath();
+export function loadLocalPresets(root?: string): MachineDeltaPreset[] {
+  const path = presetPath(root);
   if (!existsSync(path)) return [];
   return parsePresetsFile(readFileSync(path, "utf8"), path);
 }
@@ -31,8 +31,8 @@ export function loadLocalPresets(): MachineDeltaPreset[] {
  * The canonical machine-local preset file path.
  * `ROLL_HOME` env var overrides `~/.roll`.
  */
-export function presetPath(): string {
-  const rollHome = process.env["ROLL_HOME"] ?? join(homedir(), ".roll");
+export function presetPath(root?: string): string {
+  const rollHome = root ?? process.env["ROLL_HOME"] ?? join(homedir(), ".roll");
   return join(rollHome, "delta-team", "presets.yaml");
 }
 

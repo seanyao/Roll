@@ -200,6 +200,35 @@ raw chat. The Builder is the sole worktree writer; Designer, Evaluator, and Peer
 are read-only except for their own artifact directory. Peer is optional advisory
 input to the Evaluator, never a substitute for it.
 
+### Local exact-model rig readiness
+
+`roll delta rigs` is a human-facing, machine-local diagnostic for the exact
+models referenced by local Delta presets. With no flag it only renders the
+pointer-selected cached observation. It does not spawn a process, contact a
+service, write configuration or a snapshot, append a project event, or change a
+workspace, lease, dispatch, role resolution, or delivery fact.
+
+Run `roll delta rigs --refresh` only when the owner wants a new bounded local
+observation. It derives the same configured candidates, probes each exact
+`{adapter, cliModelId}`, and publishes a snapshot only after every candidate has
+an observation. For example, a Codex mapping uses the exact selector
+`codex exec --model <cliModelId> ...`, never the default model. A missing
+executable is **blocked** with an installation action. An adapter without a
+verified safe exact-model noninteractive surface is **blocked** and is not run.
+
+The view groups results as **ready**, **blocked**, or **unknown**. A compatible
+old snapshot is unknown/stale; a fingerprint mismatch is unknown/incompatible;
+a timeout, malformed fixed-token output, or unclassified failure is unknown.
+Fix the shown condition and refresh. Do not treat a current ready observation as
+proof of a later long-running invocation, delivery, host-session freshness, or
+final role assignment. The normal resolution still applies pins, exclusions,
+tags, cost caps, and role diversity.
+
+One invocation is one language: `ROLL_LANG` is a one-process override, then
+the persisted `roll config lang` preference, then `LC_ALL`, `LANG`, and English.
+For a Chinese operator, `ROLL_LANG=zh roll delta rigs --refresh` gives the same
+local diagnostic entirely in Simplified Chinese.
+
 After its final green TCR commit and before its one formal Builder validation,
 the Builder runs
 `roll delta preflight --delegation <id> --stage builder --json` as a read-only

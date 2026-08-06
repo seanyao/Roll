@@ -131,17 +131,45 @@ export function publishRigReadinessSnapshot(
     candidateFingerprint: snapshot.candidateFingerprint,
     publishedAt: new Date(deps.now()).toISOString(),
   };
+  const latestPath = join(dir, "latest.json");
+  // Keep exact prior bytes so a post-rename failure can conservatively restore
+  // the old publication rather than exposing a pointer we could not verify.
+  const priorPointer = deps.io.readUtf8(latestPath);
   const temp = join(dir, `.tmp-latest-${randomUUID()}`);
   try {
     deps.io.writeTempThenFsync(temp, JSON.stringify(pointer) + "\n");
-    deps.io.rename(temp, join(dir, "latest.json"), true);
+    deps.io.rename(temp, latestPath, true);
     deps.io.fsyncDir(dir);
+    const reread = parsePointer(deps.io.readUtf8(latestPath));
+    if (
+      reread === null || reread.refreshId !== pointer.refreshId ||
+      reread.candidateFingerprint !== pointer.candidateFingerprint ||
+      reread.publishedAt !== pointer.publishedAt
+    ) throw new Error(`cannot verify readiness pointer publication ${refreshId}`);
   } catch (error) {
     try { deps.io.rmFile(temp); } catch { /* preserve the original I/O failure */ }
+    try { restorePriorPointer(deps, dir, latestPath, priorPointer); } catch { /* preserve original error; caller remains fail-loud */ }
     throw error;
   }
   retainReadinessSnapshots(deps, refreshId);
   return pointer;
+}
+
+/** Best-effort rollback after a publication failure; exact bytes avoid reformatting prior truth. */
+function restorePriorPointer(deps: RigStorageDeps, dir: string, latestPath: string, priorPointer: string | null): void {
+  if (priorPointer === null) {
+    deps.io.rmFile(latestPath);
+    deps.io.fsyncDir(dir);
+    return;
+  }
+  const restoreTemp = join(dir, `.tmp-latest-restore-${randomUUID()}`);
+  try {
+    deps.io.writeTempThenFsync(restoreTemp, priorPointer);
+    deps.io.rename(restoreTemp, latestPath, true);
+    deps.io.fsyncDir(dir);
+  } finally {
+    try { deps.io.rmFile(restoreTemp); } catch { /* best effort */ }
+  }
 }
 
 /** Readers trust only latest.json; no directory-order fallback is available. */

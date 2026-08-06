@@ -7,7 +7,7 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
     "zh": undefined,
   },
   "help": {
-    "en": "Usage: roll delta <prepare|validate|conclude|recover-held|status|help>
+    "en": "Usage: roll delta <prepare|validate|conclude|recover-held|rigs|status|help>
 
   Delta Team (host-guided) = the current host main session (implicit Supervisor)
   plus host-native Designer/Builder/Evaluator sub-agent sessions, driven through
@@ -54,6 +54,9 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
   roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
     Read immutable event and delivery truth. It never selects a rig, changes priority, or merges.
 
+
+  roll delta rigs [--refresh]
+    Read the local exact-model readiness snapshot; --refresh runs bounded local probes and publishes only a complete snapshot.
   roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
     owner_redelegate transfers the reservation to the named successor; the successor
@@ -73,7 +76,7 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
     A red preflight is repaired in the same frame, then preflight runs green before one formal validate
     with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
 ",
-    "zh": "用法：roll delta <prepare|validate|conclude|recover-held|status|help>
+    "zh": "用法：roll delta <prepare|validate|conclude|recover-held|rigs|status|help>
 
   Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native
   能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Roll 从不
@@ -114,6 +117,9 @@ exports[`US-DELTA-016 — Builder preflight published procedure > freezes the EN
   roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
     只读不可变事件和交付真相；绝不选择模型组合、改变优先级或合并。
 
+
+  roll delta rigs [--refresh]
+    读取本机指定模型就绪快照；--refresh 执行有界的本地探测，且只发布完整快照。
   roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
     记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。
     owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
