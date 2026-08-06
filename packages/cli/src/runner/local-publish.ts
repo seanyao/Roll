@@ -5,7 +5,7 @@
  * Split out of terminal-handlers.ts (REFACTOR-060 module-size guard) so the
  * local-delivery ladder has its own testable home. Two exports:
  *
- *   - {@link evaluateEvidenceGate}: the US-DELIV-004 push-time evidence gate,
+ *   - {@link evaluateEvidenceGate}: the US-DELIV-004 / RL-DELIV-010 push-time evidence gate,
  *     shared by BOTH the remote publish path (terminal-handlers `publish_pr`)
  *     and the local landing path here. Extracting it is what lets local mode run
  *     the SAME gate with the SAME fail-loud semantics — the E3 constraint that
@@ -37,7 +37,7 @@ import { eventTs } from "./runner-time.js";
 import { hostDeltaDeliveryBinding } from "../lib/delta-delivery-binding.js";
 
 /**
- * US-DELIV-004 — the push-time evidence gate, shared by the REMOTE publish path
+ * US-DELIV-004 / RL-DELIV-010 — the push-time evidence gate, shared by the REMOTE publish path
  * and the E3 LOCAL landing path. Verifies the acceptance evidence (attest report
  * + ac-map) was produced BEFORE the work leaves the cycle; appends the
  * `delivery:evidence_gate` event (earned/blocked) and, on a block, the fail-loud

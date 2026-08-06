@@ -109,7 +109,7 @@ export function createSkillDispatchPlan(
   return { ok: true, value: { parent: { ...parent, workspace: normalizedParent.value }, children } };
 }
 
-/** The parent aggregates child commits/artifacts and is the sole delivery actor. */
+/** RL-EXEC-010: the parent aggregates child commits/artifacts and is the sole delivery actor. */
 export function skillDispatchAuthority(
   actor: SkillDispatchActor,
   _operation: SkillDispatchOperation,

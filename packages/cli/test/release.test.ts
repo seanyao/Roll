@@ -296,7 +296,7 @@ describe("runReleaseFlow — the one transaction", () => {
     expect(writes).toContain("bump:0.1.0");
   });
 
-  it("FIX-288 AC4: a drifting consistency gate aborts BEFORE the PR/merge — nothing lands on main", async () => {
+  it("FIX-288 AC4 / RL-REL-010: a drifting consistency gate aborts BEFORE the PR/merge — nothing lands on main", async () => {
     const { deps, writes } = fakeDeps({ consistencyGate: () => false });
     const res = await runReleaseFlow("/repo", deps, { dryRun: false, yes: true });
     expect(res.status).toBe("aborted");

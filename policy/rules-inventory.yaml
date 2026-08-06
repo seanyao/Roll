@@ -21,19 +21,27 @@ coverage_sets:
       - packages/core/src/delivery
       - packages/core/src/events
       - packages/core/src/loop
+      - packages/core/src/release
       - packages/core/src/reconcile
       - packages/spec/src
     include:
       - pre-commit
       - pre-push
+      - evidence-gate.ts
+      - flow.ts
+      - local-publish.ts
       - loop-run-once.ts
       - loop-self-downgrade.ts
+      - release.ts
       - delivery-facts.ts
       - contract-snapshot.ts
       - done-guard.ts
       - main-checkout-guard.ts
       - run-cycle.ts
       - skip-cards.ts
+      - skill-dispatch.ts
+      - skill-dispatch-workspace.ts
+      - terminal-handlers.ts
       - router.ts
       - report.ts
       - store.ts
@@ -79,6 +87,17 @@ candidates:
     rule_id: RL-TRUTH-001
     reason: "CLI/infra fact-gathering adapter for merge truth"
     reviewed_by: US-RULE-009
+  - path: packages/cli/src/commands/release.ts
+    marker: "RL-REL-010"
+    classification: registered
+    rule_id: RL-REL-010
+    reason: "release transaction aborts before PR/merge/tag when gates fail"
+    reviewed_by: US-RULE-010
+  - path: packages/cli/src/commands/skill-dispatch.ts
+    marker: "skill-dispatch-command-facade"
+    classification: out-of-scope
+    reason: "command facade for allocator operations; parent-only delivery authority is owned by core skill-dispatch and CLI workspace enforcement, reviewed for v4.806"
+    reviewed_by: US-RULE-010
   - path: packages/cli/src/runner/contract-snapshot.ts
     marker: "RL-EVID-005"
     classification: registered
@@ -97,6 +116,12 @@ candidates:
     rule_id: RL-ISO-002
     reason: "shared main checkout write protection"
     reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/local-publish.ts
+    marker: "RL-DELIV-010"
+    classification: registered
+    rule_id: RL-DELIV-010
+    reason: "local delivery path runs the shared push-time evidence gate before landing"
+    reviewed_by: US-RULE-010
   - path: packages/cli/src/runner/run-cycle.ts
     marker: "writeHeartbeat"
     classification: registered
@@ -109,6 +134,18 @@ candidates:
     rule_id: I5
     reason: "permanent skip after repeated failures (I5 enforcement)"
     reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/skill-dispatch-workspace.ts
+    marker: "RL-EXEC-010"
+    classification: registered
+    rule_id: RL-EXEC-010
+    reason: "CLI runner boundary refuses child delivery operations (parent-only delivery authority)"
+    reviewed_by: US-RULE-010
+  - path: packages/cli/src/runner/terminal-handlers.ts
+    marker: "RL-DELIV-010"
+    classification: registered
+    rule_id: RL-DELIV-010
+    reason: "remote publish path blocks before push/PR when the evidence gate is not earned"
+    reviewed_by: US-RULE-010
   - path: packages/core/src/agent/router.ts
     marker: "I10"
     classification: registered
@@ -139,6 +176,12 @@ candidates:
     rule_id: RL-TRUTH-001
     reason: "pure core merge-truth decision"
     reviewed_by: US-RULE-009
+  - path: packages/core/src/delivery/evidence-gate.ts
+    marker: "RL-DELIV-010"
+    classification: registered
+    rule_id: RL-DELIV-010
+    reason: "pure push-time delivery evidence gate verdict"
+    reviewed_by: US-RULE-010
   - path: packages/core/src/delivery/store.ts
     marker: "I7"
     classification: registered
@@ -169,6 +212,18 @@ candidates:
     rule_id: I2
     reason: "orphan detection and safe takeover after SIGKILL"
     reviewed_by: US-RULE-009
+  - path: packages/core/src/loop/skill-dispatch.ts
+    marker: "RL-EXEC-010"
+    classification: registered
+    rule_id: RL-EXEC-010
+    reason: "Skill dispatch delivery authority remains parent-only"
+    reviewed_by: US-RULE-010
+  - path: packages/core/src/release/flow.ts
+    marker: "RL-REL-010"
+    classification: registered
+    rule_id: RL-REL-010
+    reason: "release step order keeps irreversible actions behind gates"
+    reviewed_by: US-RULE-010
   - path: packages/core/src/reconcile/engine.ts
     marker: "I4"
     classification: registered

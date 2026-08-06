@@ -4462,7 +4462,7 @@ describe("executeCommand — command → executor mapping", () => {
     expect(runPublishPlan).not.toHaveBeenCalled();
   });
 
-  it("US-DELIV-004: publish_pr blocks BEFORE push when attest/ac-map evidence is missing (no bare branch)", async () => {
+  it("US-DELIV-004 / RL-DELIV-010: publish_pr blocks BEFORE push when attest/ac-map evidence is missing (no bare branch)", async () => {
     const repo = initCleanGitRepo("roll-evidence-gate-blocked-");
     const base = fakePorts();
     const push = vi.fn(async () => ({ code: 0 }));

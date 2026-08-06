@@ -94,6 +94,7 @@ describe("isChangelogReady — FIX-1030: shared changelog readiness predicate", 
 
 describe("RELEASE_STEPS", () => {
   it("every irreversible step sits behind the gates before it", () => {
+    // RL-REL-010: irreversible release steps remain behind package and consistency gates.
     expect(RELEASE_STEPS.indexOf("package-gate")).toBeLessThan(RELEASE_STEPS.indexOf("commit-push"));
     expect(RELEASE_STEPS.indexOf("consistency-gate")).toBeLessThan(RELEASE_STEPS.indexOf("tag-push"));
     expect(RELEASE_STEPS.at(-1)).toBe("tag-push");

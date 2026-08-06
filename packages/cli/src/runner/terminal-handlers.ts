@@ -120,7 +120,7 @@ export async function executeTerminalCommand(
         const pub: PublishResult = { status: 0, manualMerge, ...(cmd.draft === true ? { draft: true } : {}) };
         return { event: { type: "published", result: pub } };
       }
-      // US-DELIV-004 — push-time evidence gate (fail-loud): verify the
+      // US-DELIV-004 / RL-DELIV-010 — push-time evidence gate (fail-loud): verify the
       // acceptance evidence (attest report + ac-map) was produced BEFORE the
       // branch leaves the machine. Missing evidence ⇒ blocked_no_evidence:
       // the branch is NEVER pushed and no PR is opened — "pushed a branch but

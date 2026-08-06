@@ -1,5 +1,5 @@
 /**
- * US-REL-007 — the ONE release flow's pure pieces. `roll release` is the only
+ * US-REL-007 / RL-REL-010 — the ONE release flow's pure pieces. `roll release` is the only
  * release command: it owns version bump → changelog fold → package gate →
  * commit-push → consistency gate → release PR → merge → tag push, in that order,
  * every irreversible step behind an earlier gate. These helpers are
@@ -84,7 +84,7 @@ function escapeRegex(value: string): string {
 
 /**
  * The transaction's ordered steps — names are the observable progress output.
- * FIX-288: `consistency-gate` runs BEFORE `open-pr` so the gate guards the
+ * FIX-288 / RL-REL-010: `consistency-gate` runs BEFORE `open-pr` so the gate guards the
  * release branch state before the bump+changelog can merge to main (no
  * merged-but-untagged half-product when docs drift).
  */

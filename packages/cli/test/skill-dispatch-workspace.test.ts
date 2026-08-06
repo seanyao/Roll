@@ -126,6 +126,7 @@ describe("US-LOOP-127 — managed Skill parent/child allocator", () => {
     } finally { process.env.PATH = oldPath; }
   });
 
+  // RL-EXEC-010: a child caller is refused the parent-only delivery confirmation path.
   it("refuses missing delivery proof, evidence, dirt, identity drift, and a child caller without writing a release request", async () => {
     const missingMerge = await stopFixture("dispatch-confirm-missing-merge");
     await expect(confirmSkillDispatchDelivery(missingMerge.root, "FIX-1498", "dispatch-confirm-missing-merge", missingMerge.root, {

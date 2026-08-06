@@ -186,7 +186,11 @@ const REDLINE_IDS = [
   "RL-EVID-005",
   "RL-ISO-002",
   "RL-TRUTH-001",
+  "RL-EXEC-010",
+  "RL-DELIV-010",
+  "RL-REL-010",
 ];
+const RULE_010_BATCH_IDS = ["RL-EXEC-010", "RL-DELIV-010", "RL-REL-010"];
 
 function trackedV2(): ParsedRulesV2 {
   return ok(parseRulesV2(TRACKED_RULES));
@@ -289,6 +293,53 @@ describe("parseRulesV2 — the tracked v2 policy/rules.yaml", () => {
       }
     }
   });
+
+  it("registers the US-RULE-010 execution, delivery, and release batch without weakening gates", () => {
+    const registry = trackedV2();
+    const byId = new Map(registry.rules.map((rule) => [rule.id, rule]));
+
+    expect(byId.get("RL-EXEC-010")).toMatchObject({
+      kind: "redline",
+      ownerDomain: "orchestration",
+      severity: "block",
+      enforcement: [
+        { path: "packages/core/src/loop/skill-dispatch.ts", marker: "RL-EXEC-010" },
+        { path: "packages/cli/src/runner/skill-dispatch-workspace.ts", marker: "RL-EXEC-010" },
+      ],
+      verification: [
+        { path: "packages/core/test/skill-dispatch.test.ts", marker: "RL-EXEC-010" },
+        { path: "packages/cli/test/skill-dispatch-workspace.test.ts", marker: "RL-EXEC-010" },
+      ],
+    });
+    expect(byId.get("RL-DELIV-010")).toMatchObject({
+      kind: "redline",
+      ownerDomain: "evals",
+      severity: "block",
+      enforcement: [
+        { path: "packages/core/src/delivery/evidence-gate.ts", marker: "RL-DELIV-010" },
+        { path: "packages/cli/src/runner/local-publish.ts", marker: "RL-DELIV-010" },
+        { path: "packages/cli/src/runner/terminal-handlers.ts", marker: "RL-DELIV-010" },
+      ],
+      verification: [
+        { path: "packages/core/test/evidence-gate.test.ts", marker: "RL-DELIV-010" },
+        { path: "packages/cli/test/evidence-gate-full-verify-us-cycle-011.test.ts", marker: "RL-DELIV-010" },
+        { path: "packages/cli/test/runner-executor.test.ts", marker: "RL-DELIV-010" },
+      ],
+    });
+    expect(byId.get("RL-REL-010")).toMatchObject({
+      kind: "redline",
+      ownerDomain: "guardrails",
+      severity: "block",
+      enforcement: [
+        { path: "packages/core/src/release/flow.ts", marker: "RL-REL-010" },
+        { path: "packages/cli/src/commands/release.ts", marker: "RL-REL-010" },
+      ],
+      verification: [
+        { path: "packages/core/test/release-flow.test.ts", marker: "RL-REL-010" },
+        { path: "packages/cli/test/release.test.ts", marker: "RL-REL-010" },
+      ],
+    });
+  });
 });
 
 describe("parseRulesRegistry — v2 projects onto the legacy v1 shape", () => {
@@ -330,6 +381,16 @@ describe("rules inventory — the tracked policy/rules-inventory.yaml", () => {
     const report = auditRulesInventory(inventory, trackedV2(), realInventoryFs(REPO_ROOT), REPO_ROOT);
     expect(inventoryReportFails(report)).toBe(false);
     expect(report.covered.length).toBeGreaterThanOrEqual(REDLINE_IDS.length + INVARIANT_IDS.length);
+  });
+
+  it("records the US-RULE-010 batch as reviewed registered candidates", () => {
+    const inventory = ok(parseRulesInventory(TRACKED_INVENTORY));
+    const candidates = inventory.candidates.filter((candidate) => candidate.reviewedBy === "US-RULE-010" && candidate.classification === "registered");
+    expect(new Set(candidates.map((candidate) => candidate.ruleId))).toEqual(new Set(RULE_010_BATCH_IDS));
+    for (const ruleId of RULE_010_BATCH_IDS) {
+      expect(candidates.filter((candidate) => candidate.ruleId === ruleId).length).toBeGreaterThanOrEqual(1);
+      expect(candidates.filter((candidate) => candidate.ruleId === ruleId).every((candidate) => candidate.classification === "registered")).toBe(true);
+    }
   });
 });
 

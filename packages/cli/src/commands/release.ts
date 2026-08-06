@@ -1181,7 +1181,7 @@ export interface ReleaseRunResult {
 }
 
 /**
- * The transaction. Fail-loud and partial-release-free: every abort happens
+ * RL-REL-010: the transaction is fail-loud and partial-release-free: every abort happens
  * BEFORE the next irreversible step; nothing is tagged unless every gate
  * passed and the release PR is on main.
  */

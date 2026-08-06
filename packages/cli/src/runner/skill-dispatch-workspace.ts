@@ -571,7 +571,7 @@ function deliveredRequest(
 }
 
 /**
- * Parent-only delivery confirmation. It is intentionally the only path that
+ * RL-EXEC-010: parent-only delivery confirmation. It is intentionally the only path that
  * may turn a live dispatch into the existing delivered release lifecycle.
  */
 export async function confirmSkillDispatchDelivery(

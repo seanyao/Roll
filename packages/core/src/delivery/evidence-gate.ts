@@ -1,5 +1,5 @@
 /**
- * US-DELIV-004 — push-time evidence gate (fail-loud).
+ * US-DELIV-004 / RL-DELIV-010 — push-time evidence gate (fail-loud).
  *
  * Design .roll/features/delivery-reconciler/delivery-reconciler-design.md
  * §3.2/§4/§8: BEFORE the cycle branch is pushed, verify the acceptance

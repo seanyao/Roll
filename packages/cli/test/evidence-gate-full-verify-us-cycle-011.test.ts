@@ -1,5 +1,5 @@
 /**
- * US-CYCLE-011 AC2 + AC4 — the push-time evidence gate (`evaluateEvidenceGate`,
+ * US-CYCLE-011 AC2 + AC4 / RL-DELIV-010 — the push-time evidence gate (`evaluateEvidenceGate`,
  * the PR-creation chokepoint) BLOCKS a publish that lacks a valid full-mode
  * proof matching the delivered tree, and only lets it through with one. Proven
  * on a NO-AC story so the acceptance-evidence half of the gate passes cleanly

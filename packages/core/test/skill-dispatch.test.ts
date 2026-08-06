@@ -54,6 +54,7 @@ describe("US-LOOP-127 — parent-owned Skill dispatch", () => {
   });
 
   it("keeps PR, attest, Story closure, and reservation release parent-only", () => {
+    // RL-EXEC-010: child dispatch checkouts never receive delivery authority.
     expect(skillDispatchAuthority("child", "publish_pr")).toEqual({ ok: false, reason: "parent_required" });
     expect(skillDispatchAuthority("child", "attest")).toEqual({ ok: false, reason: "parent_required" });
     expect(skillDispatchAuthority("child", "close_story")).toEqual({ ok: false, reason: "parent_required" });

@@ -115,6 +115,64 @@ rules:
     docs:
       - path: docs/architecture.md
         marker: "事实来源"
+  - id: RL-EXEC-010
+    kind: redline
+    statement: "A Skill dispatch child checkout is never a delivery authority; PR publishing, attest, story closure, delivery confirmation, and reservation release stay parent-owned."
+    owner_domain: orchestration
+    severity: block
+    enforcement:
+      - path: packages/core/src/loop/skill-dispatch.ts
+        marker: "RL-EXEC-010"
+      - path: packages/cli/src/runner/skill-dispatch-workspace.ts
+        marker: "RL-EXEC-010"
+    verification:
+      - path: packages/core/test/skill-dispatch.test.ts
+        marker: "RL-EXEC-010"
+      - path: packages/cli/test/skill-dispatch-workspace.test.ts
+        marker: "RL-EXEC-010"
+    docs:
+      - path: docs/architecture.md
+        marker: "Skill contract"
+  - id: RL-DELIV-010
+    kind: redline
+    statement: "A non-doc delivery publish cannot push, open a PR, or land locally until the push-time evidence gate earns attest/ac-map/full-verify proof; missing or unverified evidence blocks fail-loud."
+    owner_domain: evals
+    severity: block
+    enforcement:
+      - path: packages/core/src/delivery/evidence-gate.ts
+        marker: "RL-DELIV-010"
+      - path: packages/cli/src/runner/local-publish.ts
+        marker: "RL-DELIV-010"
+      - path: packages/cli/src/runner/terminal-handlers.ts
+        marker: "RL-DELIV-010"
+    verification:
+      - path: packages/core/test/evidence-gate.test.ts
+        marker: "RL-DELIV-010"
+      - path: packages/cli/test/evidence-gate-full-verify-us-cycle-011.test.ts
+        marker: "RL-DELIV-010"
+      - path: packages/cli/test/runner-executor.test.ts
+        marker: "RL-DELIV-010"
+    docs:
+      - path: docs/architecture.md
+        marker: "attest 硬闸"
+  - id: RL-REL-010
+    kind: redline
+    statement: "Release flow must pass package and consistency gates before opening or merging a release PR and before pushing the release tag; a drifting gate aborts without landing a half-release."
+    owner_domain: guardrails
+    severity: block
+    enforcement:
+      - path: packages/core/src/release/flow.ts
+        marker: "RL-REL-010"
+      - path: packages/cli/src/commands/release.ts
+        marker: "RL-REL-010"
+    verification:
+      - path: packages/core/test/release-flow.test.ts
+        marker: "RL-REL-010"
+      - path: packages/cli/test/release.test.ts
+        marker: "RL-REL-010"
+    docs:
+      - path: docs/architecture.md
+        marker: "Release"
   - id: I1
     kind: invariant
     statement: "A running cycle writes a heartbeat at least every 60s; crossing the watchdog threshold forces reaping into a terminal state. Process liveness is orthogonal to business health."
