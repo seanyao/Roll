@@ -1,3 +1,183 @@
+# Rules inventory (US-RULE-009) — narrow rule-candidate coverage over the
+# files that carry registered RL / I-number markers. Roots stay narrow on
+# purpose: include patterns name exact files, so every marker file must be
+# classified here and any new candidate file under these roots fails the audit
+# until it is classified. Audited by scripts/audit-rules.mjs (default v2 audit)
+# via auditRulesInventory in packages/spec/src/rules-inventory.ts.
 version: 1
-coverage_sets: []
-candidates: []
+
+coverage_sets:
+  - id: rule-candidates
+    purpose: rule-candidate
+    roots:
+      - hooks
+      - packages/cli/src/commands
+      - packages/cli/src/lib
+      - packages/cli/src/runner
+      - packages/core/src/agent
+      - packages/core/src/attest
+      - packages/core/src/backlog
+      - packages/core/src/cost
+      - packages/core/src/delivery
+      - packages/core/src/events
+      - packages/core/src/loop
+      - packages/core/src/reconcile
+      - packages/spec/src
+    include:
+      - pre-commit
+      - pre-push
+      - loop-run-once.ts
+      - loop-self-downgrade.ts
+      - delivery-facts.ts
+      - contract-snapshot.ts
+      - done-guard.ts
+      - main-checkout-guard.ts
+      - run-cycle.ts
+      - skip-cards.ts
+      - router.ts
+      - report.ts
+      - store.ts
+      - tracker.ts
+      - reconcile.ts
+      - tcr.ts
+      - bus.ts
+      - orchestrator.ts
+      - recovery.ts
+      - engine.ts
+      - project.ts
+    allow_overlap_with: []
+    exclude: []
+
+candidates:
+  - path: hooks/pre-commit
+    marker: "RL-TCR-001"
+    classification: registered
+    rule_id: RL-TCR-001
+    reason: "TCR test-pass proof gate"
+    reviewed_by: US-RULE-009
+  - path: hooks/pre-push
+    marker: "RL-ISO-002"
+    classification: registered
+    rule_id: RL-ISO-002
+    reason: "client-side main push guard"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/commands/loop-run-once.ts
+    marker: "RL-FAIL-007"
+    classification: registered
+    rule_id: RL-FAIL-007
+    reason: "consecutive-failure auto-PAUSE"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/commands/loop-self-downgrade.ts
+    marker: "I3"
+    classification: registered
+    rule_id: I3
+    reason: "one open PR per story dedupe"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/lib/delivery-facts.ts
+    marker: "RL-TRUTH-001"
+    classification: registered
+    rule_id: RL-TRUTH-001
+    reason: "CLI/infra fact-gathering adapter for merge truth"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/contract-snapshot.ts
+    marker: "RL-EVID-005"
+    classification: registered
+    rule_id: RL-EVID-005
+    reason: "frozen acceptance contract drift detection"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/done-guard.ts
+    marker: "RL-EVID-004"
+    classification: registered
+    rule_id: RL-EVID-004
+    reason: "guarded Done transition"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/main-checkout-guard.ts
+    marker: "RL-ISO-002"
+    classification: registered
+    rule_id: RL-ISO-002
+    reason: "shared main checkout write protection"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/run-cycle.ts
+    marker: "writeHeartbeat"
+    classification: registered
+    rule_id: I1
+    reason: "cycle heartbeat write (I1 enforcement)"
+    reviewed_by: US-RULE-009
+  - path: packages/cli/src/runner/skip-cards.ts
+    marker: "skip-list"
+    classification: registered
+    rule_id: I5
+    reason: "permanent skip after repeated failures (I5 enforcement)"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/agent/router.ts
+    marker: "I10"
+    classification: registered
+    rule_id: I10
+    reason: "predictable routing with pre-spawn liveness probe"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/attest/report.ts
+    marker: "RL-EVID-003"
+    classification: registered
+    rule_id: RL-EVID-003
+    reason: "zero-evidence AC downgrade"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/backlog/store.ts
+    marker: "I9"
+    classification: registered
+    rule_id: I9
+    reason: "optimistic-locking backlog store"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/cost/tracker.ts
+    marker: "I11"
+    classification: registered
+    rule_id: I11
+    reason: "per-cycle cost recording incl. retries"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/delivery/reconcile.ts
+    marker: "RL-TRUTH-001"
+    classification: registered
+    rule_id: RL-TRUTH-001
+    reason: "pure core merge-truth decision"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/delivery/store.ts
+    marker: "I7"
+    classification: registered
+    rule_id: I7
+    reason: "cross-worktree shared runtime store under path-as-identity boundary"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/delivery/tcr.ts
+    marker: "I12"
+    classification: registered
+    rule_id: I12
+    reason: "TCR green-or-revert accounting"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/events/bus.ts
+    marker: "I8"
+    classification: registered
+    rule_id: I8
+    reason: "atomic append-only event stream"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/loop/orchestrator.ts
+    marker: "I6"
+    classification: registered
+    rule_id: I6
+    reason: "fail-loud pause + alert, no silent fallback"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/loop/recovery.ts
+    marker: "I2"
+    classification: registered
+    rule_id: I2
+    reason: "orphan detection and safe takeover after SIGKILL"
+    reviewed_by: US-RULE-009
+  - path: packages/core/src/reconcile/engine.ts
+    marker: "I4"
+    classification: registered
+    rule_id: I4
+    reason: "main-is-truth reconciliation engine"
+    reviewed_by: US-RULE-009
+  - path: packages/spec/src/project.ts
+    marker: "I7"
+    classification: registered
+    rule_id: I7
+    reason: "path-as-identity project slug"
+    reviewed_by: US-RULE-009

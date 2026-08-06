@@ -1,27 +1,28 @@
 #!/usr/bin/env node
 /**
- * US-RULE-001 — CI audit for the rules registry (`policy/rules.yaml`).
+ * US-RULE-001 / US-RULE-009 — CI audit for the rules registry
+ * (`policy/rules.yaml`, native v2 schema).
  *
- * Bidirectional check, both directions rooted at the registry, never at a
- * fixture:
- *   (forward)  every rule's enforcement.point exists and contains its marker;
- *              every verification.test exists, contains its marker, AND its
- *              path is one vitest would actually discover (matches the
- *              default test glob and isn't excluded by the root vitest
- *              config) — a test that vitest never runs cannot prove aliveness.
- *   (reverse)  every `RL-<KIND>-<NNN>` marker found in source outside
- *              `policy/rules.yaml` itself and test paths must resolve to a
- *              registered rule id — an unregistered marker is a red line with
- *              no declared owner.
+ * The default audit checks, all rooted at the registry, never at a fixture:
+ *   (anchors)   every rule's enforcement / verification / docs anchor names an
+ *               existing file that still contains its marker; every
+ *               verification anchor is a path vitest would actually discover
+ *               (matches the default test glob and isn't excluded by the root
+ *               vitest config) — a test that vitest never runs cannot prove
+ *               aliveness. A removed file or drifted marker is a finding.
+ *   (reverse)   every `RL-<KIND>-<NNN>` marker found in source outside
+ *               `policy/rules.yaml` itself and test paths must resolve to a
+ *               registered rule id — an unregistered marker is a red line with
+ *               no declared owner.
+ *   (inventory) `policy/rules-inventory.yaml` must parse and classify every
+ *               rule-candidate file under its declared roots — unclassified
+ *               candidates, orphan anchors (stale rule references), missing
+ *               coverage and ambiguous overlaps are findings.
  *
- * A registry with zero rules is rejected by the strict parser itself (empty
- * registry is not permitted), so "registered 0" can never print as success —
- * closing the "empty registry is vacuously green" hole.
- *
- * Usage: node scripts/audit-rules.mjs [--root DIR] [--json]
+ * Usage: node scripts/audit-rules.mjs [--root DIR] [--json] [--inventory]
  * Exit codes: 0 = every registered rule verified alive, N unregistered
- * markers = 0; 1 = one or more audit findings; 2 = the audit itself failed
- * (registry missing/malformed, @roll/spec not built).
+ * markers = 0, inventory clean; 1 = one or more audit findings; 2 = the audit
+ * itself failed (registry missing/malformed, @roll/spec not built).
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -50,37 +51,14 @@ function parseArgs(argv) {
   return options;
 }
 
-async function loadParser() {
-  const dist = path.join(repoRoot, "packages", "spec", "dist", "rules.js");
-  if (!existsSync(dist)) {
-    throw new Error("@roll/spec not built — run `pnpm -r build` first (canonical source: packages/spec/src/rules.ts)");
-  }
-  return import(pathToFileURL(dist).href);
-}
-
-async function loadInventorySpec() {
+async function loadSpec() {
   const dist = path.join(repoRoot, "packages", "spec", "dist", "index.js");
-  if (!existsSync(dist)) throw new Error("@roll/spec not built — run `pnpm -r build` first (canonical source: packages/spec/src/rules-inventory.ts)");
+  if (!existsSync(dist)) throw new Error("@roll/spec not built — run `pnpm -r build` first (canonical source: packages/spec/src/rules.ts)");
   return import(pathToFileURL(dist).href);
 }
 
 function rel(root, file) {
   return path.relative(root, file).split(path.sep).join("/");
-}
-
-function isUnderRollLoopWorktree(relPath) {
-  return relPath.startsWith(".roll/loop/worktrees/");
-}
-
-/** Would vitest's default include/exclude actually discover this test path? */
-function isDiscoverableTestPath(relPath) {
-  if (!TEST_FILE_PATTERN.test(relPath)) return false;
-  if (relPath.endsWith(".live.test.ts")) return false;
-  if (isUnderRollLoopWorktree(relPath)) return false;
-  for (const segment of relPath.split("/")) {
-    if (segment === "node_modules" || segment === "dist") return false;
-  }
-  return true;
 }
 
 /** A path the reverse marker scan must not treat as "loose source". */
@@ -102,36 +80,17 @@ function walk(root, dir, out) {
   if (st.isFile() && SCAN_EXTENSIONS.has(path.extname(dir))) out.push(dir);
 }
 
-function forwardCheck(root, registry) {
-  const findings = [];
-  for (const rule of registry.rules) {
-    for (const enforcement of rule.enforcement) {
-      const full = path.join(root, enforcement.point);
-      if (!existsSync(full) || !statSync(full).isFile()) {
-        findings.push(`[${rule.id}] missing enforcement point: ${enforcement.point}`);
-        continue;
-      }
-      const content = readFileSync(full, "utf8");
-      if (!content.includes(enforcement.marker)) {
-        findings.push(`[${rule.id}] enforcement point ${enforcement.point} does not contain marker "${enforcement.marker}"`);
-      }
-    }
-
-    const { test, marker } = rule.verification;
-    const fullTest = path.join(root, test);
-    if (!existsSync(fullTest) || !statSync(fullTest).isFile()) {
-      findings.push(`[${rule.id}] missing verification test file: ${test}`);
-      continue;
-    }
-    if (!isDiscoverableTestPath(test)) {
-      findings.push(`[${rule.id}] verification.test path is not discoverable by vitest (excluded or non-matching pattern): ${test}`);
-    }
-    const testContent = readFileSync(fullTest, "utf8");
-    if (!testContent.includes(marker)) {
-      findings.push(`[${rule.id}] verification test ${test} does not contain marker "${marker}"`);
-    }
-  }
-  return findings;
+/** Real-tree adapter for the spec's fail-closed v2 anchor audit. */
+function anchorFs(root) {
+  return {
+    isFile(file) {
+      const full = path.join(root, file);
+      return existsSync(full) && statSync(full).isFile();
+    },
+    read(file) {
+      return readFileSync(path.join(root, file), "utf8");
+    },
+  };
 }
 
 function reverseCheck(root, registry) {
@@ -157,19 +116,48 @@ function reverseCheck(root, registry) {
   return findings;
 }
 
+/** The inventory side of the default audit: missing file, parse failure, or
+ * any failing bucket (missing / orphan anchor / unclassified candidate /
+ * ambiguous overlap) is a finding, never silently skipped. */
+function inventoryFindings(root, registry, spec) {
+  const inventoryPath = path.join(root, "policy", "rules-inventory.yaml");
+  if (!existsSync(inventoryPath)) {
+    return ["policy/rules-inventory.yaml not found — the v2 audit requires the classification inventory"];
+  }
+  const inventory = spec.parseRulesInventory(readFileSync(inventoryPath, "utf8"));
+  if (!inventory.ok) {
+    return [`policy/rules-inventory.yaml failed to parse: ${inventory.error.message}`];
+  }
+  const report = spec.auditRulesInventory(inventory.value, registry, inventoryFs(root), root);
+  if (!spec.inventoryReportFails(report)) return [];
+  const findings = [];
+  for (const bucket of ["missing", "orphan_anchor", "candidate", "overlap_ambiguous"]) {
+    for (const entry of report[bucket]) {
+      const marker = entry.marker ? ` marker "${entry.marker}"` : "";
+      const reason = entry.reason ? ` (${entry.reason})` : "";
+      findings.push(`inventory ${bucket}: ${entry.path}${marker}${reason}`);
+    }
+  }
+  return findings;
+}
+
 async function runAudit(root) {
   const registryPath = path.join(root, "policy", "rules.yaml");
   if (!existsSync(registryPath)) {
     return { ok: false, findings: [`policy/rules.yaml not found at ${registryPath}`], registered: 0 };
   }
-  const { parseRulesRegistry } = await loadParser();
+  const spec = await loadSpec();
   const text = readFileSync(registryPath, "utf8");
-  const parsed = parseRulesRegistry(text);
+  const parsed = spec.parseRulesV2(text);
   if (!parsed.ok) {
-    return { ok: false, findings: [`policy/rules.yaml failed to parse: ${parsed.error.message}`], registered: 0 };
+    return { ok: false, findings: [`policy/rules.yaml failed to parse as v2: ${parsed.error.message}`], registered: 0 };
   }
   const registry = parsed.value;
-  const findings = [...forwardCheck(root, registry), ...reverseCheck(root, registry)];
+  const findings = [
+    ...spec.auditV2Anchors(registry, anchorFs(root)),
+    ...reverseCheck(root, registry),
+    ...inventoryFindings(root, registry, spec),
+  ];
   return { ok: findings.length === 0, findings, registered: registry.rules.length };
 }
 
@@ -191,7 +179,7 @@ async function runInventoryAudit(root) {
   const inventoryPath = path.join(root, "policy", "rules-inventory.yaml");
   const rulesPath = path.join(root, "policy", "rules.yaml");
   if (!existsSync(inventoryPath) || !existsSync(rulesPath)) throw new Error("policy/rules.yaml and policy/rules-inventory.yaml are required for --inventory");
-  const { auditRulesInventory, inventoryReportFails, parseRulesInventory, parseRulesV2 } = await loadInventorySpec();
+  const { auditRulesInventory, inventoryReportFails, parseRulesInventory, parseRulesV2 } = await loadSpec();
   const inventory = parseRulesInventory(readFileSync(inventoryPath, "utf8"));
   if (!inventory.ok) throw new Error(`policy/rules-inventory.yaml failed to parse: ${inventory.error.message}`);
   const rules = parseRulesV2(readFileSync(rulesPath, "utf8"));

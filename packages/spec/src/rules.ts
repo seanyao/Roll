@@ -193,8 +193,25 @@ function parseDocSurface(raw: unknown, index: number): { value: DocSurface } | {
  * duplicate rule ids, invalid enum values, invalid rule id shapes, an empty
  * registry, and any enforcement/test path escaping into `policy/**` (which
  * would let the registry certify its own aliveness).
+ *
+ * US-RULE-009: a `version: 2` document is parsed by the native v2 parser and
+ * projected onto this legacy v1 shape (redlines only — the v1 contract is the
+ * redline catalog; invariants have no v1 representation), so existing
+ * doc-drift callers keep their stable RulesRegistry contract.
  */
 export function parseRulesRegistry(text: string): Result<RulesRegistry, RulesParseError> {
+  let probe: unknown;
+  try {
+    probe = parseYaml(text);
+  } catch (cause) {
+    return err(`invalid YAML: ${(cause as Error).message}`);
+  }
+  if (isPlainObject(probe) && probe.version === 2) {
+    const parsed = parseRulesV2(text);
+    if (!parsed.ok) return parsed;
+    return { ok: true, value: projectV2ToLegacy(parsed.value) };
+  }
+
   let doc: unknown;
   try {
     doc = parseYaml(text);
@@ -409,4 +426,77 @@ export function parseRulesV2(text: string): Result<ParsedRulesV2, RulesParseErro
     docSurfaces.push({ id, paths: raw.paths as string[], docs: raw.docs as string[] });
   }
   return { ok: true, value: { version: 2, gates: { docDrift: doc.gates.doc_drift }, rules, pipelineStages, docSurfaces } };
+}
+
+/** Project a parsed v2 registry onto the legacy v1 shape. Only redlines
+ * project: the v1 contract is the redline catalog (single verification test,
+ * ALERT/block trigger), so invariants — which have no v1 representation — are
+ * visible only through parseRulesV2. severity maps back onto trigger_report
+ * (block → block, alert/observe → ALERT). */
+function projectV2ToLegacy(parsed: ParsedRulesV2): RulesRegistry {
+  const rules: RuleEntry[] = [];
+  for (const rule of parsed.rules) {
+    if (rule.kind !== "redline") continue;
+    const verification = rule.verification[0];
+    if (!verification) continue; // unreachable: the v2 parser requires non-empty anchors
+    rules.push({
+      id: rule.id,
+      kind: "redline",
+      statement: rule.statement,
+      enforcement: rule.enforcement.map((anchor) => ({ point: anchor.path, marker: anchor.marker })),
+      verification: { test: verification.path, marker: verification.marker },
+      triggerReport: rule.severity === "block" ? "block" : "ALERT",
+      ...(rule.since !== undefined ? { since: rule.since } : {}),
+    });
+  }
+  return { version: parsed.version, gates: parsed.gates, rules, docSurfaces: parsed.docSurfaces };
+}
+
+/** Would vitest's default include/exclude (plus the root config's exclusions)
+ * actually discover this verification path? A test vitest never runs cannot
+ * prove aliveness. Kept beside the parser so the CLI audit script and the
+ * contract tests share one definition. */
+export function isDiscoverableVerificationPath(relPath: string): boolean {
+  if (!/\.(test|spec)\.[cm]?[jt]sx?$/.test(relPath)) return false;
+  if (relPath.endsWith(".live.test.ts")) return false;
+  if (relPath.startsWith(".roll/loop/worktrees/")) return false;
+  for (const segment of relPath.split("/")) {
+    if (segment === "node_modules" || segment === "dist") return false;
+  }
+  return true;
+}
+
+/** Minimal filesystem view the v2 anchor audit needs — the CLI script adapts
+ * the real tree, tests adapt an in-memory tree. Paths are repo-relative. */
+export interface RulesAnchorFs {
+  readonly isFile: (path: string) => boolean;
+  readonly read: (path: string) => string;
+}
+
+/** Fail-closed anchor audit for a parsed v2 registry: every enforcement,
+ * verification and docs anchor must name an existing file that still contains
+ * its marker, and every verification anchor must sit somewhere vitest actually
+ * discovers. A removed file or a drifted marker is a finding, never skipped. */
+export function auditV2Anchors(registry: ParsedRulesV2, fs: RulesAnchorFs): readonly string[] {
+  const findings: string[] = [];
+  const checkAnchor = (ruleId: string, label: string, anchor: Anchor): void => {
+    if (!fs.isFile(anchor.path)) {
+      findings.push(`[${ruleId}] missing ${label} anchor: ${anchor.path}`);
+      return;
+    }
+    if (!fs.read(anchor.path).includes(anchor.marker)) {
+      findings.push(`[${ruleId}] ${label} anchor ${anchor.path} does not contain marker "${anchor.marker}"`);
+    }
+  };
+  for (const rule of registry.rules) {
+    for (const anchor of rule.enforcement) checkAnchor(rule.id, "enforcement", anchor);
+    for (const anchor of rule.verification) {
+      checkAnchor(rule.id, "verification", anchor);
+      if (fs.isFile(anchor.path) && !isDiscoverableVerificationPath(anchor.path)) {
+        findings.push(`[${rule.id}] verification anchor path is not discoverable by vitest (excluded or non-matching pattern): ${anchor.path}`);
+      }
+    }
+    for (const anchor of rule.docs) checkAnchor(rule.id, "docs", anchor);
+  }
+  return findings;
 }
