@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { deltaCommand } from "../src/commands/delta.js";
-import { supervisorUsage } from "../src/commands/supervisor.js";
+import { deliveryHelp, supervisorUsage } from "../src/commands/supervisor.js";
 import { skillDispatchUsage } from "../src/commands/skill-dispatch.js";
 import { worktreeAuditUsage } from "../src/commands/worktree-audit.js";
 import { worktreeCleanupUsage } from "../src/commands/worktree-cleanup.js";
@@ -48,6 +48,7 @@ describe("US-LOOP-129 managed-runtime help", () => {
       cleanup: withLang("en", worktreeCleanupUsage),
       dispatch: withLang("en", skillDispatchUsage),
       supervisor: withLang("en", supervisorUsage),
+      deliveryHelp: withLang("en", deliveryHelp),
     };
     const zh = {
       delta: await captureDeltaHelp("zh"),
@@ -56,6 +57,7 @@ describe("US-LOOP-129 managed-runtime help", () => {
       cleanup: withLang("zh", worktreeCleanupUsage),
       dispatch: withLang("zh", skillDispatchUsage),
       supervisor: withLang("zh", supervisorUsage),
+      deliveryHelp: withLang("zh", deliveryHelp),
     };
 
     expect(en.delta).toContain("managed workspace");
@@ -68,6 +70,15 @@ describe("US-LOOP-129 managed-runtime help", () => {
     expect(zh.supervisor).toContain("绝不路由工作、改变优先级或合并");
     expect(en.worktree).not.toMatch(/[\u4e00-\u9fff]/);
     expect(zh.worktree).not.toContain("Usage:");
+    // US-DELTA-021 — delivery help leads with the unified view, in one locale.
+    expect(en.deliveryHelp).toMatch(/one card has one final delivery\s+conclusion/i);
+    expect(en.deliveryHelp).toContain("cannot route an agent");
+    expect(en.deliveryHelp).toContain("Safety boundary: this command reads facts only");
+    expect(zh.deliveryHelp).toContain("一张卡只有一个最终交付结论");
+    expect(zh.deliveryHelp).toContain("不能路由 agent");
+    expect(zh.deliveryHelp).toContain("安全边界：本命令只读事实");
+    expect(en.deliveryHelp).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(zh.deliveryHelp).not.toContain("Usage:");
     expect({ en, zh }).toMatchSnapshot();
   });
 });
@@ -156,5 +167,63 @@ describe("US-DELTA-014 metric documentation contract", () => {
     expect(zh).toContain("`roll supervisor metrics [");
     expect(zh).toContain("不是模型调用的证明");
     expect(readmeZh).toContain("guide/zh/delivery-metrics.md");
+  });
+});
+
+describe("US-DELTA-021 — unified feature delivery view documentation contract", () => {
+  const surfaces = [
+    "README.md",
+    "README_CN.md",
+    "guide/en/delivery-metrics.md",
+    "guide/zh/delivery-metrics.md",
+    "guide/en/ai-agents.md",
+    "guide/zh/ai-agents.md",
+    "guide/en/skills.md",
+    "guide/zh/skills.md",
+    "guide/en/getting-started.md",
+    "guide/zh/getting-started.md",
+    "docs/architecture.md",
+    "docs/acceptance-contract.md",
+  ];
+  // The guard list is explicit so a future legitimate rewrite updates this test
+  // rather than silently weakening it (design contract §6.5).
+  const forbiddenStaleDirections = [
+    // An operator choice between loop and Delta metric surfaces.
+    /(?:pick|choose|select|switch between).*(?:loop|delta).*(?:metrics|views?)/i,
+    // Topology-split as the way to read delivery.
+    /use (?:roll )?(?:delta|loop) metrics[^\n]*to (?:see|view|check|compare)[^\n]*(?:loop|delta|feature) deliver/i,
+    /primary workflow[^\n]*(?:loop|delta) metrics/i,
+    /(?:选择|选用|切换).*(?:loop|delta).*(?:指标|metrics|视图)/,
+    /(?:用|使用) (?:roll )?(?:delta|loop) metrics[^\n]*(?:查看|观察|比较)[^\n]*(?:交付|delivery)/,
+    /(?:主要|首选)工作流[^\n]*(?:delta|loop).*(?:指标|metrics)/,
+  ];
+
+  it("never sends feature operators to separate loop/Delta metric surfaces as the primary workflow", () => {
+    for (const surface of surfaces) {
+      const text = readFileSync(resolve(projectRoot, surface), "utf8");
+      for (const pattern of forbiddenStaleDirections) {
+        expect(text, `${surface} must not publish ${pattern.source}`).not.toMatch(pattern);
+      }
+    }
+    const rendered = [
+      ["rendered EN supervisor usage", withLang("en", supervisorUsage)],
+      ["rendered ZH supervisor usage", withLang("zh", supervisorUsage)],
+      ["rendered EN delivery help", withLang("en", deliveryHelp)],
+      ["rendered ZH delivery help", withLang("zh", deliveryHelp)],
+    ] as const;
+    for (const [label, text] of rendered) {
+      for (const pattern of forbiddenStaleDirections) {
+        expect(text, `${label} must not publish ${pattern.source}`).not.toMatch(pattern);
+      }
+    }
+  });
+
+  it("points every delivery-metrics surface at the unified roll supervisor delivery view", () => {
+    for (const surface of ["README.md", "README_CN.md", "guide/en/delivery-metrics.md", "guide/zh/delivery-metrics.md"]) {
+      const text = readFileSync(resolve(projectRoot, surface), "utf8");
+      expect(text, `${surface} must name the unified view`).toContain("roll supervisor delivery");
+    }
+    expect(readFileSync(resolve(projectRoot, "guide/en/delivery-metrics.md"), "utf8")).toContain("# Feature delivery view");
+    expect(readFileSync(resolve(projectRoot, "guide/zh/delivery-metrics.md"), "utf8")).toContain("# 功能交付视图");
   });
 });

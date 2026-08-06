@@ -84,7 +84,7 @@ export const SUPERVISOR_USAGE = [
   "  live --watch     redraw the role board in-place until Ctrl-C; use --interval <sec>",
   "  live --collab    follow the multi-cycle collaboration stream; add --once for a snapshot",
   "  metrics          read-only queue, dependency, delivery, and reconciliation lag projection; never routes work, changes priority, or merges",
-  "  delivery         read-only unified card/feature delivery view; accepts <id> [--from <ISO>] [--to <ISO>] [--json]",
+  "  delivery         read-only unified feature delivery view — one card, one final conclusion; every attempt visible; never routes, retries, changes backlog, merges, or attests",
   "  journal          structured supervisor narrative stream: list/record decisions, verifications, rescues",
   "  health           agent toolchain health: auth/network/setup/worktree classification and routing",
   "  route            Role route trace: --role builder|designer|evaluator|peer_reviewer [--story <id>]",
@@ -104,13 +104,74 @@ export function supervisorUsage(): string {
       "  live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>",
       "  live --collab    跟随多周期协作流；加 --once 读取快照",
       "  metrics          只读投影：排队、依赖、交付与对账耗时；绝不路由工作、改变优先级或合并",
-      "  delivery         只读统一交付视图：<id> [--from <ISO>] [--to <ISO>] [--json]",
+      "  delivery         只读统一功能交付视图——一张卡一个最终结论；每次尝试可见；绝不路由、重试、改 backlog、合并或 attest",
       "  journal          Supervisor 叙事流：列出/记录决策、验证、救援",
       "  health           agent 工具链健康：auth/network/setup/worktree 分类与路由",
       "  route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]",
       "  repair-evidence  修复绿色 PR 缺失的验收证据并恢复 merge-ready 状态",
     ].join("\n")
     : SUPERVISOR_USAGE;
+}
+
+/** US-DELTA-021 — locale-exclusive help for `roll supervisor delivery` (frozen copy). */
+export const DELIVERY_USAGE_EN = [
+  "Usage: roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]",
+  "",
+  "  Read-only unified feature delivery view. One card has one final delivery",
+  "  conclusion; every attempt stays visible under that card, and loop cycles and",
+  "  Delta delegations are interleaved by time in a single view — there is no",
+  "  loop view and no Delta view to pick between.",
+  "",
+  "  - Final state: not_started | active | blocked | handoff_ready | delivered | attested | unknown",
+  "    A delivered/attested card is the only final \"done\" conclusion; handoff_ready",
+  "    is a handoff, not a delivery.",
+  "  - Attempts: each admitted loop cycle or Delta delegation remains listed, so a",
+  "    card repaired after an earlier failed attempt shows both attempts.",
+  "  - Samples: timing (elapsed, build, merge tail), TCR green/red, first-pass and",
+  "    rework numbers always show their sample size; a missing or contradictory",
+  "    boundary renders n/a, never a zero or a success.",
+  "  - Incomplete history stays incomplete: ? / n/a / an Incomplete: line in the",
+  "    terminal, null plus codes in --json. A visible 0 means a known zero.",
+  "",
+  "  Safety boundary: this command reads facts only. It cannot route an agent,",
+  "  retry work, change the backlog, merge a PR, or attest a card.",
+  "",
+  "  <id>        a card id (card wins) or a registered feature id (its cards)",
+  "  --from      inclusive lower bound on observed event time (RFC 3339/ISO instant)",
+  "  --to        inclusive upper bound on observed event time",
+  "  --json      exact projection schema (version 2) with sources and diagnostics",
+].join("\n");
+
+/** US-DELTA-021 — locale-exclusive ZH help for `roll supervisor delivery` (frozen copy). */
+export const DELIVERY_USAGE_ZH = [
+  "用法：roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]",
+  "",
+  "  只读统一功能交付视图。一张卡只有一个最终交付结论；每次尝试都保留在该卡下，",
+  "  loop cycle 与 Delta 委派按时间交错显示在同一个视图里——不存在需要二选一的",
+  "  loop 视图或 Delta 视图。",
+  "",
+  "  - 最终状态：not_started | active | blocked | handoff_ready | delivered | attested | unknown",
+  "    只有 delivered/attested 才是最终\"完成\"结论；handoff_ready 是交接，不是交付。",
+  "  - 尝试：每条已准入的 loop cycle 或 Delta 委派都会列出，因此一张卡在早期尝试",
+  "    失败后修复，会同时显示两次尝试。",
+  "  - 样本量：耗时（elapsed、build、merge tail）、TCR 绿/红、首轮与返工数字总是",
+  "    显示样本量；边界缺失或矛盾时渲染 n/a，绝不渲染成零或成功。",
+  "  - 缺失的历史保持不完整：终端里是 ? / n/a / Incomplete: 行，--json 里是 null",
+  "    加 codes。可见的 0 表示已知为零。",
+  "",
+  "  安全边界：本命令只读事实。它不能路由 agent、重试工作、改变 backlog、合并 PR，",
+  "  也不能 attest 卡片。",
+  "",
+  "  <id>        卡片 id（卡片优先）或已注册的 feature id（其全部卡片）",
+  "  --from      事件记录时间的含下界（RFC 3339/ISO 瞬时）",
+  "  --to        事件记录时间的含上界",
+  "  --json      输出精确投影 schema（版本 2），含来源与诊断",
+].join("\n");
+
+/** US-DELTA-021 — locale-resolved `roll supervisor delivery` help; never touches the filesystem. */
+export function deliveryHelp(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh ? DELIVERY_USAGE_ZH : DELIVERY_USAGE_EN;
 }
 
 function depsOf(desc: string): string[] {
@@ -1292,6 +1353,12 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   }
   const projectPath = process.cwd();
   if (sub === "delivery") {
+    // US-DELTA-021 — a cry for help never parses a subject or touches the
+    // filesystem: print the locale-resolved unified delivery view help first.
+    if (args.includes("--help") || args.includes("-h")) {
+      process.stdout.write(deliveryHelp() + "\n");
+      return 0;
+    }
     const parsed = parseDeliveryArgs(args);
     if ("error" in parsed) {
       process.stderr.write(`delivery: ${parsed.error}\n`);

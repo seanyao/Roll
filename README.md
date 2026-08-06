@@ -158,6 +158,18 @@ future long task, delivery, host-session freshness, or final role assignment;
 pins, exclusions, tags, cost caps, and role diversity still make the real
 allocation decision.
 
+### Feature delivery view
+
+To see how a feature or a single card actually delivered, run
+`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]`.
+It is one read-only view: one card has one final delivery conclusion, every
+attempt stays visible under that card, timing/TCR/rework numbers show their
+sample size, and missing history stays incomplete (`?` / `n/a`) rather than a
+zero or a success. It cannot route an agent, retry work, change the backlog,
+merge a PR, or attest a card. See the
+[delivery metrics dictionary](guide/en/delivery-metrics.md) for the worked
+example and the exact source facts.
+
 Honest boundaries the protocol states and never overclaims:
 
 - **Terminal binding is Option C, handoff-only.** A valid Evaluator report reaches
@@ -172,12 +184,14 @@ Honest boundaries the protocol states and never overclaims:
   project config.
 - **Host-guided cost is `? (host_unobservable)`** — never estimated, priced, or
   zeroed.
-- **`roll delta metrics` is read-only.** It derives counts, timing, TCR facts,
-  redelegation, and rig diversity from immutable event and delivery records.
-  Its window and percentile samples are shown explicitly; missing or
-  contradictory facts stay marked incomplete rather than becoming a zero or a
-  success. It never selects a model, changes backlog order, or merges a PR.
-  See the [delivery metrics dictionary](guide/en/delivery-metrics.md) for every
+- **`roll delta metrics` remains a retained Delta-only detail dictionary**; for
+  a feature or card use the unified `roll supervisor delivery` view first. It
+  derives counts, timing, TCR facts, redelegation, and rig diversity from
+  immutable event and delivery records. Its window and percentile samples are
+  shown explicitly; missing or contradictory facts stay marked incomplete
+  rather than becoming a zero or a success. It never selects a model, changes
+  backlog order, or merges a PR. See the
+  [delivery metrics dictionary](guide/en/delivery-metrics.md) for every
   Delta and Supervisor source fact, denominator, time boundary, and unknown
   behavior.
 
@@ -407,11 +421,14 @@ the same board open and redraws it in-place from the same event-backed view
 model. A browser/TUI Supervisor Live Console remains future work and must reuse
 that view model.
 
-`roll supervisor metrics [--json]` is the companion read-only flow projection.
-It derives per-card and aggregate queue, dependency, first-action, merge, PR/CI,
-and reconciliation lag from the event ledger. Its terminal output names the
-observation window, sample sizes, `nearest-rank` percentiles, and every missing
-upstream fact; JSON preserves the same uncertainty. Dependency wait keeps
+`roll supervisor metrics [--json]` remains a retained flow-lag projection
+(queue/dependency/merge/CI/reconciliation); the unified
+`roll supervisor delivery <id>` view is the primary way to read a feature's
+delivery conclusion. It derives per-card and aggregate queue, dependency,
+first-action, merge, PR/CI, and reconciliation lag from the event ledger. Its
+terminal output names the observation window, sample sizes, `nearest-rank`
+percentiles, and every missing upstream fact; JSON preserves the same
+uncertainty. Dependency wait keeps
 blocked-by-not-Done separate from satisfied-but-not-dispatched. A
 `handoff_ready` fact remains a handoff only — it is never a Delivered claim.
 The [delivery metrics dictionary](guide/en/delivery-metrics.md) and its

@@ -244,8 +244,19 @@ AC 状态、无豁免可视卡缺截图，都会拒合。PR body 里的 `Roll-Ev
 
 `roll supervisor live` 是已交付的 CLI-first 多角色看板。它默认打印一帧快照，适合脚本和快速查看；`roll supervisor live --watch` 会让同一个看板保持打开，并从同一条事件驱动 view model 原地刷新。浏览器/TUI 版 Supervisor Live Console 仍是未来工作，必须复用这个 view model。
 
+### 功能交付视图
+
+要查看一个 feature 或单张卡实际是如何交付的，运行
+`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]`。
+它是一张只读视图：一张卡只有一个最终交付结论，每次尝试都保留在该卡下，
+耗时/TCR/返工数字总是显示样本量，缺失的历史保持不完整（`?` / `n/a`），
+而不是变成零或成功。它不能路由 agent、重试工作、改变 backlog、合并 PR 或
+attest 卡片。完整的[交付指标词典](guide/zh/delivery-metrics.md)给出了
+worked example 与精确的来源事实。
+
 `roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]`
-从不可变事件和交付事实只读推导尝试数、耗时、TCR、重新交接和组合多样性。窗口和百分位
+仍是保留的 Delta-only 细节词典；查看 feature 或卡片请先使用统一的
+`roll supervisor delivery` 视图。它从不可变事件和交付事实只读推导尝试数、耗时、TCR、重新交接和组合多样性。窗口和百分位
 样本会明确显示；缺失或矛盾事实保持不完整，绝不会变成零或成功。它绝不选择模型组合、
 改变 backlog 顺序或合并 PR。
 
@@ -278,7 +289,7 @@ Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builde
 不产生生命周期成功，也不证明模型执行，更不替代独立 Evaluator 或正式的 fail-closed 校验。
 流程是：预检失败 → 在同一帧修复 → 预检通过 → 正式 validate；它不是自动重试或 fallback。
 
-`roll supervisor metrics [--json]` 是配套的只读流程投影。它从事件账本推导逐卡与聚合的排队、依赖、首个动作、合并、PR/CI 和对账耗时；终端输出会写明观察窗口、样本量、`nearest-rank` 百分位算法以及每一项缺失的上游事实，JSON 保留同样的不确定性。依赖等待会区分“未完成依赖阻塞”和“依赖已满足但尚未派发”。`handoff_ready` 仍然只是交接，绝不会被显示为已交付。
+`roll supervisor metrics [--json]` 仍是保留的流程滞后投影（排队/依赖/合并/CI/对账）；统一的 `roll supervisor delivery <id>` 视图才是读取 feature 交付结论的主要方式。它从事件账本推导逐卡与聚合的排队、依赖、首个动作、合并、PR/CI 和对账耗时；终端输出会写明观察窗口、样本量、`nearest-rank` 百分位算法以及每一项缺失的上游事实，JSON 保留同样的不确定性。依赖等待会区分“未完成依赖阻塞”和“依赖已满足但尚未派发”。`handoff_ready` 仍然只是交接，绝不会被显示为已交付。
 完整的[交付指标词典](guide/zh/delivery-metrics.md)列出两条命令的来源事实、分子/分母、
 时间边界、未知行为与建议性边界；artifact 缺失不是关于模型调用的证据。
 

@@ -13,6 +13,92 @@ the terminal mean that the required fact was absent, malformed, or inconsistent;
 they are not zero, success, or a model-execution claim. Percentiles use
 `nearest-rank`; every timing row names its sample size.
 
+## Feature delivery view
+
+`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]`
+is the read-only unified feature delivery view. It joins loop cycles and Delta
+delegations into one projection per card or feature:
+
+- **One card has one final delivery conclusion**
+  (`not_started | active | blocked | handoff_ready | delivered | attested | unknown`).
+  Only a delivered/attested card is a final "done" conclusion; `handoff_ready`
+  is a handoff, not a delivery.
+- **Every attempt remains visible under its card.** A card repaired after an
+  earlier failed attempt shows the failed earlier attempt **and** the delivering
+  later attempt — the earlier attempt never erases main truth.
+- **Timing, TCR, and rework numbers show their sample size** — fractions like
+  `1/2`, `n/a`, and `P50 · sample N` are explicit, never bare averages.
+- **Missing history stays incomplete** (`?` / `n/a` / `Incomplete:` codes in the
+  terminal, `null` plus codes in `--json`), never a zero or a success. A visible
+  `0` always means a known zero.
+
+Loop cycles and Delta delegations are interleaved by time in one list — there is
+no separate loop view and no separate Delta view to read as the primary
+workflow. The two dictionaries below (`## Delta dictionary` /
+`## Supervisor dictionary`) remain reference detail for `roll delta metrics` and
+`roll supervisor metrics`; neither replaces this view.
+
+**Safety boundary.** The command reads facts only. It opens the current backlog,
+feature registry, and event ledgers read-only and projects them; it cannot route
+an agent, retry work, change the backlog, merge a PR, or attest a card. Running
+it never appends an event, writes a backlog row, spawns a session, or touches
+git.
+
+### Worked example: feature `delta-team`
+
+Fixture: feature `delta-team` has two cards. Card `US-A` was repaired after an
+earlier attempt — delegation `d1` was abandoned (`delta:d1 · failed`), a later
+delegation `d2` handed off and the owner merged its PR, so the card is
+`delivered`. Card `US-B` has one delegation `d3` that handed off without a
+merge, so it is `handoff_ready`.
+
+```
+Delivery view: delta-team
+Cards 2 · attempts 3
+- US-A: delivered
+  delta:d1 · failed · elapsed 1000ms
+  delta:d2 · handoff_ready · elapsed 1000ms
+- US-B: handoff_ready
+  delta:d3 · handoff_ready · elapsed 1000ms
+First-pass 0/0 (n/a; 1 incomplete excluded)
+Rework attempts after first 1
+Elapsed samples 3 · P50 1000ms · P95 1000ms
+Incomplete: missing_delta_delivery_publish, missing_designer_start, missing_evaluator_start
+```
+
+Reading rules for this render:
+
+- **Feature total**: `Cards 2 · attempts 3` — the summary counts each card's
+  final state exactly once (`states: delivered 1, handoff_ready 1`) and every
+  admitted attempt; totals are read across the **same** list, there is no second
+  table.
+- **One card, one final conclusion**: `US-A` is `delivered` because its PR merge
+  is confirmed, while its attempt `delta:d2` stays visible with the delegation's
+  own terminal (`handoff_ready`) — the owner merged the published PR after the
+  handoff. The card conclusion comes from final truth, not from any single
+  attempt.
+- **First-pass 0/0 (n/a; 1 incomplete excluded)**: only delivered cards with a
+  complete attempt history enter the denominator. `US-A` is delivered, but its
+  earlier abandoned attempt left missing delivery evidence, so the view marks
+  the card incomplete and excludes it — it renders `n/a` plus `1 incomplete
+  excluded`, never a fabricated `0%`. US-A's repair is exactly why it can never
+  be first-pass: its earliest attempt was `failed`.
+- **Rework attempts after first 1**: the one attempt after US-A's earliest
+  attempt (`delta:d2`).
+- **Elapsed samples 3**: only non-null elapsed attempts; P50/P95 use nearest-rank
+  over those three samples; a missing or inverted boundary would drop the sample
+  and add a code instead of borrowing one.
+- **Incomplete, not zero**: the `Incomplete:` line lists every diagnostic code —
+  here `missing_delta_delivery_publish` (the abandoned attempt's cycle never
+  published a delivery) plus `missing_designer_start` / `missing_evaluator_start`
+  (this fixture's delegations carry no designer/evaluator stage records). A
+  visible `0` always means a known zero.
+- **Source references**: the human view hides provenance; `--json` exposes
+  per-attempt and per-view `sourceRefs` (`ledgerUri` + `line` + `rawSha256`,
+  e.g. `<project>/.roll/events.ndjson:10`) and every diagnostic code. Source
+  labels are detail-only — they are never rendered as separate loop and Delta
+  panes.
+
 ## Delta dictionary
 
 | Metric | Source facts and calculation | Boundary and incomplete behavior | Gate? |
