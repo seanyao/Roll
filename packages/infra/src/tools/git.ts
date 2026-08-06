@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the git tool adapter.
+ */
 import type { GitResult } from "../git.js";
 import { rawGit } from "../git.js";
 import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";

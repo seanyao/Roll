@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll loop runner-readout` subcommand, reading the runner version readout.
+ */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isRollPackageName } from "@roll/core";

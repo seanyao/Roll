@@ -1,4 +1,7 @@
 /**
+ * @responsibility Assesses capture-policy readiness with actionable reasons.
+ */
+/**
  * US-EVID-032 — capture-policy readiness (AC4).
  *
  * ONE shared collector that surfaces, with actionable reasons:

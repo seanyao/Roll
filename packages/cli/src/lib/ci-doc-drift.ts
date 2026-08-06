@@ -1,4 +1,7 @@
 /**
+ * @responsibility Adapts the doc-drift verdict for CI and the matching merge-check set.
+ */
+/**
  * US-RULE-004c — CI's doc-drift adapter and the matching merge-check set.
  *
  * The verdict itself stays in `doc-drift.ts`; this module deliberately owns

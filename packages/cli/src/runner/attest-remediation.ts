@@ -1,4 +1,7 @@
 /**
+ * @responsibility Remediates ac-map omissions with a surgical second pass.
+ */
+/**
  * FIX-246 — ac-map omission remediation (one surgical second pass).
  *
  * Observed 2026-06-10: agents deliver real work (commits, tests, even a

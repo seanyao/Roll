@@ -1,4 +1,7 @@
 /**
+ * @responsibility Describes how the project is being driven for the loop.
+ */
+/**
  * US-LOOP-112 — how Roll describes the way this project is being driven.
  *
  * This module used to answer a BINARY question: `guided` or `autonomous`. Its one

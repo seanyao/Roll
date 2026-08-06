@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects browser-operation events from the project ledger into browser operations truth.
+ */
+/**
  * US-BROW-009b — lightweight facts collector that reads browser operation
  * events from the project's ledger and passes them to {@link browserOperationsTruth}.
  * Missing facts are honest (unknown), never inferred.

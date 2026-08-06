@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll worktree cleanup` subcommand, safe recovery from branch-canary worktree pressure.
+ */
+/**
  * FIX-1273 — `roll worktree cleanup`: safe recovery for branch-canary historical
  * worktree pressure.
  *

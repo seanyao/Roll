@@ -1,3 +1,6 @@
+/**
+ * @responsibility Defines the runner port adapter types for injected dependencies.
+ */
 import type { CycleContext, CycleEvent, ObservedCommit, OpenPrReferenceInput, RouteDeps, RunKey } from "@roll/core";
 import type { RollEvent } from "@roll/spec";
 import type { CaptureMarker, Clock, ScreenshotResult } from "@roll/infra";

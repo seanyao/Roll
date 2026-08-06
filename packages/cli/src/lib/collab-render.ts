@@ -1,4 +1,7 @@
 /**
+ * @responsibility Defines the collab view render contract and protocol legend.
+ */
+/**
  * US-OBS-037 — Collab view render contract + protocol legend (Layer A)
  *
  * Pure render primitives for the agent-collaboration visual vocabulary.

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the MCP tool adapter.
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join } from "node:path";
 import { BrowserOperationLedger, BrowserTransportRegistry, isReservedBrowserTransport } from "@roll/core";

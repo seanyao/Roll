@@ -1,4 +1,7 @@
 /**
+ * @responsibility Maintains the runtime poison-pill skip-list.
+ */
+/**
  * FIX-363 (loop resilience) — the runtime poison-pill skip-list.
  *
  * Before this, the cron loop (`roll loop run-once`) auto-PAUSED the WHOLE loop

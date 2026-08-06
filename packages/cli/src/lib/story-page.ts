@@ -1,4 +1,7 @@
 /**
+ * @responsibility Generates shared story-card pages.
+ */
+/**
  * Shared story-card page generator (US-META-005/006/007).
  *
  * One source of truth for the per-story `spec.md` + `index.html` skeleton and

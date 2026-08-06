@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the CycleRoleSummary projection types.
+ */
+/**
  * CycleRoleSummary — typed projection types for US-OBS-032.
  *
  * A CycleRoleSummary translates low-level RollEvent facts into a readable

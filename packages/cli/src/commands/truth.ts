@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll truth query` subcommand, the CLI entry point for deterministic delivery-truth queries.
+ */
+/**
  * FIX-389a / US-TRUTH-016 AC4 — `roll truth query <storyId>`: the one CLI
  * entry point for deterministic delivery-truth queries.
  *

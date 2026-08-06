@@ -1,3 +1,6 @@
+/**
+ * @responsibility Loads the runner policy and resume scope.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parsePolicy, type ResumeScope } from "@roll/core";

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the tool contract types.
+ */
 /** Tool contracts (Tool Use capability layer). */
 import type { JsonSchema } from "./json-schema.js";
 export type ToolId = string & { readonly __brand?: "ToolId" };

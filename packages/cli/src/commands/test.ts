@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll test` subcommand, porting the isolation dispatcher and the test runner.
+ */
+/**
  * `roll test` — TS port of bin/roll cmd_test (6849-6942) plus the isolation
  * dispatcher it drives: `_cmd_test_where` (6821-6847), `_isolation_get_type`
  * (6552-6577), `_isolation_dispatch` (6582-6617), the `none` adapter

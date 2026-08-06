@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs capture helper peer processes for the capture lane.
+ */
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

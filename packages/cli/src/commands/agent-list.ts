@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll agent list` subcommand, listing the known agent registry with installed and current markers.
+ */
+/**
  * `roll agent list` — TS port of bin/roll cmd_agent `list)` arm (US-CLI-002).
  * Lists the known agent registry with installed/current markers, byte-aligned
  * with the bash oracle (colors honor NO_COLOR exactly like bin/roll does).

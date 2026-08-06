@@ -1,3 +1,6 @@
+/**
+ * @responsibility Handles capture-facts cycle commands and records capture facts.
+ */
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

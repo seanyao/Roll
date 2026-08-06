@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `index` subcommand, regenerating the authoritative index and the features index page.
+ */
+/**
  * US-META-001 — `roll index`: (re)generate `.roll/index.json`, the authoritative
  * ID→epic map the archive layout uses to place a card's deliverables under
  * `features/<epic>/<ID>/`. Also regenerates `features/index.html`, redesigned

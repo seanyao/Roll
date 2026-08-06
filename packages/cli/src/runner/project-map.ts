@@ -1,3 +1,6 @@
+/**
+ * @responsibility Maps project state for story routing decisions.
+ */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { readLatestStoryReviewScore, REVIEW_SCORE_LOW_THRESHOLD, type ReviewScoreEntry } from "../lib/review-score.js";

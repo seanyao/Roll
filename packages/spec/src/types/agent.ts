@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the agent type vocabulary.
+ */
 /** Agent routing contracts (BC3, I10). */
 export const AGENT_NAMES = ["claude", "kimi", "codex", "pi", "agy", "reasonix", "cursor"] as const;
 export type AgentName = (typeof AGENT_NAMES)[number];

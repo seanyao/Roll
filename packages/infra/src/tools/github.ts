@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the GitHub tool adapter.
+ */
 import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
 import { rawGh, type PrMergeMode } from "../github.js";
 import { githubCiInputSchema, githubCiOutputSchema, githubPrInputSchema, githubPrOutputSchema } from "./schema-contracts.js";

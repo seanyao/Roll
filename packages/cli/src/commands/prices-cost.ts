@@ -1,4 +1,7 @@
 /**
+ * @responsibility Re-exports the canonical cost and currency resolution from @roll/core.
+ */
+/**
  * Cost/currency resolution — re-export of the canonical port now living in
  * `@roll/core` (`packages/core/src/cost/prices.ts`).
  *

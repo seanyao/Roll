@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll lang` subcommand, reading and persisting the UI language setting.
+ */
+/**
  * `roll lang` — TS port of bin/roll cmd_lang (14334-14379).
  * No-arg: print `current: <lang>, source: <src>`. `zh`/`en`: persist
  * `lang: <v>` to ~/.roll/config.yaml (atomic temp-file swap, mirroring the

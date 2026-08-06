@@ -1,3 +1,6 @@
+/**
+ * @responsibility Formats tool cost and status for display.
+ */
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ToolCost } from "@roll/spec";

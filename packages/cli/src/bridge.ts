@@ -1,4 +1,7 @@
 /**
+ * @responsibility Routes CLI subcommands to their TypeScript handlers and prints usage for unregistered commands.
+ */
+/**
  * CLI bridge — US-SCAF-004 / US-PORT-021.
  *
  * Commands route TS-first: a subcommand registered in the ported table runs its

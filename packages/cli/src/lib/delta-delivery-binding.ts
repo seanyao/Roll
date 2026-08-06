@@ -1,4 +1,7 @@
 /**
+ * @responsibility Binds a delivery writer to the immutable terminal reservation it closes.
+ */
+/**
  * Bind a delivery writer to the immutable terminal reservation it is actually
  * closing.  Cycle delivery events normally carry no Delta identity; they gain
  * one only when their durable run is the terminal host-Delta run itself.

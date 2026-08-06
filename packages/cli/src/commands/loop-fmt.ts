@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop fmt` subcommand, formatting the agent observation stream for the watch window.
+ */
+/**
  * `roll loop fmt` — US-PORT-012 → US-LOOP-077.
  *
  * The observation-window pipe: stdin is the running agent's raw stream (the same

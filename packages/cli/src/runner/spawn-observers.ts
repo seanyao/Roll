@@ -1,3 +1,6 @@
+/**
+ * @responsibility Spawns observer processes for the adversarial lane.
+ */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {

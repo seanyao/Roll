@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the policy contract types.
+ */
 /** Policy contracts (BC6) — human intent, read and obeyed by loops. */
 import type { AgentId, ModelId } from "./agent.js";
 

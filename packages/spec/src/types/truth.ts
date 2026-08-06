@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the truth source declaration types.
+ */
+/**
  * US-TRUTH-000 — Truth Source Declaration (the field-level authority matrix).
  *
  * Roll's drift epidemic (FIX-243/244/248/249; the 2026-06-10 day where every

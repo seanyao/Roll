@@ -1,4 +1,7 @@
 /**
+ * @responsibility Adapts managed Chrome and DevTools sessions.
+ */
+/**
  * US-BROW-004b — Managed Chrome/DevTools adapter.
  *
  * Runs approved typed actions in an isolated temporary Chrome profile, observes

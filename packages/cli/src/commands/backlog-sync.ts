@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll backlog sync` subcommand, importing GitHub issues into the backlog.
+ */
+/**
  * `roll backlog sync` — GitHub issues → backlog (US-PORT-019 port of
  * lib/github_sync.py's `sync` subcommand). The pure mapping/merge/config logic
  * lives in @roll/core (backlog/github-sync); this module owns the I/O: token

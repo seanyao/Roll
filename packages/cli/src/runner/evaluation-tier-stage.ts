@@ -1,4 +1,7 @@
 /**
+ * @responsibility Turns a card's risk tier into evaluation depth at the capture stage.
+ */
+/**
  * US-CYCLE-008 — the capture-stage glue that turns a card's lint-validated
  * `risk_tier` into evaluation DEPTH, kept out of capture-facts-handler.ts so that
  * hot handler stays under its module-size budget (REFACTOR-060). Pure orchestration

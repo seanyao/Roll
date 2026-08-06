@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides managed-lane fixture seams with a fake target.
+ */
+/**
  * US-BROW-004c — Managed-lane fixture seams (fake target).
  *
  * A deterministic, dependency-free set of {@link ManagedChromeAdapterDeps} that

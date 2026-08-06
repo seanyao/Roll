@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the Features Index landing page as the Delivery Dossier front page.
+ */
+/**
  * US-DOSSIER-001a — the Features Index landing page, rebuilt as the Delivery
  * Dossier front page. The page exists to make one thing legible in ten
  * seconds: backlog is *wish*, main is *truth*, and how much wish has become

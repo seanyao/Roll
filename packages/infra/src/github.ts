@@ -1,4 +1,7 @@
 /**
+ * @responsibility Drives the gh CLI for GitHub operations as the v2 loop does.
+ */
+/**
  * GitHub module — TS I/O adapters that drive the `gh` CLI exactly as the v2 loop
  * does (US-INFRA-003).
  *

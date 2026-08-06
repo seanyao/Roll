@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides GitHub PR status through the provider adapter.
+ */
+/**
  * FIX-1052 — GitHub PR status provider adapter.
  *
  * Implements the {@link PrStatusProvider} interface from `@roll/core` using the

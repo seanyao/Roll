@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop run-once` subcommand, the TS-first single-cycle runner.
+ */
+/**
  * `roll loop run-once` — TS-first single-cycle runner (US-LOOP runner adapter,
  * prerequisite for US-LOOP-006 v2-vs-v3 parallel verification).
  *

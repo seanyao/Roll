@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the machine-global Skills page.
+ */
+/**
  * US-DOSSIER-032 — the machine-global Skills page (`skills.html`), reached by
  * the top-bar breadcrumb (MACHINE › Skills). Skills are a MACHINE-side contract
  * — `skills/<name>/SKILL.md` governs every project on this box — so this is a

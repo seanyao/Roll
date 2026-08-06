@@ -1,3 +1,6 @@
+/**
+ * @responsibility Plans the onboard changeset for an existing codebase.
+ */
 import { createHash } from "node:crypto";
 import { posix as pathPosix } from "node:path";
 import { type InitDiagnosis, type InitFacts } from "./init-diagnosis.js";

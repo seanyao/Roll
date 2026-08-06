@@ -1,3 +1,6 @@
+/**
+ * @responsibility Transactionally allocates the managed primary workspace set.
+ */
 /** US-LOOP-124 — transactional allocator for a managed primary workspace set. */
 import {
   MANAGED_WORKSPACE_SCHEMA,

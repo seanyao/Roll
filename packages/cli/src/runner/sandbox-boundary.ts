@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs child commands inside the sandbox boundary.
+ */
 import { execFile } from "node:child_process";
 import { mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";

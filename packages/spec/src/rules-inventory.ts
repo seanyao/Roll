@@ -1,4 +1,7 @@
 /**
+ * @responsibility Defines the inventory parser and the filesystem-agnostic coverage auditor.
+ */
+/**
  * The inventory auditor is intentionally filesystem-agnostic.  The CLI script
  * supplies a tiny adapter; tests supply an in-memory tree.  Keeping discovery
  * here makes ordering, containment and fail-closed classification testable
@@ -10,7 +13,7 @@ import { normalizePath, type ParsedRulesV2 } from "./rules.js";
 export type InventoryPurpose = "responsibility" | "rule-candidate" | "doc-surface";
 export type CandidateClassification = "registered" | "duplicate-of" | "out-of-scope";
 export interface CoverageExclusion { readonly path: string; readonly reason: string; readonly owner: string; readonly reviewBy: string; }
-export interface CoverageSet { readonly id: string; readonly purpose: InventoryPurpose; readonly roots: readonly string[]; readonly include: readonly string[]; readonly exclude: readonly CoverageExclusion[]; readonly allowOverlapWith: readonly string[]; }
+export interface CoverageSet { readonly id: string; readonly purpose: InventoryPurpose; readonly roots: readonly string[]; readonly include: readonly string[]; readonly exclude: readonly CoverageExclusion[]; readonly allowOverlapWith: readonly string[]; readonly mapLabel?: string; }
 export interface InventoryCandidate { readonly path: string; readonly marker: string; readonly classification: CandidateClassification; readonly ruleId?: string; readonly reason: string; readonly reviewedBy: string; }
 export interface RulesInventory { readonly version: 1; readonly coverageSets: readonly CoverageSet[]; readonly candidates: readonly InventoryCandidate[]; }
 export interface InventoryError { readonly message: string; }
@@ -52,13 +55,23 @@ export function parseRulesInventory(textInput: string): InventoryResult<RulesInv
   const rootUnknown = unknownFields(root, ["version", "coverage_sets", "candidates"], "inventory"); if (rootUnknown) return fail(rootUnknown);
   if (root.version !== 1) return fail(`inventory.version: must be 1, got ${JSON.stringify(root.version)}`);
   if (!Array.isArray(root.coverage_sets) || !Array.isArray(root.candidates)) return fail("inventory.coverage_sets and inventory.candidates must be arrays");
-  const ids = new Set<string>(); const coverageSets: CoverageSet[] = [];
+  const ids = new Set<string>(); const mapLabels = new Set<string>(); const coverageSets: CoverageSet[] = [];
   for (let index = 0; index < root.coverage_sets.length; index += 1) {
     const raw = root.coverage_sets[index]; const context = `coverage_sets[${index}]`;
     if (!plain(raw)) return fail(`${context}: must be an object`);
-    const fieldError = unknownFields(raw, ["id", "purpose", "roots", "include", "exclude", "allow_overlap_with"], context); if (fieldError) return fail(fieldError);
+    const fieldError = unknownFields(raw, ["id", "purpose", "roots", "include", "exclude", "allow_overlap_with", "map_label"], context); if (fieldError) return fail(fieldError);
     const id = text(raw.id); if (!id || !SET_ID.test(id) || ids.has(id)) return fail(`${context}.id: invalid or duplicate coverage set id`); ids.add(id);
     if (raw.purpose !== "responsibility" && raw.purpose !== "rule-candidate" && raw.purpose !== "doc-surface") return fail(`${context}.purpose: invalid purpose`);
+    let mapLabel: string | undefined;
+    if (raw.map_label !== undefined) {
+      const label = text(raw.map_label);
+      if (!label || !SET_ID.test(label)) return fail(`${context}.map_label: invalid map_label`);
+      if (raw.purpose !== "responsibility") return fail(`${context}.map_label: only valid on responsibility sets`);
+      if (label === "core") return fail(`${context}.map_label: "core" is reserved; the legacy core set omits map_label`);
+      if (mapLabels.has(label)) return fail(`${context}.map_label: duplicate map_label "${label}"`);
+      mapLabels.add(label);
+      mapLabel = label;
+    }
     const rootsRaw = stringArray(raw.roots, `${context}.roots`); if (!rootsRaw.ok) return rootsRaw;
     const roots: string[] = []; for (const rootPath of rootsRaw.value) { const parsed = normalized(rootPath, `${context}.roots`); if (!parsed.ok) return parsed; roots.push(parsed.value); }
     if (new Set(roots).size !== roots.length) return fail(`${context}.roots: duplicate root`);
@@ -70,7 +83,7 @@ export function parseRulesInventory(textInput: string): InventoryResult<RulesInv
     const exclude: CoverageExclusion[] = []; const excluded = new Set<string>();
     for (let ex = 0; ex < excludeRaw.length; ex += 1) { const item = excludeRaw[ex]; const exContext = `${context}.exclude[${ex}]`; if (!plain(item)) return fail(`${exContext}: must be an object`); const field = unknownFields(item, ["path", "reason", "owner", "review_by"], exContext); if (field) return fail(field); const path = normalized(item.path, `${exContext}.path`); if (!path.ok) return path; const reason = text(item.reason); const owner = text(item.owner); const reviewBy = text(item.review_by); if (!reason || !owner || !reviewBy || excluded.has(path.value)) return fail(`${exContext}: path, reason, owner and review_by must be non-empty; path must be unique`); excluded.add(path.value); exclude.push({ path: path.value, reason, owner, reviewBy }); }
     if (exclude.some((entry) => !roots.some((root) => entry.path.startsWith(`${root}/`)))) return fail(`${context}.exclude: path must be contained by a declared root`);
-    coverageSets.push({ id, purpose: raw.purpose, roots, include, exclude, allowOverlapWith: overlapRaw.value });
+    coverageSets.push({ id, purpose: raw.purpose, roots, include, exclude, allowOverlapWith: overlapRaw.value, ...(mapLabel === undefined ? {} : { mapLabel }) });
   }
   const seenCandidates = new Set<string>(); const candidates: InventoryCandidate[] = [];
   for (let index = 0; index < root.candidates.length; index += 1) {

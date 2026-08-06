@@ -1,4 +1,7 @@
 /**
+ * @responsibility Launches interactive agents with shared primitives for init, design, and setup.
+ */
+/**
  * Shared primitives for interactive agent launch — used by `roll init` (legacy
  * onboard), `roll design`, and `roll setup` (US-ONBOARD-NUDGE-004/006).
  *

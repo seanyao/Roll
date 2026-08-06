@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll init` subcommand, scaffolding a new project with AGENTS.md and the roll structure.
+ */
+/**
  * `roll init` — TS port of bin/roll cmd_init (2147-2210) and its scaffolding
  * helpers, plus the v2 UI renderer lib/roll-init.py (rendered natively here via
  * the shared render primitives). Mirrors the DETERMINISTIC happy path:

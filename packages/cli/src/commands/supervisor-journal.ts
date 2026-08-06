@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll supervisor journal` subcommand, reading and appending supervisor journal events.
+ */
+/**
  * US-OBS-048 — `roll supervisor journal` read/write surface.
  *
  * Reads and appends structured `supervisor:journal` events to the project's

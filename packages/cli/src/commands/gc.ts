@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `gc` subcommand, aging out surplus attest run directories per the archive verdict.
+ */
+/**
  * US-META-001 — `roll gc`: bound the size of the archive layout.
  *
  * Every attest writes a fresh, never-overwritten run dir under a card folder

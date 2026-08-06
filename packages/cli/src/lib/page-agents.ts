@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the machine-global Agents page.
+ */
+/**
  * US-DOSSIER-031 — the machine-global **Agents** page the top-bar breadcrumb
  * routes to (`agents.html`), filling the US-DOSSIER-027 stub.
  *

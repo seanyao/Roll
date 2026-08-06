@@ -1,3 +1,6 @@
+/**
+ * @responsibility Applies correction actions from the correction circuit verdict.
+ */
 import {
   BacklogStore,
   ConflictError,

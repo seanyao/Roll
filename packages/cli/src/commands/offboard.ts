@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `offboard` subcommand, porting the v2 offboard flow.
+ */
+/**
  * `roll offboard` — TS port of bin/roll cmd_offboard (2987-3159) plus the
  * helpers it leans on: _onboard_changeset_path (2591-2593), _loop_in_cycle
  * (10493-10495), and _launchctl_safe (9606-9633).

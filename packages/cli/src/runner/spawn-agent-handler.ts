@@ -1,3 +1,6 @@
+/**
+ * @responsibility Spawns an agent with the extracted usage and cost tracking.
+ */
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { extractUsage, getAgentSpec, toCycleCost, type AgentInternalFailure, type CycleCommand, type CycleContext, type RunKillReason } from "@roll/core";

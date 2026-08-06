@@ -1,3 +1,6 @@
+/**
+ * @responsibility Provides runner time and cycle timing helpers.
+ */
 import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type { Ports } from "./ports.js";

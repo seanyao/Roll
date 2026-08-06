@@ -1,4 +1,7 @@
 /**
+ * @responsibility Shares the pardon-skip-list logic between the legacy command and doctor pardon.
+ */
+/**
  * Shared pardon-skip-list logic — consumed by both `loop pardon-skip-list`
  * (legacy transition) and `doctor pardon` (canonical surface).
  *

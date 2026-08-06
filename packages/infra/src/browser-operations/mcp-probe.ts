@@ -1,4 +1,7 @@
 /**
+ * @responsibility Probes the real MCP lane for doctor and update.
+ */
+/**
  * US-BROW-019 — real MCP lane probe for doctor --probe and update --apply.
  *
  * The probe runs the exact pinned chrome-devtools-mcp session through

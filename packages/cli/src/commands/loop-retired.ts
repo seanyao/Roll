@@ -1,4 +1,7 @@
 /**
+ * @responsibility Prints retirement redirect stubs for the retired v2 tmux-popup loop commands.
+ */
+/**
  * Retirement stubs for the v2 tmux-popup loop commands `monitor` / `attach`
  * (US-PORT-007). The v3 self-contained runner already streams every cycle into
  * the tmux session `roll-loop-<slug>` (see loop-state.ts), so the old

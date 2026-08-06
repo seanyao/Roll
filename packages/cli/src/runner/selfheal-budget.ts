@@ -1,4 +1,7 @@
 /**
+ * @responsibility Enforces the per-story self-heal agent-rotation budget.
+ */
+/**
  * FIX-930 — per-story self-heal agent-rotation budget (the anti-oscillation
  * backbone).
  *

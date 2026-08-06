@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs outward smoke checks in isolated temporary environments with enforced timeouts and captured artifacts.
+ */
+/**
  * US-ATTEST-016 — CLI adapter for the external smoke runner.
  *
  * Provides the real process-spawning implementation that the pure core

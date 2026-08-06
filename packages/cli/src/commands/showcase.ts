@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `showcase` subcommand, orchestrating the golden-path standard E2E in a sandbox.
+ */
+/**
  * US-SHOW-001 — `roll showcase`: the golden-path standard E2E.
  *
  * Orchestrates roll's canonical self-proof in an ISOLATED sandbox so it never

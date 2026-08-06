@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop status` subcommand, rendering the loop health dashboard.
+ */
+/**
  * `roll loop status` — TS port of lib/roll-loop-status.py (US-CLI-006).
  *
  * Renders the loop health dashboard. Byte-aligned with the python oracle

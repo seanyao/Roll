@@ -1,4 +1,7 @@
 /**
+ * @responsibility Publishes deliveries locally through the shared push-time evidence gate.
+ */
+/**
  * E3 — local-only delivery (`publish_mode: local`) + the shared push-time
  * evidence gate.
  *

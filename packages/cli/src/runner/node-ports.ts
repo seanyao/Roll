@@ -1,3 +1,6 @@
+/**
+ * @responsibility Manages the node ports file for cross-process coordination.
+ */
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

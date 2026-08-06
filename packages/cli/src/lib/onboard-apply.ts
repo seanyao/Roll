@@ -1,3 +1,6 @@
+/**
+ * @responsibility Applies the onboard plan to an existing project.
+ */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

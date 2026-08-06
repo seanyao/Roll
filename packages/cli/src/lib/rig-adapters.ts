@@ -1,3 +1,6 @@
+/**
+ * @responsibility Maps machine-local configured-model rig adapters.
+ */
 /** US-DELTA-017 — machine-local, versioned configured-model adapter mapping. */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";

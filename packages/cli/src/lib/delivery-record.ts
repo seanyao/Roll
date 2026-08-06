@@ -1,4 +1,7 @@
 /**
+ * @responsibility Resolves a card's delivery record (PR and merge sha) for the attest evidence collector.
+ */
+/**
  * US-EVID-033 — resolve THIS card's delivery record (PR + merge sha) for the
  * attest evidence collector.
  *

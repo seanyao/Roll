@@ -1,4 +1,7 @@
 /**
+ * @responsibility Adapts git operations exactly as the v2 loop performs them.
+ */
+/**
  * Git module — TS I/O adapters mirroring the git operations the v2 loop performs
  * (US-INFRA-002).
  *

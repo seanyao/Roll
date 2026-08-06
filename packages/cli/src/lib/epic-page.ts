@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the epic detail page of the Delivery Dossier.
+ */
+/**
  * US-DOSSIER-001b — the epic detail page (`.roll/features/<epic>/index.html`).
  *
  * One epic, fully accounted: masthead with a breadcrumb home, an epic-level

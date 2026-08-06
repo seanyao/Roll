@@ -1,3 +1,6 @@
+/**
+ * @responsibility Handles the setup cycle commands for workspaces and submodules.
+ */
 import {
   assessBacklog,
   buildHasOpenPr,

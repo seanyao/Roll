@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the cross-agent pairing CLI surface (`pair`).
+ */
+/**
  * Cross-Agent Pairing CLI surface.
  *   `roll pair status` (US-PAIR-002) — observability: who is in the pairing pool,
  *     their vendor + capability, and why an agent is excluded. Observability is a

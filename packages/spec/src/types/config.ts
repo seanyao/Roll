@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the resolved config shapes.
+ */
 /** Config contracts — multi-layer resolution lives in infra; shapes live here. */
 export interface RollConfig {
   /** Resolved UI language ("en" | "zh") — single-language output per locale. */

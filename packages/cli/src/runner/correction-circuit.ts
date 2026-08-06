@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the correction circuit verdict over the policy and cycle state.
+ */
 import {
   correctionCircuitVerdict,
   parsePolicy,

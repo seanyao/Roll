@@ -1,4 +1,7 @@
 /**
+ * @responsibility Binds CAPTURED evidence into the harness-owned evidence set.
+ */
+/**
  * US-EVID-023 — harness-owned binding for CAPTURED evidence.
  *
  * The empty-shell discard (55/116 blocked attestations) is dominated by an

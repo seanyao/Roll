@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the collab-view projection types.
+ */
+/**
  * collab-view.v1 — cross-cycle collaboration projection derived from
  * CycleRoleSummary + RollEvent stream (US-OBS-038).
  *

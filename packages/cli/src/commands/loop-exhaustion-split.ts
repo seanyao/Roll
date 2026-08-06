@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop exhaustion-split` subcommand, auto-splitting exhausted cards into sub-stories.
+ */
+/**
  * `roll loop exhaustion-split <story-id> [reason]`
  *
  * FIX-931 — agent-exhaustion auto-split (self-heal chain 3/4). After FIX-930's

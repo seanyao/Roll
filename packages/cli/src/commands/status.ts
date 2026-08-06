@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll status` subcommand, rendering the one-screen sync health dashboard.
+ */
+/**
  * `roll status` — TS port of lib/roll-status.py (US-CLI-001).
  *
  * One-screen sync health: global conventions, AI clients table (with setup

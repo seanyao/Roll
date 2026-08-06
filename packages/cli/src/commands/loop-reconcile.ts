@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop reconcile` subcommand, the I/O adapter for reconcile-from-main.
+ */
+/**
  * `roll loop reconcile [--json]` — US-DELIV-002.
  *
  * The IO adapter for the layered reconcile-from-main pure function. Gathers

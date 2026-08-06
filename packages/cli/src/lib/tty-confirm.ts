@@ -1,4 +1,7 @@
 /**
+ * @responsibility Prompts the operator for a synchronous terminal y/N confirmation.
+ */
+/**
  * Synchronous interactive y/N confirm — used by `release ship` (FIX-228/229)
  * and any other command that needs a blocking terminal prompt.
  *

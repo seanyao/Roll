@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll backlog` write and maintenance subcommands (block, defer, unblock, promote, lint).
+ */
+/**
  * `roll backlog` WRITE/maintenance subcommands — US-PORT-019. Ports the bash
  * `cmd_backlog` status-management arms off the frozen `bin/roll`:
  *   - block / defer / unblock / promote : rewrite the Status cell (BacklogStore).

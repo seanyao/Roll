@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the backlog and story contract types.
+ */
 /** Backlog contracts (BC1, I9). */
 export type StoryId = string;
 

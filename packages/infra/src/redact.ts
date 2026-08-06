@@ -1,4 +1,7 @@
 /**
+ * @responsibility Redacts secrets and PII from captured evidence.
+ */
+/**
  * US-ATTEST-012 — secret / PII redaction red line.
  *
  * Acceptance evidence is human-authored command output: it can carry a token,

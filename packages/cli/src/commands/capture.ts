@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll capture` subcommand for capture-policy migration, evidence repair, and readiness status.
+ */
+/**
  * `roll capture` — US-EVID-032 capture policy migration, evidence-only repair,
  * and readiness status.
  *

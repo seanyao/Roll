@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop reconcile-pending` subcommand, a bounded one-pass reconcile of pending-merge PRs.
+ */
+/**
  * `roll loop reconcile-pending` — FIX-1052.
  *
  * Bounded, one-pass reconcile for pending-merge PRs. Polls each PR that is

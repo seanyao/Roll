@@ -1,4 +1,7 @@
 /**
+ * @responsibility Orchestrates the golden-path showcase as a pure testable core.
+ */
+/**
  * US-SHOW-001 — the golden-path showcase orchestration core (pure + testable).
  *
  * `roll showcase` is roll's canonical end-to-end self-proof: against a throwaway

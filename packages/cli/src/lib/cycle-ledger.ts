@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the cycle ledger view model with one row per loop cycle.
+ */
+/**
  * US-DOSSIER-013 — the cycle ledger view model: every loop cycle as one row
  * (verdict dot · cycle no · story · model · tokens · cost · duration) that
  * expands into a seven-segment trace tape (cycle→story→build→peer→ci→pr→end)

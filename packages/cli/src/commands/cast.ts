@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `cast` subcommand, rendering the role casting table in the terminal.
+ */
+/**
  * US-DOSSIER-037 — `roll cast`: the same role Casting table the static archive
  * shows (US-DOSSIER-030 Casting grid), brought to the terminal.
  *

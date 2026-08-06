@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the agents-on-this-machine panel view model for the loop tab.
+ */
+/**
  * US-DOSSIER-014 — the "agents on this machine" panel for the loop tab.
  *
  * One row per known agent: runner · version · 72h cycles & spend · availability.

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop signals` subcommand, reading scored runs for rubric signals.
+ */
+/**
  * `roll loop signals [--streak N] [--quiet]` — TS port of bin/roll's
  * `_loop_signals` read-face command (US-PORT-007). Reads the project's scored
  * runs.jsonl, asks the pure rubric detector (`@roll/core` detectSignals — a

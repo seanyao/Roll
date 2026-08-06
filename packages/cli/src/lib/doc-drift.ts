@@ -1,4 +1,7 @@
 /**
+ * @responsibility Decides whether a declared source surface changed without its declared documentation.
+ */
+/**
  * Doc-drift verdict (US-RULE-004a) — the SHARED pure decision for "a declared
  * source surface changed without its declared documentation". This module is
  * the single home for BOTH doc-gap rulesets:

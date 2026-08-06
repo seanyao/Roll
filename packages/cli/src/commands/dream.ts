@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll dream` subcommand, framing the dream service run and its output.
+ */
 import { dreamRunOnceCommand } from "./dream-run-once.js";
 import { ROLL_REPO_SLUG } from "@roll/core";
 import { rollVersion } from "./version.js";

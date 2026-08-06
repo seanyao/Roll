@@ -127,5 +127,46 @@ describe("inventory parser and pure auditor", () => {
     ["unknown", INVENTORY.replace("version: 1", "version: 1\nextra: no")],
     ["bad root", INVENTORY.replace("packages/core/src/attest", "../escape")],
     ["glob", INVENTORY.replace("**/*.ts", "src/*.ts")],
+    ["exclusion outside root", INVENTORY.replace("packages/core/src/attest/legacy.ts", "packages/other/src/legacy.ts")],
   ])("rejects inventory %s", (_name, text) => expect(parseRulesInventory(text).ok).toBe(false));
+
+  it("rejects an exclusion path outside the declared root with the containment message", () => {
+    const text = INVENTORY.replace("packages/core/src/attest/legacy.ts", "packages/other/src/legacy.ts");
+    const result = parseRulesInventory(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("exclude: path must be contained by a declared root");
+  });
+
+  // US-RULE-012 — map_label is additive: surfaced on responsibility sets, and
+  // every misuse (wrong purpose, reserved "core", bad charset, duplicate)
+  // fails loud without relaxing any pre-existing validation.
+  it("accepts map_label on a responsibility set and surfaces the parsed value", () => {
+    const text = INVENTORY.replace('include: ["**/*.ts"]', 'include: ["**/*.ts"]\n    map_label: cli');
+    const result = parseRulesInventory(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.coverageSets[0]?.mapLabel).toBe("cli");
+  });
+
+  it.each([
+    ["rule-candidate set", INVENTORY.replace("purpose: responsibility", "purpose: rule-candidate").replace('include: ["**/*.ts"]', 'include: ["**/*.ts"]\n    map_label: cli')],
+    ["reserved core label", INVENTORY.replace('include: ["**/*.ts"]', 'include: ["**/*.ts"]\n    map_label: core')],
+    ["bad charset", INVENTORY.replace('include: ["**/*.ts"]', 'include: ["**/*.ts"]\n    map_label: CLI')],
+  ])("rejects map_label on a %s", (_name, text) => expect(parseRulesInventory(text).ok).toBe(false));
+
+  it("rejects a duplicate map_label across two responsibility sets", () => {
+    const twoSets = INVENTORY.replace('include: ["**/*.ts"]', 'include: ["**/*.ts"]\n    map_label: cli').replace(
+      "candidates: []",
+      `  - id: maps-attest
+    purpose: responsibility
+    roots: [packages/core/src/attest]
+    include: ["**/*.ts"]
+    map_label: cli
+    allow_overlap_with: []
+    exclude: []
+candidates: []`,
+    );
+    const result = parseRulesInventory(twoSets);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain('duplicate map_label "cli"');
+  });
 });

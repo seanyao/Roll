@@ -1,4 +1,7 @@
 /**
+ * @responsibility Gates the cycle on the acceptance-report evidence chain.
+ */
+/**
  * FIX-207 — the acceptance-report (attest) gate.
  *
  * Skill 10.6 ("write the verification report") was a TEXT instruction: a cycle

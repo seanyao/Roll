@@ -1,4 +1,7 @@
 /**
+ * @responsibility Loads the Delta CLI preset artifacts.
+ */
+/**
  * US-DELTA-002 — CLI preset loader seam.
  *
  * Loads MachineDeltaPreset objects from the machine-local path only:

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Handles the repair-round warm-start briefing.
+ */
+/**
  * US-CYCLE-007 — runner glue for the repair-round warm-start briefing.
  *
  * The PURE packaging/budget/manifest logic lives in `@roll/core`

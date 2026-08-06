@@ -1,4 +1,7 @@
 /**
+ * @responsibility Executes the adversarial-pairing spawn_role command.
+ */
+/**
  * US-LOOP-102 — the adversarial-pairing `spawn_role` executor.
  *
  * The orchestrator (pure) sequences test_author → implementer → attack rounds

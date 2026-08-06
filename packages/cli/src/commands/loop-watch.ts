@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop watch` subcommand, the read-only live view of the loop.
+ */
+/**
  * `roll loop watch` — US-LOOP-074.
  *
  * The one-command, READ-ONLY, concise live view of the loop. It auto-locates the

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Freezes the acceptance contract at cycle start and detects drift.
+ */
+/**
  * US-EVID-021 — freeze the acceptance contract at cycle start; detect drift.
  *
  * The attest gate reads the contract (AC set + evidence frontmatter) from the

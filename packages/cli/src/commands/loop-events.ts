@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop events` subcommand, tailing the shared per-project event log.
+ */
+/**
  * `roll loop events [N]` — TS port of bin/roll's `_loop_event_log` (US-PORT-022).
  * Tails the last N events from the shared per-project event log
  * `<shared>/loop/events-<slug>.ndjson` and prints one aligned line each. Pure

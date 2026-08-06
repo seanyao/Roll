@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the bash tool adapter.
+ */
 import { join, resolve } from "node:path";
 import type { ExecResult, ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
 import { bashInputSchema, bashOutputSchema } from "./schema-contracts.js";

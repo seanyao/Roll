@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll doctor` subcommand, porting the four-section environment health checks.
+ */
+/**
  * `roll doctor` — TS port of bin/roll cmd_doctor (1700-1705) and its four
  * sections, IN ORDER:
  *   1. _doctor_agent_section          (1727-1757)

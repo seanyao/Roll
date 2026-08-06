@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reports the screenshot_exempt rate as an observability signal.
+ */
+/**
  * US-EVID-026 — screenshot_exempt rate as an observability signal.
  *
  * 27% of cards self-exempt from visual evidence; if exemption quietly creeps

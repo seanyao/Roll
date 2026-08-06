@@ -1,4 +1,7 @@
 /**
+ * @responsibility Executes emitted cycle commands as the runner adapter glue.
+ */
+/**
  * Runner adapter — the executable glue that lets the pure {@link cycleStep}
  * orchestrator actually drive a cycle (prerequisite for US-LOOP-006 v2-vs-v3
  * parallel verification).

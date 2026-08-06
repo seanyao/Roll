@@ -1,3 +1,6 @@
+/**
+ * @responsibility Shares managed-workspace allocation identity for cycle and Delta recovery.
+ */
 import type { ManagedWorkspaceSet, RollEvent } from "@roll/spec";
 
 /** Shared allocation identity for Cycle and host-guided Delta recovery. */

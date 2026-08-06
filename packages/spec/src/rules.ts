@@ -1,4 +1,7 @@
 /**
+ * @responsibility Defines the rules registry contract and its strict native v2 parser.
+ */
+/**
  * Rules registry contract (US-RULE-001) — the single machine-readable
  * definition layer for roll's redlines, parsed strictly from
  * `policy/rules.yaml`. Enforcement stays in its existing capability domain;

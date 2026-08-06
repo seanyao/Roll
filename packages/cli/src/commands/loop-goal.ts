@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll loop goal` subcommand, reviewing and updating the project goal.
+ */
 import { parseGoalYaml, type GoalScope, type RollGoal } from "@roll/spec";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

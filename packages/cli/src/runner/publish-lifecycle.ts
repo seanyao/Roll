@@ -1,3 +1,6 @@
+/**
+ * @responsibility Walks the publish lifecycle state machine for remote delivery.
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";

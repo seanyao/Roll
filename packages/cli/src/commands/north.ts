@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll north` subcommand, rendering the North Star report.
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";

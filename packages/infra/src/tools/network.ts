@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the network tool adapter.
+ */
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { RequestOptions } from "node:http";

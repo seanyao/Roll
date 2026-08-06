@@ -1,4 +1,7 @@
 /**
+ * @responsibility Distinguishes a slow peer review from an externally blocked agent.
+ */
+/**
  * FIX-363 (2/2) — distinguish a SLOW peer review from an externally BLOCKED agent.
  *
  * The pairing gate kills a reviewer at its wall-clock budget. But a "timeout" is

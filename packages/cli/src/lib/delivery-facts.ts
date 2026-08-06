@@ -1,4 +1,7 @@
 /**
+ * @responsibility Gathers reconcile delivery facts for the loop reconcile and cycles read paths.
+ */
+/**
  * US-DELIV-008 — the SINGLE reconcile fact-gathering adapter, shared by the
  * `roll loop reconcile` command and the `roll loop cycles` read path so both
  * feed the SAME pure `reconcileDelivery` (packages/core/src/delivery/

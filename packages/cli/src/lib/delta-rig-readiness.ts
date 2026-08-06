@@ -1,3 +1,6 @@
+/**
+ * @responsibility Projects machine-local Delta rig readiness in a human-localized form.
+ */
 /** US-DELTA-018 — pure, human-only localized Delta rig readiness projection. */
 import { projectRigReadiness, type RigCacheStatus } from "@roll/core";
 import { t, v3Catalog, type Lang } from "@roll/spec";

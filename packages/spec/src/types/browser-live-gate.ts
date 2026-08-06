@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the browser live-gate regression evidence contract.
+ */
+/**
  * US-BROW-020 — Live managed-lane regression gate evidence contract.
  *
  * This is the structured-evidence vocabulary for the real local Chrome +

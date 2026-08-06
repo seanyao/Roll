@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reconciles the latest released version from the real release truth source.
+ */
+/**
  * FIX-368 — reconcile the dossier's "latest released version" from the REAL
  * source of truth, not from the `release:gate` event cache.
  *

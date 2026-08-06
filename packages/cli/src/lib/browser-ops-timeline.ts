@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the compact read-only browser-operations timeline for the dossier.
+ */
+/**
  * US-BROW-013 — compact read-only browser-operations timeline for the dossier.
  *
  * Projection comes from {@link browserOperationsTimeline}; this module only

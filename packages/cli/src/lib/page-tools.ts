@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the machine-global Tools page.
+ */
+/**
  * US-TOOL-017 — the machine-global **Tools** page (`tools.html`), the fifth
  * machine-layer breadcrumb destination, peer to Agents · Skills · Conventions ·
  * About. It promotes the built-in tool catalog to a first-class machine-scope

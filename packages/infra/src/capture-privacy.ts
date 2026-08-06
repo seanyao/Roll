@@ -1,4 +1,7 @@
 /**
+ * @responsibility Checks post-capture privacy and redaction compliance.
+ */
+/**
  * US-PHYSICAL-007 — post-capture privacy checker.
  *
  * After Roll Capture.app returns a "taken" screenshot, attest must verify that

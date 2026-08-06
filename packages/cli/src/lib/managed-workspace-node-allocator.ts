@@ -1,4 +1,7 @@
 /**
+ * @responsibility Allocates managed workspaces through the node and git adapter.
+ */
+/**
  * Node/Git adapter for the common managed-workspace allocation state machine.
  *
  * Cycle uses the same state vocabulary through injected async runner ports;

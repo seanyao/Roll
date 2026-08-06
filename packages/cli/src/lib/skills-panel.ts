@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the skills surface from the strict audit and real invocations.
+ */
+/**
  * US-DOSSIER-017 / US-DOSSIER-032 — the Skills surface: the contract says how
  * work should be done; the strict audit + real invocations say how it actually
  * is. One row per skill READ FROM THE REPO DIRECTORY (no drifting hand-kept

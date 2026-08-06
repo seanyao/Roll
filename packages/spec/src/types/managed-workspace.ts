@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the portable event-backed managed-workspace facts.
+ */
+/**
  * US-LOOP-122 — portable, event-backed workspace facts.
  *
  * These values deliberately identify a workspace by a canonical-root-relative

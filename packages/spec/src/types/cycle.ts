@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the cycle contract types.
+ */
 /** Cycle contracts (BC2/BC8, I11/I12). */
 import type { ToolCost } from "./tool.js";
 

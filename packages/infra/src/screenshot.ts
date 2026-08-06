@@ -1,4 +1,7 @@
 /**
+ * @responsibility Dispatches physical screenshots to the right capture backend.
+ */
+/**
  * US-ATTEST-004 — physical screenshot dispatcher.
  *
  * Each surface carries its own SKIP preconditions (design D6) and the contract

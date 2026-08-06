@@ -1,4 +1,7 @@
 /**
+ * @responsibility Spawns real agent processes for the orchestrator's spawn_agent commands.
+ */
+/**
  * Agent spawn port — the EXECUTION glue between the orchestrator's
  * `{ kind: "spawn_agent" }` command and a real agent process (US-LOOP runner
  * adapter, prerequisite for US-LOOP-006).

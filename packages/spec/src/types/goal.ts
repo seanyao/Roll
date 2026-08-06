@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the goal schema and status types.
+ */
 export const GOAL_SCHEMA_VERSION = "goal.v1" as const;
 export const GOAL_STATUSES = ["active", "paused", "complete"] as const;
 export const GOAL_REVIEW_MODES = ["auto", "hetero", "self", "off"] as const;

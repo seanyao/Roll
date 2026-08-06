@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders pages with Playwright for in-process capture.
+ */
+/**
  * US-PHYSICAL-010 — Playwright render port for in-process rendered v2 capture.
  *
  * Headless Chromium navigates a declared surface URL, writes a PNG to `out`,

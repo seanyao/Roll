@@ -1,3 +1,6 @@
+/**
+ * @responsibility Attributes cycle failures to their root classes from the event stream.
+ */
 import type { FailureClass } from "@roll/spec";
 import { blockCauseRootKey, parseEventLine, type RollEvent } from "@roll/spec";
 import { EventBus } from "@roll/core";

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Writes the in-repo backlog for the child worktree.
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";

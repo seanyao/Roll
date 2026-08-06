@@ -1,3 +1,6 @@
+/**
+ * @responsibility Builds the morning report digest from the event stream.
+ */
 import { CHROME_CONTROLS, CHROME_CSS, CHROME_SCRIPT, buildLoopDigestModel, serializeEvent, type LoopDigestModel, type MorningRunRow } from "@roll/core";
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { createHash } from "node:crypto";

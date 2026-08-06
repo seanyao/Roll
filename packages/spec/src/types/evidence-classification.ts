@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the evidence classification contract types.
+ */
+/**
  * US-BROW-006 — Evidence classification contract.
  *
  * The EvidenceClassifier distinguishes three mutually-exclusive evidence classes

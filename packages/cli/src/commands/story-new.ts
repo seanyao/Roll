@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll story new` subcommand, the single channel for minting a card folder.
+ */
+/**
  * `roll story new` — the SINGLE channel for minting a card folder
  * (US-META-009). Reverse-derivation audit, 2026-06-08: card creation had no
  * code-enforced shape — `roll idea` generated proper cards, but design-time

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the browser capture tool adapter.
+ */
 import { join } from "node:path";
 import { PHYSICAL_SCREENSHOT_TOOL_CONTRACT } from "@roll/spec";
 import type { ExecResult, RollCaptureRequestV1, RollCaptureResponseV1, ToolDeclaration, ToolDeps, ToolErrorCode, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";

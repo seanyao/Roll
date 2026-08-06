@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `version` subcommand, reporting the running Roll version from the install tree.
+ */
+/**
  * `roll version` — single source of truth for the running Roll version.
  *
  * FIX-202: the version probe reads the install tree's `package.json` `version`

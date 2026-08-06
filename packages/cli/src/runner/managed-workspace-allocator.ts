@@ -1,4 +1,7 @@
 /**
+ * @responsibility Allocates managed workspaces through the common boundary.
+ */
+/**
  * Common managed-workspace allocation boundary.
  *
  * Callers request a durable WorkspaceSet through this module; they never

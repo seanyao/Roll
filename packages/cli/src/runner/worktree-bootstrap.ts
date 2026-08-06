@@ -1,3 +1,6 @@
+/**
+ * @responsibility Bootstraps worktrees with submodules and hooks.
+ */
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll update` subcommand, upgrading the global roll install and re-syncing.
+ */
+/**
  * `roll update` — upgrade the global roll install, invalidate the stale
  * update-check cache, re-sync via `roll setup`, then print the recent changelog.
  *

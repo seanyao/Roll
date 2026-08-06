@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the RollEvent published-language types.
+ */
+/**
  * RollEvent — the published language (BC7, I8): every loop appends these to
  * events.ndjson; all state is rebuilt from this stream, no separate cache.
  * Schema per specs/architecture §3 (v2-aligned).

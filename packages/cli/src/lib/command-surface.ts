@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides the one command-surface truth source for the CLI.
+ */
+/**
  * REFACTOR-056 — the ONE command-surface truth source.
  *
  * Roll's public CLI is a short list of product nouns and actions. A command is

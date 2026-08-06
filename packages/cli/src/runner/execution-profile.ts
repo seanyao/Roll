@@ -1,3 +1,6 @@
+/**
+ * @responsibility Persists the execution profile for the runner.
+ */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";

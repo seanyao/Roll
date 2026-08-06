@@ -1,4 +1,7 @@
 /**
+ * @responsibility Probes configured model rigs at the CLI and infra boundary.
+ */
+/**
  * US-DELTA-018 — CLI/infra boundary for exact configured-model rig probes.
  *
  * This module intentionally contains the vendor executable vocabulary. It has

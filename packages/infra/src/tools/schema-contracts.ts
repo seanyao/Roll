@@ -1,3 +1,6 @@
+/**
+ * @responsibility Defines the shared tool JSON-schema contracts.
+ */
 import type { JsonSchema } from "@roll/spec";
 
 const STRING: JsonSchema = { type: "string" };

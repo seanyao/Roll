@@ -1,3 +1,6 @@
+/**
+ * @responsibility Loads the read-only machine-local rig readiness limits.
+ */
 /** US-DELTA-017 — read-only machine-local readiness limits loader. */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";

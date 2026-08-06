@@ -1,4 +1,7 @@
 /**
+ * @responsibility Warns when the roll binary is too old for the loop.
+ */
+/**
  * FIX-366 (part 2, optional/low-cost) — binary-too-old SOFT warning for the loop.
  *
  * When the globally-installed `roll` running the loop falls behind the published

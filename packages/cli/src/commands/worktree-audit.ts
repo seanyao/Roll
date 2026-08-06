@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll worktree audit` subcommand, a read-only worktree lifecycle audit.
+ */
+/**
  * US-LOOP-093 — `roll worktree audit`: 只读 worktree 生命周期审计。
  *
  * Read-only audit of all git worktrees registered for the current repo.

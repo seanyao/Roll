@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll idea` subcommand, the single user-facing card-capture entry point.
+ */
+/**
  * `roll idea <description>` — THE single user-facing card-capture entry point
  * (US-PORT-003 + REFACTOR-050 card-creation unification).
  *

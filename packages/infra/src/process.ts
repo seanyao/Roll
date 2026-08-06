@@ -1,4 +1,7 @@
 /**
+ * @responsibility Manages loop lock, heartbeat, and signal discipline.
+ */
+/**
  * ProcessManager — TS port of the v2 loop lock / heartbeat / signal discipline
  * (US-INFRA-006).
  *

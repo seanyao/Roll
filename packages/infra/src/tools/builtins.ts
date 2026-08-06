@@ -1,4 +1,7 @@
 /**
+ * @responsibility Enumerates the canonical built-in tool adapter declarations.
+ */
+/**
  * US-TOOL-016 — the ONE canonical enumeration of every built-in tool adapter
  * declaration. This is the machine-global catalog the Tools page (US-TOOL-017)
  * renders from, exactly as the Skills page renders from `auditSkills` and the

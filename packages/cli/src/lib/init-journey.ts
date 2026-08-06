@@ -1,3 +1,6 @@
+/**
+ * @responsibility Drives the init and onboard journey steps and next-step recommendations.
+ */
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

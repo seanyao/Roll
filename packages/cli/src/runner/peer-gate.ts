@@ -1,4 +1,7 @@
 /**
+ * @responsibility Triggers the peer review hard gate.
+ */
+/**
  * FIX-150b / FIX-293 — the peer HARD-trigger gate.
  *
  * v2's peer review was a skill-text suggestion: nothing enforced it, non-claude

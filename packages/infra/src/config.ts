@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reads the v2 config surface with scoped registry resolution.
+ */
+/**
  * Config module — TS port of the v2 config read surface (US-INFRA-001).
  *
  * ─── v2 oracle (frozen bash, bin/roll) ──────────────────────────────────────

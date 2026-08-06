@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the release consistency audit orchestrator.
+ */
+/**
  * `roll consistency` — TS port of bin/roll cmd_consistency (5711-5736) plus the
  * full orchestrator lib/consistency_check.py (ported in full).
  *

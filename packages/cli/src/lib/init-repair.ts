@@ -1,3 +1,6 @@
+/**
+ * @responsibility Repairs the project facts and scaffolding issues found during init.
+ */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type InitFacts } from "./init-diagnosis.js";

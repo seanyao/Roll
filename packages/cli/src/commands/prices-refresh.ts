@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `prices refresh` subcommand, refreshing the versioned price snapshots.
+ */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveLang, t, v2Catalog } from "@roll/spec";

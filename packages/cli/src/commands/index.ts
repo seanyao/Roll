@@ -1,3 +1,6 @@
+/**
+ * @responsibility Registers every ported CLI subcommand in the bridge command table.
+ */
 /** Ported-command registry — one line per migrated subcommand. */
 import { resolveLang } from "@roll/spec";
 import { registerPorted, usage } from "../bridge.js";

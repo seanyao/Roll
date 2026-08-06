@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll supervisor` subcommand, the project-level observe-and-advise supervisor.
+ */
+/**
  * US-V4-008 — `roll supervisor`: the project-level Supervisor, v0 (observe +
  * advise). It reads STRUCTURED facts via deterministic selectors — backlog, merge
  * truth (pr:merge events), open PRs, route config, repeated failures, release

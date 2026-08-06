@@ -1,4 +1,7 @@
 /**
+ * @responsibility Routes story.execute commands to the scoped Builder.
+ */
+/**
  * FIX-1047 — scoped `story.execute` (Builder) routing.
  *
  * The executor used to resolve `story.execute` WITHOUT first resolving the

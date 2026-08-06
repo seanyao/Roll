@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop runs` subcommand, a thin reader over the project's runs.jsonl.
+ */
+/**
  * `roll loop runs [N] [--all] [--detail <cycle>]` — TS port of bin/roll's
  * `_loop_runs` read-face command (US-PORT-007). Thin reader over the project's
  * `.roll/loop/runs.jsonl`: filter to this project (or `--all` across every

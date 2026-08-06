@@ -1,4 +1,7 @@
 /**
+ * @responsibility Pins the Playwright version for deterministic headless Chromium.
+ */
+/**
  * FIX-394 — pinned Playwright version for deterministic headless Chromium.
  *
  * `@latest` drifts across releases; a pinned version keeps the browser version,

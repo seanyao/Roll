@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders the bare-roll front door.
+ */
+/**
  * US-DOSSIER-035 — the bare-`roll` front door (design frame 0).
  *
  * `roll` with no args is a *front door*, not a usage dump: one identity line,

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll backlog` display subcommand, parsing and rendering the backlog grouped by type.
+ */
+/**
  * `roll backlog` display mode — TS port of lib/roll-backlog.py (US-CLI-005).
  * Parses .roll/backlog.md and renders items grouped by type; management
  * subcommands (lint/unstick/sync/block/defer/unblock/promote) stay on bash.

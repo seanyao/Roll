@@ -1,4 +1,7 @@
 /**
+ * @responsibility Drives the pure cycle state machine to a terminal state.
+ */
+/**
  * runCycleOnce — the driver that walks the pure {@link cycleStep} state machine
  * to a terminal state, executing each emitted {@link CycleCommand} through the
  * {@link Ports} bundle and feeding the result back. This is the executable heart

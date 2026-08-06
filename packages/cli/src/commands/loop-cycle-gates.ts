@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop` cycle-gate subcommands (notify, enforce-tcr, precheck-ci).
+ */
+/**
  * `roll loop` CYCLE-GATE subcommands — the last bin/roll fallbacks (US-PORT-021
  * prerequisite). These are invoked by the loop AGENT during a cycle per the
  * roll-loop skill, not by the runner script:

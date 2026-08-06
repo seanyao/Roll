@@ -1,3 +1,6 @@
+/**
+ * @responsibility Reads and plans a story spec's target_submodule delivery.
+ */
 import { parseTargetSubmodule } from "@roll/core";
 
 /**

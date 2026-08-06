@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the truth-registry field authority types.
+ */
+/**
  * US-TRUTH-006 — the change-point guardrail: persistent fact FIELDS register
  * their authority/source/cache semantics, and CI fails loud when a new field
  * lands unregistered.

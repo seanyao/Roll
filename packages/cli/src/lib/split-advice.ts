@@ -1,4 +1,7 @@
 /**
+ * @responsibility Detects run-time mis-sizing signals and advises story splits.
+ */
+/**
  * US-CYCLE-006 — run-time mis-sizing signal. A card that needed more than the
  * repair threshold of rounds is a SIZING error surfaced late: it should have been
  * split at design time. This turns that into a feedback loop — an automatic

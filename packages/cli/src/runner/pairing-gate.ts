@@ -1,4 +1,7 @@
 /**
+ * @responsibility Enforces the cross-agent pairing runtime gate.
+ */
+/**
  * US-PAIR-003 — Cross-Agent Pairing runtime gate (MVP walking skeleton).
  *
  * After a code-stage delivery, a heterogeneous peer (chosen by the US-PAIR-001

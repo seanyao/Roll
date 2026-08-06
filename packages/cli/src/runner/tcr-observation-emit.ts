@@ -1,4 +1,7 @@
 /**
+ * @responsibility Emits TCR observation events from the roll test side.
+ */
+/**
  * US-DELTA-011 — the `roll test` side of the TCR observation boundary.
  *
  * One `roll test` gate run is ONE Builder TCR round, observed as a begin/complete

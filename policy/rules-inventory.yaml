@@ -32,6 +32,66 @@ coverage_sets:
         reason: "pure barrel re-export; ownership lives in the exported tools modules"
         owner: tools
         review_by: US-RULE-011
+
+  # US-RULE-012 — CLI responsibility coverage. Wholesale **/*.ts like
+  # maps-core: any new .ts under the root is auto-in-scope and must carry a
+  # header @responsibility declaration or a literal reasoned exclusion.
+  # map_label prefixes every map file name (docs/maps/cli-*.md) so outputs can
+  # never collide with core contexts; root files map to docs/maps/cli.md.
+  - id: maps-cli
+    purpose: responsibility
+    map_label: cli
+    roots:
+      - packages/cli/src
+    include:
+      - "**/*.ts"
+    allow_overlap_with: []
+    exclude:
+      - path: packages/cli/src/index.ts
+        reason: "pure barrel re-export of the CLI public API; ownership lives in the exported modules"
+        owner: cli
+        review_by: US-RULE-012
+      - path: packages/cli/src/runner/index.ts
+        reason: "pure barrel re-export of runner adapter glue; ownership lives in the exported runner modules"
+        owner: runner
+        review_by: US-RULE-012
+
+  - id: maps-infra
+    purpose: responsibility
+    map_label: infra
+    roots:
+      - packages/infra/src
+    include:
+      - "**/*.ts"
+    allow_overlap_with: []
+    exclude:
+      - path: packages/infra/src/index.ts
+        reason: "pure barrel re-export of the infra public API; ownership lives in the exported modules"
+        owner: infra
+        review_by: US-RULE-012
+      - path: packages/infra/src/tools/index.ts
+        reason: "pure barrel re-export of the infra tool adapters; ownership lives in the exported tool modules"
+        owner: tools
+        review_by: US-RULE-012
+
+  - id: maps-spec
+    purpose: responsibility
+    map_label: spec
+    roots:
+      - packages/spec/src
+    include:
+      - "**/*.ts"
+    allow_overlap_with: []
+    exclude:
+      - path: packages/spec/src/index.ts
+        reason: "pure barrel re-export of the spec public API; ownership lives in the exported modules"
+        owner: spec
+        review_by: US-RULE-012
+      - path: packages/spec/src/types/index.ts
+        reason: "pure barrel re-export of the shared type modules; ownership lives in the exported type modules"
+        owner: types
+        review_by: US-RULE-012
+
   - id: rule-candidates
     purpose: rule-candidate
     roots:

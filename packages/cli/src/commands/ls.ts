@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `ls` subcommand, printing the cross-project registry.
+ */
+/**
  * US-DOSSIER-028 — `roll ls`: print the cross-project registry
  * (`~/.roll/projects.json`) the web project switcher (US-DOSSIER-027) reads.
  *

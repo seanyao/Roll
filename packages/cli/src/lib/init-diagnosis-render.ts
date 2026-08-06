@@ -1,3 +1,6 @@
+/**
+ * @responsibility Renders the init diagnosis report in the resolved language.
+ */
 import { type Lang } from "@roll/spec";
 import { type InitDiagnosis } from "./init-diagnosis.js";
 

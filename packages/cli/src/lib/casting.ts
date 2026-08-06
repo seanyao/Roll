@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects the loop-tab casting table of which agent plays which role.
+ */
+/**
  * US-DOSSIER-030 — the Loop-tab CASTING collector: "who plays which role".
  *
  * The design reference shows a Role | Agent | Note grid with two row families:

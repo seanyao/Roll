@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll effort` subcommand, rendering the read-only isolation-effort view.
+ */
+/**
  * US-PAIR-016 — `roll effort`: the read-only effort view.
  *
  * Renders one row per (gate x achieved isolation tier) so the "stronger isolation

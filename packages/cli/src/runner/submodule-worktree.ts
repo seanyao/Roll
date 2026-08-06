@@ -1,4 +1,7 @@
 /**
+ * @responsibility Creates submodule-aware worktrees for delivery.
+ */
+/**
  * E2 — submodule-aware worktree creation, split out of setup-handlers.ts
  * (REFACTOR-060 module-size guard) so the submodule delivery ladder has its own
  * testable home (mirrors how E3 extracted local-publish.ts).

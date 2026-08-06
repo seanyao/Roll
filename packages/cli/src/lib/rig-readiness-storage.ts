@@ -1,4 +1,7 @@
 /**
+ * @responsibility Persists machine-local rig readiness snapshots atomically.
+ */
+/**
  * US-DELTA-017 — atomic machine-local readiness snapshot persistence.
  *
  * The module writes only ROLL_HOME/delta-team/rig-readiness and does not import

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Handles terminal commands for the remote publish path.
+ */
 import { lstatSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {

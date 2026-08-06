@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the structured delivery record and lifecycle state types.
+ */
+/**
  * US-TRUTH-013 — Structured Delivery Record + Lifecycle State enumeration.
  *
  * This is the foundation of the structured-truth-review epic: the machine-managed

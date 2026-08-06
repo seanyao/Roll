@@ -1,4 +1,7 @@
 /**
+ * @responsibility Plans the supervised recovery from a no-progress stop.
+ */
+/**
  * FIX-1049 — supervised recovery from a no-progress stop.
  *
  * The dead-loop breaker (loop-go.ts) STOPS a goal after K consecutive

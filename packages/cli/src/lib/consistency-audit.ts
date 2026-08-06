@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the release consistency shadow drift scanner.
+ */
+/**
  * US-TRUTH-002 — `roll release consistency audit`: the shadow drift scanner.
  *
  * Read-only gatherer over the fact sources declared in US-TRUTH-000 (backlog,

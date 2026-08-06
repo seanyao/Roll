@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll attest <story-id>` subcommand, composing the acceptance evidence chain into one report.
+ */
+/**
  * US-ATTEST-006 — `roll attest <story-id>`: compose the five-piece evidence
  * chain into one acceptance report.
  *

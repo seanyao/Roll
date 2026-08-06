@@ -1,3 +1,6 @@
+/**
+ * @responsibility Reads and writes story review scores.
+ */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { ResizeSignal } from "@roll/core";

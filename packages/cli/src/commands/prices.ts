@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `prices` subcommand, rendering the versioned price table.
+ */
+/**
  * `roll prices` — TS port of cmd_prices show/help (US-CLI-004).
  * Loads the versioned price snapshots under lib/prices/ (frozen v2 data),
  * merges them later-overrides-earlier, and renders the same table bytes as

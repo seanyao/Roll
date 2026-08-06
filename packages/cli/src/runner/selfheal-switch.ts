@@ -1,4 +1,7 @@
 /**
+ * @responsibility Decides and actuates the zero-TCR agent switch.
+ */
+/**
  * FIX-930 — the zero-TCR agent-switch decision + actuation, factored out of the
  * loop-run-once driver so it is unit-testable with injected ports (no real spawn,
  * no real clock; the budget store is an injected runtime dir).

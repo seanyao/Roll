@@ -1,3 +1,6 @@
+/**
+ * @responsibility Installs the roll-capture binary with verified integrity.
+ */
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides the shared install and sync primitives used by setup, init, and update.
+ */
+/**
  * Shared install/sync primitives — TS port of the bin/roll helpers that both
  * `roll setup` and `roll init` (and `roll update`, via setup) lean on:
  *

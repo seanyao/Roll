@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the async merge write-back for the `roll loop` reconcile path.
+ */
+/**
  * US-CYCLE-009 — the async merge write-back adapter.
  *
  * When a PR was opened and auto-merge attached (the runner returned immediately —

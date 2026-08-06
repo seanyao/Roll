@@ -1,4 +1,7 @@
 /**
+ * @responsibility Probes screen-lock state for the machine.
+ */
+/**
  * FIX-1268a — Screen-lock probe primitive.
  *
  * Reads macOS `ioreg -n Root -d1 -a` JSON output and checks

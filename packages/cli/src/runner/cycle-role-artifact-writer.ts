@@ -1,4 +1,7 @@
 /**
+ * @responsibility Writes CycleRoleSummary artifacts from the event stream at cycle end.
+ */
+/**
  * cycle-role-artifact-writer.ts — US-OBS-032: writes CycleRoleSummary
  * artifacts (summary.json + summary.md) from the event stream at cycle
  * wrap-up. Called best-effort from the executor's append_run handler.

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Persists terminal runs and reconciles post-terminal truth.
+ */
 /** Terminal run persistence and post-terminal truth reconciliation. */
 import { dirname, join } from "node:path";
 import {

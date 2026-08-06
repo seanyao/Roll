@@ -1,4 +1,7 @@
 /**
+ * @responsibility Loads the project browser-operations policy.
+ */
+/**
  * US-BROW-018 — Project browser-operations policy loader.
  *
  * Reads the `browser_operations` block from `<cwd>/.roll/policy.yaml` and merges

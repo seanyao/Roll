@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reads the cross-project registry for the project switcher.
+ */
+/**
  * US-DOSSIER-027 — read the cross-project registry `~/.roll/projects.json` for
  * the Truth Console top-bar project switcher. READ-ONLY here: US-DOSSIER-028
  * authors/refreshes the file (one row per project, upsert by slug). This module

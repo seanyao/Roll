@@ -1,3 +1,6 @@
+/**
+ * @responsibility Reads and appends run records.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import type { CycleCommand, CycleContext, ReconcileRunRow } from "@roll/core";
 import {

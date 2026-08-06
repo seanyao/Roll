@@ -1,3 +1,6 @@
+/**
+ * @responsibility Restores resume truth for interrupted cycles.
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

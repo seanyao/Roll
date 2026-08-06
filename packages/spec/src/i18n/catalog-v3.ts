@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the v3-native message catalog.
+ */
+/**
  * v3-native message catalog. The frozen v2 catalog (catalog.generated.json) is
  * mechanically derived from the bash oracle and must not be hand-edited; strings
  * for behaviour that is new in v3 live here instead (see catalog.ts header).

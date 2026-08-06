@@ -1,3 +1,6 @@
+/**
+ * @responsibility Provides fixed Asia/Shanghai display-time helpers.
+ */
 // Display-time helpers: fixed Asia/Shanghai wall clock (UTC+8, no DST).
 export const TZ_OFFSET_MS = 8 * 3600 * 1000;
 

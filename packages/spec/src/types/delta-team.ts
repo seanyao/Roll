@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the shared Delta Team type vocabulary.
+ */
+/**
  * US-DELTA-001 — Shared Delta Team types: orthogonal trigger, topology, quality
  * profile, and the derived visible-mode projection.
  *

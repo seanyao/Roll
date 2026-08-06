@@ -1,4 +1,7 @@
 /**
+ * @responsibility Applies concrete caller-neutral managed-workspace bootstrap effects.
+ */
+/**
  * Concrete, caller-neutral managed-workspace bootstrap effects.
  *
  * Cycle and host Delta both enter here.  The caller supplies only process and

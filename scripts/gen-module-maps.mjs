@@ -71,12 +71,16 @@ async function loadSpec() {
   return import(pathToFileURL(dist).href);
 }
 
-function collectTsFiles(directory) {
+function collectTsFiles(directory, pushSymlink) {
   const files = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const full = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...collectTsFiles(full));
-    else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(full);
+    if (entry.isDirectory()) files.push(...collectTsFiles(full, pushSymlink));
+    else if (entry.isSymbolicLink()) {
+      // Symlinks under a declared responsibility root are a loud finding:
+      // never followed, never rendered (no external/symlink source admission).
+      if (pushSymlink) pushSymlink(full);
+    } else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(full);
   }
   return files;
 }
@@ -158,7 +162,7 @@ async function computeMaps(root, push) {
         push("missing inventory", `declared responsibility root does not exist: ${setRoot}`);
         continue;
       }
-      const files = collectTsFiles(rootPath).sort();
+      const files = collectTsFiles(rootPath, (full) => push("missing inventory", `symlink under declared responsibility root: ${rel(root, full)}`)).sort();
       if (files.length === 0) {
         push("missing inventory", `declared responsibility root has no TypeScript files: ${setRoot}`);
         continue;
@@ -170,8 +174,17 @@ async function computeMaps(root, push) {
         if (set.exclude.some((entry) => entry.path === repoRel)) continue;
         const text = declarationFor(root, file, push);
         if (text === undefined) continue;
-        const context = dirname(fromRoot) === "." ? "core" : dirname(fromRoot).split(sep).join("/");
-        const contextDir = join(rootPath, context === "core" ? "." : context);
+        // US-RULE-012 — decouple the display context (map file name) from the
+        // real context directory: legacy sets (no map_label) keep the
+        // byte-compatible `core` / bare-subdir naming; labeled sets prefix
+        // every non-root context with `<mapLabel>-` (root → `<mapLabel>.md`).
+        const relDir = dirname(fromRoot).split(sep).join("/");
+        const context = set.mapLabel === undefined
+          ? (relDir === "." ? "core" : relDir)
+          : relDir === "."
+            ? set.mapLabel
+            : `${set.mapLabel}-${relDir.replaceAll("/", "-")}`;
+        const contextDir = join(rootPath, relDir === "." ? "." : relDir);
         records.push({
           set: set.id,
           context,

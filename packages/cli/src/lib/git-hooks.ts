@@ -1,3 +1,6 @@
+/**
+ * @responsibility Installs and manages the repository git hooks.
+ */
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";

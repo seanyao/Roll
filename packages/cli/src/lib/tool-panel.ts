@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects the tools-on-this-machine panel rows.
+ */
+/**
  * US-TOOL-016 — the machine-global "tools on this machine" collector. One row
  * per built-in tool adapter declaration, summarizing its capabilities and
  * default guardrails. This is the single source the Tools page (US-TOOL-017)

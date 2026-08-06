@@ -1,3 +1,6 @@
+/**
+ * @responsibility Derives screen-lock events from the event stream.
+ */
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { existsSync, readFileSync } from "node:fs";
 

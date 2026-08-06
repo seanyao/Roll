@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll story validate` subcommand, self-checking a story against the structural rules.
+ */
+/**
  * `roll story validate <ID>` — FIX-339 (AC7). The COMMAND-SIDE of the must-declare
  * contract: a read-only self-check that runs the SAME structural rules the runtime
  * attest gate enforces (FIX-339 AC6), so roll-design can prefill it as a closing

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Diagnoses an existing project to plan init or onboard actions.
+ */
 import { spawnSync } from "node:child_process";
 import { existsSync, opendirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";

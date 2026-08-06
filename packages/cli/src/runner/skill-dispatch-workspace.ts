@@ -1,3 +1,6 @@
+/**
+ * @responsibility Allocates the child workspace for parent-owned Skill dispatch.
+ */
 /** US-LOOP-127 — production allocator for parent-owned Skill dispatch. */
 import {
   EventBus,

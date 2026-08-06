@@ -1,3 +1,6 @@
+/**
+ * @responsibility Renders stable operator guidance for workspace lifecycle refusals.
+ */
 /** Stable operator guidance for US-LOOP-124 lifecycle refusals. */
 import { resolveLang, t, type Catalog } from "@roll/spec";
 

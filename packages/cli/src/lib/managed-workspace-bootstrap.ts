@@ -1,3 +1,6 @@
+/**
+ * @responsibility Defines the caller-neutral managed-workspace bootstrap effect boundary.
+ */
 import type { ManagedWorkspaceBootstrapPlan } from "./target-submodule.js";
 
 /**

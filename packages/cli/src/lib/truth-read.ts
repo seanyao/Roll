@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reads the one TruthSnapshot for the CLI surfaces.
+ */
+/**
  * US-DOSSIER-035 — the CLI's reader for the ONE TruthSnapshot the static archive
  * reads (US-DOSSIER-010/021). `roll index` writes `.roll/features/truth.json`
  * and embeds the SAME object in index.html; the CLI front door + `roll status`

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll loop go` subcommand, starting a loop cycle over the routed next card.
+ */
 import { EventBus, parseBacklog, ensureDeliveriesFresh, nodeExecPort, queryStoryDelivery, assessBootstrapArtifacts, readPendingDeliveryEvidenceManifests, type AuditPrEvidence, type FreshnessPort, type PendingDeliveryEvidenceManifest, type StoryDeliveryTruth, type StoryTruth } from "@roll/core";
 import {
   GOAL_REVIEW_MODES,

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Reports tool readiness for doctor checks.
+ */
 import { deriveToolReadiness, type ToolRequirementResolver } from "@roll/core";
 import type { ToolReadinessStatus } from "@roll/spec";
 import { collectBuiltinToolDeclarations } from "./builtin-tool-declarations.js";

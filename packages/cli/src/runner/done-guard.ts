@@ -1,4 +1,7 @@
 /**
+ * @responsibility Blocks the Done transition until merge and acceptance evidence are confirmed.
+ */
+/**
  * RL-EVID-004: registered redline in policy/rules.yaml — a card may only be
  * marked Done when the merge is confirmed on main AND acceptance evidence is
  * complete. markDoneGuarded() enforces it at the status-write boundary: it

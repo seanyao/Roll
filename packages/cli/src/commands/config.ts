@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll config` command surface, adding the write surface and the lang sub-command.
+ */
+/**
  * `roll config` — full command surface, TS-native (US-PORT-006).
  *
  * The READ surface (help / --list / key read) was ported first (US-CLI-003,

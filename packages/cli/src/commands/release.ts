@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll release` subcommand, owning the whole release transaction in order.
+ */
+/**
  * US-REL-007 — `roll release`: the ONLY release command.
  *
  * The default flow owns the whole release transaction, in order, every

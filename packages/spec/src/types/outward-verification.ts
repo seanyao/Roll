@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the outward behavior verification types.
+ */
+/**
  * US-ATTEST-015 — Outward behavior verification types.
  *
  * An "outward" AC is a behavior that cannot be verified locally (e.g. real

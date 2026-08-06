@@ -1,4 +1,7 @@
 /**
+ * @responsibility Assembles the pure Delta Team banner.
+ */
+/**
  * US-DELTA-009 — Pure Delta Team assembly banner.
  *
  * Callers provide only facts that were already persisted by the delegation

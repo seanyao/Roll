@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the protocol-only `roll delta` CLI with prepare, validate, conclude, and status plumbing.
+ */
+/**
  * US-DELTA-003 — protocol-only `roll delta` CLI.
  *
  * Hidden from the public command surface; discoverable via `roll delta help`.

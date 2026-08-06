@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the TruthSnapshot aggregate types.
+ */
+/**
  * US-DOSSIER-010 — TruthSnapshot: the ONE machine-readable truth aggregate.
  *
  * Every surface (web dossier, CLI status, downstream tools) consumes

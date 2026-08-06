@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll next` subcommand, continuing the init and onboard journey with one command.
+ */
 import { renderInitJourneyAttestSmoke, recommendNext, renderNextRecommendation } from "../lib/init-journey.js";
 
 export const NEXT_USAGE =

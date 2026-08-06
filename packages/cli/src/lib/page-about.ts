@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the machine-global About page content model.
+ */
+/**
  * US-DOSSIER-041 — the About machine-global page, rebuilt to the CORRECT content
  * model (the design reference's ABOUT ROLL TAB).
  *

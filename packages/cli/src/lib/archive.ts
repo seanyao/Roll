@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides archive-layout write-side support for the archive layout.
+ */
+/**
  * US-META-001 — archive-layout write-side support.
  *
  * The card folder `.roll/features/<epic>/<ID>/` is the single home for a card's

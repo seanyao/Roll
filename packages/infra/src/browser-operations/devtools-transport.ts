@@ -1,3 +1,6 @@
+/**
+ * @responsibility Bridges the typed process boundary for managed Chrome DevTools.
+ */
 /** US-BROW-002 — typed process boundary for managed Chrome DevTools. */
 import {
   BrowserTransportRegistry,

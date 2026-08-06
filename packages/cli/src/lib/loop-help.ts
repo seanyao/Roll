@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders the grouped `roll loop --help` surface.
+ */
+/**
  * US-DOSSIER-035 — grouped `roll loop --help` (design frame 4).
  *
  * The flat ~18-verb pipe list becomes four labeled bands so a user instantly

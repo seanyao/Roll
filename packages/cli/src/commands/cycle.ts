@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `cycle <id>` subcommand, replaying one cycle in the terminal.
+ */
+/**
  * US-CLI-013 — `roll cycle <id>`: one cycle, fully replayable in the terminal,
  * SAME shape and vocabulary as the web trace tape (US-DOSSIER-013): summary
  * line → story line → vertical seven-segment tape (each segment a colored dot

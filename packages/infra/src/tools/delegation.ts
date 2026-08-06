@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the delegation tool adapter.
+ */
 import { execFile as nodeExecFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Tracks goal progress limits and allowed-cards enforcement.
+ */
 import { classifyStatus } from "@roll/spec";
 
 export const GOAL_ALLOWED_CARDS_ENV = "ROLL_LOOP_GO_ALLOWED_CARDS";

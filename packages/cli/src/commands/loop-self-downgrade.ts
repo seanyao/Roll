@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop self-downgrade` subcommand, downgrading a story's delivery tier.
+ */
+/**
  * `roll loop self-downgrade <story-id> "<reason>" [sub-a,sub-b,...]`
  *
  * US-AGENT-042 — the v3-native self-downgrade the skill contracts call when a

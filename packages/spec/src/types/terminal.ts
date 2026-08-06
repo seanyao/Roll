@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the terminal event schema.
+ */
+/**
  * US-TRUTH-001 — the Terminal Event schema (versioned, complete-or-reasoned).
  *
  * The cycle's old terminal records (cycle:end + runs row) mixed

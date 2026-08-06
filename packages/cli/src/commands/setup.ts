@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll setup` subcommand, porting the v2 setup flow and its step record buffer.
+ */
+/**
  * `roll setup` — TS port of bin/roll cmd_setup (1410-1476) plus the helpers it
  * drives: the P1-3.4 submodule guard (1419-1424), the per-step `_record` buffer
  * + `_state_to_marker` (1428-1441), `_run_setup_step` / `_setup_snapshot`

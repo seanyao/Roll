@@ -1,4 +1,7 @@
 /**
+ * @responsibility Protects the shared main checkout during a cycle.
+ */
+/**
  * RL-ISO-002: registered redline in policy/rules.yaml — the shared main
  * checkout is write-protected for the duration of a cycle, dirt/HEAD leaks are
  * quarantined, and the shared ref is NEVER reset (FIX-1475). Companion

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll design` subcommand, launching the design skill conversation with a captured transcript.
+ */
+/**
  * `roll design` — explicit thin entry point for the `$roll-design` skill
  * (US-ONBOARD-NUDGE-004, FIX-1055).
  *

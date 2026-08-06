@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll config` read surface, porting the help, --list, and key-read paths from the bash oracle.
+ */
+/**
  * `roll config` read surface — TS port of cmd_config's help/--list/key-read
  * paths (US-CLI-003). The write surface and dream-time compact facade share
  * the same registry in config.ts.

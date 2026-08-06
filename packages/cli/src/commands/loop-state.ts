@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop pause|resume` subcommand, the PAUSE gate and the run-state read.
+ */
+/**
  * `roll loop pause|resume` — the PAUSE gate, and the run-state read that goes with it.
  *
  * US-LOOP-119: renamed from `loop-sched.ts`. The old name described what the file

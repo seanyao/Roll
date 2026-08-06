@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll agent` subcommand for agent registry and scope-config management.
+ */
 import {
   AGENT_REGISTRY_NAMES,
   AgentRegistry,

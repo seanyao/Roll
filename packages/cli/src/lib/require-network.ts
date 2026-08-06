@@ -1,4 +1,7 @@
 /**
+ * @responsibility Guards commands that require network access with a shared check.
+ */
+/**
  * FIX-298 — the shared network guard.
  *
  * Owner design: any roll command that needs the network MUST, as its FIRST

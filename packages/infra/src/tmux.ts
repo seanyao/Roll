@@ -1,4 +1,7 @@
 /**
+ * @responsibility Controls tmux sessions for the loop windows.
+ */
+/**
  * Tmux module — TS port of the v2 loop's tmux session control (US-INFRA-005).
  *
  * ─── v2 oracle (frozen bash, bin/roll) — tmux invocation inventory ───────────

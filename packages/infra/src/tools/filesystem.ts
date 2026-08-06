@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares and runs the filesystem tool adapter.
+ */
 import { stat as nodeStat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";

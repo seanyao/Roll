@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects declared browser-operation facts and projects the optional dossier timeline.
+ */
+/**
  * US-BROW-013 — collect declared browser-operation facts and project the
  * optional dossier timeline via {@link browserOperationsTimeline}.
  */

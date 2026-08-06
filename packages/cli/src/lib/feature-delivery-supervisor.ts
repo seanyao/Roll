@@ -1,3 +1,6 @@
+/**
+ * @responsibility Provides the read-only adapter for `roll supervisor delivery`.
+ */
 /** Read-only adapter for `roll supervisor delivery`.  All aggregation belongs in core. */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll skill-dispatch` subcommand, the explicit parent-owned Skill dispatch command.
+ */
 /** US-LOOP-127 — explicit parent-owned Skill dispatch command. */
 import { resolveLang } from "@roll/spec";
 import { allocateSkillDispatchRun, confirmSkillDispatchDelivery, integrateSkillDispatchChild, releaseSkillDispatchReservation, stopSkillDispatchRun, type SkillDispatchRunInput } from "../runner/skill-dispatch-workspace.js";

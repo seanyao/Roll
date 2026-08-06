@@ -1,3 +1,6 @@
+/**
+ * @responsibility Defines the physical terminal spec used to launch terminal apps.
+ */
 export interface PhysicalTerminalSpec {
   app: string;
   command: string;

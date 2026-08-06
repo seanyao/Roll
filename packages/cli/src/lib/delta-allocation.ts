@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides Delta delegation allocation, lease, and artifact I/O primitives.
+ */
+/**
  * US-DELTA-003 — Delta delegation allocation, lease, and artifact I/O primitives.
  *
  * Extends the US-DELTA-002 preset loader with host-guided delegation frame
