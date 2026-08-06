@@ -311,6 +311,12 @@ export interface ParsedRulesV2 {
 const V2_RULE_ID = /^(?:I(?:[1-9]|1[0-2])|RL-[A-Z]+-\d{3})$/;
 const STAGE_ID = /^STAGE-[A-Z0-9-]+$/;
 const DOC_SURFACE_ID = /^DS-[A-Z0-9-]+$/;
+const DOC_ALIGNMENT_ROOTS = ["docs", "guide", "site", "policy"];
+const GENERATED_SEGMENTS = new Set(["test", "tests", "__snapshots__", "dist", "coverage", ".roll"]);
+const DOC_ROOT_FILE = /^(?:README(?:_[A-Z]+)?\.md|AGENTS\.md|CHANGELOG\.md)$/;
+const GLOB_MAGIC = /[*?[\]{}]/;
+const PRODUCTION_SOURCE_PREFIX = /^packages\/(?:core|cli|infra|spec)\/src\//;
+const NON_PRODUCTION_SEGMENTS = new Set(["dist", "coverage", ".roll", "node_modules"]);
 
 /** Normalize a concrete repository-relative path. It is intentionally not a
  * platform path helper: callers must opt in to every accepted wildcard. */
@@ -326,11 +332,83 @@ export function normalizePath(input: unknown): string {
   return normalized;
 }
 
+/** Broad-pattern floor for a source-side pattern: the (glob base or exact)
+ * path must be behavior-bearing source — at least 2 segments, never under a
+ * doc-alignment root (`docs/`, `guide/`, `site/`, `policy/`), never a
+ * README/AGENTS/CHANGELOG root file, and never containing test/generated
+ * segments. A violation throws a rules.ts-style message. */
+function enforceSourceBreadthFloor(base: string, original: string, context: string): void {
+  const segments = base.split("/");
+  if (DOC_ALIGNMENT_ROOTS.includes(segments[0] ?? "")) {
+    throw new Error(`${context}: broad pattern "${original}" — base under a doc-alignment root is not behavior-bearing source`);
+  }
+  if (DOC_ROOT_FILE.test(base)) {
+    throw new Error(`${context}: broad pattern "${original}" — a doc-alignment root file is not behavior-bearing source`);
+  }
+  if (segments.length < 2) {
+    throw new Error(`${context}: broad pattern "${original}" — glob base must have at least 2 segments`);
+  }
+  for (const segment of segments) {
+    if (GENERATED_SEGMENTS.has(segment)) {
+      throw new Error(`${context}: broad pattern "${original}" — contains a test|generated segment ("${segment}")`);
+    }
+  }
+}
+
+/** Normalize + validate one doc-surface path/docs entry. Returns the
+ *  normalized pattern, or throws with a rules.ts-style message on:
+ *  unsafe path (NUL, absolute, drive-letter, ./ or ../ segments, empty),
+ *  unsupported glob syntax, out-of-vocabulary shape, or broad pattern. */
+export function normalizeSurfacePattern(
+  input: unknown,
+  side: "paths" | "docs",
+  context: string,
+): string {
+  if (typeof input !== "string") throw new Error(`${context}: must be a string`);
+  const value = input.trim().replaceAll("\\", "/").replaceAll(/\/{2,}/g, "/");
+  const normalized = value.startsWith("./") ? value.slice(2) : value;
+  if (normalized.length === 0) throw new Error(`${context}: must not be empty`);
+  if (normalized.includes("\0")) throw new Error(`${context}: must not contain NUL`);
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) throw new Error(`${context}: must be relative`);
+  if (normalized.split("/").some((part) => part === "." || part === "..")) {
+    throw new Error(`${context}: must not contain . or .. segments`);
+  }
+  if (side === "docs") {
+    if (GLOB_MAGIC.test(normalized)) {
+      throw new Error(`${context}: docs must be exact file paths (no glob syntax)`);
+    }
+    return normalized;
+  }
+  // paths side: exact path OR single trailing /** suffix glob.
+  if (normalized.endsWith("/**")) {
+    const base = normalized.slice(0, -3);
+    if (GLOB_MAGIC.test(base)) {
+      throw new Error(`${context}: unsupported glob syntax — only a single trailing "/**" is allowed`);
+    }
+    enforceSourceBreadthFloor(base, normalized, context);
+    return normalized;
+  }
+  if (GLOB_MAGIC.test(normalized)) {
+    throw new Error(`${context}: out-of-vocabulary pattern — glob characters are only allowed as a trailing "/**"`);
+  }
+  enforceSourceBreadthFloor(normalized, normalized, context);
+  return normalized;
+}
+
+/** Production-source placement gate for stage consumer anchors:
+ *  /^packages\/(?:core|cli|infra|spec)\/src\// AND no generated/system
+ *  segment (dist, coverage, .roll, node_modules). True ⇒ consumer is
+ *  eligible; false ⇒ parser rejects the stage. */
+export function isProductionSourcePath(path: string): boolean {
+  if (!PRODUCTION_SOURCE_PREFIX.test(path)) return false;
+  return !path.split("/").some((segment) => NON_PRODUCTION_SEGMENTS.has(segment));
+}
+
 function v2Error(message: string): Result<never, RulesParseError> { return err(`v2: ${message}`); }
 function requiredText(value: unknown, context: string): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
-function parseV2Anchor(raw: unknown, context: string): { value: Anchor } | { error: string } {
+function parseV2Anchor(raw: unknown, context: string, opts?: { readonly allowPolicyForConsumer?: boolean }): { value: Anchor } | { error: string } {
   if (!isPlainObject(raw)) return { error: `${context}: must be an object` };
   const unknown = rejectUnknownFields(raw, ["path", "marker"], context);
   if (unknown) return { error: unknown };
@@ -338,7 +416,9 @@ function parseV2Anchor(raw: unknown, context: string): { value: Anchor } | { err
   if (!marker) return { error: `${context}.marker: must be a non-empty string` };
   let anchorPath: string;
   try { anchorPath = normalizePath(raw.path); } catch (cause) { return { error: `${context}.path: ${(cause as Error).message}` }; }
-  if (anchorPath === "policy" || anchorPath.startsWith("policy/")) return { error: `${context}.path: policy self-certification is forbidden` };
+  if (!opts?.allowPolicyForConsumer && (anchorPath === "policy" || anchorPath.startsWith("policy/"))) {
+    return { error: `${context}.path: policy self-certification is forbidden` };
+  }
   return { value: { path: anchorPath, marker } };
 }
 function parseAnchors(raw: unknown, context: string): { value: readonly Anchor[] } | { error: string } {
@@ -415,8 +495,8 @@ export function parseRulesV2(text: string): Result<ParsedRulesV2, RulesParseErro
     const inputs = raw.inputs; const outputs = raw.outputs;
     if (!Array.isArray(inputs) || !Array.isArray(outputs) || inputs.some((value) => !requiredText(value, context)) || outputs.some((value) => !requiredText(value, context))) return v2Error(`${context}: inputs and outputs must be string arrays`);
     if (raw.exit !== "advance" && raw.exit !== "pause" && raw.exit !== "hold" && raw.exit !== "fail") return v2Error(`${context}.exit: invalid enum`);
-    const consumer = parseV2Anchor(raw.consumer, `${context}.consumer`); if ("error" in consumer) return v2Error(consumer.error);
-    if (!/^packages\/(?:core|cli|infra|spec)\/src\//.test(consumer.value.path)) return v2Error(`${context}.consumer.path: must name production source`);
+    const consumer = parseV2Anchor(raw.consumer, `${context}.consumer`, { allowPolicyForConsumer: true }); if ("error" in consumer) return v2Error(consumer.error);
+    if (!isProductionSourcePath(consumer.value.path)) return v2Error(`${context}.consumer.path: must name production source`);
     pipelineStages.push({ id, inputs: inputs as string[], outputs: outputs as string[], exit: raw.exit, consumer: consumer.value });
   }
   if (!Array.isArray(doc.doc_surfaces)) return v2Error("registry.doc_surfaces: must be an array");
@@ -426,8 +506,38 @@ export function parseRulesV2(text: string): Result<ParsedRulesV2, RulesParseErro
     if (!isPlainObject(raw)) return v2Error(`${context}: must be an object`);
     const unknown = rejectUnknownFields(raw, ["id", "paths", "docs"], context); if (unknown) return v2Error(unknown);
     const id = requiredText(raw.id, context); if (!id || !DOC_SURFACE_ID.test(id) || surfaceIds.has(id)) return v2Error(`${context}.id: invalid or duplicate doc surface id`); surfaceIds.add(id);
-    if (!Array.isArray(raw.paths) || !Array.isArray(raw.docs) || raw.paths.length === 0 || raw.docs.length === 0 || raw.paths.some((value) => typeof value !== "string") || raw.docs.some((value) => typeof value !== "string")) return v2Error(`${context}: paths and docs must be non-empty string arrays`);
-    docSurfaces.push({ id, paths: raw.paths as string[], docs: raw.docs as string[] });
+    if (!Array.isArray(raw.paths) || !Array.isArray(raw.docs) || raw.paths.length === 0 || raw.docs.length === 0) return v2Error(`${context}: paths and docs must be non-empty arrays`);
+    const surfaceContext = `${context}.paths`;
+    const normalizedPaths: string[] = [];
+    const seenPatterns = new Set<string>();
+    for (let pIndex = 0; pIndex < raw.paths.length; pIndex += 1) {
+      let normalized: string;
+      try {
+        normalized = normalizeSurfacePattern(raw.paths[pIndex], "paths", `${surfaceContext}[${pIndex}]`);
+      } catch (cause) {
+        return v2Error((cause as Error).message);
+      }
+      if (seenPatterns.has(normalized)) {
+        return v2Error(`${surfaceContext}[${pIndex}]: duplicate pattern "${normalized}"`);
+      }
+      seenPatterns.add(normalized);
+      normalizedPaths.push(normalized);
+    }
+    const normalizedDocs: string[] = [];
+    for (let dIndex = 0; dIndex < raw.docs.length; dIndex += 1) {
+      let normalized: string;
+      try {
+        normalized = normalizeSurfacePattern(raw.docs[dIndex], "docs", `${context}.docs[${dIndex}]`);
+      } catch (cause) {
+        return v2Error((cause as Error).message);
+      }
+      if (seenPatterns.has(normalized)) {
+        return v2Error(`${context}.docs[${dIndex}]: duplicate pattern "${normalized}"`);
+      }
+      seenPatterns.add(normalized);
+      normalizedDocs.push(normalized);
+    }
+    docSurfaces.push({ id, paths: normalizedPaths, docs: normalizedDocs });
   }
   return { ok: true, value: { version: 2, gates: { docDrift: doc.gates.doc_drift }, rules, pipelineStages, docSurfaces } };
 }
@@ -501,6 +611,46 @@ export function auditV2Anchors(registry: ParsedRulesV2, fs: RulesAnchorFs): read
       }
     }
     for (const anchor of rule.docs) checkAnchor(rule.id, "docs", anchor);
+  }
+  return findings;
+}
+
+/** Fail-closed audit of doc surfaces + pipeline stages against the real or
+ * in-memory tree. Every doc target must be an existing file, every source-side
+ * pattern must resolve (exact path → file, `/**` glob → base directory), and
+ * every stage consumer must name an existing file that still contains its
+ * marker. Reuses the RulesAnchorFs shape and additionally requires isDirectory
+ * for glob-base existence checks. Returns findings (empty ⇒ clean). */
+export function auditV2SurfacesAndStages(
+  registry: ParsedRulesV2,
+  fs: RulesAnchorFs & { readonly isDirectory: (path: string) => boolean },
+): readonly string[] {
+  const findings: string[] = [];
+  for (const surface of registry.docSurfaces) {
+    for (const pattern of surface.paths) {
+      if (pattern.endsWith("/**")) {
+        const base = pattern.slice(0, -3);
+        if (!fs.isDirectory(base)) {
+          findings.push(`[${surface.id}] missing surface path / glob base: ${base}`);
+        }
+      } else if (!fs.isFile(pattern)) {
+        findings.push(`[${surface.id}] missing surface path: ${pattern}`);
+      }
+    }
+    for (const doc of surface.docs) {
+      if (!fs.isFile(doc)) {
+        findings.push(`[${surface.id}] missing doc target: ${doc}`);
+      }
+    }
+  }
+  for (const stage of registry.pipelineStages) {
+    if (!fs.isFile(stage.consumer.path)) {
+      findings.push(`[${stage.id}] missing consumer anchor: ${stage.consumer.path}`);
+      continue;
+    }
+    if (!fs.read(stage.consumer.path).includes(stage.consumer.marker)) {
+      findings.push(`[${stage.id}] consumer anchor ${stage.consumer.path} does not contain marker "${stage.consumer.marker}"`);
+    }
   }
   return findings;
 }

@@ -3,7 +3,10 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   auditV2Anchors,
+  auditV2SurfacesAndStages,
   isDiscoverableVerificationPath,
+  isProductionSourcePath,
+  normalizeSurfacePattern,
   parseRulesRegistry,
   parseRulesV2,
   type ParsedRulesV2,
@@ -208,6 +211,16 @@ const realAnchorFs: RulesAnchorFs = {
     return existsSync(full) && statSync(full).isFile();
   },
   read: (path) => readFileSync(resolve(REPO_ROOT, path), "utf8"),
+};
+
+/** Real-tree adapter that additionally answers directory queries — the
+ * `auditV2SurfacesAndStages` glob-base existence check needs it. */
+const realSurfaceFs: RulesAnchorFs & { isDirectory: (path: string) => boolean } = {
+  ...realAnchorFs,
+  isDirectory: (path) => {
+    const full = resolve(REPO_ROOT, path);
+    return existsSync(full) && statSync(full).isDirectory();
+  },
 };
 
 function memoryFs(files: Readonly<Record<string, string>>): InventoryFileSystem {
@@ -468,5 +481,240 @@ candidates:
     const findings = auditV2Anchors(trackedV2(), driftedFs);
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.some((finding) => finding.includes('does not contain marker "I12"'))).toBe(true);
+  });
+});
+
+/* US-RULE-014 — doc-surface + pipeline-stage declarations: parser
+ * normalization/validation and the fail-closed surfaces+stages audit. */
+
+const MINIMAL_RULE = `  - id: I1
+    kind: invariant
+    statement: dup
+    owner_domain: orchestration
+    severity: block
+    enforcement: [{ path: packages/core/src/loop/recovery.ts, marker: I2 }]
+    verification: [{ path: packages/core/test/orchestrator.test.ts, marker: I2 }]
+    docs: [{ path: docs/architecture.md, marker: I2 }]
+    projection:
+      about: { en: dup, zh: 重复 }
+      verification: { fault_zh: 错, expected_zh: 对 }
+      architecture: { zh: 重复 }
+`;
+
+const EXPECTED_STAGE_IDS = [
+  "STAGE-ATTEST-GATE",
+  "STAGE-EVIDENCE-GATE",
+  "STAGE-CONTRACT-SNAPSHOT",
+  "STAGE-RECONCILE",
+  "STAGE-RELEASE",
+  "STAGE-EVAL-TIER",
+];
+
+function v2TextWithDocSurfaces(surfacesYaml: string, stagesYaml = "pipeline_stages: []\n"): string {
+  return `version: 2
+gates: { doc_drift: soft }
+rules:
+${MINIMAL_RULE}${stagesYaml}doc_surfaces:
+${surfacesYaml}`;
+}
+
+function surfaceBlock(id: string, paths: readonly string[], docs: readonly string[]): string {
+  const quotedPaths = paths.map((p) => JSON.stringify(p)).join(", ");
+  const quotedDocs = docs.map((d) => JSON.stringify(d)).join(", ");
+  return `  - id: ${id}
+    paths: [${quotedPaths}]
+    docs: [${quotedDocs}]
+`;
+}
+
+function stageBlock(id: string, consumerPath: string, marker = "RL-EVID-004"): string {
+  return `  - id: ${id}
+    inputs: [in]
+    outputs: [out]
+    exit: fail
+    consumer: { path: ${JSON.stringify(consumerPath)}, marker: ${marker} }
+`;
+}
+
+const allExistsFs: RulesAnchorFs & { isDirectory: (path: string) => boolean } = {
+  isFile: () => true,
+  read: () => "marker present",
+  isDirectory: () => true,
+};
+
+describe("US-RULE-014 — the tracked v2 doc-surface and pipeline-stage declarations", () => {
+  it("registers the full 13-surface doc-surface set including DS-ATTEST", () => {
+    const registry = trackedV2();
+    expect(registry.docSurfaces.map((s) => s.id)).toEqual([
+      "DS-ATTEST",
+      "DS-EVIDENCE-DELIVERY",
+      "DS-RECONCILE",
+      "DS-LOOP",
+      "DS-EVENTS",
+      "DS-COST",
+      "DS-AGENT",
+      "DS-BACKLOG",
+      "DS-RELEASE",
+      "DS-CLI-COMMANDS",
+      "DS-CLI-RUNNER",
+      "DS-CLI-LIB",
+      "DS-SPEC",
+    ]);
+    expect(registry.docSurfaces.some((s) => s.id === "DS-ATTEST")).toBe(true);
+  });
+
+  it("registers exactly the six verified pipeline stages, each with a production consumer", () => {
+    const registry = trackedV2();
+    expect(registry.pipelineStages.map((s) => s.id)).toEqual(EXPECTED_STAGE_IDS);
+    for (const stage of registry.pipelineStages) {
+      expect(isProductionSourcePath(stage.consumer.path)).toBe(true);
+    }
+  });
+
+  it("audits every surface pattern, doc target, and stage consumer against the live tree", () => {
+    expect(auditV2SurfacesAndStages(trackedV2(), realSurfaceFs)).toEqual([]);
+    expect(auditV2Anchors(trackedV2(), realAnchorFs)).toEqual([]);
+  });
+
+  it("normalizes ./ prefixes, backslashes, whitespace and duplicate slashes in surface patterns", () => {
+    const text = v2TextWithDocSurfaces(
+      surfaceBlock("DS-NORM", ["./packages\\core\\src\\attest\\**", "  packages/core//src/attest/report.ts  "], ["docs/verification.md"]),
+    );
+    const registry = ok(parseRulesV2(text));
+    expect(registry.docSurfaces[0]?.paths).toEqual([
+      "packages/core/src/attest/**",
+      "packages/core/src/attest/report.ts",
+    ]);
+  });
+});
+
+describe("US-RULE-014 — parser rejects unsafe, broad, and dead surface/stage config", () => {
+  it.each([
+    ["bare ** on the paths side", ["**"], /out-of-vocabulary|unsupported glob syntax/],
+    ["one-segment glob base packages/**", ["packages/**"], /broad pattern/],
+    ["doc-alignment root docs/**", ["docs/**"], /doc-alignment root/],
+    ["doc-alignment root guide/en/**", ["guide/en/**"], /doc-alignment root/],
+    ["doc-alignment root policy/**", ["policy/**"], /doc-alignment root/],
+    ["mid-star a/*.ts", ["a/*.ts"], /out-of-vocabulary|unsupported glob syntax/],
+    [".. segment", ["../x.ts"], /\.\. segments/],
+  ] as const)("rejects %s", (_label, paths, message) => {
+    const result = parseRulesV2(v2TextWithDocSurfaces(surfaceBlock("DS-X", paths, ["docs/verification.md"])));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(message);
+  });
+
+  it("rejects a docs entry that is not an exact file path", () => {
+    const result = parseRulesV2(
+      v2TextWithDocSurfaces(surfaceBlock("DS-X", ["packages/core/src/attest/**"], ["docs/verification.md/**"])),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/docs must be exact file paths/);
+  });
+
+  it("rejects a duplicate stage id", () => {
+    const text = v2TextWithDocSurfaces(
+      surfaceBlock("DS-X", ["packages/core/src/attest/**"], ["docs/verification.md"]),
+      `pipeline_stages:\n${stageBlock("STAGE-DUP", "packages/cli/src/runner/done-guard.ts")}${stageBlock("STAGE-DUP", "packages/cli/src/runner/local-publish.ts", "RL-DELIV-010")}`,
+    );
+    const result = parseRulesV2(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/invalid or duplicate stage id/);
+  });
+
+  it("rejects a duplicate normalized pattern within one surface", () => {
+    const text = v2TextWithDocSurfaces(
+      surfaceBlock("DS-X", ["packages/core/src/attest/**", "./packages/core/src/attest/**"], ["docs/verification.md"]),
+    );
+    const result = parseRulesV2(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/duplicate pattern/);
+  });
+
+  it("rejects a duplicate normalized doc target within one surface", () => {
+    const text = v2TextWithDocSurfaces(
+      surfaceBlock("DS-X", ["packages/core/src/attest/**"], ["docs/verification.md", "docs/verification.md"]),
+    );
+    const result = parseRulesV2(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/duplicate pattern/);
+  });
+
+  it.each([
+    ["a test path", "packages/cli/test/x.test.ts"],
+    ["a docs path", "docs/a.md"],
+    ["a generated dist path", "packages/spec/dist/index.js"],
+    ["the registry itself", "policy/rules.yaml"],
+  ] as const)("rejects a consumer anchor in %s", (_label, consumerPath) => {
+    const text = v2TextWithDocSurfaces(
+      surfaceBlock("DS-X", ["packages/core/src/attest/**"], ["docs/verification.md"]),
+      `pipeline_stages:\n${stageBlock("STAGE-X", consumerPath)}`,
+    );
+    const result = parseRulesV2(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/consumer\.path: must name production source/);
+  });
+});
+
+describe("US-RULE-014 — audit rejects dangling surfaces, doc targets, and stage consumers", () => {
+  it("flags a missing exact doc target", () => {
+    const fs = { ...allExistsFs, isFile: (p: string) => p !== "docs/maps/attest.md" };
+    const findings = auditV2SurfacesAndStages(trackedV2(), fs);
+    expect(findings).toContain("[DS-ATTEST] missing doc target: docs/maps/attest.md");
+  });
+
+  it("flags a missing glob base directory", () => {
+    const fs = { ...allExistsFs, isDirectory: (p: string) => p !== "packages/core/src/attest" };
+    const findings = auditV2SurfacesAndStages(trackedV2(), fs);
+    expect(findings).toContain("[DS-ATTEST] missing surface path / glob base: packages/core/src/attest");
+  });
+
+  it("flags a missing stage consumer file", () => {
+    const fs = { ...allExistsFs, isFile: (p: string) => p !== "packages/cli/src/runner/done-guard.ts" };
+    const findings = auditV2SurfacesAndStages(trackedV2(), fs);
+    expect(findings).toContain("[STAGE-ATTEST-GATE] missing consumer anchor: packages/cli/src/runner/done-guard.ts");
+  });
+
+  it("flags a stage consumer whose marker drifted out of the file", () => {
+    const fs = {
+      ...allExistsFs,
+      read: (p: string) => (p === "packages/cli/src/runner/done-guard.ts" ? "no marker here" : "marker present"),
+    };
+    const findings = auditV2SurfacesAndStages(trackedV2(), fs);
+    expect(findings).toContain(
+      '[STAGE-ATTEST-GATE] consumer anchor packages/cli/src/runner/done-guard.ts does not contain marker "RL-EVID-004"',
+    );
+  });
+});
+
+describe("normalizeSurfacePattern + isProductionSourcePath — exported unit contract", () => {
+  it("normalizes a trailing /** glob and an exact path", () => {
+    expect(normalizeSurfacePattern("packages/core/src/attest/**", "paths", "ctx")).toBe("packages/core/src/attest/**");
+    expect(normalizeSurfacePattern("packages/cli/src/runner/attest-gate.ts", "paths", "ctx")).toBe("packages/cli/src/runner/attest-gate.ts");
+    expect(normalizeSurfacePattern("docs/verification.md", "docs", "ctx")).toBe("docs/verification.md");
+  });
+
+  it("throws on unsafe, unsupported, and broad paths-side patterns", () => {
+    expect(() => normalizeSurfacePattern("**", "paths", "ctx")).toThrow(/out-of-vocabulary/);
+    expect(() => normalizeSurfacePattern("packages/**", "paths", "ctx")).toThrow(/broad pattern/);
+    expect(() => normalizeSurfacePattern("docs/**", "paths", "ctx")).toThrow(/doc-alignment root/);
+    expect(() => normalizeSurfacePattern("a/*.ts", "paths", "ctx")).toThrow(/out-of-vocabulary|unsupported glob syntax/);
+    expect(() => normalizeSurfacePattern("../x.ts", "paths", "ctx")).toThrow(/\.\. segments/);
+    expect(() => normalizeSurfacePattern("packages/core/src/dist/**", "paths", "ctx")).toThrow(/test\|generated segment/);
+  });
+
+  it("rejects glob syntax on the docs side", () => {
+    expect(() => normalizeSurfacePattern("docs/verification.md/**", "docs", "ctx")).toThrow(/docs must be exact file paths/);
+  });
+
+  it("isProductionSourcePath gates on the src/ prefix and generated segments", () => {
+    expect(isProductionSourcePath("packages/cli/src/runner/done-guard.ts")).toBe(true);
+    expect(isProductionSourcePath("packages/core/src/delivery/evidence-gate.ts")).toBe(true);
+    expect(isProductionSourcePath("packages/infra/src/fs.ts")).toBe(true);
+    expect(isProductionSourcePath("packages/spec/src/rules.ts")).toBe(true);
+    expect(isProductionSourcePath("packages/cli/test/x.test.ts")).toBe(false);
+    expect(isProductionSourcePath("docs/a.md")).toBe(false);
+    expect(isProductionSourcePath("packages/spec/dist/index.js")).toBe(false);
+    expect(isProductionSourcePath("policy/rules.yaml")).toBe(false);
+    expect(isProductionSourcePath("packages/cli/src/coverage/x.ts")).toBe(false);
   });
 });

@@ -10,6 +10,10 @@
  *               (matches the default test glob and isn't excluded by the root
  *               vitest config) — a test that vitest never runs cannot prove
  *               aliveness. A removed file or drifted marker is a finding.
+ *   (surfaces)  every doc surface's exact paths / `/**` glob bases must exist
+ *               and every doc target must be an existing file; every pipeline
+ *               stage consumer must name an existing file that still contains
+ *               its marker (US-RULE-014 — no dead surface or stage config).
  *   (reverse)   every `RL-<KIND>-<NNN>` marker found in source outside
  *               `policy/rules.yaml` itself and test paths must resolve to a
  *               registered rule id — an unregistered marker is a red line with
@@ -80,12 +84,18 @@ function walk(root, dir, out) {
   if (st.isFile() && SCAN_EXTENSIONS.has(path.extname(dir))) out.push(dir);
 }
 
-/** Real-tree adapter for the spec's fail-closed v2 anchor audit. */
+/** Real-tree adapter for the spec's fail-closed v2 anchor and
+ * surfaces+stages audits. isDirectory backs the `/**` glob-base existence
+ * check in auditV2SurfacesAndStages. */
 function anchorFs(root) {
   return {
     isFile(file) {
       const full = path.join(root, file);
       return existsSync(full) && statSync(full).isFile();
+    },
+    isDirectory(file) {
+      const full = path.join(root, file);
+      return existsSync(full) && statSync(full).isDirectory();
     },
     read(file) {
       return readFileSync(path.join(root, file), "utf8");
@@ -155,6 +165,7 @@ async function runAudit(root) {
   const registry = parsed.value;
   const findings = [
     ...spec.auditV2Anchors(registry, anchorFs(root)),
+    ...spec.auditV2SurfacesAndStages(registry, anchorFs(root)),
     ...reverseCheck(root, registry),
     ...inventoryFindings(root, registry, spec),
   ];

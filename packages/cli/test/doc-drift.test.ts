@@ -47,6 +47,36 @@ const DS_CLI: DocSurface = {
   docs: ["docs/cli.md"],
 };
 
+/* US-RULE-014 — the tracked doc-surface set (mirrors policy/rules.yaml §5
+ * declarations so the verdicts below are exact per-surface, not diluted by
+ * unrelated surfaces). */
+const DS_EVIDENCE_DELIVERY: DocSurface = {
+  id: "DS-EVIDENCE-DELIVERY",
+  paths: [
+    "packages/core/src/delivery/**",
+    "packages/cli/src/runner/local-publish.ts",
+    "packages/cli/src/runner/terminal-handlers.ts",
+  ],
+  docs: [
+    "docs/verification.md",
+    "docs/maps/delivery.md",
+    "guide/en/acceptance-evidence.md",
+    "guide/zh/acceptance-evidence.md",
+  ],
+};
+
+const DS_RECONCILE: DocSurface = {
+  id: "DS-RECONCILE",
+  paths: ["packages/core/src/reconcile/**", "packages/cli/src/lib/delivery-facts.ts"],
+  docs: ["docs/architecture.md", "docs/maps/reconcile.md"],
+};
+
+const DS_RELEASE: DocSurface = {
+  id: "DS-RELEASE",
+  paths: ["packages/core/src/release/**", "packages/cli/src/commands/release.ts"],
+  docs: ["docs/architecture.md", "docs/maps/release.md", "guide/en/changelog.md"],
+};
+
 describe("checkDocDrift — normalization + dedupe", () => {
   it("normalizes backslashes, ./ prefixes and whitespace before matching", () => {
     const verdict = checkDocDrift({
@@ -151,6 +181,117 @@ describe("checkDocDrift — multi-surface verdicts", () => {
       surfaces: [DS_CLI, DS_ATTEST],
     });
     expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-ATTEST"]);
+  });
+});
+
+/* US-RULE-014 — the tracked multi-surface fixture matrix (mirrors the
+ * declarations in policy/rules.yaml §5). */
+describe("checkDocDrift — US-RULE-014 multi-surface matrix", () => {
+  const THREE_SURFACES = [DS_EVIDENCE_DELIVERY, DS_RECONCILE, DS_RELEASE];
+
+  it("hits only DS-EVIDENCE-DELIVERY for a delivery evidence-gate change", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/delivery/evidence-gate.ts"],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits).toEqual([
+      { surfaceId: "DS-EVIDENCE-DELIVERY", matchedPaths: ["packages/core/src/delivery/evidence-gate.ts"] },
+    ]);
+  });
+
+  it("hits DS-RECONCILE then DS-RELEASE in declaration order", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/reconcile/engine.ts", "packages/cli/src/commands/release.ts"],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-RECONCILE", "DS-RELEASE"]);
+  });
+
+  it("hits both surfaces in declaration order for attest + command changes", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts", "packages/cli/src/commands/status.ts"],
+      surfaces: [DS_ATTEST, DS_CLI],
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-ATTEST", "DS-CLI"]);
+  });
+
+  it("hits nothing for infra, site, and README paths", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/infra/src/fs.ts", "site/index.html", "README.md"],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits).toEqual([]);
+  });
+
+  it("a doc-only change hits nothing", () => {
+    const verdict = checkDocDrift({ changedPaths: ["docs/architecture.md"], surfaces: THREE_SURFACES });
+    expect(verdict.hits).toEqual([]);
+  });
+
+  it("changing a declared doc clears only that surface's hit", () => {
+    const verdict = checkDocDrift({
+      changedPaths: [
+        "packages/core/src/reconcile/engine.ts",
+        "packages/cli/src/commands/release.ts",
+        "docs/maps/reconcile.md",
+      ],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-RELEASE"]);
+  });
+
+  it("a backslash changed path hits DS-RECONCILE after normalization", () => {
+    const verdict = checkDocDrift({ changedPaths: ["packages\\core\\src\\reconcile\\engine.ts"], surfaces: THREE_SURFACES });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-RECONCILE"]);
+  });
+
+  it("space + ./ + duplicate-slash changed path keeps the frozen changed-path normalizer boundary", () => {
+    // normalizeDiffPath (byte-identical, frozen) trims, converts backslashes
+    // and strips ./ — it does NOT collapse duplicate slashes. Dup-slash
+    // collapse is the parser's job (normalizeSurfacePattern on DECLARED
+    // patterns, proven in packages/spec/test/rules.test.ts); changed paths
+    // pass through the frozen normalizer unchanged, so this input hits nothing.
+    const verdict = checkDocDrift({
+      changedPaths: [" ./packages/cli//src/commands/release.ts "],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.changedPaths).toEqual(["packages/cli//src/commands/release.ts"]);
+    expect(verdict.hits).toEqual([]);
+  });
+});
+
+describe("US-RULE-014 — the new declarations keep soft doc_drift semantics", () => {
+  it("runDocDriftSoftCheck reports a soft hit over a new surface with exit 0", () => {
+    const store = memStore();
+    const r = runDocDriftSoftCheck({
+      changedPaths: ["packages/core/src/reconcile/engine.ts"],
+      surfaces: [DS_RECONCILE],
+      eventsPath: "/ev.ndjson",
+      cycleId: "c1",
+      storyId: "US-RULE-014",
+      baseline: "abc123",
+      lang: "en",
+      ts: 1_700_000_000_000,
+      store,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.appended).toBe(true);
+    expect(r.output).toContain("DS-RECONCILE");
+    const ev = JSON.parse((store.files.get("/ev.ndjson") ?? "").trim()) as Record<string, unknown>;
+    expect(ev["type"]).toBe("doc_drift_soft_hit");
+    expect(ev).not.toHaveProperty("actor");
+  });
+
+  it("the tracked registry still declares doc_drift soft with the new surfaces", () => {
+    const repoRoot = resolve(__dirname, "../../..");
+    const parsed = parseRulesRegistry(readFileSync(resolve(repoRoot, "policy/rules.yaml"), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.gates.docDrift).toBe("soft");
+    const ids = parsed.value.docSurfaces.map((s) => s.id);
+    expect(ids).toContain("DS-EVIDENCE-DELIVERY");
+    expect(ids).toContain("DS-RECONCILE");
+    expect(ids).toContain("DS-RELEASE");
   });
 });
 

@@ -450,7 +450,37 @@ rules:
       architecture:
         zh: "一 Cycle 一个 Story，全新上下文，TCR 每步 green-or-revert。0 个 TCR 提交 → 判定失败并告警。"
 
-pipeline_stages: []
+pipeline_stages:
+  - id: STAGE-ATTEST-GATE
+    inputs: ["delivery commits ahead", "story spec AC block", "capture artifacts"]
+    outputs: ["acceptance report", "ac-map", "attest:gate event"]
+    exit: fail
+    consumer: { path: packages/cli/src/runner/done-guard.ts, marker: "RL-EVID-004" }
+  - id: STAGE-EVIDENCE-GATE
+    inputs: ["attest report presence", "ac-map presence", "full-verify proof"]
+    outputs: ["evidence-gate verdict", "delivery:evidence_gate event"]
+    exit: fail
+    consumer: { path: packages/cli/src/runner/local-publish.ts, marker: "RL-DELIV-010" }
+  - id: STAGE-CONTRACT-SNAPSHOT
+    inputs: ["story spec at cycle start"]
+    outputs: ["frozen contract snapshot hash", "drift finding (alert-only)"]
+    exit: advance
+    consumer: { path: packages/cli/src/runner/contract-snapshot.ts, marker: "RL-EVID-005" }
+  - id: STAGE-RECONCILE
+    inputs: ["delivery rows", "PR merge facts"]
+    outputs: ["reconciled delivery truth", "delivery verdicts"]
+    exit: advance
+    consumer: { path: packages/cli/src/lib/delivery-facts.ts, marker: "RL-TRUTH-001" }
+  - id: STAGE-RELEASE
+    inputs: ["package consistency", "changelog readiness", "required checks"]
+    outputs: ["release PR", "release tag"]
+    exit: fail
+    consumer: { path: packages/cli/src/commands/release.ts, marker: "RL-REL-010" }
+  - id: STAGE-EVAL-TIER
+    inputs: ["lint-validated story spec"]
+    outputs: ["evaluation tier", "panel fanout reason", "eval:tier-missing event"]
+    exit: fail
+    consumer: { path: packages/cli/src/runner/capture-facts-handler.ts, marker: "US-CYCLE-008" }
 
 doc_surfaces:
   - id: DS-ATTEST
@@ -462,3 +492,61 @@ doc_surfaces:
       - "docs/maps/attest.md"
       - "guide/en/acceptance-evidence.md"
       - "guide/zh/acceptance-evidence.md"
+  - id: DS-EVIDENCE-DELIVERY
+    paths:
+      - "packages/core/src/delivery/**"
+      - "packages/cli/src/runner/local-publish.ts"
+      - "packages/cli/src/runner/terminal-handlers.ts"
+    docs:
+      - "docs/verification.md"
+      - "docs/maps/delivery.md"
+      - "guide/en/acceptance-evidence.md"
+      - "guide/zh/acceptance-evidence.md"
+  - id: DS-RECONCILE
+    paths:
+      - "packages/core/src/reconcile/**"
+      - "packages/cli/src/lib/delivery-facts.ts"
+    docs:
+      - "docs/architecture.md"
+      - "docs/maps/reconcile.md"
+  - id: DS-LOOP
+    paths:
+      - "packages/core/src/loop/**"
+      - "packages/cli/src/runner/run-cycle.ts"
+    docs:
+      - "docs/architecture.md"
+      - "docs/maps/loop.md"
+      - "guide/en/loop.md"
+      - "guide/zh/loop.md"
+  - id: DS-EVENTS
+    paths: ["packages/core/src/events/**"]
+    docs: ["docs/architecture.md", "docs/maps/events.md"]
+  - id: DS-COST
+    paths: ["packages/core/src/cost/**"]
+    docs: ["docs/architecture.md", "docs/maps/cost.md"]
+  - id: DS-AGENT
+    paths: ["packages/core/src/agent/**"]
+    docs: ["docs/architecture.md", "docs/maps/agent.md"]
+  - id: DS-BACKLOG
+    paths: ["packages/core/src/backlog/**"]
+    docs: ["docs/architecture.md", "docs/maps/backlog.md"]
+  - id: DS-RELEASE
+    paths:
+      - "packages/core/src/release/**"
+      - "packages/cli/src/commands/release.ts"
+    docs:
+      - "docs/architecture.md"
+      - "docs/maps/release.md"
+      - "guide/en/changelog.md"
+  - id: DS-CLI-COMMANDS
+    paths: ["packages/cli/src/commands/**"]
+    docs: ["docs/maps/cli-commands.md"]
+  - id: DS-CLI-RUNNER
+    paths: ["packages/cli/src/runner/**"]
+    docs: ["docs/maps/cli-runner.md"]
+  - id: DS-CLI-LIB
+    paths: ["packages/cli/src/lib/**"]
+    docs: ["docs/maps/cli-lib.md"]
+  - id: DS-SPEC
+    paths: ["packages/spec/src/**"]
+    docs: ["docs/maps/spec.md", "docs/maps/spec-types.md", "docs/maps/spec-i18n.md"]
