@@ -109,7 +109,7 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
   confirm only finalizes a run after independent merge, accepted-attest, and clean-workspace checks.
   stop only abandons a clean, unmerged, unpublished run; its branches and retained commits stay available for audit.
 ",
-    "supervisor": "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|journal|health|route|repair-evidence] [--json]
+    "supervisor": "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]
   status           observe + advise summary (alias for no subcommand)
   observe          structured project facts (backlog, truth coverage, PRs, release readiness)
   advise           Supervisor decisions (advisory; persistent changes need owner confirmation)
@@ -119,6 +119,7 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
   live --watch     redraw the role board in-place until Ctrl-C; use --interval <sec>
   live --collab    follow the multi-cycle collaboration stream; add --once for a snapshot
   metrics          read-only queue, dependency, delivery, and reconciliation lag projection; never routes work, changes priority, or merges
+  delivery         read-only unified card/feature delivery view; accepts <id> [--from <ISO>] [--to <ISO>] [--json]
   journal          structured supervisor narrative stream: list/record decisions, verifications, rescues
   health           agent toolchain health: auth/network/setup/worktree classification and routing
   route            Role route trace: --role builder|designer|evaluator|peer_reviewer [--story <id>]
@@ -223,7 +224,7 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
   confirm 只会收尾已合入、已验收且所有目录干净的运行。
   stop 只会停止干净、未合入、未发布的运行；分支和保留提交会留下供核对。
 ",
-    "supervisor": "用法：roll supervisor [status|observe|advise|next|why|live|metrics|journal|health|route|repair-evidence] [--json]
+    "supervisor": "用法：roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]
   status           observe + advise 摘要（无子命令的别名）
   observe          项目结构化事实（backlog、真相覆盖、PR、发布就绪度）
   advise           Supervisor 建议（持久化更改需 owner 确认）
@@ -232,6 +233,7 @@ exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, w
   live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>
   live --collab    跟随多周期协作流；加 --once 读取快照
   metrics          只读投影：排队、依赖、交付与对账耗时；绝不路由工作、改变优先级或合并
+  delivery         只读统一交付视图：<id> [--from <ISO>] [--to <ISO>] [--json]
   journal          Supervisor 叙事流：列出/记录决策、验证、救援
   health           agent 工具链健康：auth/network/setup/worktree 分类与路由
   route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]

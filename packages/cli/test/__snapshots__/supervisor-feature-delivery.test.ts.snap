@@ -1,0 +1,181 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`supervisor delivery > renders Chinese and exposes a malformed ledger diagnostic without throwing > zh 1`] = `
+"
+交付视图：US-X
+卡片 1 · 尝试 1
+- US-X：delivered
+  loop:c1 · active · 耗时 10ms
+首轮交付 0/0 (n/a；排除不完整 1)
+返工后尝试 0
+耗时样本 1 · P50 10ms · P95 10ms
+不完整：malformed_json, missing_loop_build_start, missing_merge_publish, unsupported_loop_stage_boundary
+"
+`;
+
+exports[`supervisor delivery > renders one unified, read-only current-truth view > en 1`] = `
+"
+Delivery view: US-X
+Cards 1 · attempts 1
+- US-X: delivered
+  loop:c1 · active · elapsed 10ms
+First-pass 0/0 (n/a; 1 incomplete excluded)
+Rework attempts after first 0
+Elapsed samples 1 · P50 10ms · P95 10ms
+Incomplete: missing_loop_build_start, missing_merge_publish, unsupported_loop_stage_boundary
+"
+`;
+
+exports[`supervisor delivery > renders one unified, read-only current-truth view > json 1`] = `
+{
+  "cards": [
+    {
+      "attempts": [
+        {
+          "attemptId": "loop:c1",
+          "cardId": "US-X",
+          "codes": [
+            "missing_loop_build_start",
+            "missing_merge_publish",
+            "unsupported_loop_stage_boundary",
+          ],
+          "incomplete": true,
+          "kind": "loop",
+          "observedAtMs": 10,
+          "outcome": "active",
+          "sourceRefs": [
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 1,
+              "rawSha256": "116cced96867caadea2a9c1965649b28bebfc96414eea34f944a62e0b98b5210",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 2,
+              "rawSha256": "a352d54d9025a924bf8a3875593a78da61299cba554bb9d39d911e585d99a1c1",
+            },
+          ],
+          "tcr": {
+            "green": 0,
+            "incompleteAttempts": 0,
+            "red": 0,
+            "unattributed": 0,
+          },
+          "timing": {
+            "buildMs": null,
+            "codes": [
+              "missing_loop_build_start",
+              "missing_merge_publish",
+              "unsupported_loop_stage_boundary",
+            ],
+            "designMs": null,
+            "elapsedMs": 10,
+            "evaluateMs": null,
+            "mergeTailMs": null,
+          },
+        },
+      ],
+      "codes": [
+        "missing_loop_build_start",
+        "missing_merge_publish",
+        "unsupported_loop_stage_boundary",
+      ],
+      "finalState": "delivered",
+      "finalTruth": {
+        "attestation": false,
+        "backlog": true,
+        "bindingIds": [
+          "loop:c1",
+        ],
+        "conflict": false,
+        "main": true,
+      },
+      "id": "US-X",
+      "incomplete": true,
+      "sourceRefs": [
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 1,
+          "rawSha256": "116cced96867caadea2a9c1965649b28bebfc96414eea34f944a62e0b98b5210",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 2,
+          "rawSha256": "a352d54d9025a924bf8a3875593a78da61299cba554bb9d39d911e585d99a1c1",
+        },
+      ],
+      "title": "fixture card",
+      "unattributedTcr": 0,
+    },
+  ],
+  "codes": [
+    "missing_loop_build_start",
+    "missing_merge_publish",
+    "unsupported_loop_stage_boundary",
+  ],
+  "diagnostics": [],
+  "incomplete": true,
+  "schemaVersion": 2,
+  "sourceRefs": [
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 1,
+      "rawSha256": "116cced96867caadea2a9c1965649b28bebfc96414eea34f944a62e0b98b5210",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 2,
+      "rawSha256": "a352d54d9025a924bf8a3875593a78da61299cba554bb9d39d911e585d99a1c1",
+    },
+  ],
+  "subject": {
+    "id": "US-X",
+    "kind": "card",
+    "title": "fixture card",
+  },
+  "summary": {
+    "attempts": 1,
+    "cards": 1,
+    "elapsed": {
+      "p50Ms": 10,
+      "p95Ms": 10,
+      "sampleSize": 1,
+      "totalMs": 10,
+    },
+    "firstPassDeliveryRate": {
+      "denominator": 0,
+      "excludedIncomplete": 1,
+      "numerator": 0,
+      "value": null,
+    },
+    "redelegateRate": {
+      "denominator": 0,
+      "excludedIncomplete": 0,
+      "numerator": 0,
+      "value": null,
+    },
+    "rework": {
+      "attemptsAfterFirst": 0,
+    },
+    "states": {
+      "active": 0,
+      "attested": 0,
+      "blocked": 0,
+      "delivered": 1,
+      "handoff_ready": 0,
+      "not_started": 0,
+      "unknown": 0,
+    },
+    "tcr": {
+      "green": 0,
+      "incompleteAttempts": 0,
+      "red": 0,
+      "unattributed": 0,
+    },
+  },
+  "window": {
+    "basis": "observed_fact_time",
+    "inclusive": true,
+  },
+}
+`;

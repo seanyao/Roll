@@ -63,6 +63,7 @@ import { cardArchiveDir, reportFileName, reviewFileName } from "../lib/archive.j
 import { readScopedAgentLayer, renderScopedExecuteRoute, resolveScopedCastRole, scopedExecuteRouteTrace } from "../runner/scoped-route.js";
 import { renderCollabStream } from "../lib/collab-render.js";
 import { auditWorktrees } from "./worktree-audit.js";
+import { parseDeliveryArgs, readFeatureDelivery, renderFeatureDelivery } from "../lib/feature-delivery-supervisor.js";
 
 const EXEC_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const SUPERVISOR_LIVE_WATCH_DEFAULT_INTERVAL_MS = 2_000;
@@ -70,7 +71,7 @@ const SUPERVISOR_LIVE_WATCH_MIN_INTERVAL_MS = 250;
 const SUPERVISOR_DELIVERY_STALE_AFTER_MS = 5 * 60 * 1000;
 
 export const SUPERVISOR_USAGE = [
-  "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|journal|health|route|repair-evidence] [--json]",
+  "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]",
   "  status           observe + advise summary (alias for no subcommand)",
   "  observe          structured project facts (backlog, truth coverage, PRs, release readiness)",
   "  advise           Supervisor decisions (advisory; persistent changes need owner confirmation)",
@@ -80,6 +81,7 @@ export const SUPERVISOR_USAGE = [
   "  live --watch     redraw the role board in-place until Ctrl-C; use --interval <sec>",
   "  live --collab    follow the multi-cycle collaboration stream; add --once for a snapshot",
   "  metrics          read-only queue, dependency, delivery, and reconciliation lag projection; never routes work, changes priority, or merges",
+  "  delivery         read-only unified card/feature delivery view; accepts <id> [--from <ISO>] [--to <ISO>] [--json]",
   "  journal          structured supervisor narrative stream: list/record decisions, verifications, rescues",
   "  health           agent toolchain health: auth/network/setup/worktree classification and routing",
   "  route            Role route trace: --role builder|designer|evaluator|peer_reviewer [--story <id>]",
@@ -90,7 +92,7 @@ export function supervisorUsage(): string {
   const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
   return zh
     ? [
-      "用法：roll supervisor [status|observe|advise|next|why|live|metrics|journal|health|route|repair-evidence] [--json]",
+      "用法：roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]",
       "  status           observe + advise 摘要（无子命令的别名）",
       "  observe          项目结构化事实（backlog、真相覆盖、PR、发布就绪度）",
       "  advise           Supervisor 建议（持久化更改需 owner 确认）",
@@ -99,6 +101,7 @@ export function supervisorUsage(): string {
       "  live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>",
       "  live --collab    跟随多周期协作流；加 --once 读取快照",
       "  metrics          只读投影：排队、依赖、交付与对账耗时；绝不路由工作、改变优先级或合并",
+      "  delivery         只读统一交付视图：<id> [--from <ISO>] [--to <ISO>] [--json]",
       "  journal          Supervisor 叙事流：列出/记录决策、验证、救援",
       "  health           agent 工具链健康：auth/network/setup/worktree 分类与路由",
       "  route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]",
@@ -1280,11 +1283,26 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   let sub = args.find((a) => !a.startsWith("-"));
   // `status` is an alias for the default observe + advise summary.
   if (sub === "status") sub = undefined;
-  if (sub !== undefined && !["observe", "advise", "next", "why", "live", "metrics", "journal", "health", "route", "repair-evidence"].includes(sub)) {
+  if (sub !== undefined && !["observe", "advise", "next", "why", "live", "metrics", "delivery", "journal", "health", "route", "repair-evidence"].includes(sub)) {
     process.stderr.write(supervisorUsage() + "\n");
     return 1;
   }
   const projectPath = process.cwd();
+  if (sub === "delivery") {
+    const parsed = parseDeliveryArgs(args);
+    if ("error" in parsed) {
+      process.stderr.write(`delivery: ${parsed.error}\n`);
+      return 1;
+    }
+    const result = readFeatureDelivery(projectPath, parsed);
+    if (!result.ok) {
+      if (json) process.stdout.write(JSON.stringify({ error: result.code }, null, 2) + "\n");
+      else process.stderr.write(`delivery: ${result.message}\n`);
+      return 1;
+    }
+    process.stdout.write(json ? JSON.stringify(result.view, null, 2) + "\n" : renderFeatureDelivery(result.view));
+    return 0;
+  }
   if (sub === "metrics") return supervisorMetricsCommand(args, projectPath);
   if (sub === "journal") {
     return supervisorJournalCommand(args, projectPath);
