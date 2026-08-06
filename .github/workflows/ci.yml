@@ -60,6 +60,12 @@ jobs:
       # documentation. --check verifies without writing: bad declaration,
       # stale map bytes, missing inventory and overlap are distinct findings.
       - run: node scripts/gen-module-maps.mjs --check
+      # US-RULE-013 — invariant projections (docs/generated fragments, the
+      # verification/architecture sentinel regions, and
+      # packages/spec/src/generated/invariants.ts) are derived from the v2
+      # projection fields in policy/rules.yaml. --check verifies every output is
+      # fresh and the sentinel regions are intact (needs @roll/spec built).
+      - run: node scripts/gen-rule-projections.mjs --check
       # The root gate builds the workspace, runs the role-taxonomy audit and
       # orphan-snapshot guard, then executes every package's Vitest suite.
       # `npm pack` runs root prepack from inside npm. Keep action-setup's pnpm
