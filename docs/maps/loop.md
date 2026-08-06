@@ -21,6 +21,7 @@ This file is derived only from `@responsibility` declarations in each source fil
 | `design-contract.ts` | Declares the designer contract a designed story must write before execution. |
 | `evaluator-artifact.ts` | Declares the evaluator artifact contract for verified execution. |
 | `execution-profile.ts` | Selects the cheapest sufficient execution profile from risk signals. |
+| `handoff.ts` | Pure projection of the durable cycle-handoff/v1 event family. |
 | `managed-workspace.ts` | Projects workspace lifecycle facts and conservatively releases workspaces. |
 | `morning-report.ts` | Composes morning report rows from cycle events. |
 | `north-star.ts` | Tracks daily north-star metrics against targets. |
