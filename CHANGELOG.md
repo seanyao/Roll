@@ -2,12 +2,14 @@
 
 ## Unreleased
 
+## v4.806.1 — 2026-08-06
+
 ### Delta Team
 - 已暂缓的旧 Delta 交付现在可以安全恢复并继续接管（#85）
 - Roll Capture 更新改为显式同意后执行，不再默认改动已安装应用（#86）
 - Delta rig 的指定模型就绪快照已持久化，供后续派工前查看（#87）
-- `roll delta rigs` 与 `roll delta rigs --refresh` 可查看/刷新本机指定模型就绪状态，明确区分 ready / blocked / unknown / stale / incompatible（#103）
-- 新增 `roll supervisor delivery`，把 loop 与 Delta 的交付过程、结果和效率数据放进同一个只读视图（#104）
+- `roll delta rigs` 与 `roll delta rigs --refresh` 可查看/刷新本机指定模型就绪状态，明确区分 ready / blocked / unknown / stale / incompatible（US-DELTA-018 / #103）
+- 新增 `roll supervisor delivery`，把 loop 与 Delta 的交付过程、结果和效率数据放进同一个只读视图（US-DELTA-020 / #104）
 
 ### Rules
 - 规则注册表迁移到原生 v2 schema，登记 I1–I12 不变量并保留现有 7 条红线条目，审计脚本同步验证锚点与 inventory（#105）
