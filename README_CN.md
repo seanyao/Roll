@@ -286,9 +286,11 @@ Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builde
 
 [`policy/rules.yaml`](policy/rules.yaml) 是已注册 redline、doc-drift 模式以及源码到文档映射的唯一机器可读权威。README、指南、验证说明和生成的[职责地图](docs/maps/)只解释这份注册表，不再声明第二份策略。`node scripts/audit-rules.mjs` 报告的是**已注册 N** 条规则仍然有效；这不是“仓库所有可能规则均已覆盖”的声明。
 
+[`policy/rules-inventory.yaml`](policy/rules-inventory.yaml) 是规则候选文件上的可审计覆盖面谓词：声明的 roots、include 模式与带理由的排除项，逐条分类 registered 或 out-of-scope。覆盖面 = 该谓词 + 其排除项，绝非关键字搜索式完备性；审计对未分类候选与孤儿锚点报错，而不是假定所有规则都已注册。
+
 当前 `doc_drift: soft` 由注册表驱动且可观测：已声明的源码面变更而其声明文档未同步时，会输出诊断，但 soft 命中仍以 exit 0 结束。不存在豁免路径。在本仓形态下，命名 CI 检查对手工 GitHub UI 合并同样只是 advisory：CI 记录结果，但不写 Roll 事件，也不认证合并决定。
 
-hard doc-drift 执行**尚未启用**。启用前必须先有可信的 owner 授权与校准设计。peer 会话、交互式 TTY 或 `actor` 字段都不是 owner 身份认证，文档不得把它们说成认证。
+hard doc-drift 执行**尚未启用**。启用前必须先有可信的 owner 授权与校准设计。peer 会话、交互式 TTY 或 `actor` 字段都不是 owner 身份认证，文档不得把它们说成认证。将其翻为 hard 由 US-RULE-006 跟踪，该卡处于 **Hold**：loop 不得自动拾取；激活前必须先完成可信 owner 授权与校准设计。
 
 ## 仓库结构
 

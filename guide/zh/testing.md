@@ -44,9 +44,15 @@ PR CI 还会发布一个名为 `doc-drift` 的检查。它获取 `origin/main`�
 合并授权。
 
 hard doc-drift 模式尚未启用，仍受可信 owner 授权与校准设计阻塞。peer 会话、TTY 或
-`actor` 字段都不能认证 owner。如果该设计完成且注册表启用 hard，命名检查才可以和
-`test-ts` 一起进入 Roll 驱动的 exact-SHA 合并闸。审计只报告**已注册 N** 条规则仍然
-有效，不代表已经穷尽仓库规则；源码派生的权属视图见生成的[职责地图](../../docs/maps/)。
+`actor` 字段都不能认证 owner。将其翻为 hard 由 US-RULE-006 跟踪，该卡处于 **Hold**：
+loop 不得自动拾取；激活前必须先完成可信 owner 授权与校准设计。如果该设计完成且注册表
+启用 hard，命名检查才可以和 `test-ts` 一起进入 Roll 驱动的 exact-SHA 合并闸。审计只
+报告**已注册 N** 条规则仍然有效，不代表已经穷尽仓库规则；源码派生的权属视图见生成的
+[职责地图](../../docs/maps/)。
+[`policy/rules-inventory.yaml`](../../policy/rules-inventory.yaml) 是规则候选文件上的
+可审计覆盖面谓词：声明的 roots、include 模式与带理由的排除项，逐条分类 registered 或
+out-of-scope。覆盖面 = 该谓词 + 其排除项，绝非关键字搜索式完备性；审计对未分类候选与
+孤儿锚点报错，而不是假定所有规则都已注册。
 
 模板 CI 工作流（`.github/workflows/ci.yml`）将 E2E 测试作为独立任务，必须通过才能合并。失败时：
 

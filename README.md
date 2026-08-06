@@ -438,6 +438,12 @@ The README, guides, verification notes, and generated
 second policy. `node scripts/audit-rules.mjs` reports that the **registered N**
 rules are live. It is not a claim that every possible repository rule has already
 been registered.
+[`policy/rules-inventory.yaml`](policy/rules-inventory.yaml) is the audited
+coverage predicate over rule-candidate files: declared roots, include patterns,
+and reasoned exclusions, with every candidate classified registered or
+out-of-scope. Coverage is that audited predicate plus its exclusions — never a
+keyword-search completeness claim; the audit fails on unclassified candidates
+and orphan anchors rather than assuming every rule is already registered.
 
 The current `doc_drift: soft` mode is registry-driven and observable: a declared
 source surface changed without its declared documentation emits a diagnostic, but
@@ -448,6 +454,9 @@ result but does not create Roll events or authenticate a merge decision.
 Hard doc-drift enforcement is **not enabled**. Enabling it needs a trusted owner
 authorization and calibration design first. A peer session, an interactive TTY,
 or an `actor` field is not owner authentication and must not be presented as one.
+Flipping the mode to hard is tracked as US-RULE-006, which is on Hold: the loop
+must not auto-pick it, and activation requires a trusted-owner authorization and
+calibration design first.
 
 ## Repository layout
 
