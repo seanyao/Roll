@@ -41,7 +41,13 @@ describe("US-DELTA-019 — rig readiness operator documentation", () => {
     const enGuide = read("guide/en/ai-agents.md");
     const zhGuide = read("guide/zh/ai-agents.md");
     const readme = read("README.md");
+    const zhReadme = read("README_CN.md");
+    const skill = read("skills/roll-delta-team/SKILL.md");
     expect(readme).toContain("roll delta rigs --refresh");
+    expect(zhReadme).toContain("roll delta rigs --refresh");
+    expect(zhReadme).toContain("绝不使用默认模型");
+    expect(skill).toContain("roll delta rigs --refresh");
+    expect(skill).toContain("never the default model");
     expect(enGuide).toContain("`ROLL_LANG=zh roll delta rigs --refresh`");
     expect(zhGuide).toContain("`ROLL_LANG=zh roll delta rigs --refresh`");
     const enHelp = await help("en");
@@ -57,6 +63,7 @@ describe("US-DELTA-019 — rig readiness operator documentation", () => {
       },
       docs: {
         readme: section(readme, "#### Local exact-model rig readiness", "\nHonest boundaries"),
+        readmeZh: section(zhReadme, "### Delta rig 本机就绪诊断", "\n### Delta Builder 预检"),
         en: section(enGuide, "### Local exact-model rig readiness", "\nAfter its final green TCR commit"),
         zh: section(zhGuide, "### 本机指定模型就绪状态", "\nBuilder 完成最后一次"),
       },
@@ -66,6 +73,7 @@ describe("US-DELTA-019 — rig readiness operator documentation", () => {
   it("rejects misleading stale operator claims", () => {
     const surfaces = [
       "README.md",
+      "README_CN.md",
       "guide/en/ai-agents.md",
       "guide/zh/ai-agents.md",
       "skills/roll-delta-team/SKILL.md",

@@ -58,6 +58,28 @@ future long task, delivery, host-session freshness, or final role assignment;
 pins, exclusions, tags, cost caps, and role diversity still make the real
 allocation decision.
 ",
+    "readmeZh": "### Delta rig 本机就绪诊断
+
+请宿主担当 Delta 角色之前，先用 \`roll delta rigs\` 查看它的本机诊断。不带标志的普通读取
+只渲染最近一次完整的本机观测：不会启动模型、写快照，也不会改动工作区、租约、派工、
+角色解析或事件。只有当你想对每个精确配置的 \`{adapter, cliModelId}\` 做有界探测并发布一份
+完整的新本机快照时，才使用 \`roll delta rigs --refresh\`。
+
+例如，已配置的 Codex 候选按其精确的本地模型映射探测（等价于
+\`codex exec --model <cliModelId> ...\`），绝不使用默认模型。找不到可执行文件会显示为
+**不可用**并提示安装；没有已验证安全的指定模型非交互选择方式的适配器同样显示为
+**不可用**，且不会执行。**未知**包括过期或不兼容的缓存、超时、令牌输出未验证以及
+未分类失败；修好界面显示的问题后再刷新。就绪文件保存在本机 \`$ROLL_HOME\` 下
+（\`delta-team/rig-adapters.yaml\` 与 \`delta-team/rig-readiness/…\`），只是诊断证据：
+它们不是 Delta 生命周期存储，prepare、角色解析、角色准入、租约与交付对账都不会读取。
+
+输出一次调用只使用一种语言：\`ROLL_LANG\` 是单进程覆盖，然后是持久化的
+\`roll config lang\` 偏好，再是 \`LC_ALL\`、\`LANG\` 和英文；中文操作者可用
+\`ROLL_LANG=zh roll delta rigs --refresh\` 获得完整的简体中文本机诊断。**通过**
+只表示这个指定模型在记录的观测时间返回了固定的最小令牌。它绝不证明后续长任务、
+交付、宿主会话新鲜度或最终角色分配；真正做决定的是 pin、排除规则、标签、
+成本上限和角色多样性。
+",
     "zh": "### 本机指定模型就绪状态
 
 \`roll delta rigs\` 是面向人的、本机诊断命令，用于查看本机 Delta preset 中引用的指定模型。
