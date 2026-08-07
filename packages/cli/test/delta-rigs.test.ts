@@ -123,6 +123,25 @@ describe("US-DELTA-018 — exact-model rig probes", () => {
     await expect(missing.get("codex")!.probe(request)).resolves.toMatchObject({ outcome: "blocked", reasonCode: "adapter_missing" });
   });
 
+  it("accepts the fixed token surrounded by banner text or trailing punctuation instead of requiring byte-exact output", async () => {
+    const outcomes = [
+      { code: 0, stdout: `Ready.\n${RIG_PROBE_TOKEN}\n`, stderr: "" },
+      { code: 0, stdout: `${RIG_PROBE_TOKEN}.`, stderr: "" },
+      { code: 0, stdout: `${RIG_PROBE_TOKEN}10`, stderr: "" },
+    ];
+    const adapters = createRigProbeAdapters({
+      makeTempDir: () => "/tmp/probe",
+      removeTempDir: () => undefined,
+      now: () => 0,
+      run: async () => outcomes.shift()!,
+    });
+    const request = { adapter: "codex", modelId: "exact", timeoutMs: 1000, token: RIG_PROBE_TOKEN } as const;
+    await expect(adapters.get("codex")!.probe(request)).resolves.toMatchObject({ outcome: "ready", reasonCode: "probe_passed" });
+    await expect(adapters.get("codex")!.probe(request)).resolves.toMatchObject({ outcome: "ready", reasonCode: "probe_passed" });
+    // A longer token that merely starts with the fixed token must not count as a match.
+    await expect(adapters.get("codex")!.probe(request)).resolves.toMatchObject({ outcome: "unknown", reasonCode: "probe_output_unverified" });
+  });
+
   it("classifies quota, rate limit, network, and rejected-model diagnostics", async () => {
     const cases: ReadonlyArray<{ readonly output: string; readonly reasonCode: string }> = [
       { output: "provider quota exhausted: insufficient credits", reasonCode: "quota_exhausted" },

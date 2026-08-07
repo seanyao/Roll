@@ -229,8 +229,8 @@ function classifyProcessResult(result: RigProbeProcessResult, token: string, lat
   const known = classifyKnownDiagnostic(`${result.stderr}\n${result.stdout}`);
   if (known !== undefined) return blocked(known, detailForKnownDiagnostic(known), latencyMs);
   if (result.code === 0) {
-    if (normalizeProbeOutput(result.stdout) === token) return ready(latencyMs);
-    return unknown("probe_output_unverified", "The adapter exited cleanly but did not return the fixed probe token exactly.", latencyMs);
+    if (containsProbeToken(result.stdout, token)) return ready(latencyMs);
+    return unknown("probe_output_unverified", "The adapter exited cleanly but its output never included the fixed probe token.", latencyMs);
   }
   return unknown("probe_failed", "The exact-model probe failed without a recognized actionable diagnostic.", latencyMs);
 }
@@ -270,6 +270,22 @@ function unknown(reasonCode: Extract<RigProbeReasonCode, "probe_timeout" | "prob
 
 function normalizeProbeOutput(value: string): string {
   return value.replace(/\r\n/g, "\n").trim();
+}
+
+/**
+ * A healthy CLI often wraps the fixed probe token in banner lines, auth
+ * disclaimers, or trailing punctuation — conversational models rarely emit
+ * only the bare token and nothing else. Requiring byte-exact equality of the
+ * whole output made real, working rigs read as "unverified" on nothing more
+ * than incidental surrounding text. Require the token to appear as a
+ * standalone word instead: still rejects outputs that never mention it, but
+ * no longer rejects outputs that mention it plus something else.
+ */
+function containsProbeToken(stdout: string, token: string): boolean {
+  const normalized = normalizeProbeOutput(stdout);
+  if (normalized === token) return true;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?:[^A-Za-z0-9_]|$)`).test(normalized);
 }
 
 /** Exported for deterministic boundary tests and to prevent accidental raw diagnostics rendering. */
