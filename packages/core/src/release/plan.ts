@@ -52,27 +52,18 @@ const DEFAULT_MAJOR = 3;
 /**
  * roll's own npm package name — the ONLY project that uses the calver scheme.
  *
- * FIX-1493: THIS repo publishes exactly ONE name. The dual-scope arrangement
- * (US-INSTALL-007) is retired: `seanyao/roll` and `BIPOSVC/ape-roll` are now
- * separate repositories that each publish their own npm name, so mirroring one
- * repo's artifact under the other's name would ship this repo's code as the other
- * project. `@seanyao/roll` belongs to the old repo and is NOT a release target
- * here.
+ * FIX-1493: THIS repo publishes exactly ONE name: `@seanyao/roll`.
  *
- * The alias MECHANISM is kept (an empty list, not deleted code) because it is
- * what makes version planning, self-update and the release gate treat every
- * published name identically — adding a name later is one edit, and the release
- * gate keeps its "every name must carry this version" guarantee for free.
+ * The alias MECHANISM is kept (an empty list, not deleted code) so version
+ * planning, self-update and the release gate can treat future published names
+ * identically with one edit.
  */
-export const ROLL_PACKAGE_NAME = "@bipo-ape/roll";
+export const ROLL_PACKAGE_NAME = "@seanyao/roll";
 
 /**
  * Equivalent published names for the same artifact (see {@link ROLL_PACKAGE_NAME}).
  *
- * FIX-1493: intentionally EMPTY. Do not re-add `@seanyao/roll` — that name is the
- * old repo's, and publishing it from here would push this codebase out under the
- * other project's identity. Historical `npx @seanyao/roll@2 migrate` pointers are
- * unrelated: they point users at the retired v2 TOOL, not at a release target.
+ * FIX-1493: intentionally EMPTY. `@seanyao/roll` is the only published name.
  */
 export const ROLL_PACKAGE_ALIASES = [] as const;
 
@@ -82,27 +73,23 @@ export const ROLL_PACKAGE_NAMES: readonly string[] = [ROLL_PACKAGE_NAME, ...ROLL
 /**
  * US-INSTALL-008 — the product repo, in ONE place.
  *
- * roll moved from a personal account to the org (`BIPOSVC/ape-roll`); the old
- * repo stays readable but frozen. Every user-facing link and every remote
- * lookup reads these, so the next move is one edit rather than a hunt through
- * four files that each learned the address by heart.
+ * Every user-facing link and every remote lookup reads these, so a future move
+ * is one edit rather than a hunt through files that each learned the address.
  */
-export const ROLL_REPO_SLUG = "BIPOSVC/ape-roll";
+export const ROLL_REPO_SLUG = "seanyao/roll";
 
 /** Browser URL for {@link ROLL_REPO_SLUG}. */
 export const ROLL_REPO_URL = `https://github.com/${ROLL_REPO_SLUG}`;
 
 /** True when `name` is one of roll's own published package names. */
 /**
- * FIX-1493 — names roll has EVER been installed as, including retired ones.
+ * FIX-1493 — names roll has EVER been installed as.
  *
  * Distinct from {@link ROLL_PACKAGE_NAMES} on purpose. That list is "what this
- * repo publishes" (one name). THIS list is "what a running install might call
- * itself", and it must keep recognising retired names so self-update follows the
- * name the owner actually installed instead of silently moving them onto a
- * different package.
+ * repo publishes". THIS list is "what a running install might call itself", so
+ * self-update follows the name the owner actually installed.
  */
-export const ROLL_KNOWN_INSTALL_NAMES: readonly string[] = [ROLL_PACKAGE_NAME, "@seanyao/roll"];
+export const ROLL_KNOWN_INSTALL_NAMES: readonly string[] = [ROLL_PACKAGE_NAME];
 
 export function isRollPackageName(name: string): boolean {
   return ROLL_PACKAGE_NAMES.includes(name);

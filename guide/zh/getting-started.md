@@ -6,8 +6,8 @@ Roll 管理的故事。
 ## 1. 安装
 
 ```bash
-npm install -g @bipo-ape/roll
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
+npm install -g @seanyao/roll
 ```
 
 Roll 需要 Node.js 22 或更新版本，并且本机至少装好一个支持的 AI agent。

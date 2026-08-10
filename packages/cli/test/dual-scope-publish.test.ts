@@ -1,11 +1,7 @@
 /**
  * FIX-1493 — this repo publishes ONE npm name, and the multi-name gate stays.
  *
- * The dual-scope arrangement (US-INSTALL-007) is retired: `seanyao/roll` and
- * `BIPOSVC/ape-roll` are separate repositories that each publish their own name.
- * Publishing this artifact under the other repo's name would ship this codebase
- * out under that project's identity — and it made `release verify` block forever
- * on a name this repo does not own.
+ * `@seanyao/roll` is this repo's only published npm name.
  *
  * Two things are still enforced here, not by the registry:
  *
@@ -23,18 +19,16 @@ import { installedPackageName } from "../src/commands/update.js";
 
 describe("FIX-1493 — self-update follows the installed name", () => {
   it("stays on the primary when that is what is installed", () => {
-    expect(installedPackageName("@bipo-ape/roll")).toBe("@bipo-ape/roll");
+    expect(installedPackageName("@seanyao/roll")).toBe("@seanyao/roll");
   });
 
-  it("does not migrate a user off a name this repo no longer publishes", () => {
-    // Someone who installed the old name still runs the old name. Rewriting it to
-    // the primary would move them onto a different package behind their back.
+  it("keeps an installed known name stable", () => {
     expect(installedPackageName("@seanyao/roll")).toBe("@seanyao/roll");
   });
 
   it("falls back to the primary for a dev checkout or unreadable tree", () => {
     for (const notRoll of [null, undefined, "", "some-fork"]) {
-      expect(installedPackageName(notRoll)).toBe("@bipo-ape/roll");
+      expect(installedPackageName(notRoll)).toBe("@seanyao/roll");
     }
   });
 });
@@ -54,14 +48,13 @@ describe("FIX-1493 — release verify covers every published name", () => {
   }
 
   it("the published-name list is exactly the one name this repo owns", () => {
-    expect(ROLL_PACKAGE_NAMES).toEqual(["@bipo-ape/roll"]);
+    expect(ROLL_PACKAGE_NAMES).toEqual(["@seanyao/roll"]);
   });
 
   it("promotes once that one name carries the version", () => {
-    // The concrete unblock: verify used to fail forever on @seanyao/roll, a name
-    // this repo cannot publish.
+    // Verify only checks the one published name this repo owns.
     const promoted = { called: false };
-    const res = verifyRelease(ROLL_PACKAGE_NAMES, "9.9.9", "v9.9.9", seams(["@bipo-ape/roll"], promoted));
+    const res = verifyRelease(ROLL_PACKAGE_NAMES, "9.9.9", "v9.9.9", seams(["@seanyao/roll"], promoted));
     expect(res.ok, res.gaps.join("; ")).toBe(true);
     expect(promoted.called).toBe(true);
   });
@@ -71,15 +64,15 @@ describe("FIX-1493 — release verify covers every published name", () => {
     const res = verifyRelease(ROLL_PACKAGE_NAMES, "9.9.9", "v9.9.9", seams([], promoted));
     expect(res.ok).toBe(false);
     expect(promoted.called).toBe(false);
-    expect(res.gaps.join("\n")).toContain("@bipo-ape/roll");
+    expect(res.gaps.join("\n")).toContain("@seanyao/roll");
   });
 
   it("keeps the every-name guarantee for a future added name", () => {
     // The mechanism is retained deliberately: adding a name later must not need a
     // new gate. A second name missing its publish still blocks promotion.
     const promoted = { called: false };
-    const twoNames = ["@bipo-ape/roll", "@example/roll"];
-    const res = verifyRelease(twoNames, "9.9.9", "v9.9.9", seams(["@bipo-ape/roll"], promoted));
+    const twoNames = ["@seanyao/roll", "@example/roll"];
+    const res = verifyRelease(twoNames, "9.9.9", "v9.9.9", seams(["@seanyao/roll"], promoted));
     expect(res.ok).toBe(false);
     expect(promoted.called).toBe(false);
     expect(res.gaps.join("\n")).toContain("@example/roll");

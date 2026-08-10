@@ -81,8 +81,8 @@ function fakeDeps(over: Partial<ReleaseFlowDeps> = {}): { deps: ReleaseFlowDeps;
     version: () => "3.612.2",
     // Default to roll's own package so the base fixture stays on the calver path
     // (FIX-1247); target-project cases override packageName to exercise semver.
-    // FIX-1493: roll's own package name (the alias is the other repo's now).
-    packageName: () => "@bipo-ape/roll",
+    // FIX-1493: @seanyao/roll is this repo's only package name.
+    packageName: () => "@seanyao/roll",
     branch: () => "main",
     clean: () => true,
     synced: () => true,
@@ -129,7 +129,7 @@ function recoveryDeps(over: Partial<ReleaseRecoveryDeps> = {}): { deps: ReleaseR
     },
     readFileAt: (_cwd, sha, path) => {
       calls.push(`read:${sha}:${path}`);
-      if (path === "package.json") return { ok: true, value: '{"name":"@bipo-ape/roll","version":"4.802.1"}' };
+      if (path === "package.json") return { ok: true, value: '{"name":"@seanyao/roll","version":"4.802.1"}' };
       return { ok: true, value: "# Changelog\n\n## v4.802.1 — 2026-08-04\n\n- recovered\n" };
     },
     ...over,
@@ -142,7 +142,7 @@ describe("FIX-1514 — recover exactly one verified, merged-but-untagged release
     const { deps: recovery, calls } = recoveryDeps();
     const actions: string[] = [];
     const result = recoverMergedRelease("/repo", {
-      packageName: () => "@bipo-ape/roll",
+      packageName: () => "@seanyao/roll",
       recovery,
       tag: (_cwd, tag, version, sha) => void actions.push(`tag:${tag}:${version}:${sha}`),
       pushTag: (_cwd, tag) => void actions.push(`push:${tag}`),
@@ -166,7 +166,7 @@ describe("FIX-1514 — recover exactly one verified, merged-but-untagged release
     });
     const actions: string[] = [];
     const result = recoverMergedRelease("/repo", {
-      packageName: () => "@bipo-ape/roll",
+      packageName: () => "@seanyao/roll",
       recovery,
       tag: () => void actions.push("tag"),
       pushTag: () => void actions.push("push"),
@@ -196,13 +196,13 @@ describe("FIX-1514 — recover exactly one verified, merged-but-untagged release
     ["version mismatch", {
       readFileAt: (_cwd: string, _sha: string, path: string) =>
         path === "package.json"
-          ? { ok: true as const, value: '{"name":"@bipo-ape/roll","version":"4.802.2"}' }
+          ? { ok: true as const, value: '{"name":"@seanyao/roll","version":"4.802.2"}' }
           : { ok: true as const, value: "## v4.802.1 — 2026-08-04\n" },
     }, /version identity/],
     ["changelog mismatch", {
       readFileAt: (_cwd: string, _sha: string, path: string) =>
         path === "package.json"
-          ? { ok: true as const, value: '{"name":"@bipo-ape/roll","version":"4.802.1"}' }
+          ? { ok: true as const, value: '{"name":"@seanyao/roll","version":"4.802.1"}' }
           : { ok: true as const, value: "## v4.801.1 — 2026-08-03\n" },
     }, /CHANGELOG identity/],
     ["unreadable PR facts", {
@@ -212,7 +212,7 @@ describe("FIX-1514 — recover exactly one verified, merged-but-untagged release
     const { deps: recovery } = recoveryDeps(override);
     const actions: string[] = [];
     const result = recoverMergedRelease("/repo", {
-      packageName: () => "@bipo-ape/roll",
+      packageName: () => "@seanyao/roll",
       recovery,
       tag: () => void actions.push("tag"),
       pushTag: () => void actions.push("push"),
@@ -230,7 +230,7 @@ describe("FIX-1514 — recover exactly one verified, merged-but-untagged release
     });
     const actions: string[] = [];
     const result = recoverMergedRelease("/repo", {
-      packageName: () => "@bipo-ape/roll",
+      packageName: () => "@seanyao/roll",
       recovery,
       tag: () => void actions.push("tag"),
       pushTag: () => void actions.push("push"),

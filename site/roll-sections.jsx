@@ -18,7 +18,7 @@ function Header({ theme, onThemeChange, lang, onLangChange }) {
           {t.UI.nav.map((n) => (
             <a key={n.id} href={`#${n.id}`}>{n.label}</a>
           ))}
-          <a className="r-nav-ext" href="https://github.com/BIPOSVC/ape-roll" target="_blank" rel="noreferrer">
+          <a className="r-nav-ext" href="https://github.com/seanyao/roll" target="_blank" rel="noreferrer">
             {t.UI.githubLabel} <Icon name="ext" size={12} />
           </a>
         </nav>
@@ -344,7 +344,7 @@ function Guides() {
         <p className="r-section-lede">{g.sub}</p>
         <div className="r-guides">
           {g.tiles.map((tile, i) => (
-            <a key={tile.name} className="r-card r-guide" href={`https://github.com/BIPOSVC/ape-roll/blob/main/${tile.path}`} target="_blank" rel="noreferrer">
+            <a key={tile.name} className="r-card r-guide" href={`https://github.com/seanyao/roll/blob/main/${tile.path}`} target="_blank" rel="noreferrer">
               <span className="r-guide-glyph"><Icon name={glyphs[i]} size={16} /></span>
               <span className="r-guide-name">{tile.name}</span>
               <span className="r-guide-desc">{tile.desc}</span>
@@ -377,10 +377,10 @@ function Footer() {
           <span>seanyao</span>
         </div>
         <div className="r-footer-right">
-          <a href="https://github.com/BIPOSVC/ape-roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="GitHub">
+          <a href="https://github.com/seanyao/roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="GitHub">
             <Icon name="github" size={16} />
           </a>
-          <a href="https://www.npmjs.com/package/@bipo-ape/roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="npm">
+          <a href="https://www.npmjs.com/package/@seanyao/roll" target="_blank" rel="noreferrer" className="r-icon-link" aria-label="npm">
             <span className="r-mono r-mute" style={{ fontSize: 13 }}>npm</span>
           </a>
         </div>

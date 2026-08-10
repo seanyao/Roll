@@ -34,7 +34,7 @@ function ghWith(conclusions: string[], merged = "true", calls: string[][] = []) 
   };
 }
 
-const base = { slug: "BIPOSVC/ape-roll", prNum: "42", branch: "release/v1.2.3" };
+const base = { slug: "seanyao/roll", prNum: "42", branch: "release/v1.2.3" };
 const lsRemote = () => `${TIP}\trefs/heads/release/v1.2.3\n`;
 
 describe("US-DELIV-014 — self-driven merge refuses anything but green", () => {

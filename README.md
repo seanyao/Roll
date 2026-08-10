@@ -10,21 +10,18 @@
 **[中文版 README](README_CN.md)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![npm version](https://img.shields.io/npm/v/@bipo-ape/roll.svg)](https://www.npmjs.com/package/@bipo-ape/roll)
-[![CI](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml/badge.svg)](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@seanyao/roll.svg)](https://www.npmjs.com/package/@seanyao/roll)
+[![CI](https://github.com/seanyao/roll/actions/workflows/ci.yml/badge.svg)](https://github.com/seanyao/roll/actions/workflows/ci.yml)
 
 Roll — a Supervisor-led CLI harness that routes AI agents through story-scoped planning, building, evaluation, git, CI, and acceptance evidence. Works with Claude, Cursor, Codex, Kimi, Pi, Reasonix, and other local rigs when they are available.
 
 ## Install
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 ```
 
-Roll is published under two equivalent names: `@bipo-ape/roll` (use this) and
-`@seanyao/roll` (the original scope, kept working for existing installs). Both
-ship the identical artifact at the same version — installing or updating from
-either gets you the same `roll`.
+Roll is published as `@seanyao/roll`.
 
 Requirements: Node.js ≥ 22. Roll is a self-contained TypeScript CLI — no runtime engine beyond node.
 On macOS, npm installation also tries to install `Roll Capture.app` from the
@@ -489,7 +486,7 @@ template/      Project scaffolding installed by `roll init`
 
 Build & test: `pnpm install && pnpm -r test`.
 
-Published as a single npm package `@bipo-ape/roll`: `dist/` (the CLI bundled to one self-contained ESM by esbuild) + `lib/` + `skills/` + `conventions/` + `template/`.
+Published as a single npm package `@seanyao/roll`: `dist/` (the CLI bundled to one self-contained ESM by esbuild) + `lib/` + `skills/` + `conventions/` + `template/`.
 
 ## Documentation
 
