@@ -18,6 +18,14 @@ On macOS, npm installation also tries to install `Roll Capture.app` from the lat
 
 ## Quick Start
 
+### Use it in any agent
+
+Roll is agent-first. Open any supported agent in the project; that session is the Supervisor. From that session you can:
+
+- Ask for the next card with `roll supervisor next`.
+- Start a continuous backlog run with `roll loop go`.
+- Deliver one Story through host-native sub-agents with `roll delta`.
+
 ### New project
 
 ```bash
@@ -27,7 +35,7 @@ roll next
 roll loop go
 ```
 
-`roll init` diagnoses the directory. `roll next` prints one best next command. `roll loop go` starts a session-driven run that picks cards from the backlog and delivers them one at a time.
+`roll init` diagnoses the directory. `roll next` prints one best next command. `roll supervisor next` lets the current agent session decide what to drive. `roll loop go` starts a continuous session-driven run that picks cards from the backlog and delivers them one at a time.
 
 ### Existing codebase
 
@@ -46,7 +54,7 @@ The loop needs a reachable Git remote so it can push branches and open PRs. Paus
 Roll separates project coordination from Story delivery:
 
 - **Human**: owns the backlog, reviews PRs, and approves releases.
-- **Supervisor**: coordinates at project level. It reads backlog, CI, PR, evidence, and failure state, then advises the next action. It does not implement a Story or override evidence gates.
+- **Supervisor**: the agent session you are in. It coordinates at project level, reads backlog, CI, PR, evidence, and failure state, then advises or drives the next action. It does not implement a Story or override evidence gates.
 - **Delta Unit**: delivers one Story through the stable roles `Designer`, `Builder`, and `Evaluator`, using the `standard`, `verified`, or `designed` execution profile.
 - **Skills**: roles invoke `$roll-design`, `$roll-build`, `$roll-fix`, `$roll-peer`, and related skills instead of reimplementing those workflows.
 - **Evidence**: each Story is accepted through its own attest evidence, AC map, tests, and captured artifacts.
@@ -55,7 +63,11 @@ The role model is `Scope -> Role -> Binding -> Agent -> optional Model`. Machine
 
 ### Session-driven execution
 
-Work only starts when you run `roll loop go` in a session. There is no timer or resident scheduler. `roll loop pause` gates automatic card pickup; `roll loop resume` reopens it. A run may continue in its detached tmux worker after your window closes, but no run starts that you did not start.
+Work only starts when you start it. There is no timer or resident scheduler. In an agent session, `roll loop go` starts a continuous backlog run; `roll loop pause` gates automatic card pickup and `roll loop resume` reopens it. A run may continue in its detached tmux worker after your window closes, but no run starts that you did not start.
+
+### Delta Team sub-agents
+
+For one Story, the host session is the implicit Supervisor. It requests and attests host-native sub-agent sessions for Designer, Builder, and Evaluator, and drives the protocol through `roll delta prepare`, `roll delta validate`, and `roll delta conclude`. Roll never spawns or configures those sessions. `roll loop go` can also delegate to a Delta Team when the execution profile requires it.
 
 ### Fail-loud routing
 

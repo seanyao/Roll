@@ -18,6 +18,14 @@ macOS 上 npm 安装会尽量从 `seanyao/roll-capture` 安装 `Roll Capture.app
 
 ## 快速开始
 
+### 在任意 agent 中使用
+
+Roll 是 agent-first 的。在项目里打开任意受支持的 agent，这个会话本身就是 Supervisor。你可以在这个会话里：
+
+- 用 `roll supervisor next` 询问下一张卡。
+- 用 `roll loop go` 启动连续的 backlog 交付运行。
+- 用 `roll delta` 通过宿主原生 sub-agents 交付单张 Story。
+
 ### 新项目
 
 ```bash
@@ -27,7 +35,7 @@ roll next
 roll loop go
 ```
 
-`roll init` 会先诊断当前目录；`roll next` 只给出一个最合适的下一步；`roll loop go` 在当前会话中启动一轮交付，从 backlog 逐张领取并完成 Story。
+`roll init` 会先诊断当前目录；`roll next` 只给出一个最合适的下一步；`roll supervisor next` 让当前 agent 会话决定接下来驱动什么；`roll loop go` 在当前会话中启动连续交付，从 backlog 逐张领取并完成 Story。
 
 ### 已有代码库
 
@@ -46,7 +54,7 @@ loop 需要可访问的 Git remote，才能推送分支和创建 PR。`roll loop
 Roll 把项目协调与 Story 交付分开：
 
 - **Human**：负责 backlog、审阅 PR、批准发布。
-- **Supervisor**：做项目级协调，读取 backlog、CI、PR、证据与失败状态，并给出下一步建议；它不实现 Story，也不覆盖证据闸。
+- **Supervisor**：就是你所处的 agent 会话。它做项目级协调，读取 backlog、CI、PR、证据与失败状态，并建议或驱动下一步；它不实现 Story，也不覆盖证据闸。
 - **Delta Unit**：通过 `Designer`、`Builder`、`Evaluator` 三个稳定角色交付一张 Story，执行剖面为 `standard`、`verified` 或 `designed`。
 - **Skills**：角色调用 `$roll-design`、`$roll-build`、`$roll-fix`、`$roll-peer` 等技能，而不是把工作流重写进 TS。
 - **证据**：每张 Story 通过自己的 attest 证据、AC map、测试和截图收口。
@@ -55,7 +63,11 @@ Roll 把项目协调与 Story 交付分开：
 
 ### 会话驱动
 
-只有运行 `roll loop go` 才会开始领卡。没有定时器，也没有常驻调度器。`roll loop pause` 会暂停自动领卡，`roll loop resume` 恢复。运行可以留在 detached tmux worker 中继续，但不会启动你没有启动过的运行。
+只有你启动时才会开始推进。没有定时器，也没有常驻调度器。在 agent 会话中，`roll loop go` 启动连续 backlog 运行；`roll loop pause` 会暂停自动领卡，`roll loop resume` 恢复。运行可以留在 detached tmux worker 中继续，但不会启动你没有启动过的运行。
+
+### Delta Team sub-agents
+
+交付单张 Story 时，宿主会话就是隐式 Supervisor。它通过自己的宿主原生能力请求并 attest Designer、Builder、Evaluator 子会话，并用 `roll delta prepare`、`roll delta validate`、`roll delta conclude` 驱动协议。Roll 不会代为启动或配置这些会话。执行剖面需要时，`roll loop go` 也可以把 Story 委派给 Delta Team。
 
 ### 失败必须响
 
