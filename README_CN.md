@@ -10,20 +10,18 @@
 **[English README](README.md)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![npm version](https://img.shields.io/npm/v/@bipo-ape/roll.svg)](https://www.npmjs.com/package/@bipo-ape/roll)
-[![CI](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml/badge.svg)](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@seanyao/roll.svg)](https://www.npmjs.com/package/@seanyao/roll)
+[![CI](https://github.com/seanyao/roll/actions/workflows/ci.yml/badge.svg)](https://github.com/seanyao/roll/actions/workflows/ci.yml)
 
 Roll 是 Supervisor-led 的 CLI harness：把 AI agent 解析为按 Story 收口的规划、构建、评估、git、CI 与验收证据流程。支持 Claude、Codex、Kimi、Pi、Antigravity、Reasonix 等本机可用 agent。
 
 ## 安装
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 ```
 
-Roll 以两个等效的名字发布：`@bipo-ape/roll`（推荐用这个）和 `@seanyao/roll`
-（最初的 scope，为已安装的用户保留）。两者是同一份产物、同一个版本 —— 从哪边
-装、从哪边升级，得到的 `roll` 完全一样。
+Roll 以 `@seanyao/roll` 发布。
 
 环境要求：Node.js ≥ 22。Roll 是自包含的 TypeScript CLI —— 除 node 外无其它运行时引擎。
 macOS 上通过 npm 安装时，会顺手从 `seanyao/roll-capture` 最新 GitHub Release
@@ -317,7 +315,7 @@ template/      roll init 安装的项目脚手架
 
 构建与测试：`pnpm install && pnpm -r test`。
 
-发布为单一 npm 包 `@bipo-ape/roll`：`dist/`（CLI 经 esbuild 打平为单个自包含 ESM）+ `lib/` + `skills/` + `conventions/` + `template/`。
+发布为单一 npm 包 `@seanyao/roll`：`dist/`（CLI 经 esbuild 打平为单个自包含 ESM）+ `lib/` + `skills/` + `conventions/` + `template/`。
 
 ## 文档
 

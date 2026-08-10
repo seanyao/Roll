@@ -187,8 +187,8 @@ describe("resolveProjectName — FIX-307 real project display name", () => {
   it("uses roll only when no project name can be derived", () => {
     // US-INSTALL-008: `""` let git resolve from the PROCESS cwd, so this
     // asserted the checkout's own directory name — green only while that
-    // directory happened to be called `roll`, red the moment the repo was
-    // cloned as `ape-roll`. `/` derives nothing: not a repo, empty basename.
+    // directory happened to be called `roll`. `/` derives nothing: not a repo,
+    // empty basename.
     expect(resolveProjectName("/")).toBe("roll");
   });
 });

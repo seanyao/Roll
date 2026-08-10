@@ -72,10 +72,9 @@ describe("planRelease", () => {
 // roll's calver build number. Only roll's own package uses calver.
 describe("resolveVersionScheme", () => {
   it("uses calver ONLY for roll's own package", () => {
-    // FIX-1493: roll's own name is @bipo-ape/roll. @seanyao/roll is the other
-    // repo's package now — it must resolve like any third-party project.
-    expect(resolveVersionScheme("@bipo-ape/roll")).toBe("calver");
-    expect(resolveVersionScheme("@seanyao/roll")).toBe("semver");
+    // FIX-1493: @seanyao/roll is this repo's only own package.
+    expect(resolveVersionScheme("@seanyao/roll")).toBe("calver");
+    expect(resolveVersionScheme("@example/roll")).toBe("semver");
   });
 
   it("uses semver for every other (target/user) project", () => {

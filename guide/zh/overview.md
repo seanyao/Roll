@@ -5,7 +5,7 @@ Roll 是 Supervisor-led 的交付 harness。把目标写下来，让 Roll 拆成
 ## 快速开始
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 
 cd my-project
 roll setup && roll init

@@ -77,22 +77,16 @@ function runForward(cmd: string, argv: string[]): number {
 }
 
 /**
- * US-INSTALL-007 — which of roll's published names THIS install came from.
+ * US-INSTALL-007 — which published roll name THIS install came from.
  *
- * roll ships one artifact under several names (`@bipo-ape/roll` primary,
- * `@seanyao/roll` the equivalent alias). Self-update must stay on the name the
- * owner actually installed: hard-coding one name would silently reinstall
- * users of the other scope onto it — they would believe they run the package
- * they chose while every update pulled the other one.
+ * roll currently ships as `@seanyao/roll`. Self-update stays on the name the
+ * owner actually installed rather than silently switching packages.
  *
  * Truth source is the running tree's own package.json; when that is unreadable
  * or is not a roll name (dev checkout, renamed fork), fall back to the primary.
  */
 export function installedPackageName(runningTreeName: string | null | undefined = selfPackageName()): string {
-  // FIX-1493: recognise RETIRED install names too, not just current publish
-  // targets. A machine that installed the old name keeps updating that name —
-  // rewriting it to the primary would move the owner onto a different package
-  // behind their back.
+  // FIX-1493: recognise known install names, not just current publish targets.
   return typeof runningTreeName === "string" && ROLL_KNOWN_INSTALL_NAMES.includes(runningTreeName)
     ? runningTreeName
     : ROLL_PACKAGE_NAME;

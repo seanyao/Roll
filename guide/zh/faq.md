@@ -125,7 +125,7 @@ Roll 绝不做的是:装下任何会启动你没要求过的工作的东西。
 要完全卸载：
 
 ```bash
-npm uninstall -g @bipo-ape/roll
+npm uninstall -g @seanyao/roll
 ~/.roll/uninstall.sh --dry-run    # 预览会删什么
 ~/.roll/uninstall.sh              # 实际执行
 ```
@@ -139,7 +139,7 @@ npm uninstall -g @bipo-ape/roll
 **细节：**
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 ```
 
 不需要 Node.js、不需要 npm、不需要任何包管理器。脚本下载 tarball、解压到
@@ -150,7 +150,7 @@ npm install -g @bipo-ape/roll
 钉版本（生产环境推荐）：
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 ```
 
 ---

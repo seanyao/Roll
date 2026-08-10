@@ -1088,10 +1088,10 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
       members: [
         {
           ...workspace.members[0],
-          repositoryId: "git@github.com:BIPOSVC/ape-roll.git",
+          repositoryId: "git@github.com:seanyao/roll.git",
         },
         {
-          repositoryId: "git@github.com:BIPOSVC/ape-roll-skills.git",
+          repositoryId: "git@github.com:seanyao/roll-skills.git",
           workspaceKey: "delta-d-1",
           relativeLocator: "delta-d-1.submodules/skills",
           checkoutRef: { kind: "detached" as const, head: "skills-head" },
@@ -1123,8 +1123,8 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
         if (args[0] === "-C" && args[1] === "/fake/repo/skills" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1.submodules/skills", head: "skills-head" }]);
         if (args[0] === "-C" && args[2] === "rev-parse") return args[1];
         if (args[0] === "-C" && args[2] === "remote") return args[1] === "/fake/repo"
-          ? "https://github.com/BIPOSVC/ape-roll.git"
-          : "https://github.com/BIPOSVC/ape-roll-skills.git";
+          ? "https://github.com/seanyao/roll.git"
+          : "https://github.com/seanyao/roll-skills.git";
         if (args[0] === "status") return "";
         if (args[0] === "rev-list") return "0";
         return "";
@@ -1156,9 +1156,9 @@ describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
   });
 
   it.each([
-    ["different remote", "git@github.com:BIPOSVC/ape-roll.git", "https://github.com/BIPOSVC/other.git"],
-    ["missing remote", "git@github.com:BIPOSVC/ape-roll.git", undefined],
-    ["forged identity", "not-a-repository-identity", "https://github.com/BIPOSVC/ape-roll.git"],
+    ["different remote", "git@github.com:seanyao/roll.git", "https://github.com/BIPOSVC/other.git"],
+    ["missing remote", "git@github.com:seanyao/roll.git", undefined],
+    ["forged identity", "not-a-repository-identity", "https://github.com/seanyao/roll.git"],
   ])("fails closed for a %s repository identity", (_caseName, repositoryId, remoteUrl) => {
     const events = [
       { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId }] }, ts: 1 },

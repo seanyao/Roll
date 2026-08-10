@@ -6,8 +6,8 @@ about five minutes. Run it in a git repository.
 ## 1. Install
 
 ```bash
-npm install -g @bipo-ape/roll
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
+npm install -g @seanyao/roll
 ```
 
 Roll needs Node.js 22 or newer and at least one supported local AI agent.

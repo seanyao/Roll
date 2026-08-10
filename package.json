@@ -1,5 +1,5 @@
 {
-  "name": "@bipo-ape/roll",
+  "name": "@seanyao/roll",
   "version": "4.807.1",
   "description": "Roll — Roll out features with AI agents",
   "packageManager": "pnpm@11.1.3",
@@ -22,10 +22,10 @@
     "skills",
     "agent-first"
   ],
-  "homepage": "https://github.com/BIPOSVC/ape-roll",
+  "homepage": "https://github.com/seanyao/roll",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BIPOSVC/ape-roll.git"
+    "url": "git+https://github.com/seanyao/roll.git"
   },
   "bin": {
     "roll": "dist/roll.mjs"

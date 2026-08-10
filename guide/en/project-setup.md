@@ -70,7 +70,7 @@ roll sync
 ## Typical First-Use Sequence
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 roll setup                 # configure AI tools globally (one time per machine)
 cd my-project
 roll init                  # diagnose and route this project

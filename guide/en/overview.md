@@ -5,7 +5,7 @@ Roll is a Supervisor-led delivery harness. Write a goal, let Roll turn it into S
 ## Quick Start
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 
 cd my-project
 roll setup && roll init

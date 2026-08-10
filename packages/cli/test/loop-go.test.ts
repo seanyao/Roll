@@ -973,7 +973,7 @@ describe("US-GOAL-004 — no-progress suppression", () => {
 
   it("FIX-1239: refuses autonomous work when the repo-local roll package is newer than the running runner", async () => {
     const p = project();
-    writeFileSync(join(p, "package.json"), JSON.stringify({ name: "@bipo-ape/roll", version: "99.0.0" }) + "\n");
+    writeFileSync(join(p, "package.json"), JSON.stringify({ name: "@seanyao/roll", version: "99.0.0" }) + "\n");
     let calls = 0;
     const deps: LoopGoDeps = {
       identity: () => Promise.resolve({ path: p, slug: "proj-abc123" }),

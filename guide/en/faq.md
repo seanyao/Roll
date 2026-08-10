@@ -141,7 +141,7 @@ What Roll never does is install something that starts work you did not ask for.
 To remove everything:
 
 ```bash
-npm uninstall -g @bipo-ape/roll
+npm uninstall -g @seanyao/roll
 ~/.roll/uninstall.sh --dry-run    # preview removals
 ~/.roll/uninstall.sh              # actually remove
 ```
@@ -156,7 +156,7 @@ bash, curl, and tar — all preinstalled on macOS and Linux.
 **Details:**
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 ```
 
 No Node.js, no npm, no package manager needed. The script downloads a tarball,
@@ -168,7 +168,7 @@ everything.
 To pin a specific version (recommended for production):
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 ```
 
 ---

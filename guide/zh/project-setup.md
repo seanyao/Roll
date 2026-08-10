@@ -62,7 +62,7 @@ roll sync
 ## 典型首次使用流程
 
 ```bash
-npm install -g @bipo-ape/roll
+npm install -g @seanyao/roll
 roll setup                 # 全机器配置 AI 工具（仅需一次）
 cd my-project
 roll init                  # 诊断并路由该项目
