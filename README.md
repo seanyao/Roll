@@ -292,6 +292,7 @@ selectors -> adapter -> projections.
 roll loop cycle <id> --roles      # who was selected, who returned, who was accepted
 roll loop cycle <id> --collab     # the handoffs between roles
 roll loop cycle --legend          # what the symbols mean
+roll supervisor delivery <id>     # one feature's delivery, in one view
 roll supervisor live              # multi-role board, one frame
 roll supervisor live --collab     # the same board with collaboration detail
 roll supervisor live --watch      # keep it open and redraw in place
@@ -367,7 +368,7 @@ Build and test: `pnpm install && pnpm -r test`.
 | | |
 |---|---|
 | **Start here** | [Getting started](guide/en/getting-started.md) · [Overview](guide/en/overview.md) · [Engineering methodology](guide/en/methodology.md) |
-| **Daily driving** | [The loop](guide/en/loop.md) · [AI agents](guide/en/ai-agents.md) · [Configuration](guide/en/configuration.md) · [Pricing & cost](guide/en/pricing.md) · [FAQ](guide/en/faq.md) |
+| **Daily driving** | [The loop](guide/en/loop.md) · [AI agents](guide/en/ai-agents.md) · [Delivery metrics](guide/en/delivery-metrics.md) · [Configuration](guide/en/configuration.md) · [Pricing & cost](guide/en/pricing.md) · [FAQ](guide/en/faq.md) |
 | **Quality machinery** | [Acceptance evidence](guide/en/acceptance-evidence.md) · [Evidence lifecycle](guide/en/acceptance-evidence.md#lifecycle-in-three-stages) · [Consistency & release gate](guide/en/consistency.md) · [Testing](guide/en/testing.md) · [Test isolation](guide/en/test-isolation.md) |
 | **Under the hood** | [Architecture](docs/architecture.md) · [Verification system](docs/verification.md) |
 

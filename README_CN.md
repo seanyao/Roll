@@ -267,6 +267,7 @@ Builder 完成最后一次 green TCR 提交后会跑一次只读预检：预检�
 roll loop cycle <id> --roles      # 选了谁、谁回了、谁被采纳
 roll loop cycle <id> --collab     # 角色之间的交接
 roll loop cycle --legend          # 符号是什么意思
+roll supervisor delivery <id>     # 一个功能的交付情况，一个视图看完
 roll supervisor live              # 多角色看板，打一帧
 roll supervisor live --collab     # 同一个看板 + 协同细节
 roll supervisor live --watch      # 保持打开，原地刷新
@@ -335,7 +336,7 @@ policy/        规则注册表与它的审计清单
 | | |
 |---|---|
 | **从这里开始** | [快速上手](guide/zh/getting-started.md) · [概述](guide/zh/overview.md) · [工程方法论](guide/zh/methodology.md) |
-| **日常使用** | [Loop](guide/zh/loop.md) · [AI agent](guide/zh/ai-agents.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
+| **日常使用** | [Loop](guide/zh/loop.md) · [AI agent](guide/zh/ai-agents.md) · [交付指标](guide/zh/delivery-metrics.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
 | **质量机制** | [验收证据](guide/zh/acceptance-evidence.md) · [证据生命周期](guide/zh/acceptance-evidence.md#三段式生命周期) · [一致性与发版闸](guide/zh/consistency.md) · [测试](guide/zh/testing.md) · [测试隔离](guide/zh/test-isolation.md) |
 | **底层设计** | [架构](docs/architecture.md) · [验证体系](docs/verification.md) |
 
