@@ -1,4 +1,4 @@
-/* global React, ReactDOM, RollI18n, Header, Hero, Why, How, Features, Skills, Journey, Numbers, Guides, Footer,
+/* global React, ReactDOM, RollI18n, Header, Hero, Why, How, QuickStart, Commands, Guides, Footer,
           useTweaks, TweaksPanel, TweakSection, TweakRadio, TweakSelect */
 const { useEffect } = React;
 
@@ -72,10 +72,8 @@ function App() {
           <Hero key={heroKey} animate={tweaks.terminalAnim === "animated"} />
           <Why />
           <How />
-          <Features />
-          <Skills />
-          <Journey />
-          <Numbers />
+          <QuickStart />
+          <Commands />
           <Guides />
         </main>
         <Footer />
