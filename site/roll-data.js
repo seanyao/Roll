@@ -59,7 +59,7 @@ window.RollData = (function () {
         { label: "Quick start", href: "#quickstart", primary: true },
         { label: "View on GitHub", href: "https://github.com/seanyao/roll", primary: false, external: true },
       ],
-      meta: ["MIT licensed", "Node 22+", "Works with Claude · Codex · Cursor · Kimi · Pi · Reasonix when available"],
+      meta: ["MIT licensed", "Node 22+", "Works with Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix when available"],
     },
     TERMINAL: [
       { kind: "prompt", text: "roll loop go" },
@@ -192,7 +192,7 @@ window.RollData = (function () {
         { label: "快速开始", href: "#quickstart", primary: true },
         { label: "GitHub", href: "https://github.com/seanyao/roll", primary: false, external: true },
       ],
-      meta: ["MIT 协议", "Node 22+", "支持 Claude · Codex · Cursor · Kimi · Pi · Reasonix（可用时）"],
+      meta: ["MIT 协议", "Node 22+", "支持 Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix（可用时）"],
     },
     TERMINAL: [
       { kind: "prompt", text: "roll loop go" },
