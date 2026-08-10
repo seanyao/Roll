@@ -144,6 +144,60 @@ function How() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Quick Start
+// ─────────────────────────────────────────────────────────────────────────────
+function QuickStart() {
+  const t = useT();
+  const q = t.QUICKSTART;
+  return (
+    <section className="r-section" id="quickstart">
+      <div className="r-container">
+        <SectionLabel n="03">{q.label}</SectionLabel>
+        <h2 className="r-h2">{q.title}</h2>
+        <p className="r-section-lede">{q.sub}</p>
+        <div className="r-quickstart">
+          {q.steps.map((s) => (
+            <div className="r-quick-row" key={s.cmd}>
+              <span className="r-quick-prompt">$</span>
+              <code className="r-quick-cmd">{s.cmd}</code>
+              <span className="r-quick-desc">{s.desc}</span>
+            </div>
+          ))}
+        </div>
+        <ul className="r-quick-notes">
+          {q.notes.map((note) => <li key={note}>{note}</li>)}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Commands
+// ─────────────────────────────────────────────────────────────────────────────
+function Commands() {
+  const t = useT();
+  const c = t.COMMANDS;
+  return (
+    <section className="r-section r-section-tinted" id="commands">
+      <div className="r-container">
+        <SectionLabel n="04">{c.label}</SectionLabel>
+        <h2 className="r-h2">{c.title}</h2>
+        <p className="r-section-lede">{c.sub}</p>
+        <div className="r-command-grid">
+          {c.rows.map((row) => (
+            <div className="r-card r-command" key={row.cmd}>
+              <code className="r-command-name">{row.cmd}</code>
+              <span className="r-command-desc">{row.desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Features — grouped grid with sticky group nav
 // ─────────────────────────────────────────────────────────────────────────────
 function Features() {
@@ -339,7 +393,7 @@ function Guides() {
   return (
     <section className="r-section" id="guides">
       <div className="r-container">
-        <SectionLabel n="07">{g.label}</SectionLabel>
+        <SectionLabel n="05">{g.label}</SectionLabel>
         <h2 className="r-h2">{g.title}</h2>
         <p className="r-section-lede">{g.sub}</p>
         <div className="r-guides">
@@ -389,4 +443,4 @@ function Footer() {
   );
 }
 
-Object.assign(window, { Header, Hero, Why, How, Features, Skills, Journey, Numbers, Guides, Footer });
+Object.assign(window, { Header, Hero, Why, How, QuickStart, Commands, Features, Skills, Journey, Numbers, Guides, Footer });
