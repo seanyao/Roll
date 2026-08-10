@@ -34,11 +34,17 @@ local diagnostic entirely in Simplified Chinese.
 ",
     "readme": "#### Local exact-model rig readiness
 
-\`roll delta rigs --refresh\` probes every exact configured \`{adapter, cliModelId}\` and publishes one complete local snapshot. It is read-only, never uses the default model, and does not change dispatch, allocation, or resolution.
+\`roll delta rigs --refresh\` probes every exactly configured
+\`{adapter, cliModelId}\` and publishes one complete local snapshot. It is
+read-only, never the default model, and does not change dispatch, allocation, or
+resolution.
 ",
     "readmeZh": "### Delta rig 本机就绪诊断
 
-\`roll delta rigs --refresh\` 探测每个精确配置的 \`{adapter, cliModelId}\` 并发布一份完整本机快照。它只读、绝不使用默认模型，也不改变派工、分配或解析。
+\`roll delta rigs --refresh\` 探测每个精确配置的 \`{adapter, cliModelId}\` 并发布一份
+完整本机快照。它只读、**绝不使用默认模型**，也不改变派工、分配或解析。
+
+探测通过只说明这个 rig 刚刚在这台机器上应答了，不代表更多。
 ",
     "zh": "### 本机指定模型就绪状态
 
