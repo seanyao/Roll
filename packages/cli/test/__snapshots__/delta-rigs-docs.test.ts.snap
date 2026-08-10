@@ -34,63 +34,11 @@ local diagnostic entirely in Simplified Chinese.
 ",
     "readme": "#### Local exact-model rig readiness
 
-Before asking a host to resolve a Delta role, inspect its machine-local
-diagnostic with \`roll delta rigs\`. This ordinary read only renders the most
-recent complete local observation: it does not start a model, write a snapshot,
-or change a workspace, lease, dispatch, resolution, or event. Use
-\`roll delta rigs --refresh\` only when you want bounded probes of every exact
-configured \`{adapter, cliModelId}\` and publication of one complete new local
-snapshot.
-
-For example, a configured Codex candidate is probed with its exact local model
-mapping (equivalent to \`codex exec --model <cliModelId> ...\`), not Codex's
-default model. A missing executable is shown as **blocked** with an installation
-action; an adapter without a verified safe exact-model noninteractive selector
-is also **blocked** and is not executed. **Unknown** includes stale or
-incompatible cache, timeout, unverified token output, and unclassified failure;
-refresh after fixing the actionable condition.
-
-Output follows one language per process: \`ROLL_LANG\` is the one-process
-override, then \`roll config lang\` is the persisted preference, then \`LC_ALL\`,
-\`LANG\`, and English. A \`ready\` observation means only that this exact model
-returned the fixed minimal token at that observation time. It never proves a
-future long task, delivery, host-session freshness, or final role assignment;
-pins, exclusions, tags, cost caps, and role diversity still make the real
-allocation decision.
-
-### Feature delivery view
-
-To see how a feature or a single card actually delivered, run
-\`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]\`.
-It is one read-only view: one card has one final delivery conclusion, every
-attempt stays visible under that card, timing/TCR/rework numbers show their
-sample size, and missing history stays incomplete (\`?\` / \`n/a\`) rather than a
-zero or a success. It cannot route an agent, retry work, change the backlog,
-merge a PR, or attest a card. See the
-[delivery metrics dictionary](guide/en/delivery-metrics.md) for the worked
-example and the exact source facts.
+\`roll delta rigs --refresh\` probes every exact configured \`{adapter, cliModelId}\` and publishes one complete local snapshot. It is read-only, never uses the default model, and does not change dispatch, allocation, or resolution.
 ",
     "readmeZh": "### Delta rig 本机就绪诊断
 
-请宿主担当 Delta 角色之前，先用 \`roll delta rigs\` 查看它的本机诊断。不带标志的普通读取
-只渲染最近一次完整的本机观测：不会启动模型、写快照，也不会改动工作区、租约、派工、
-角色解析或事件。只有当你想对每个精确配置的 \`{adapter, cliModelId}\` 做有界探测并发布一份
-完整的新本机快照时，才使用 \`roll delta rigs --refresh\`。
-
-例如，已配置的 Codex 候选按其精确的本地模型映射探测（等价于
-\`codex exec --model <cliModelId> ...\`），绝不使用默认模型。找不到可执行文件会显示为
-**不可用**并提示安装；没有已验证安全的指定模型非交互选择方式的适配器同样显示为
-**不可用**，且不会执行。**未知**包括过期或不兼容的缓存、超时、令牌输出未验证以及
-未分类失败；修好界面显示的问题后再刷新。就绪文件保存在本机 \`$ROLL_HOME\` 下
-（\`delta-team/rig-adapters.yaml\` 与 \`delta-team/rig-readiness/…\`），只是诊断证据：
-它们不是 Delta 生命周期存储，prepare、角色解析、角色准入、租约与交付对账都不会读取。
-
-输出一次调用只使用一种语言：\`ROLL_LANG\` 是单进程覆盖，然后是持久化的
-\`roll config lang\` 偏好，再是 \`LC_ALL\`、\`LANG\` 和英文；中文操作者可用
-\`ROLL_LANG=zh roll delta rigs --refresh\` 获得完整的简体中文本机诊断。**通过**
-只表示这个指定模型在记录的观测时间返回了固定的最小令牌。它绝不证明后续长任务、
-交付、宿主会话新鲜度或最终角色分配；真正做决定的是 pin、排除规则、标签、
-成本上限和角色多样性。
+\`roll delta rigs --refresh\` 探测每个精确配置的 \`{adapter, cliModelId}\` 并发布一份完整本机快照。它只读、绝不使用默认模型，也不改变派工、分配或解析。
 ",
     "zh": "### 本机指定模型就绪状态
 
