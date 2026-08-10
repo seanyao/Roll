@@ -1,4 +1,5 @@
 /**
+ * @responsibility Guards reconcile side effects with idempotency predicates.
  * US-DELIV-011 — reconcile side-effect idempotency guards.
  *
  * Multi-source reconcile (human / cron / CI / loop boundary) may overlap.

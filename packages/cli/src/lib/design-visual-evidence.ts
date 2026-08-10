@@ -1,4 +1,7 @@
 /**
+ * @responsibility Enforces the design-phase visual-evidence contract.
+ */
+/**
  * FIX-311 — the DESIGN-PHASE visual-evidence contract (roll-design's teeth).
  *
  * The three screenshot gates must agree or they fight each other:

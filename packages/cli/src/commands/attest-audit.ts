@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll attest audit` subcommand, auditing Done stories for dangling evidence references.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseBacklog } from "@roll/core";

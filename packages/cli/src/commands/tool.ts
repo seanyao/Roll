@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `tool` subcommand, surfacing tool readiness and policy checks.
+ */
 import { join } from "node:path";
 import { deriveToolReadiness, schemaParameterSummary, ToolPolicyEngine, type ToolRequirementResolver } from "@roll/core";
 import type { ToolReadinessStatus, ToolSandbox } from "@roll/spec";

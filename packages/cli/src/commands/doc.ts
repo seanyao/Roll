@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `doc` subcommand, rendering Charter and language guide markdown as readable text.
+ */
+/**
  * US-DOSSIER-037 — `roll doc [--lang en|zh]`: view the Charter / language guide
  * markdown from the terminal (the same docs the static archive Charter browser
  * renders, US-DOSSIER-033), as readable text rather than HTML.

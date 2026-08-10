@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the review-page block and page types.
+ */
 export type ReviewPageKind = "design" | "acceptance";
 
 export type DesignReviewBlockKind =

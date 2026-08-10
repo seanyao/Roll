@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll worktree audit` subcommand, a read-only worktree lifecycle audit.
+ */
+/**
  * US-LOOP-093 — `roll worktree audit`: 只读 worktree 生命周期审计。
  *
  * Read-only audit of all git worktrees registered for the current repo.
@@ -10,37 +13,16 @@
  * Data contract: {@link WorktreeAuditRecord}, {@link WorktreeAuditOutput}
  */
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, realpathSync, type Dirent } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { isEphemeralBranch } from "@roll/core";
+import { isEphemeralBranch, managedWorkspaceReleaseVerdict, projectManagedWorkspaceRuns, type ManagedWorkspaceRunView } from "@roll/core";
 import { resolveIntegrationBranch } from "@roll/infra";
+import { normalizeRemoteUrl, parseEventLine, projectSlug, resolveLang, type RollEvent } from "@roll/spec";
 
 // ─── types (shared with the spec) ───────────────────────────────────────────
 
-export type WorktreeOwner = "loop" | "workspace" | "manual" | "external";
-
-export type WorkspaceDeliveryProof =
-  | "delivered"
-  | "abandoned"
-  | "incomplete"
-  | "blocked"
-  | "unknown";
-
-/** Registry- and Issue-fact-backed ownership supplied by the Workspace aggregate.
- * Path names never create this authority: callers must derive it from one valid
- * Workspace registry entry plus one matching `issue:repository_bound` fact. */
-export interface WorkspaceWorktreeOwnership {
-  readonly workspaceId: string;
-  readonly storyId: string;
-  readonly repoId: string;
-  readonly repositoryAlias: string;
-  readonly cachePath: string;
-  readonly expectedBranch: string | null;
-  readonly active: boolean;
-  readonly deliveryProof: WorkspaceDeliveryProof;
-}
+export type WorktreeOwner = "loop" | "manual" | "external";
 
 export type MergeEvidenceKind =
   | "ancestor"
@@ -61,9 +43,8 @@ export type WorktreeDisposition =
   // registration was removed — e.g. a failed `git worktree remove` that left
   // untracked scratch). The runtime canary counts these dirs, so they must be
   // visible here or they leak. `orphan_reclaimable` = owning cycle is provably
-  // delivered AND the path-specific recovery proof contains only trusted
-  // generated residue; every missing, linked, untrusted, or ambiguous proof is
-  // `preserved_orphan` and cannot be overridden by cleanup.
+  // delivered → safe bounded reclaim; `preserved_orphan` = delivery not provable
+  // → preserved + surfaced (never auto-deleted).
   | "orphan_reclaimable"
   | "preserved_orphan";
 
@@ -72,12 +53,6 @@ export interface WorktreeAuditRecord {
   branch?: string;
   head?: string;
   owner: WorktreeOwner;
-  workspaceId?: string;
-  repoId?: string;
-  repositoryAlias?: string;
-  cachePath?: string;
-  deliveryProof?: WorkspaceDeliveryProof;
-  ownershipState?: "verified" | "mismatch";
   cycleId?: string;
   storyId?: string;
   outcome?: string;
@@ -93,16 +68,16 @@ export interface WorktreeAuditRecord {
     state: "OPEN" | "MERGED" | "CLOSED" | "UNKNOWN";
   };
   active: boolean;
-  orphanRecoveryProof?: OrphanRecoveryProof;
   disposition: WorktreeDisposition;
   reason: string;
-}
-
-export interface OrphanRecoveryProof {
-  state: "empty" | "trusted_generated" | "linked_metadata" | "untrusted_material" | "ambiguous";
-  fingerprint: string | null;
-  entries: readonly string[];
-  detail: string;
+  /** US-LOOP-123: projection identity, never inferred from a path name. */
+  runId?: string;
+  memberLocator?: string;
+  runState?: string;
+  registration?: "registered" | "missing" | "unknown" | "foreign";
+  /** The recorded repository identity matched during a subordinate-repo audit. */
+  repositoryIdentity?: "expected" | "foreign" | "unknown";
+  releaseVerdict?: "safe_to_release" | "preserve_active" | "preserve_unmerged" | "preserve_pending_evidence" | "preserve_truth_disagreement" | "preserve_unknown";
 }
 
 export interface WorktreeAuditOutput {
@@ -117,10 +92,11 @@ export interface WorktreeAuditOutput {
    * SOLE authority over what the canary sees, never a separate ad-hoc count.
    */
   ephemeralBranches: string[];
+  /** A missing inspection is a safety fault, never an empty managed set. */
+  inspectionUnavailable?: boolean;
   summary: {
     total: number;
     loop: number;
-    workspace?: number;
     manual: number;
     external: number;
     active: number;
@@ -129,6 +105,18 @@ export interface WorktreeAuditOutput {
     /** FIX-1273: ephemeral local branch count (canary's other addend). */
     ephemeralBranches: number;
   };
+}
+
+interface ProjectedMember {
+  readonly run: ManagedWorkspaceRunView;
+  readonly locator: string;
+  readonly expectedHead?: string;
+}
+
+interface RawWorktree {
+  path: string;
+  head: string;
+  branch: string;
 }
 
 // ─── dependency hooks (injectable for tests) ──────────────────────────────
@@ -146,8 +134,6 @@ export interface WorktreeAuditDeps {
    * Injectable in tests. Must NOT throw — returns [] when the path is absent.
    */
   readDir?: (p: string) => string[];
-  /** Inspect one unregistered direct child for path-specific recovery proof. */
-  inspectOrphanDir?: (repoRoot: string, path: string, name: string) => OrphanRecoveryProof;
   /** Current timestamp as ISO-8601 string. */
   nowISO?: () => string;
   /** Current UTC seconds. */
@@ -160,23 +146,17 @@ export interface WorktreeAuditDeps {
    * overridden). Injected in tests.
    */
   integrationBranch?: string;
-  /** Exact registered worktree path -> Workspace ownership facts. */
-  workspaceOwnership?: ReadonlyMap<string, WorkspaceWorktreeOwnership>;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function git(args: string[], cwd: string): string {
-  try {
-    return execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 16 * 1024 * 1024,
-    }).trimEnd();
-  } catch {
-    return "";
-  }
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 16 * 1024 * 1024,
+  }).trimEnd();
 }
 
 function readFileSafe(p: string): string | null {
@@ -184,17 +164,6 @@ function readFileSafe(p: string): string | null {
     return readFileSync(p, "utf8");
   } catch {
     return null;
-  }
-}
-
-function readActivityFile(p: string, deps: WorktreeAuditDeps): string | null {
-  if (deps.readFile) return deps.readFile(p);
-  try {
-    return readFileSync(p, "utf8");
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String(error.code) : "";
-    if (code === "ENOENT") return null;
-    throw error;
   }
 }
 
@@ -232,12 +201,7 @@ interface CycleEvent {
 
 function readCycleContext(eventsPath: string, deps: WorktreeAuditDeps): Map<string, CycleEvent> {
   const map = new Map<string, CycleEvent>();
-  let text: string | null;
-  try {
-    text = deps.readFile ? deps.readFile(eventsPath) : readFileSafe(eventsPath);
-  } catch {
-    return map;
-  }
+  const text = deps.readFile ? deps.readFile(eventsPath) : readFileSafe(eventsPath);
   if (!text) return map;
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
@@ -259,6 +223,197 @@ function readCycleContext(eventsPath: string, deps: WorktreeAuditDeps): Map<stri
   return map;
 }
 
+function readEvents(eventsPath: string, deps: WorktreeAuditDeps): RollEvent[] {
+  const text = deps.readFile ? deps.readFile(eventsPath) : readFileSafe(eventsPath);
+  if (!text) return [];
+  return text.split("\n").map(parseEventLine).filter((event): event is RollEvent => event !== null);
+}
+
+/**
+ * Materialise the shared projection at the filesystem boundary.  Legacy cycles
+ * are adapted by the core projection's run id, not by scanning a prefix.
+ */
+function projectedMembers(events: readonly RollEvent[]): ProjectedMember[] {
+  const members: ProjectedMember[] = [];
+  for (const run of projectManagedWorkspaceRuns(events)) {
+    if (run.workspace !== undefined) {
+      // Allocation HEAD names the checkout created for a run. Once release has
+      // been requested, the only valid destructive expectation is the fresh
+      // per-member HEAD frozen immediately before release (a child may have
+      // committed since allocation). Use the latest matching durable request.
+      const release = [...events].reverse().find((event) => event.type === "worktree:release_requested" && event.runId === run.runId) as unknown as {
+        readonly expectedHeads: readonly { readonly relativeLocator: string; readonly head: string }[];
+      } | undefined;
+      const releaseHeads = release?.expectedHeads;
+      for (const member of run.workspace.members) {
+        members.push({
+          run,
+          locator: member.relativeLocator,
+          expectedHead: releaseHeads?.find((head) => head.relativeLocator === member.relativeLocator)?.head ?? member.checkoutRef.head,
+        });
+      }
+    } else if (run.state === "legacy_cycle") {
+      // The legacy adapter is deliberately bounded to the event identity.  It
+      // does not promote an arbitrary `cycle-*` directory into Roll ownership.
+      members.push({ run, locator: run.runId });
+    }
+  }
+  return members;
+}
+
+function withinManagedRoot(repoRoot: string, locator: string): string | undefined {
+  const root = resolve(repoRoot, ".roll", "loop", "worktrees");
+  const path = resolve(root, locator);
+  if (!path.startsWith(root + "/")) return undefined;
+  // Git returns physical worktree paths.  On macOS `/var` commonly resolves to
+  // `/private/var`; compare the same physical locator so a valid registered
+  // member is never downgraded to an unregistered phantom.
+  const physicalRoot = realpathSafe(root);
+  const physicalPath = realpathSafe(path);
+  // A missing member cannot be realpath'd. Preserve its canonical-root
+  // relative locator while using the physical root, so missing registration is
+  // a first-class audit fault rather than a silently omitted member.
+  const comparablePath = physicalPath === path ? resolve(physicalRoot, relative(root, path)) : physicalPath;
+  return comparablePath.startsWith(physicalRoot + "/") ? comparablePath : undefined;
+}
+
+/**
+ * Submodules own separate Git registrations.  Looking only at the superproject
+ * list would turn every real submodule checkout into a false orphan, while the
+ * `<key>.submodules` directory itself is intentionally never a member.
+ */
+function submoduleRepositoryPath(repoRoot: string, locator: string): string | undefined {
+  const marker = ".submodules/";
+  const index = locator.indexOf(marker);
+  if (index < 1) return undefined;
+  const submodule = locator.slice(index + marker.length);
+  return submodule === "" ? undefined : resolve(repoRoot, submodule);
+}
+
+function parseWorktreeEntries(output: string): RawWorktree[] {
+  const entries: RawWorktree[] = [];
+  let current: Partial<RawWorktree> = {};
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current.path) entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
+      current = { path: line.slice("worktree ".length).trim() };
+    } else if (line.startsWith("HEAD ")) {
+      current.head = line.slice("HEAD ".length).trim();
+    } else if (line.startsWith("branch ")) {
+      current.branch = line.slice("branch ".length).trim();
+    } else if (line === "" && current.path) {
+      entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
+      current = {};
+    }
+  }
+  if (current.path) entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
+  return entries;
+}
+
+/**
+ * A host-guided Delta allocation persists the configured origin URL, while
+ * older Cycle allocations persist `projectSlug`.  A URL only proves identity
+ * when both sides are recognised Git remote spellings; never treat a similar
+ * repository name as equivalent.
+ */
+function canonicalRemoteIdentity(value: string): string | undefined {
+  const remote = value.trim();
+  if (/^git@[^/:\s]+:[^/\s]+\/.+$/i.test(remote) || /^https?:\/\/[^/\s]+\/.+$/i.test(remote)) {
+    return normalizeRemoteUrl(remote);
+  }
+  const sshUrl = /^ssh:\/\/git@([^/:\s]+)(?::22)?\/(.+)$/i.exec(remote);
+  return sshUrl === null ? undefined : normalizeRemoteUrl(`https://${sshUrl[1]}/${sshUrl[2]}`);
+}
+
+function repositoryIdentityMatches(
+  expectedRepositoryId: string,
+  observed: { readonly top: string; readonly remoteUrl?: string },
+): boolean {
+  const expectedRemote = canonicalRemoteIdentity(expectedRepositoryId);
+  if (expectedRemote !== undefined) {
+    const observedRemote = observed.remoteUrl === undefined ? undefined : canonicalRemoteIdentity(observed.remoteUrl);
+    return observedRemote !== undefined && observedRemote === expectedRemote;
+  }
+  // Preserve the pre-URL allocation contract. `projectSlug` includes the
+  // normalized remote hash when available and a canonical local-path hash when
+  // it is not, so this is still an exact identity comparison.
+  return projectSlug({ path: observed.top, remoteUrl: observed.remoteUrl }) === expectedRepositoryId;
+}
+
+function memberRepositoryEntry(
+  repository: string,
+  path: string,
+  expectedRepositoryId: string,
+  deps: WorktreeAuditDeps,
+): { registration: "registered" | "missing" | "unknown" | "foreign"; repositoryIdentity: "expected" | "foreign" | "unknown"; entry?: RawWorktree } {
+  try {
+    const g = deps.git ?? git;
+    const listed = g(["-C", repository, "worktree", "list", "--porcelain"], repository);
+    const entry = parseWorktreeEntries(listed).find((candidate) => realpathSafe(resolve(candidate.path)) === realpathSafe(resolve(path)));
+    if (entry === undefined) return { registration: "missing", repositoryIdentity: "unknown" };
+    const top = g(["-C", repository, "rev-parse", "--show-toplevel"], repository).trim();
+    if (top === "") return { registration: "registered", repositoryIdentity: "unknown", entry };
+    let remoteUrl: string | undefined;
+    try {
+      const origin = g(["-C", repository, "remote", "get-url", "origin"], repository).trim();
+      remoteUrl = origin === "" ? undefined : origin;
+    } catch { /* a local repository has a path-derived identity */ }
+    // Do not pass ROLL_MAIN_SLUG here. It is the owner namespace, whereas this
+    // comparison proves the identity of this independently registered repo.
+    const matches = repositoryIdentityMatches(expectedRepositoryId, {
+      top: realpathSafe(resolve(top)),
+      remoteUrl,
+    });
+    return matches
+      ? { registration: "registered", repositoryIdentity: "expected", entry }
+      : { registration: "foreign", repositoryIdentity: "foreign", entry };
+  } catch {
+    return { registration: "unknown", repositoryIdentity: "unknown" };
+  }
+}
+
+function submoduleMemberEntry(
+  repoRoot: string,
+  path: string,
+  locator: string,
+  expectedRepositoryId: string,
+  deps: WorktreeAuditDeps,
+): { registration: "registered" | "missing" | "unknown" | "foreign"; repositoryIdentity: "expected" | "foreign" | "unknown"; entry?: RawWorktree } {
+  const repository = submoduleRepositoryPath(repoRoot, locator);
+  return repository === undefined
+    ? { registration: "missing", repositoryIdentity: "unknown" }
+    : memberRepositoryEntry(repository, path, expectedRepositoryId, deps);
+}
+
+function deliveryFacts(events: readonly RollEvent[], runId: string): {
+  delivery: "merged" | "unmerged" | "unknown";
+  attest: "accepted" | "missing" | "unknown";
+  factsAgree: boolean;
+} {
+  let merged = false;
+  let unmerged = false;
+  let accepted = false;
+  let missing = false;
+  for (const event of events) {
+    if ("cycleId" in event && event.cycleId === runId) {
+      if (event.type === "delivery:merge_confirmed"
+        || (event.type === "delivery:reconciled"
+          && (event.state === "delivered" || event.state === "delivered_external" || event.state === "delivered_local"))) merged = true;
+      if (event.type === "delivery:abandoned") unmerged = true;
+      if (event.type === "attest:gate") {
+        if (event.verdict === "produced") accepted = true;
+        else missing = true;
+      }
+      if (event.type === "attest:host_delta") accepted = true;
+    }
+  }
+  return {
+    delivery: merged ? "merged" : unmerged ? "unmerged" : "unknown",
+    attest: accepted ? "accepted" : missing ? "missing" : "unknown",
+    factsAgree: !(merged && unmerged) && !(accepted && missing),
+  };
+}
+
 function extractCycleId(dirName: string): string | undefined {
   const m = /^(cycle-\d{8}-\d{6}-\d+)$/.exec(dirName);
   return m ? m[1] : undefined;
@@ -271,8 +426,6 @@ function extractCycleId(dirName: string): string | undefined {
  * plus `merged` (reconcile treats status==="merged" as delivered).
  */
 const ORPHAN_DELIVERED_OUTCOMES = new Set(["delivered", "merged"]);
-const TRUSTED_ORPHAN_GENERATED_ROOTS = new Set([".next"]);
-const MAX_ORPHAN_PROOF_ENTRIES = 100_000;
 
 /** Resolve symlinks for path comparison; returns the input unchanged if it can't. */
 function realpathSafe(p: string): string {
@@ -294,166 +447,6 @@ function defaultReadDirNames(dir: string): string[] {
   }
 }
 
-function ambiguousOrphanProof(entries: readonly string[], detail: string): OrphanRecoveryProof {
-  return { state: "ambiguous", fingerprint: null, entries, detail };
-}
-
-function inspectTrustedOrphanTree(path: string, entries: readonly string[]): OrphanRecoveryProof {
-  const hash = createHash("sha256");
-  const pending = [...entries].sort().reverse();
-  let seen = 0;
-
-  try {
-    const root = lstatSync(path);
-    hash.update(`.\0directory\0${root.mode}\0${root.mtimeMs}\0${root.ctimeMs}\0${root.dev}\0${root.ino}\n`);
-  } catch {
-    return ambiguousOrphanProof(entries, "orphan directory identity could not be fingerprinted");
-  }
-
-  while (pending.length > 0) {
-    const relativePath = pending.pop();
-    if (relativePath === undefined) break;
-    seen += 1;
-    if (seen > MAX_ORPHAN_PROOF_ENTRIES) {
-      return ambiguousOrphanProof(entries, `recovery material exceeds ${MAX_ORPHAN_PROOF_ENTRIES} entries`);
-    }
-
-    const absolutePath = join(path, relativePath);
-    let stat;
-    try {
-      stat = lstatSync(absolutePath);
-    } catch {
-      return ambiguousOrphanProof(entries, `could not inspect '${relativePath}'`);
-    }
-    if (stat.isSymbolicLink()) {
-      return ambiguousOrphanProof(entries, `symbolic link '${relativePath}' is untrusted recovery material`);
-    }
-    if (stat.isDirectory()) {
-      hash.update(`${relativePath}\0directory\0${stat.mode}\0${stat.mtimeMs}\0${stat.ctimeMs}\n`);
-      let children: string[];
-      try {
-        children = readdirSync(absolutePath).sort();
-      } catch {
-        return ambiguousOrphanProof(entries, `could not enumerate '${relativePath}'`);
-      }
-      for (let index = children.length - 1; index >= 0; index -= 1) {
-        pending.push(join(relativePath, children[index] as string));
-      }
-      continue;
-    }
-    if (!stat.isFile()) {
-      return ambiguousOrphanProof(entries, `unsupported entry '${relativePath}' is untrusted recovery material`);
-    }
-    hash.update(
-      `${relativePath}\0file\0${stat.mode}\0${stat.size}\0${stat.mtimeMs}\0${stat.ctimeMs}\0${stat.ino}\n`,
-    );
-  }
-
-  return {
-    state: entries.length === 0 ? "empty" : "trusted_generated",
-    fingerprint: hash.digest("hex"),
-    entries,
-    detail: entries.length === 0 ? "empty orphan directory" : `trusted generated roots: ${entries.join(", ")}`,
-  };
-}
-
-export function inspectOrphanRecoveryProof(repoRoot: string, path: string, name: string): OrphanRecoveryProof {
-  const worktreesRoot = resolve(repoRoot, ".roll", "loop", "worktrees");
-  try {
-    const root = lstatSync(worktreesRoot);
-    if (!root.isDirectory() || root.isSymbolicLink()) {
-      return ambiguousOrphanProof([], "loop worktree root is a symlink or external boundary");
-    }
-    if (dirname(realpathSync(path)) !== realpathSync(worktreesRoot)) {
-      return ambiguousOrphanProof([], "orphan path resolves outside the loop worktree root");
-    }
-  } catch {
-    return ambiguousOrphanProof([], "loop worktree boundary could not be verified");
-  }
-
-  let rootStat;
-  try {
-    rootStat = lstatSync(path);
-  } catch {
-    return ambiguousOrphanProof([], "orphan directory disappeared during audit");
-  }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    return ambiguousOrphanProof([], "orphan path is not a stable directory");
-  }
-
-  let entries: string[];
-  try {
-    entries = readdirSync(path).sort();
-  } catch {
-    return ambiguousOrphanProof([], "orphan directory could not be enumerated");
-  }
-
-  if (entries.includes(".git")) {
-    return {
-      state: "linked_metadata",
-      fingerprint: null,
-      entries,
-      detail: "orphan directory still contains .git ownership metadata",
-    };
-  }
-
-  const g = git;
-  const commonOutput = g(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot).trim();
-  if (!commonOutput) {
-    return ambiguousOrphanProof(entries, "Git common directory could not be resolved");
-  }
-  const commonDir = resolve(repoRoot, commonOutput);
-  try {
-    const adminRoot = join(commonDir, "worktrees");
-    const adminNames = readdirSync(adminRoot, { withFileTypes: true })
-      .filter((entry: Dirent) => entry.isDirectory())
-      .map((entry: Dirent) => entry.name);
-    if (adminNames.includes(name)) {
-      return {
-        state: "linked_metadata",
-        fingerprint: null,
-        entries,
-        detail: `Git linked-worktree admin metadata still exists for '${name}'`,
-      };
-    }
-    for (const adminName of adminNames) {
-      const gitdirPath = join(adminRoot, adminName, "gitdir");
-      const gitdir = readFileSafe(gitdirPath);
-      if (gitdir === null) {
-        return ambiguousOrphanProof(entries, `Git worktree metadata '${adminName}' could not be verified`);
-      }
-      if (gitdir.trim() === "") {
-        return ambiguousOrphanProof(entries, `Git worktree metadata '${adminName}' has an empty gitdir`);
-      }
-      const linkedPath = dirname(resolve(dirname(gitdirPath), gitdir.trim()));
-      if (realpathSafe(linkedPath) === realpathSafe(path)) {
-        return {
-          state: "linked_metadata",
-          fingerprint: null,
-          entries,
-          detail: `Git linked-worktree admin metadata '${adminName}' still owns this path`,
-        };
-      }
-    }
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String(error.code) : "";
-    if (code !== "ENOENT") {
-      return ambiguousOrphanProof(entries, "Git linked-worktree metadata could not be enumerated");
-    }
-  }
-
-  const untrusted = entries.filter((entry) => !TRUSTED_ORPHAN_GENERATED_ROOTS.has(entry));
-  if (untrusted.length > 0) {
-    return {
-      state: "untrusted_material",
-      fingerprint: null,
-      entries,
-      detail: `untrusted material may contain tracked or unpublished work: ${untrusted.join(", ")}`,
-    };
-  }
-  return inspectTrustedOrphanTree(path, entries);
-}
-
 /**
  * FIX-1460 (#1468): enumerate ORPHAN loop worktree directories — dirs under
  * `.roll/loop/worktrees` that are NOT registered in `git worktree list`. Such a
@@ -462,10 +455,9 @@ export function inspectOrphanRecoveryProof(repoRoot: string, path: string, name:
  * so the runtime canary keeps counting it while cleanup cannot see it.
  *
  * Each orphan becomes a loop-owned record so it is COUNTED + VISIBLE. It is marked
- * `orphan_reclaimable` ONLY when it is inactive, its owning cycle is delivered,
- * linked Git metadata is absent, and a bounded material inspection produces a
- * stable fingerprint for empty or explicitly trusted generated residue. Otherwise
- * it is `preserved_orphan`; no manual cleanup override is authorized.
+ * `orphan_reclaimable` ONLY when it is inactive AND its owning cycle's recorded
+ * outcome is delivered/merged (its work is on main → the checkout is redundant);
+ * otherwise `preserved_orphan` (delivery not provable → never auto-deleted).
  */
 function scanOrphanLoopWorktrees(
   repoRoot: string,
@@ -477,16 +469,12 @@ function scanOrphanLoopWorktrees(
   const names = deps.readDir ? deps.readDir(worktreesDir) : defaultReadDirNames(worktreesDir);
   const out: WorktreeAuditRecord[] = [];
   for (const name of [...names].sort()) {
-    if (basename(name) !== name || name === "." || name === "..") continue;
     const absPath = resolve(join(worktreesDir, name));
     if (registeredPaths.has(realpathSafe(absPath))) continue; // a registered worktree — already recorded above
     const cycleId = extractCycleId(name);
     const ce = cycleId ? cycles.get(cycleId) : undefined;
     const outcome = ce?.outcome;
     const active = isActiveCycle(cycleId, repoRoot, deps);
-    const recoveryProof = deps.inspectOrphanDir
-      ? deps.inspectOrphanDir(repoRoot, absPath, name)
-      : inspectOrphanRecoveryProof(repoRoot, absPath, name);
 
     const rec: WorktreeAuditRecord = {
       path: absPath,
@@ -499,24 +487,17 @@ function scanOrphanLoopWorktrees(
       ahead: null,
       mergeEvidence: { kind: "none" },
       active,
-      orphanRecoveryProof: recoveryProof,
       disposition: "preserved_orphan",
       reason: "",
     };
 
     if (active) {
-      rec.reason = "orphan loop dir with an active cycle or inconclusive activity proof; never reclaimed";
-    } else if (recoveryProof.state === "linked_metadata") {
-      rec.reason = `orphan loop dir has linked or external Git ownership metadata (${recoveryProof.detail}); preserved`;
-    } else if (recoveryProof.state === "untrusted_material") {
-      rec.reason = `orphan loop dir contains untrusted recovery material (${recoveryProof.detail}); preserved`;
-    } else if (recoveryProof.state === "ambiguous") {
-      rec.reason = `orphan loop dir recovery proof is ambiguous (${recoveryProof.detail}); preserved`;
+      rec.reason = "orphan loop dir with an active cycle lock; never reclaimed";
     } else if (outcome && ORPHAN_DELIVERED_OUTCOMES.has(outcome)) {
       rec.disposition = "orphan_reclaimable";
-      rec.reason = `orphan loop dir (deregistered from git); owning cycle outcome '${outcome}' is delivered and material is ${recoveryProof.state} — bounded reclaim`;
+      rec.reason = `orphan loop dir (deregistered from git); owning cycle outcome '${outcome}' is delivered — bounded reclaim`;
     } else {
-      rec.reason = `orphan loop dir (deregistered from git); delivery not provable (cycle outcome '${outcome ?? "unknown"}') — preserved until a complete recovery proof exists`;
+      rec.reason = `orphan loop dir (deregistered from git); delivery not provable (cycle outcome '${outcome ?? "unknown"}') — preserved, reclaim manually after review`;
     }
     out.push(rec);
   }
@@ -628,12 +609,7 @@ function isActiveCycle(
 
   // Check inner.lock for the active cycleId
   const lockPath = join(repoRoot, ".roll", "loop", "inner.lock");
-  let lock: string | null;
-  try {
-    lock = readActivityFile(lockPath, deps);
-  } catch {
-    return true;
-  }
+  const lock = deps.readFile ? deps.readFile(lockPath) : readFileSafe(lockPath);
   if (lock) {
     for (const line of lock.split("\n")) {
       if (line.trim().startsWith(cycleId)) return true;
@@ -646,7 +622,7 @@ function isActiveCycle(
 
   try {
     const heartbeatPath = join(repoRoot, ".roll", "loop", "heartbeat");
-    const hb = readActivityFile(heartbeatPath, deps);
+    const hb = deps.readFile ? deps.readFile(heartbeatPath) : readFileSafe(heartbeatPath);
     if (hb) {
       for (const line of hb.split("\n")) {
         const parts = line.trim().split(/\s+/);
@@ -657,7 +633,7 @@ function isActiveCycle(
       }
     }
   } catch {
-    return true;
+    /* heartbeat read failed — not a reason to mark active */
   }
 
   return false;
@@ -669,28 +645,6 @@ function classifyDisposition(
   rec: WorktreeAuditRecord,
 ): { disposition: WorktreeDisposition; reason: string } {
   if (rec.active) return { disposition: "active", reason: "active cycle with fresh lock/heartbeat" };
-
-  if (rec.owner === "workspace") {
-    if (rec.ownershipState === "mismatch") {
-      return { disposition: "preserved_needs_review", reason: "Workspace Issue branch does not match its repository-bound fact" };
-    }
-    if (rec.dirtyTracked === "unknown" || rec.dirtyUntracked === "unknown") {
-      return { disposition: "preserved_needs_review", reason: "Workspace Issue dirt could not be verified" };
-    }
-    if (rec.dirtyTracked || rec.dirtyUntracked) {
-      return { disposition: "preserved_dirty_no_tcr", reason: "Workspace Issue worktree is dirty; cleanup is forbidden" };
-    }
-    if (rec.deliveryProof === "delivered" || rec.deliveryProof === "abandoned") {
-      return { disposition: "disposable_candidate", reason: `Workspace Issue ${rec.deliveryProof} proof permits clean inactive disposal` };
-    }
-    if (rec.deliveryProof === "blocked") {
-      return { disposition: "preserved_needs_review", reason: "Workspace Issue delivery is blocked; cleanup is forbidden" };
-    }
-    if (rec.deliveryProof === "incomplete") {
-      return { disposition: "preserved_unpublished", reason: "Workspace Issue delivery is incomplete; cleanup is forbidden" };
-    }
-    return { disposition: "preserved_needs_review", reason: "Workspace Issue delivery proof is unknown; cleanup is forbidden" };
-  }
 
   if (rec.owner === "external") {
     return { disposition: "external_unmanaged", reason: "external worktree; not managed by loop" };
@@ -743,60 +697,52 @@ function classifyDisposition(
 
 export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
   const repoRoot = resolve(deps.repoRoot);
-  const workspaceOwnership = new Map<string, WorkspaceWorktreeOwnership>();
-  for (const [path, ownership] of deps.workspaceOwnership ?? []) {
-    workspaceOwnership.set(realpathSafe(resolve(path)), ownership);
-  }
   // E1: resolve the integration branch ONCE (injected override wins for tests;
   // otherwise the project's `integration_branch` config, default origin/main).
   const integrationBranch = deps.integrationBranch ?? resolveIntegrationBranch(repoRoot);
 
   // 1. Parse `git worktree list --porcelain`
-  const wtOutput = deps.git
-    ? deps.git(["worktree", "list", "--porcelain"], repoRoot)
-    : git(["worktree", "list", "--porcelain"], repoRoot);
+  let inspectionUnavailable = false;
+  let wtOutput = "";
+  try {
+    wtOutput = deps.git
+      ? deps.git(["worktree", "list", "--porcelain"], repoRoot)
+      : git(["worktree", "list", "--porcelain"], repoRoot);
+  } catch {
+    inspectionUnavailable = true;
+  }
 
   // 2. Read events.ndjson for cycle context
   const eventsPath = join(repoRoot, ".roll", "loop", "events.ndjson");
   const cycles = readCycleContext(eventsPath, deps);
+  const events = readEvents(eventsPath, deps);
+  const projectionMembers = projectedMembers(events);
+  // Once the lifecycle vocabulary exists, it is the sole ownership authority.
+  // Empty historical ledgers retain the pre-cutover read-compatible surface.
+  const projectionEnabled = events.some((event) => event.type.startsWith("worktree:"));
 
-  // 3. Parse worktree entries
-  interface RawWorktree { path: string; head: string; branch: string; }
-  const entries: RawWorktree[] = [];
-  let current: Partial<RawWorktree> = {};
-
-  for (const line of wtOutput.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current.path) entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
-      current = { path: line.slice(9).trim() };
-    } else if (line.startsWith("HEAD ")) {
-      current.head = line.slice(5).trim();
-    } else if (line.startsWith("branch ")) {
-      current.branch = line.slice(7).trim();
-    } else if (line === "") {
-      if (current.path) {
-        entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
-        current = {};
-      }
-    }
-  }
-  if (current.path) {
-    entries.push({ path: current.path, head: current.head ?? "", branch: current.branch ?? "" });
-  }
+  // 3. Parse the superproject registrations. Submodule registrations are
+  // enumerated separately below from each member's own repository.
+  const entries = parseWorktreeEntries(wtOutput);
 
   // 4. Build records
   const records: WorktreeAuditRecord[] = [];
+  const seenProjectedLocators = new Set<string>();
 
   for (const entry of entries) {
     const absPath = resolve(entry.path);
-    const owned = workspaceOwnership.get(realpathSafe(absPath));
-    const owner = owned === undefined ? classifyOwner(absPath, repoRoot) : "workspace";
+    const projected = projectionMembers.find((member) => withinManagedRoot(repoRoot, member.locator) === absPath);
+    const owner = projected !== undefined ? "loop" : projectionEnabled ? "external" : classifyOwner(absPath, repoRoot);
 
     let cycleId: string | undefined;
     let storyId: string | undefined;
     let outcome: string | undefined;
 
-    if (owner === "loop") {
+    if (projected !== undefined) {
+      seenProjectedLocators.add(projected.locator);
+      cycleId = projected.run.kind === "cycle" ? projected.run.runId : undefined;
+      storyId = projected.run.storyId;
+    } else if (owner === "loop") {
       cycleId = extractCycleId(basename(absPath));
       if (cycleId) {
         const ce = cycles.get(cycleId);
@@ -810,27 +756,17 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     const dirty = detectDirty(absPath, deps);
     const ahead = countAhead(absPath, deps, integrationBranch);
     const mergeEvidence = detectMergeEvidence(absPath, entry.branch || undefined, deps, integrationBranch);
-    const active = owned?.active ?? isActiveCycle(cycleId, repoRoot, deps);
-    const actualBranch = entry.branch.replace(/^refs\/heads\//, "") || null;
-    const ownershipState = owned === undefined || owned.expectedBranch === actualBranch
-      ? "verified"
-      : "mismatch";
+    const active = projected !== undefined
+      ? projected.run.state === "active" || projected.run.state === "active_unstarted"
+      : isActiveCycle(cycleId, repoRoot, deps);
 
     const baseRec: WorktreeAuditRecord = {
       path: absPath,
       branch: entry.branch || undefined,
       head: entry.head || undefined,
       owner,
-      ...(owned === undefined ? {} : {
-        workspaceId: owned.workspaceId,
-        repoId: owned.repoId,
-        repositoryAlias: owned.repositoryAlias,
-        cachePath: owned.cachePath,
-        deliveryProof: owned.deliveryProof,
-        ownershipState,
-      }),
       cycleId,
-      storyId: owned?.storyId ?? storyId,
+      storyId,
       outcome,
       dirtyTracked: dirty.dirtyTracked,
       dirtyUntracked: dirty.dirtyUntracked,
@@ -839,16 +775,61 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
       active,
       disposition: "preserved_needs_review",
       reason: "",
+      ...(projected === undefined
+        ? {}
+        : {
+            runId: projected.run.runId,
+            memberLocator: projected.locator,
+            runState: projected.run.state,
+            registration: "registered" as const,
+          }),
     };
 
-    const disp = classifyDisposition(baseRec);
-    baseRec.disposition = disp.disposition;
-    baseRec.reason = disp.reason;
+    if (projected !== undefined) {
+      const expectedRepositoryId = projected.run.workspace?.members.find(
+        (member) => member.relativeLocator === projected.locator,
+      )?.repositoryId ?? "";
+      // The superproject list proves only registration. Verify its own live
+      // repository identity too; otherwise a replaced primary can masquerade
+      // as the recorded member just as a replaced submodule could.
+      const memberInspection = memberRepositoryEntry(repoRoot, absPath, expectedRepositoryId, deps);
+      const facts = deliveryFacts(events, projected.run.runId);
+      const release = managedWorkspaceReleaseVerdict({
+        runState: projected.run.state,
+        ...facts,
+        members: [{
+          relativeLocator: projected.locator,
+          registration: memberInspection.registration,
+          activity: active ? "active" : "inactive",
+          head: projected.expectedHead === undefined || entry.head === projected.expectedHead ? "expected" : "mismatch",
+          cleanliness: dirty.dirtyTracked === false && dirty.dirtyUntracked === false ? "clean" : dirty.dirtyTracked === "unknown" || dirty.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+        }],
+      });
+      baseRec.releaseVerdict = release.verdict;
+      baseRec.registration = memberInspection.registration;
+      baseRec.repositoryIdentity = memberInspection.repositoryIdentity;
+      if (release.verdict === "safe_to_release") {
+        baseRec.disposition = "disposable_candidate";
+        baseRec.reason = "projection confirms merged delivery, accepted attest, and a clean registered member";
+      } else if (release.verdict === "preserve_active") {
+        baseRec.disposition = "active";
+        baseRec.reason = "projection retains an active delivery reservation";
+      } else {
+        baseRec.disposition = "preserved_needs_review";
+        baseRec.reason = `projection release verdict: ${release.verdict}`;
+      }
+    } else {
+      const disp = classifyDisposition(baseRec);
+      baseRec.disposition = disp.disposition;
+      baseRec.reason = disp.reason;
+    }
 
     records.push(baseRec);
   }
 
-  // 4a. FIX-1460 (#1468): scan `.roll/loop/worktrees` on disk for ORPHAN dirs —
+  // 4a. Legacy-only orphan scan. New lifecycle projections never inspect raw
+  // directories as ownership evidence: an unregistered projected member below
+  // remains a first-class preserved record instead.
   // present on disk but absent from `git worktree list` above. These are what the
   // runtime canary counts, so surfacing them here keeps the two counters in sync
   // and stops the leak (a deregistered dir that pauses the loop but is invisible
@@ -857,9 +838,142 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
   // Dedup by realpath — `git worktree list` returns realpath'd paths while the
   // scan joins onto repoRoot; a symlinked prefix (e.g. macOS /tmp→/private/tmp)
   // must not make a registered worktree look like an orphan (double-count).
-  const registeredLoopPaths = new Set(records.map((r) => realpathSafe(resolve(r.path))));
-  for (const orphan of scanOrphanLoopWorktrees(repoRoot, registeredLoopPaths, cycles, deps)) {
-    records.push(orphan);
+  if (!projectionEnabled) {
+    const registeredLoopPaths = new Set(records.map((r) => realpathSafe(resolve(r.path))));
+    for (const orphan of scanOrphanLoopWorktrees(repoRoot, registeredLoopPaths, cycles, deps)) {
+      records.push(orphan);
+    }
+  } else {
+    for (const member of projectionMembers) {
+      // A legacy cycle is an event-only compatibility view, not a promised
+      // on-disk workspace.  It can identify a registered legacy checkout above,
+      // but an absent historical path must not become a phantom member, consume
+      // capacity, or turn inspection into an unavailable safety fault.
+      if (member.run.workspace === undefined) continue;
+      if (seenProjectedLocators.has(member.locator)) continue;
+      const containedPath = withinManagedRoot(repoRoot, member.locator);
+      // Never omit an expected member. A lexical or realpath containment fault
+      // is a first-class, counted projection record so a clean sibling cannot
+      // obtain a release verdict by hiding it behind a symlink or `..` locator.
+      const path = containedPath ?? resolve(repoRoot, ".roll", "loop", "worktrees", member.locator);
+      const observed = containedPath === undefined
+        ? { registration: "unknown" as const, repositoryIdentity: "unknown" as const }
+        : submoduleMemberEntry(repoRoot, path, member.locator, member.run.workspace.members.find((candidate) => candidate.relativeLocator === member.locator)?.repositoryId ?? "", deps);
+      const registration = observed.registration;
+      const facts = deliveryFacts(events, member.run.runId);
+      const dirty = observed.entry === undefined
+        ? { dirtyTracked: "unknown" as const, dirtyUntracked: "unknown" as const }
+        : detectDirty(path, deps);
+      const active = member.run.state === "active" || member.run.state === "active_unstarted";
+      const release = managedWorkspaceReleaseVerdict({
+        runState: member.run.state,
+        ...facts,
+        members: [{
+          relativeLocator: member.locator,
+          registration,
+          activity: active ? "active" : observed.entry === undefined ? "unknown" : "inactive",
+          head: observed.entry === undefined || member.expectedHead === undefined
+            ? "unknown"
+            : observed.entry.head === member.expectedHead ? "expected" : "mismatch",
+          cleanliness: dirty.dirtyTracked === false && dirty.dirtyUntracked === false
+            ? "clean"
+            : dirty.dirtyTracked === "unknown" || dirty.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+        }],
+      });
+      records.push({
+        path,
+        owner: "loop",
+        runId: member.run.runId,
+        memberLocator: member.locator,
+        runState: member.run.state,
+        registration,
+        repositoryIdentity: observed.repositoryIdentity,
+        storyId: member.run.storyId,
+        ...(observed.entry?.branch ? { branch: observed.entry.branch } : {}),
+        ...(observed.entry?.head ? { head: observed.entry.head } : {}),
+        dirtyTracked: dirty.dirtyTracked,
+        dirtyUntracked: dirty.dirtyUntracked,
+        ahead: observed.entry === undefined ? null : countAhead(path, deps, integrationBranch),
+        mergeEvidence: observed.entry === undefined ? { kind: "unknown" } : detectMergeEvidence(path, observed.entry.branch || undefined, deps, integrationBranch),
+        active,
+        disposition: active ? "active" : "preserved_needs_review",
+        releaseVerdict: release.verdict,
+        reason: containedPath === undefined
+          ? "projection member escapes its canonical managed root; preserved for owner recovery"
+          : registration === "registered"
+          ? "submodule member registration was found but its live inspection is unavailable; preserved"
+          : "projection member is not registered in its repository; preserved for recovery",
+      });
+    }
+  }
+
+  // A workspace set is all-or-nothing.  Re-run the pure selector with every
+  // member of each run so a clean primary can never make a dirty submodule an
+  // independent cleanup candidate.
+  const recordsByRun = new Map<string, WorktreeAuditRecord[]>();
+  for (const record of records) {
+    if (record.runId === undefined) continue;
+    const group = recordsByRun.get(record.runId) ?? [];
+    group.push(record);
+    recordsByRun.set(record.runId, group);
+  }
+  for (const [runId, runRecords] of recordsByRun) {
+    const run = projectionMembers.find((member) => member.run.runId === runId)?.run;
+    if (run === undefined) continue;
+    const facts = deliveryFacts(events, runId);
+    const expectedMembers = run.workspace?.members ?? [];
+    const recordsByLocator = new Map(runRecords.map((record) => [record.memberLocator, record]));
+    const complete = expectedMembers.length === runRecords.length
+      && expectedMembers.every((member) => recordsByLocator.has(member.relativeLocator));
+    const decision = managedWorkspaceReleaseVerdict({
+      runState: run.state,
+      ...facts,
+      members: expectedMembers.map((member) => {
+        const record = recordsByLocator.get(member.relativeLocator);
+        if (record === undefined) {
+          return {
+            relativeLocator: member.relativeLocator,
+            registration: "unknown" as const,
+            activity: "unknown" as const,
+            head: "unknown" as const,
+            cleanliness: "unknown" as const,
+          };
+        }
+        // `projectedMembers` is the single lifecycle projection boundary. It
+        // already resolves the latest durable release request for this exact
+        // locator, so do not fall back to the allocation checkout here. A
+        // member is allowed to commit after allocation and freeze that newer
+        // HEAD when terminal release is requested.
+        const expected = projectionMembers.find(
+          (projected) => projected.run.runId === runId && projected.locator === member.relativeLocator,
+        )?.expectedHead;
+        return {
+          relativeLocator: member.relativeLocator,
+          registration: record.repositoryIdentity === "foreign" || record.repositoryIdentity === "unknown"
+            ? record.repositoryIdentity === "foreign" ? "foreign" : "unknown"
+            : record.registration ?? "unknown",
+          activity: record.active ? "active" : "inactive",
+          head: expected === undefined || record.head === expected ? "expected" : record.head === undefined ? "unknown" : "mismatch",
+          cleanliness: record.dirtyTracked === false && record.dirtyUntracked === false ? "clean" : record.dirtyTracked === "unknown" || record.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+        };
+      }),
+    });
+    for (const record of runRecords) {
+      const verdict = complete ? decision.verdict : "preserve_unknown";
+      record.releaseVerdict = verdict;
+      if (verdict === "safe_to_release") {
+        record.disposition = "disposable_candidate";
+        record.reason = "projection confirms every workspace member is release-safe";
+      } else if (verdict === "preserve_active") {
+        record.disposition = "active";
+        record.reason = "projection retains an active delivery reservation";
+      } else {
+        record.disposition = "preserved_needs_review";
+        record.reason = complete
+          ? `projection release verdict: ${verdict}`
+          : "projection member set is incomplete; preserved for owner recovery";
+      }
+    }
   }
 
   // 4b. Enumerate the EXACT ephemeral local branches the canary counts. The
@@ -876,18 +990,16 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
       .filter((b) => b !== "" && isEphemeralBranch(b))
       .sort();
   } catch {
-    // A git hiccup while listing branches must not topple the audit — the
-    // canary/cleanup surface simply sees zero enumerated branches.
+    // A branch list failure leaves the canary's total unknown. Preserve the
+    // readable audit but flag it so callers pause rather than treating it as 0.
     ephemeralBranches = [];
+    inspectionUnavailable = true;
   }
 
   // 5. Summary
   const summary = {
     total: records.length,
     loop: records.filter((r) => r.owner === "loop").length,
-    ...(records.some((r) => r.owner === "workspace")
-      ? { workspace: records.filter((r) => r.owner === "workspace").length }
-      : {}),
     manual: records.filter((r) => r.owner === "manual").length,
     external: records.filter((r) => r.owner === "external").length,
     active: records.filter((r) => r.active).length,
@@ -908,27 +1020,31 @@ export function auditWorktrees(deps: WorktreeAuditDeps): WorktreeAuditOutput {
     records,
     ephemeralBranches,
     summary,
+    ...(inspectionUnavailable || (projectionEnabled && records.some((record) => record.registration === "unknown" || (record.registration === "missing" && record.runState !== "released")))
+      ? { inspectionUnavailable: true }
+      : {}),
   };
 }
 
 // ─── human output ───────────────────────────────────────────────────────────
 
 function renderHuman(output: WorktreeAuditOutput): string {
-  const lines: string[] = ["Worktree audit", ""];
+  const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+  const zh = lang === "zh";
+  const lines: string[] = [zh ? "工作树审计" : "Worktree audit", ""];
 
-  lines.push(`  total: ${output.summary.total}`);
-  lines.push(`  loop: ${output.summary.loop}`);
-  if ((output.summary.workspace ?? 0) > 0) lines.push(`  workspace: ${output.summary.workspace}`);
-  lines.push(`  manual: ${output.summary.manual}`);
-  if (output.summary.external > 0) lines.push(`  external: ${output.summary.external}`);
-  lines.push(`  active: ${output.summary.active}`);
-  lines.push(`  disposable candidates: ${output.summary.disposableCandidates}`);
-  lines.push(`  preserved: ${output.summary.preserved}`);
-  lines.push(`  ephemeral branches: ${output.summary.ephemeralBranches}`);
+  lines.push(`  ${zh ? "总计" : "total"}: ${output.summary.total}`);
+  lines.push(`  ${zh ? "受管" : "loop"}: ${output.summary.loop}`);
+  lines.push(`  ${zh ? "手动" : "manual"}: ${output.summary.manual}`);
+  if (output.summary.external > 0) lines.push(`  ${zh ? "外部" : "external"}: ${output.summary.external}`);
+  lines.push(`  ${zh ? "活跃" : "active"}: ${output.summary.active}`);
+  lines.push(`  ${zh ? "可释放候选" : "disposable candidates"}: ${output.summary.disposableCandidates}`);
+  lines.push(`  ${zh ? "保留" : "preserved"}: ${output.summary.preserved}`);
+  lines.push(`  ${zh ? "临时分支" : "ephemeral branches"}: ${output.summary.ephemeralBranches}`);
   lines.push("");
 
   if (output.ephemeralBranches.length > 0) {
-    lines.push("ephemeral branches (canary-counted)");
+    lines.push(zh ? "临时分支（canary 计数）" : "ephemeral branches (canary-counted)");
     for (const b of output.ephemeralBranches) lines.push(`  ${b}`);
     lines.push("");
   }
@@ -984,16 +1100,22 @@ function renderHuman(output: WorktreeAuditOutput): string {
 // ─── CLI command ────────────────────────────────────────────────────────────
 
 const USAGE =
-  "Usage: roll worktree audit [--json] [--workspace <id|path> | --repo <path>]\n" +
-  "  Read-only audit of Workspace Issue worktrees or historical repo-local worktrees.\n" +
+  "Usage: roll worktree audit [--json] [--repo <path>]\n" +
+  "  Read-only audit of all git worktrees registered for this repo.\n" +
   "  Classifies ownership, dirt, merge evidence, and disposition.\n" +
   "  --json    print schema-1 JSON output\n" +
-  "  --workspace resolve Issue ownership through the Workspace registry\n" +
-  "  --repo    explicit historical repo-local/migration input (default: current directory)\n";
+  "  --repo    override the project root (default: current directory)\n";
+
+export function worktreeAuditUsage(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh
+    ? "用法：roll worktree audit [--json] [--repo <path>]\n  只读审计本仓库已注册的 Git 工作树。\n  输出归属、脏改动、合并证据和处置；外部或旧记录只呈现，不自动认领。\n  --json    输出 schema-1 JSON\n  --repo    覆盖项目根目录（默认：当前目录）\n"
+    : USAGE;
+}
 
 export function worktreeAuditCommand(args: string[], deps?: Partial<WorktreeAuditDeps>): number {
   if (args.includes("--help") || args.includes("-h")) {
-    process.stdout.write(USAGE);
+    process.stdout.write(worktreeAuditUsage());
     return 0;
   }
 

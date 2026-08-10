@@ -138,3 +138,11 @@ describe("US-DELTA-001 AC10 — registry guard for Delta event/manifest keys", (
     expect(hint).toContain("truth-registry.ts");
   });
 });
+
+describe("US-LOOP-122 — registry guard for managed workspace lifecycle fields", () => {
+  it("registers every persisted field in all five lifecycle events", () => {
+    const keys = ["type", "ts", "workspace", "runId", "source", "reason", "operationId", "expectedHeads", "relativeLocator"];
+    const missing = unregisteredFields("event:worktree", keys);
+    expect(missing, registrationHint("event:worktree", missing)).toEqual([]);
+  });
+});

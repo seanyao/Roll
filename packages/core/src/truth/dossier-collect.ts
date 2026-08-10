@@ -1,4 +1,5 @@
 /**
+ * @responsibility Walks feature card folders into the dossier model.
  * US-OBS-016 — dossier data-collection moved to @roll/core (read-side home).
  *
  * Walk `.roll/features/` into the dossier model: every `<epic>/<ID>/` card

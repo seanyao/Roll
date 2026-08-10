@@ -1,0 +1,507 @@
+/**
+ * US-RULE-004a — the shared pure doc-drift verdict (`checkDocDrift`) and the
+ * extraction contract: `assessDocGapFromFiles` moves to lib/doc-drift.ts and
+ * attest.ts keeps its behavior by calling the SAME implementation (no second
+ * copy of the rules).
+ */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  assessDocGapFromFiles,
+  checkDocDrift,
+  docDriftHitId,
+  isDocAlignmentFile,
+  isUserVisibleSurfaceFile,
+  recordDocDriftSoftHit,
+  runDocDriftSoftCheck,
+} from "../src/lib/doc-drift.js";
+import { parseEventLine, parseRulesRegistry, type DocSurface } from "@roll/spec";
+import type { EventStore } from "@roll/core";
+
+/** In-memory EventStore fake — observe append discipline without touching disk. */
+function memStore(initial?: Record<string, string>): EventStore & { files: Map<string, string> } {
+  const files = new Map<string, string>(Object.entries(initial ?? {}));
+  return {
+    files,
+    exists: (p) => files.has(p),
+    ensureFile: (p) => {
+      if (!files.has(p)) files.set(p, "");
+    },
+    readText: (p) => files.get(p) ?? "",
+    appendLine: (p, line) => files.set(p, (files.get(p) ?? "") + line),
+    writeText: (p, data) => files.set(p, data),
+    size: (p) => (files.get(p) ?? "").length,
+  };
+}
+
+const DS_ATTEST: DocSurface = {
+  id: "DS-ATTEST",
+  paths: ["packages/core/src/attest/**", "packages/cli/src/runner/attest-gate.ts"],
+  docs: ["docs/verification.md", "guide/en/acceptance-evidence.md", "guide/zh/acceptance-evidence.md"],
+};
+
+const DS_CLI: DocSurface = {
+  id: "DS-CLI",
+  paths: ["packages/cli/src/commands/**"],
+  docs: ["docs/cli.md"],
+};
+
+/* US-RULE-014 — the tracked doc-surface set (mirrors policy/rules.yaml §5
+ * declarations so the verdicts below are exact per-surface, not diluted by
+ * unrelated surfaces). */
+const DS_EVIDENCE_DELIVERY: DocSurface = {
+  id: "DS-EVIDENCE-DELIVERY",
+  paths: [
+    "packages/core/src/delivery/**",
+    "packages/cli/src/runner/local-publish.ts",
+    "packages/cli/src/runner/terminal-handlers.ts",
+  ],
+  docs: [
+    "docs/verification.md",
+    "docs/maps/delivery.md",
+    "guide/en/acceptance-evidence.md",
+    "guide/zh/acceptance-evidence.md",
+  ],
+};
+
+const DS_RECONCILE: DocSurface = {
+  id: "DS-RECONCILE",
+  paths: ["packages/core/src/reconcile/**", "packages/cli/src/lib/delivery-facts.ts"],
+  docs: ["docs/architecture.md", "docs/maps/reconcile.md"],
+};
+
+const DS_RELEASE: DocSurface = {
+  id: "DS-RELEASE",
+  paths: ["packages/core/src/release/**", "packages/cli/src/commands/release.ts"],
+  docs: ["docs/architecture.md", "docs/maps/release.md", "guide/en/changelog.md"],
+};
+
+describe("checkDocDrift — normalization + dedupe", () => {
+  it("normalizes backslashes, ./ prefixes and whitespace before matching", () => {
+    const verdict = checkDocDrift({
+      changedPaths: [" .\\packages\\core\\src\\attest\\report.ts "],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.hits).toEqual([
+      { surfaceId: "DS-ATTEST", matchedPaths: ["packages/core/src/attest/report.ts"] },
+    ]);
+  });
+
+  it("ignores duplicate inputs (first normalized occurrence wins)", () => {
+    const verdict = checkDocDrift({
+      changedPaths: [
+        "packages/core/src/attest/report.ts",
+        "./packages/core/src/attest/report.ts",
+        "packages/core/src/attest/report.ts",
+      ],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.changedPaths).toEqual(["packages/core/src/attest/report.ts"]);
+    expect(verdict.hits[0]?.matchedPaths).toEqual(["packages/core/src/attest/report.ts"]);
+  });
+
+  it("drops empty entries after normalization", () => {
+    const verdict = checkDocDrift({ changedPaths: ["", "  ", "./"], surfaces: [DS_ATTEST] });
+    expect(verdict.changedPaths).toEqual([]);
+    expect(verdict.hits).toEqual([]);
+  });
+});
+
+describe("checkDocDrift — DS-ATTEST semantics", () => {
+  it("hits when a declared source path changed without any declared doc", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts"],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-ATTEST"]);
+  });
+
+  it("hits on an exact declared source path (no glob)", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/cli/src/runner/attest-gate.ts"],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-ATTEST"]);
+  });
+
+  it("clears the hit when any declared documentation path changed", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts", "guide/zh/acceptance-evidence.md"],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.hits).toEqual([]);
+  });
+
+  it("treats the generated attest responsibility map as the paired documentation", () => {
+    const repoRoot = resolve(__dirname, "../../..");
+    const parsed = parseRulesRegistry(readFileSync(resolve(repoRoot, "policy/rules.yaml"), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const mapsSurface = parsed.value.docSurfaces.find((surface) => surface.id === "DS-ATTEST");
+    expect(mapsSurface?.docs).toContain("docs/maps/attest.md");
+    expect(checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts", "docs/maps/attest.md"],
+      surfaces: mapsSurface === undefined ? [] : [mapsSurface],
+    }).hits).toEqual([]);
+  });
+
+  it("does not hit on unrelated paths", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["site/index.html", "README.md"],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.hits).toEqual([]);
+  });
+
+  it("a doc path alone never produces a hit", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["docs/verification.md"],
+      surfaces: [DS_ATTEST],
+    });
+    expect(verdict.hits).toEqual([]);
+  });
+});
+
+describe("checkDocDrift — multi-surface verdicts", () => {
+  it("reports every matched surface, in surface declaration order", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/cli/src/commands/status.ts", "packages/core/src/attest/report.ts"],
+      surfaces: [DS_CLI, DS_ATTEST],
+    });
+    expect(verdict.hits).toEqual([
+      { surfaceId: "DS-CLI", matchedPaths: ["packages/cli/src/commands/status.ts"] },
+      { surfaceId: "DS-ATTEST", matchedPaths: ["packages/core/src/attest/report.ts"] },
+    ]);
+  });
+
+  it("clears only the surface whose own docs changed", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/cli/src/commands/status.ts", "packages/core/src/attest/report.ts", "docs/cli.md"],
+      surfaces: [DS_CLI, DS_ATTEST],
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-ATTEST"]);
+  });
+});
+
+/* US-RULE-014 — the tracked multi-surface fixture matrix (mirrors the
+ * declarations in policy/rules.yaml §5). */
+describe("checkDocDrift — US-RULE-014 multi-surface matrix", () => {
+  const THREE_SURFACES = [DS_EVIDENCE_DELIVERY, DS_RECONCILE, DS_RELEASE];
+
+  it("hits only DS-EVIDENCE-DELIVERY for a delivery evidence-gate change", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/delivery/evidence-gate.ts"],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits).toEqual([
+      { surfaceId: "DS-EVIDENCE-DELIVERY", matchedPaths: ["packages/core/src/delivery/evidence-gate.ts"] },
+    ]);
+  });
+
+  it("hits DS-RECONCILE then DS-RELEASE in declaration order", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/reconcile/engine.ts", "packages/cli/src/commands/release.ts"],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-RECONCILE", "DS-RELEASE"]);
+  });
+
+  it("hits both surfaces in declaration order for attest + command changes", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts", "packages/cli/src/commands/status.ts"],
+      surfaces: [DS_ATTEST, DS_CLI],
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-ATTEST", "DS-CLI"]);
+  });
+
+  it("hits nothing for infra, site, and README paths", () => {
+    const verdict = checkDocDrift({
+      changedPaths: ["packages/infra/src/fs.ts", "site/index.html", "README.md"],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits).toEqual([]);
+  });
+
+  it("a doc-only change hits nothing", () => {
+    const verdict = checkDocDrift({ changedPaths: ["docs/architecture.md"], surfaces: THREE_SURFACES });
+    expect(verdict.hits).toEqual([]);
+  });
+
+  it("changing a declared doc clears only that surface's hit", () => {
+    const verdict = checkDocDrift({
+      changedPaths: [
+        "packages/core/src/reconcile/engine.ts",
+        "packages/cli/src/commands/release.ts",
+        "docs/maps/reconcile.md",
+      ],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-RELEASE"]);
+  });
+
+  it("a backslash changed path hits DS-RECONCILE after normalization", () => {
+    const verdict = checkDocDrift({ changedPaths: ["packages\\core\\src\\reconcile\\engine.ts"], surfaces: THREE_SURFACES });
+    expect(verdict.hits.map((h) => h.surfaceId)).toEqual(["DS-RECONCILE"]);
+  });
+
+  it("space + ./ + duplicate-slash changed path keeps the frozen changed-path normalizer boundary", () => {
+    // normalizeDiffPath (byte-identical, frozen) trims, converts backslashes
+    // and strips ./ — it does NOT collapse duplicate slashes. Dup-slash
+    // collapse is the parser's job (normalizeSurfacePattern on DECLARED
+    // patterns, proven in packages/spec/test/rules.test.ts); changed paths
+    // pass through the frozen normalizer unchanged, so this input hits nothing.
+    const verdict = checkDocDrift({
+      changedPaths: [" ./packages/cli//src/commands/release.ts "],
+      surfaces: THREE_SURFACES,
+    });
+    expect(verdict.changedPaths).toEqual(["packages/cli//src/commands/release.ts"]);
+    expect(verdict.hits).toEqual([]);
+  });
+});
+
+describe("US-RULE-014 — the new declarations keep soft doc_drift semantics", () => {
+  it("runDocDriftSoftCheck reports a soft hit over a new surface with exit 0", () => {
+    const store = memStore();
+    const r = runDocDriftSoftCheck({
+      changedPaths: ["packages/core/src/reconcile/engine.ts"],
+      surfaces: [DS_RECONCILE],
+      eventsPath: "/ev.ndjson",
+      cycleId: "c1",
+      storyId: "US-RULE-014",
+      baseline: "abc123",
+      lang: "en",
+      ts: 1_700_000_000_000,
+      store,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.appended).toBe(true);
+    expect(r.output).toContain("DS-RECONCILE");
+    const ev = JSON.parse((store.files.get("/ev.ndjson") ?? "").trim()) as Record<string, unknown>;
+    expect(ev["type"]).toBe("doc_drift_soft_hit");
+    expect(ev).not.toHaveProperty("actor");
+  });
+
+  it("the tracked registry still declares doc_drift soft with the new surfaces", () => {
+    const repoRoot = resolve(__dirname, "../../..");
+    const parsed = parseRulesRegistry(readFileSync(resolve(repoRoot, "policy/rules.yaml"), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.gates.docDrift).toBe("soft");
+    const ids = parsed.value.docSurfaces.map((s) => s.id);
+    expect(ids).toContain("DS-EVIDENCE-DELIVERY");
+    expect(ids).toContain("DS-RECONCILE");
+    expect(ids).toContain("DS-RELEASE");
+  });
+});
+
+describe("extraction contract — attest doc-gap helpers come from the shared module", () => {
+  it("assessDocGapFromFiles keeps its exact behavior in the shared home", () => {
+    expect(assessDocGapFromFiles(["packages/cli/src/commands/status.ts"])).toEqual({
+      changedFiles: ["packages/cli/src/commands/status.ts"],
+      visibleFiles: ["packages/cli/src/commands/status.ts"],
+    });
+    expect(assessDocGapFromFiles(["packages/cli/src/commands/status.ts", "guide/en/status.md"])).toBeUndefined();
+    expect(assessDocGapFromFiles(["packages/core/src/scoring/model.ts"])).toBeUndefined();
+  });
+
+  it("surface classifiers are exported from the shared home", () => {
+    expect(isDocAlignmentFile("docs/verification.md")).toBe(true);
+    expect(isUserVisibleSurfaceFile("packages/spec/src/i18n/catalog-v3.ts")).toBe(true);
+  });
+});
+
+describe("docDriftHitId — stable identity", () => {
+  const verdict = checkDocDrift({
+    changedPaths: ["packages/core/src/attest/report.ts", "packages/cli/src/commands/status.ts"],
+    surfaces: [DS_CLI, DS_ATTEST],
+  });
+
+  it("is deterministic for the same cycle/story/baseline/matched-surface set", () => {
+    const a = docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict });
+    const b = docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict });
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("changes when cycle, story, baseline, or the matched-surface set changes", () => {
+    const base = docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict });
+    expect(docDriftHitId({ cycleId: "c2", storyId: "US-X", baseline: "abc123", verdict })).not.toBe(base);
+    expect(docDriftHitId({ cycleId: "c1", storyId: "US-Y", baseline: "abc123", verdict })).not.toBe(base);
+    expect(docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "def456", verdict })).not.toBe(base);
+    const fewer = checkDocDrift({ changedPaths: ["packages/core/src/attest/report.ts"], surfaces: [DS_ATTEST] });
+    expect(docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict: fewer })).not.toBe(base);
+  });
+
+  it("does not depend on surface declaration order in the verdict", () => {
+    const reordered = checkDocDrift({
+      changedPaths: ["packages/core/src/attest/report.ts", "packages/cli/src/commands/status.ts"],
+      surfaces: [DS_ATTEST, DS_CLI],
+    });
+    expect(docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict: reordered })).toBe(
+      docDriftHitId({ cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict }),
+    );
+  });
+});
+
+describe("recordDocDriftSoftHit — auditable idempotent append", () => {
+  const verdict = checkDocDrift({
+    changedPaths: ["packages/core/src/attest/report.ts"],
+    surfaces: [DS_ATTEST],
+  });
+  const key = { cycleId: "c1", storyId: "US-X", baseline: "abc123", verdict };
+
+  it("appends one doc_drift_soft_hit event and returns its stable hitId", () => {
+    const store = memStore();
+    const r1 = recordDocDriftSoftHit({ eventsPath: "/ev.ndjson", ...key, ts: 1_700_000_000_000, store });
+    expect(r1.appended).toBe(true);
+    const lines = (store.files.get("/ev.ndjson") ?? "").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const ev = parseEventLine(lines[0] ?? "");
+    expect(ev).toMatchObject({
+      type: "doc_drift_soft_hit",
+      hitId: r1.hitId,
+      cycleId: "c1",
+      storyId: "US-X",
+      baseline: "abc123",
+      surfaces: ["DS-ATTEST"],
+    });
+  });
+
+  it("a retry for the same hit writes NO second record", () => {
+    const store = memStore();
+    const r1 = recordDocDriftSoftHit({ eventsPath: "/ev.ndjson", ...key, ts: 1_700_000_000_000, store });
+    const r2 = recordDocDriftSoftHit({ eventsPath: "/ev.ndjson", ...key, ts: 1_700_000_999_999, store });
+    expect(r2.hitId).toBe(r1.hitId);
+    expect(r2.appended).toBe(false);
+    const lines = (store.files.get("/ev.ndjson") ?? "").trim().split("\n");
+    expect(lines).toHaveLength(1);
+  });
+
+  it("writes nothing when the verdict has no hits", () => {
+    const store = memStore();
+    const clean = checkDocDrift({ changedPaths: ["site/index.html"], surfaces: [DS_ATTEST] });
+    const r = recordDocDriftSoftHit({ eventsPath: "/ev.ndjson", ...key, verdict: clean, ts: 1, store });
+    expect(r.appended).toBe(false);
+    expect(store.files.get("/ev.ndjson") ?? "").toBe("");
+  });
+
+  it("append failure propagates and leaves no partial duplicate record", () => {
+    const base = memStore();
+    const failing: EventStore = {
+      ...base,
+      appendLine: () => {
+        throw new Error("disk full");
+      },
+    };
+    expect(() =>
+      recordDocDriftSoftHit({ eventsPath: "/ev.ndjson", ...key, ts: 1_700_000_000_000, store: failing }),
+    ).toThrow("disk full");
+    // no partial line was persisted
+    expect(base.files.get("/ev.ndjson") ?? "").toBe("");
+  });
+
+  it("the recorded event carries NO actor / adjudication claim", () => {
+    const store = memStore();
+    recordDocDriftSoftHit({ eventsPath: "/ev.ndjson", ...key, ts: 1_700_000_000_000, store });
+    const raw = JSON.parse((store.files.get("/ev.ndjson") ?? "").trim()) as Record<string, unknown>;
+    expect(raw["type"]).toBe("doc_drift_soft_hit");
+    expect(raw).not.toHaveProperty("actor");
+    expect(raw).not.toHaveProperty("verdict");
+    expect(raw["type"]).not.toBe("doc_drift_adjudicated");
+  });
+});
+
+describe("runDocDriftSoftCheck — soft gate observable, exit 0 (snapshot)", () => {
+  const changed = ["packages/core/src/attest/report.ts", "packages/cli/src/runner/attest-gate.ts"];
+
+  it("soft hit: exit 0 + bilingual diagnostic + recorded hit (en)", () => {
+    const store = memStore();
+    const r = runDocDriftSoftCheck({
+      changedPaths: changed,
+      surfaces: [DS_ATTEST],
+      eventsPath: "/ev.ndjson",
+      cycleId: "c1",
+      storyId: "US-X",
+      baseline: "abc123",
+      lang: "en",
+      ts: 1_700_000_000_000,
+      store,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.appended).toBe(true);
+    expect(r.output).toMatchSnapshot();
+  });
+
+  it("soft hit: same diagnostic in zh (locale single-language, both catalogued)", () => {
+    const store = memStore();
+    const r = runDocDriftSoftCheck({
+      changedPaths: changed,
+      surfaces: [DS_ATTEST],
+      eventsPath: "/ev.ndjson",
+      cycleId: "c1",
+      storyId: "US-X",
+      baseline: "abc123",
+      lang: "zh",
+      ts: 1_700_000_000_000,
+      store,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toMatchSnapshot();
+  });
+
+  it("clean verdict: exit 0, empty output, nothing recorded", () => {
+    const store = memStore();
+    const r = runDocDriftSoftCheck({
+      changedPaths: ["packages/core/src/attest/report.ts", "docs/verification.md"],
+      surfaces: [DS_ATTEST],
+      eventsPath: "/ev.ndjson",
+      cycleId: "c1",
+      storyId: "US-X",
+      baseline: "abc123",
+      lang: "en",
+      ts: 1_700_000_000_000,
+      store,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toBe("");
+    expect(r.appended).toBe(false);
+    expect(store.files.get("/ev.ndjson") ?? "").toBe("");
+  });
+
+  it("retry reports the already-recorded hit without a second append", () => {
+    const store = memStore();
+    const args = {
+      changedPaths: changed,
+      surfaces: [DS_ATTEST],
+      eventsPath: "/ev.ndjson",
+      cycleId: "c1",
+      storyId: "US-X",
+      baseline: "abc123",
+      lang: "en" as const,
+      ts: 1_700_000_000_000,
+      store,
+    };
+    const r1 = runDocDriftSoftCheck(args);
+    const r2 = runDocDriftSoftCheck(args);
+    expect(r2.hitId).toBe(r1.hitId);
+    expect(r2.appended).toBe(false);
+    expect((store.files.get("/ev.ndjson") ?? "").trim().split("\n")).toHaveLength(1);
+  });
+
+  it("without an eventsPath the verdict is still observable (no record)", () => {
+    const r = runDocDriftSoftCheck({
+      changedPaths: changed,
+      surfaces: [DS_ATTEST],
+      cycleId: "c1",
+      storyId: "US-X",
+      baseline: "abc123",
+      lang: "en",
+      ts: 1_700_000_000_000,
+      store: memStore(),
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.appended).toBe(false);
+    expect(r.output).not.toBe("");
+  });
+});

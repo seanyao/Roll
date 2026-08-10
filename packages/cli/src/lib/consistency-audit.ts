@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the release consistency shadow drift scanner.
+ */
+/**
  * US-TRUTH-002 — `roll release consistency audit`: the shadow drift scanner.
  *
  * Read-only gatherer over the fact sources declared in US-TRUTH-000 (backlog,
@@ -27,7 +30,7 @@ import {
   type AuditSnapshot,
 } from "@roll/core";
 import { type PrMergeInfo, ghRepoSlug, prViewMergeInfo, remoteUrl } from "@roll/infra";
-import { parseEventLine } from "@roll/spec";
+import { eventTsMs, parseEventLine } from "@roll/spec";
 import { cardArchiveDir, readIndex, reportFileName } from "./archive.js";
 import { hasVisualEvidenceAc } from "./design-visual-evidence.js";
 
@@ -49,8 +52,6 @@ export interface AuditGatherDeps {
   /** Local main ahead count override (tests). */
   localMainAhead?: () => Promise<number>;
   nowSec?: number;
-  /** Explicit repository execution root supplied by the command host. */
-  projectDir?: string;
 }
 
 function readJsonl(path: string): Array<Record<string, unknown>> {
@@ -163,7 +164,15 @@ export async function gatherAuditSnapshot(
       const e = parseEventLine(line);
       if (e === null) continue;
       if (e.type === "cycle:terminal") terminal.push(e.cycleId);
-      if (e.type === "cycle:end" && e.outcome === "failed" && nowSec - e.ts <= COUNT_WINDOW_SEC) eventFailed += 1;
+      // FIX-1490: `nowSec` is seconds but the stream carries a mixed-unit tail, so
+      // compare both sides in epoch ms rather than subtracting across units.
+      if (
+        e.type === "cycle:end" &&
+        e.outcome === "failed" &&
+        eventTsMs(nowSec) - eventTsMs(e.ts) <= COUNT_WINDOW_SEC * 1000
+      ) {
+        eventFailed += 1;
+      }
     }
   }
   snapshot.terminalCycleIds = terminal;
@@ -293,12 +302,7 @@ function renderMarkdown(report: AuditReport, skipped: string[], dateTag: string)
 /** `roll release consistency audit [--json]` — always exits 0 on a completed scan. */
 export async function consistencyAuditCommand(args: string[], deps: AuditGatherDeps = {}): Promise<number> {
   const json = args.includes("--json");
-  const projectDirIndex = args.indexOf("--project-dir");
-  const projectPath = deps.projectDir ?? (projectDirIndex >= 0 ? args[projectDirIndex + 1] : undefined);
-  if (projectPath === undefined || projectPath === "") {
-    process.stderr.write("Usage: roll release consistency audit --project-dir <repository-root> [--json]\n");
-    return 2;
-  }
+  const projectPath = process.cwd();
   const rtEnv = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim();
   const runtimeDir = rtEnv !== "" ? rtEnv : join(projectPath, ".roll", "loop");
 

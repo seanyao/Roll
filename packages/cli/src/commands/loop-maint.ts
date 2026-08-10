@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop` maintenance subcommands (reset, mute, unmute, gc, test).
+ */
+/**
  * `roll loop reset | mute | unmute | gc | test` — US-PORT-022 (part 2): the
  * residual loop WRITE/maintenance subcommands ported off the frozen bash
  * `bin/roll` engine. Each mirrors its v2 oracle's side effects, gates, and

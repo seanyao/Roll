@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `cycle <id>` subcommand, replaying one cycle in the terminal.
+ */
+/**
  * US-CLI-013 — `roll cycle <id>`: one cycle, fully replayable in the terminal,
  * SAME shape and vocabulary as the web trace tape (US-DOSSIER-013): summary
  * line → story line → vertical seven-segment tape (each segment a colored dot
@@ -25,8 +28,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
-import { dirname, join } from "node:path";
-import { cardArchiveDir, projectRuntimePath } from "../lib/archive.js";
+import { join } from "node:path";
+import { cardArchiveDir } from "../lib/archive.js";
 import { analyzeRepairRounds, listPendingSplitAdvice, writeSplitAdvice } from "../lib/split-advice.js";
 import { cycleModelSwapCommand } from "./cycle-model-swap.js";
 import { collectCycleLedger, formatBuilderIdentity, type CycleLedgerRow, type CycleTapeSegment } from "../lib/cycle-ledger.js";
@@ -724,10 +727,10 @@ export function cycleSplitAdviceCommand(args: string[], lang: "en" | "zh"): numb
     // Emit the signal event (best-effort) — idempotent write means a re-run that
     // changes nothing does NOT re-emit.
     try {
-      const eventsPath = projectRuntimePath(cwd, EVENTS_FILE);
-      mkdirSync(dirname(eventsPath), { recursive: true });
+      const loopDir = join(cwd, ".roll", "loop");
+      mkdirSync(loopDir, { recursive: true });
       const ev: RollEvent = { type: "split:advice", card: cardId, rounds: advice.roundCount, path, ts: Date.now() };
-      appendFileSync(eventsPath, serializeEvent(ev) + "\n");
+      appendFileSync(join(loopDir, EVENTS_FILE), serializeEvent(ev) + "\n");
     } catch {
       /* event emission is best-effort observability */
     }

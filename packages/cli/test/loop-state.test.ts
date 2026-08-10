@@ -23,7 +23,6 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loopPauseCommand,
   loopResumeCommand,
-  loopWorkspaceStatusCommand,
   resolveLoopRunState,
   type LoopSchedDeps,
   type LoopRunState,
@@ -92,64 +91,6 @@ function captureBoth(
 }
 
 
-describe("Workspace session-driven state", () => {
-  it("targets status, pause, and resume at the selected Workspace runtime", async () => {
-    const root = tmp("workspace-state");
-    const runtimeRoot = join(root, "runtime");
-    const target = {
-      ok: true as const,
-      workspaceId: "ws",
-      workspaceRoot: root,
-      canonicalRoot: root,
-      backlogPath: join(root, "backlog", "index.md"),
-      storyRoot: join(root, "backlog"),
-      runtimeRoot,
-      configPath: join(runtimeRoot, "backlog-sync.yaml"),
-    };
-    const deps: LoopSchedDeps = {
-      identity: () => Promise.reject(new Error("Workspace routing must not use repo identity")),
-      resolveTarget: () => target,
-    };
-
-    const paused = await captureStdout(() => loopPauseCommand(["--workspace", "ws"], deps));
-    expect(paused.code).toBe(0);
-    expect(paused.out).toContain("Workspace loop paused: ws");
-    expect(existsSync(join(runtimeRoot, "PAUSE-ws"))).toBe(true);
-
-    const status = await captureStdout(() => loopWorkspaceStatusCommand(["--workspace", "ws"], deps));
-    expect(status.code).toBe(0);
-    expect(status.out).toContain("ws  paused  session-driven");
-    expect(status.out).not.toContain("armed");
-    expect(status.out).not.toContain("dormant");
-
-    const resumed = await captureStdout(() => loopResumeCommand(["--workspace", "ws"], deps));
-    expect(resumed.code).toBe(0);
-    expect(resumed.out).toContain("Workspace loop resumed: ws");
-    expect(existsSync(join(runtimeRoot, "PAUSE-ws"))).toBe(false);
-  });
-
-  it("refuses an ambiguous Workspace mutation instead of choosing one", async () => {
-    const deps: LoopSchedDeps = {
-      identity: () => Promise.reject(new Error("ambiguous routing must stop first")),
-      resolveTarget: () => ({
-        ok: false,
-        code: "target_ambiguous",
-        candidates: [
-          { workspaceId: "ws-a", workspaceRoot: "/tmp/ws-a", canonicalRoot: "/tmp/ws-a", backlogPath: "/tmp/ws-a/backlog/index.md" },
-          { workspaceId: "ws-b", workspaceRoot: "/tmp/ws-b", canonicalRoot: "/tmp/ws-b", backlogPath: "/tmp/ws-b/backlog/index.md" },
-        ],
-      }),
-    };
-
-    const result = await captureBoth(() => loopPauseCommand([], deps));
-    expect(result.code).toBe(1);
-    expect(result.err).toContain("target_ambiguous");
-    expect(result.err).toContain("ws-a=/tmp/ws-a");
-    expect(result.err).toContain("ws-b=/tmp/ws-b");
-  });
-});
-
-
 
 
 
@@ -187,7 +128,7 @@ describe("loop pause/resume (marker file)", () => {
 
   it("FIX-1239: resume refuses autonomous scheduling when the repo-local roll package is newer than the runner", async () => {
     const proj = tmp("proj-resume-stale");
-    writeFileSync(join(proj, "package.json"), JSON.stringify({ name: "@seanyao/roll", version: "99.0.0" }) + "\n");
+    writeFileSync(join(proj, "package.json"), JSON.stringify({ name: "@bipo-ape/roll", version: "99.0.0" }) + "\n");
     const { deps } = fakeDeps(proj, tmp("sh-resume-stale"), tmp("ld-resume-stale"));
     const marker = join(proj, ".roll", "loop", "PAUSE-proj-abc123");
     mkdirSync(join(proj, ".roll", "loop"), { recursive: true });
@@ -453,3 +394,4 @@ describe("US-LOOP-119 — PAUSE semantics", () => {
 // no-second-daemon tripwire now guards against it returning.
 
 // ─── US-LOOP-109: recovery from macOS launchd scheduler failure fault matrix ──
+

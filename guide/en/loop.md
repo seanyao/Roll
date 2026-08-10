@@ -21,13 +21,6 @@ backlog is done, paused, or capped. `roll loop pause` stops cards from being
 picked and `roll loop resume` clears it; the owner asks `roll supervisor
 next/why` to decide what to drive.
 
-Workspace mode binds each session-driven runtime to an immutable Workspace ID.
-`roll loop go`, `roll loop pause`, and `roll loop resume` accept or derive
-exactly one Workspace target and keep runtime, events, locks, and failure state
-under that Workspace. Multiple active Workspaces can run independently;
-`roll loop status --all` is the read-only aggregate view and never mutates any
-Workspace.
-
 ## How It Works
 
 1. Reads `BACKLOG.md`, picks the highest-priority `📋 Todo` item.
@@ -1058,17 +1051,31 @@ requires only one API key secret — the one matching your configured agent.
 The two modes coexist: the GHA workflow provides instant feedback, and
 `roll loop pr-inbox` acts as a safety net if the workflow is not installed.
 
-## Session Cleanup
+## Managed delivery workspaces and safe release
 
-At the end of every cycle, loop automatically prunes stale local worktrees:
+Every Roll-owned delivery is one **DeliveryRun** with one managed WorkspaceSet
+under `<project>/.roll/loop/worktrees/`. Ordinary cycles use `cycle-<id>`;
+host-guided Delta uses `delta-<delegation-id>`; Skill dispatch uses a
+parent-owned `dispatch-<run-id>` set. Submodule checkouts are members of that
+same set, not disposable container directories. A run holds its Story
+reservation before its Builder starts, and only the returned detached checkout
+and publish ref are valid Builder targets.
 
-- Any directory under `.claude/worktrees/` whose branch has been fully merged
-  into `main` is removed (`git worktree remove --force` + `git branch -D`).
-- `git worktree prune` runs afterward to clear stale metadata.
+`handoff_ready` is a Delta protocol handoff, not Delivered or Done. It keeps
+both the reservation and workspace intact while the owner completes the normal
+PR/CI/attest path. A release is possible only after a fresh all-member audit
+confirms registration, expected HEAD, inactivity, clean tracked and untracked
+state, confirmed merge, and accepted attest. `roll worktree cleanup --dry-run`
+only shows an audit-derived candidate set; `--apply` rechecks every fact before
+each removal and refuses on any change. It never substitutes another path.
 
-This keeps `git worktree list` clean and prevents `.claude/worktrees/` from
-accumulating old entries over time. Active worktrees (branches ahead of `main`)
-are left untouched.
+Legacy `.worktrees/*`, `../wt-*`, and other external/manual checkouts remain
+visible as unmanaged or unknown. Roll neither adopts nor deletes them
+automatically. For a stale reservation, an unregistered member, or a refused
+workspace key, inspect `roll worktree audit` and `roll supervisor live`, then
+use the printed owner recovery action. Preserve the checkout until its identity
+and delivery facts are explicit; do not recreate a target merely because an old
+directory exists.
 
 ## Main Checkout Guard
 
@@ -1139,11 +1146,11 @@ so the tmux viewer never looks frozen.
 | # | Phase | When it runs | Typical duration |
 |---|-------|--------------|------------------|
 | 1 | `startup` | env / lock / heartbeat setup | < 1 s |
-| 2 | `preflight` | meta sync + stale-branch GC + orphan-worktree recovery | 0 s — 30 s |
+| 2 | `preflight` | meta sync + read-only managed-workspace audit / recovery detection | 0 s — 30 s |
 | 3 | `worktree_setup` | fetch origin + worktree create + meta sync | 2 – 10 s |
 | 4 | `agent_invoke` | Agent executes with up to 3 retries | 5 – 45 min |
 | 5 | `publish_push` | push branch + open PR (or doc-only merge) | 5 – 30 s |
-| 6 | `cleanup` | env cleanup + emit PR final state + worktree teardown | < 1 s |
+| 6 | `cleanup` | env cleanup + emit PR final state; managed release remains audit-gated | < 1 s |
 
 > A cycle ends when the PR is open — it does **not** wait for merge. The event-backed Delivery Reconciler advances delivery at cycle boundaries, on read paths, or via `roll loop reconcile`; there is no merge daemon. A story with an open PR is skipped by the eligibility gate, so it is neither re-opened nor falsely marked Done.
 
@@ -1490,3 +1497,61 @@ Then confirm with `roll doctor` — the leftover-lane section disappears when th
 last plist is gone.
 
 之后用 `roll doctor` 确认 —— 最后一个 plist 清掉后,残留 lane 那一节就不再出现。
+
+## Two-slot handoff (US-CYCLE-013)
+
+Behind `ROLL_CYCLE_HANDOFF_V1=1` (default off), a completed build becomes a
+**durable, resumable handoff** instead of burning its review/test/publish/merge
+tail inside the same uninterruptible run.
+
+- One completed build **waits in its retained workspace** (state
+  `builder complete — tail capacity full`) while the **next card builds** in its
+  own workspace.
+- A **third card queues** (FIFO, with a readable reason) — at most one waiting
+  tail and one build-slot holder exist at any time.
+- A card that passed Builder validation is **never selected again and never
+  re-built**: it holds its story delivery lease and its immutable workspace
+  until its own tail reaches a terminal, identity-checked cleanup.
+
+The durable facts live in `.roll/loop/events.ndjson` as the `cycle-handoff/v1`
+family (`cycle:admitted` → `cycle:builder_ready` → `cycle:builder_handoff` →
+`cycle:tail_started/completed` → `cycle:cleanup_completed`). A process restart
+after a green, committed build resumes the tail (`roll loop run-once --resume
+<cycleId>`, or an auto-resume when exactly one live handoff exists) and **never
+runs Builder again**; a restart before the append keeps today's abort/recovery
+semantics.
+
+**Latest-main check (REAL):** after a predecessor merges, the downstream tail must
+pass a real "based on latest main" check before it continues. The probe runs
+`git merge-base --is-ancestor` (main rewritten ⇒ `conflict`, fail closed) and a
+`git rebase --onto <new tip> <recorded base> <builder head>` in a **temporary
+verification worktree** created from the recorded builder head, then executes the
+card's recorded `deliverable_cmd` (allowlist-filtered by the same roll read-only
+policy as the attest lane — rejected commands never run) bounded by a 900s
+budget. `continue` creates the durable, immutable pin
+`refs/roll/rebase-candidates/<cycle>/<attempt>` at the **true rebased head** and
+records `cycle:rebased_attempt_planned`; `conflict` / `test_failed` / `timeout` /
+`unknown` **return to serial safely** (`cycle:serial_recovery`) with the story +
+workspace + leases preserved and no half-finished state left behind. The
+temporary verify tree is always removed afterwards; the pinned candidate lives
+only in the durable pin ref (recovery may check it out via the documented
+`checkoutPin` primitive).
+
+**Execution-enforced admission:** the capacity preconditions hold **under the
+scheduler mutex** — a direct concurrent `roll loop run-once` is refused
+(`loop run-once: admission refused (build_slot_full) — no parallel build
+started`, exit 1) and the go worker **never hands a queued card to the runner**:
+on a `queued` verdict it prints the queue line and waits for a free slot instead
+of starting a build. A queued card is appended once (idempotent — its FIFO
+position never silently moves).
+
+**Reading `roll loop status`:** with the flag on, the dashboard adds a **HANDOFF**
+section whose states are literal — `building`, `builder complete — tail capacity
+full` (the ready holder sits ABOVE the queue, never inside it), `waiting for
+evaluation/test`, `serial recovery required` (no automatic deletion). Queue rows
+show the position, `seq=`, the reason, and the next action.
+
+**Rollback:** first drain/recover every v1 handoff to `terminal` or an explicit
+`cycle:serial_recovery`, then unset the flag. Feature-off without a drain fails
+loud (`upgrade_required`) rather than running a serial duplicate. File-overlap
+admission between two cards is a separate story (US-CYCLE-010).

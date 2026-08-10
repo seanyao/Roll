@@ -1,22 +1,271 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`US-DELTA-003 — CLI snapshots > US-DELTA-009: prepare prints the persisted team banner on stderr without changing JSON stdout 1`] = `
+"▁▁▁ Delta Team assembling ▁▁▁
+  story        US-DELTA-BANNER
+  ├ builder    deepseek · deepseek-v4-flash  ⚠ availability-fallback
+  └ evaluator  openai · gpt-5.6-terra  preset-preference
+  diversity    deepseek ≠ openai  ✓
+  frame        <PROJECT>/.roll/features/delta-team/US-DELTA-BANNER/delta-<DELEGATION_ID>  lease held
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-DELTA-010: a blocked validate banner remains on stderr while JSON stdout stays empty 1`] = `
+"▁▁▁ Delta Team validating ▁▁▁
+  delegation  <DELEGATION_ID>
+  stage       designer
+  verdict     blocked
+  reason      artifact_invalid
+{"ok":false,"error":"artifact_invalid","detail":"Stage artifact not found for role 'designer' at <PROJECT>/.roll/features/delta-team/US-DELTA-PHASE-BLOCKED/delta-<DELEGATION_ID>/role-artifacts/designer/evaluation-manifest.json","role":"designer"}
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-DELTA-010: prepare, successful validate, and conclude share a terminal phase banner 1`] = `
+"▁▁▁ Delta Team assembling ▁▁▁
+  story        US-DELTA-PHASE-CAPTURE
+  ├ designer   pi · claude  user-pin
+  ├ builder    pi · claude  user-pin
+  └ evaluator  pi · claude  user-pin
+  diversity    undeclared heterogeneity
+  frame        <PROJECT>/.roll/features/delta-team/US-DELTA-PHASE-CAPTURE/delta-<DELEGATION_ID>  lease held
+
+▁▁▁ Delta Team validating ▁▁▁
+  delegation  <DELEGATION_ID>
+  stage       designer
+  verdict     allowed
+
+▁▁▁ Delta Team concluded ▁▁▁
+  delegation         <DELEGATION_ID>
+  story              US-DELTA-PHASE-CAPTURE
+  outcome            handoff_ready (handoff_only)
+  owner disposition  owner_continue
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-LOOP-126 freezes EN and ZH human plus JSON fail-closed recovery boundaries 1`] = `
+"▁▁▁ Delta Team validating ▁▁▁
+  delegation  <DELEGATION_ID>
+  stage       designer
+  verdict     blocked
+  reason      artifact_invalid
+Delegation <DELEGATION_ID>: unsupported workspace schema 99
+
+{"ok":false,"error":"unsupported_workspace_schema","detail":"Delegation <DELEGATION_ID>: unsupported workspace schema 99"}
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-LOOP-126 freezes EN and ZH human plus JSON fail-closed recovery boundaries 2`] = `
+"▁▁▁ Delta Team 正在验证 ▁▁▁
+  委派  <DELEGATION_ID>
+  阶段  designer
+  结论  阻断
+  原因  artifact_invalid
+Delegation <DELEGATION_ID>: unsupported workspace schema 99
+
+{"ok":false,"error":"unsupported_workspace_schema","detail":"Delegation <DELEGATION_ID>: unsupported workspace schema 99"}
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-LOOP-126 freezes allocation, continuation, and terminal restart output in EN and ZH 1`] = `
+"{"ok":false,"error":"event_append_failure","detail":"Event append failure after delta:prepared"}
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","runId":"delta-<DELEGATION_ID>","artifacts":{"frameDir":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-EN/delta-<DELEGATION_ID>","resolutionPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-EN/delta-<DELEGATION_ID>/role-artifacts/delegation/delegation-resolution.json","markerPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-EN/delta-<DELEGATION_ID>/delegation-open.json","preparationPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-EN/delta-<DELEGATION_ID>/preparation.json","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-RESTART-EN","kind":"host_delta","topology":"solo","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-restart-en-<DELEGATION_ID>"}]}}}
+
+▁▁▁ Delta Team assembling ▁▁▁
+  story        US-DELTA-RESTART-EN
+  ├ designer   pi · claude  user-pin
+  ├ builder    pi · claude  user-pin
+  └ evaluator  pi · claude  user-pin
+  diversity    undeclared heterogeneity
+  frame        <PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-EN/delta-<DELEGATION_ID>  lease held
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-RESTART-EN","outcome":"handoff_ready","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue"}
+
+▁▁▁ Delta Team concluded ▁▁▁
+  delegation         <DELEGATION_ID>
+  story              US-DELTA-RESTART-EN
+  outcome            handoff_ready (handoff_only)
+  owner disposition  owner_continue
+
+Delegation: <DELEGATION_ID>
+  Story: US-DELTA-RESTART-EN
+  Status: handoff_ready
+  Mode: solo-skill
+  Trigger: host-guided
+  Topology: solo
+  Profile: standard
+  Cost: ? (host_unobservable)
+  Terminal: handoff_only (owner_continue)
+  workspace: delta-<DELEGATION_ID>
+    member: delta-<DELEGATION_ID>
+    detached HEAD: <GIT_SHA>
+    publish ref: refs/heads/roll/us-delta-restart-en-<DELEGATION_ID>
+  Roles:
+    designer: resolved [pi/claude] cost=? (host_unobservable)
+    builder: resolved [pi/claude] cost=? (host_unobservable)
+    evaluator: resolved [pi/claude] cost=? (host_unobservable)
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-RESTART-EN","status":"handoff_ready","visibleMode":"solo-skill","trigger":"host-guided","topology":"solo","qualityProfile":"standard","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue","roles":[{"role":"designer","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"builder","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"evaluator","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"}],"totalCost":"? (host_unobservable)","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-RESTART-EN","kind":"host_delta","topology":"solo","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-restart-en-<DELEGATION_ID>"}]}}
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-LOOP-126 freezes allocation, continuation, and terminal restart output in EN and ZH 2`] = `
+"{"ok":false,"error":"event_append_failure","detail":"Event append failure after delta:prepared"}
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","runId":"delta-<DELEGATION_ID>","artifacts":{"frameDir":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-ZH/delta-<DELEGATION_ID>","resolutionPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-ZH/delta-<DELEGATION_ID>/role-artifacts/delegation/delegation-resolution.json","markerPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-ZH/delta-<DELEGATION_ID>/delegation-open.json","preparationPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-ZH/delta-<DELEGATION_ID>/preparation.json","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-RESTART-ZH","kind":"host_delta","topology":"solo","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-restart-zh-<DELEGATION_ID>"}]}}}
+
+▁▁▁ Delta Team 正在组队 ▁▁▁
+  卡片           US-DELTA-RESTART-ZH
+  ├ designer   pi · claude  user-pin
+  ├ builder    pi · claude  user-pin
+  └ evaluator  pi · claude  user-pin
+  异构           未声明异构
+  帧            <PROJECT>/.roll/features/delta-team/US-DELTA-RESTART-ZH/delta-<DELEGATION_ID>  租约已持有
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-RESTART-ZH","outcome":"handoff_ready","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue"}
+
+▁▁▁ Delta Team 已收尾 ▁▁▁
+  委派        <DELEGATION_ID>
+  卡片        US-DELTA-RESTART-ZH
+  结果        handoff_ready (handoff_only)
+  owner 决定  owner_continue
+
+委派: <DELEGATION_ID>
+  故事: US-DELTA-RESTART-ZH
+  状态: handoff_ready
+  模式: solo-skill
+  触发方式: host-guided
+  拓扑: solo
+  质量配置: standard
+  成本: ? (host_unobservable)
+  终态: handoff_only (owner_continue)
+  工作区: delta-<DELEGATION_ID>
+    成员: delta-<DELEGATION_ID>
+    分离 HEAD: <GIT_SHA>
+    发布引用: refs/heads/roll/us-delta-restart-zh-<DELEGATION_ID>
+  角色:
+    designer: resolved [pi/claude] cost=? (host_unobservable)
+    builder: resolved [pi/claude] cost=? (host_unobservable)
+    evaluator: resolved [pi/claude] cost=? (host_unobservable)
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-RESTART-ZH","status":"handoff_ready","visibleMode":"solo-skill","trigger":"host-guided","topology":"solo","qualityProfile":"standard","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue","roles":[{"role":"designer","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"builder","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"evaluator","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"}],"totalCost":"? (host_unobservable)","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-RESTART-ZH","kind":"host_delta","topology":"solo","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-restart-zh-<DELEGATION_ID>"}]}}
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-LOOP-126 freezes managed prepare/status/conclude human and JSON output in EN 1`] = `
+"Delegation prepared: <DELEGATION_ID>
+  run ID: delta-<DELEGATION_ID>
+  frame: <PROJECT>/.roll/features/delta-team/US-DELTA-MANAGED-EN-SNAPSHOT/delta-<DELEGATION_ID>
+  workspace: delta-<DELEGATION_ID>
+    member: delta-<DELEGATION_ID>
+    detached HEAD: <GIT_SHA>
+    publish ref: refs/heads/roll/us-delta-managed-en-snapshot-<DELEGATION_ID>
+
+▁▁▁ Delta Team assembling ▁▁▁
+  story        US-DELTA-MANAGED-EN-SNAPSHOT
+  ├ designer   pi · claude  user-pin
+  ├ builder    pi · claude  user-pin
+  └ evaluator  pi · claude  user-pin
+  diversity    undeclared heterogeneity
+  frame        <PROJECT>/.roll/features/delta-team/US-DELTA-MANAGED-EN-SNAPSHOT/delta-<DELEGATION_ID>  lease held
+
+Delegation: <DELEGATION_ID>
+  Story: US-DELTA-MANAGED-EN-SNAPSHOT
+  Status: in_progress
+  Mode: delta-team
+  Trigger: host-guided
+  Topology: delta-team
+  Profile: standard
+  Cost: ? (host_unobservable)
+  workspace: delta-<DELEGATION_ID>
+    member: delta-<DELEGATION_ID>
+    detached HEAD: <GIT_SHA>
+    publish ref: refs/heads/roll/us-delta-managed-en-snapshot-<DELEGATION_ID>
+  Roles:
+    designer: resolved [pi/claude] cost=? (host_unobservable)
+    builder: resolved [pi/claude] cost=? (host_unobservable)
+    evaluator: resolved [pi/claude] cost=? (host_unobservable)
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-MANAGED-EN-SNAPSHOT","status":"in_progress","visibleMode":"delta-team","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","roles":[{"role":"designer","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"builder","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"evaluator","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"}],"totalCost":"? (host_unobservable)","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-MANAGED-EN-SNAPSHOT","kind":"host_delta","topology":"delta-team","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-managed-en-snapshot-<DELEGATION_ID>"}]}}
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-MANAGED-EN-SNAPSHOT","outcome":"handoff_ready","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue"}
+
+▁▁▁ Delta Team concluded ▁▁▁
+  delegation         <DELEGATION_ID>
+  story              US-DELTA-MANAGED-EN-SNAPSHOT
+  outcome            handoff_ready (handoff_only)
+  owner disposition  owner_continue
+"
+`;
+
+exports[`US-DELTA-003 — CLI snapshots > US-LOOP-126 freezes managed prepare/status/conclude human and JSON output in ZH 1`] = `
+"委派已准备: <DELEGATION_ID>
+  运行 ID: delta-<DELEGATION_ID>
+  帧: <PROJECT>/.roll/features/delta-team/US-DELTA-MANAGED-ZH-SNAPSHOT/delta-<DELEGATION_ID>
+  工作区: delta-<DELEGATION_ID>
+    成员: delta-<DELEGATION_ID>
+    分离 HEAD: <GIT_SHA>
+    发布引用: refs/heads/roll/us-delta-managed-zh-snapshot-<DELEGATION_ID>
+
+▁▁▁ Delta Team 正在组队 ▁▁▁
+  卡片           US-DELTA-MANAGED-ZH-SNAPSHOT
+  ├ designer   pi · claude  user-pin
+  ├ builder    pi · claude  user-pin
+  └ evaluator  pi · claude  user-pin
+  异构           未声明异构
+  帧            <PROJECT>/.roll/features/delta-team/US-DELTA-MANAGED-ZH-SNAPSHOT/delta-<DELEGATION_ID>  租约已持有
+
+委派: <DELEGATION_ID>
+  故事: US-DELTA-MANAGED-ZH-SNAPSHOT
+  状态: in_progress
+  模式: delta-team
+  触发方式: host-guided
+  拓扑: delta-team
+  质量配置: standard
+  成本: ? (host_unobservable)
+  工作区: delta-<DELEGATION_ID>
+    成员: delta-<DELEGATION_ID>
+    分离 HEAD: <GIT_SHA>
+    发布引用: refs/heads/roll/us-delta-managed-zh-snapshot-<DELEGATION_ID>
+  角色:
+    designer: resolved [pi/claude] cost=? (host_unobservable)
+    builder: resolved [pi/claude] cost=? (host_unobservable)
+    evaluator: resolved [pi/claude] cost=? (host_unobservable)
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-MANAGED-ZH-SNAPSHOT","status":"in_progress","visibleMode":"delta-team","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","roles":[{"role":"designer","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"builder","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"evaluator","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"}],"totalCost":"? (host_unobservable)","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-MANAGED-ZH-SNAPSHOT","kind":"host_delta","topology":"delta-team","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-managed-zh-snapshot-<DELEGATION_ID>"}]}}
+
+{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-MANAGED-ZH-SNAPSHOT","outcome":"handoff_ready","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue"}
+
+▁▁▁ Delta Team 已收尾 ▁▁▁
+  委派        <DELEGATION_ID>
+  卡片        US-DELTA-MANAGED-ZH-SNAPSHOT
+  结果        handoff_ready (handoff_only)
+  owner 决定  owner_continue
+"
+`;
+
 exports[`US-DELTA-003 — CLI snapshots > conclude --json output is scrubbed and snapshotted 1`] = `
 "{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-SNAP-4","outcome":"handoff_ready","terminalBinding":"handoff_only","deliveryDisposition":"owner_continue"}
 "
 `;
 
 exports[`US-DELTA-003 — CLI snapshots > prepare --json output is scrubbed and snapshotted 1`] = `
-"{"ok":true,"delegationId":"<DELEGATION_ID>","runId":"delta-<DELEGATION_ID>","artifacts":{"frameDir":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>","resolutionPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>/role-artifacts/delegation/delegation-resolution.json","markerPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>/delegation-open.json","preparationPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>/preparation.json"}}
+"{"ok":true,"delegationId":"<DELEGATION_ID>","runId":"delta-<DELEGATION_ID>","artifacts":{"frameDir":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>","resolutionPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>/role-artifacts/delegation/delegation-resolution.json","markerPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>/delegation-open.json","preparationPath":"<PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-1/delta-<DELEGATION_ID>/preparation.json","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-SNAP-1","kind":"host_delta","topology":"delta-team","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-snap-1-<DELEGATION_ID>"}]}}}
 "
 `;
 
 exports[`US-DELTA-003 — CLI snapshots > status --json after prepare is scrubbed and snapshotted 1`] = `
-"{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-SNAP-2","status":"in_progress","visibleMode":"delta-team","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","roles":[{"role":"designer","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"builder","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"evaluator","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"}],"totalCost":"? (host_unobservable)"}
+"{"ok":true,"delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-SNAP-2","status":"in_progress","visibleMode":"delta-team","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","roles":[{"role":"designer","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"builder","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"},{"role":"evaluator","status":"resolved","hostId":"pi","modelId":"claude","cost":"? (host_unobservable)"}],"totalCost":"? (host_unobservable)","workspace":{"schema":1,"runId":"delta-<DELEGATION_ID>","storyId":"US-DELTA-SNAP-2","kind":"host_delta","topology":"delta-team","delegationId":"<DELEGATION_ID>","members":[{"repositoryId":"<PROJECT>/.git","workspaceKey":"delta-<DELEGATION_ID>","relativeLocator":"delta-<DELEGATION_ID>","checkoutRef":{"kind":"detached","head":"<GIT_SHA>"},"publishRef":"refs/heads/roll/us-delta-snap-2-<DELEGATION_ID>"}]}}
 "
 `;
 
 exports[`US-DELTA-003 — CLI snapshots > validate block on missing artifact is scrubbed and snapshotted 1`] = `
-"{"ok":false,"error":"artifact_invalid","detail":"Stage artifact not found for role 'designer' at <TMP>/roll-delta-test-<UUID>/.roll/features/delta-team/US-DELTA-SNAP-3/delta-<DELEGATION_ID>/role-artifacts/designer/evaluation-manifest.json","role":"designer"}
+"▁▁▁ Delta Team validating ▁▁▁
+  delegation  <UUID>
+  stage       designer
+  verdict     blocked
+  reason      artifact_invalid
+{"ok":false,"error":"artifact_invalid","detail":"Stage artifact not found for role 'designer' at <PROJECT>/.roll/features/delta-team/US-DELTA-SNAP-3/delta-<DELEGATION_ID>/role-artifacts/designer/evaluation-manifest.json","role":"designer"}
 "
 `;
 
@@ -55,6 +304,10 @@ exports[`US-DELTA-003 — status human output with provenance > status after val
   Topology: delta-team
   Profile: standard
   Cost: ? (host_unobservable)
+  workspace: delta-<DELEGATION_ID>
+    member: delta-<DELEGATION_ID>
+    detached HEAD: <GIT_SHA>
+    publish ref: refs/heads/roll/us-delta-hprov2-<DELEGATION_ID>
   Roles:
     designer: artifact_published [pi/claude] (host-attested) cost=? (host_unobservable)
     builder: resolved [pi/claude] cost=? (host_unobservable)
@@ -71,9 +324,51 @@ exports[`US-DELTA-003 — status human output with provenance > status human out
   Topology: delta-team
   Profile: standard
   Cost: ? (host_unobservable)
+  workspace: delta-<DELEGATION_ID>
+    member: delta-<DELEGATION_ID>
+    detached HEAD: <GIT_SHA>
+    publish ref: refs/heads/roll/us-delta-hstatus-<DELEGATION_ID>
   Roles:
     designer: resolved [pi/claude] cost=? (host_unobservable)
     builder: resolved [pi/claude] cost=? (host_unobservable)
     evaluator: resolved [pi/claude] cost=? (host_unobservable)
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 1`] = `
+"Builder preflight passed: delegation <DELEGATION_ID> stage builder is structurally complete
+
+{"schema":"roll-delta-builder-preflight-receipt/v1","ok":true,"class":"artifact_protocol","delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-PREFLIGHT-SNAP-EN","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","runId":"delta-<DELEGATION_ID>","stage":"builder","snapshot":{"workspaceRunId":"delta-<DELEGATION_ID>","members":[{"relativeLocator":"delta-<DELEGATION_ID>","head":"<GIT_SHA>"}],"manifestSha256":"<SHA256>","outputSha256":[{"path":"role-artifacts/builder/evidence.md","sha256":"<SHA256>"}]}}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 2`] = `
+"Builder preflight failed: builder evidence artifact missing on disk: role-artifacts/builder/evidence.md
+
+{"ok":false,"class":"artifact_protocol","reason":"artifact_invalid","detail":"builder evidence artifact missing on disk: role-artifacts/builder/evidence.md"}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 3`] = `
+"{"ok":false,"error":"unsupported_stage","detail":"roll delta preflight supports only the managed builder stage (got 'evaluator')","stage":"evaluator"}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 4`] = `
+"建造者预检通过：委派 <DELEGATION_ID> 阶段 builder 在结构上完整
+
+{"schema":"roll-delta-builder-preflight-receipt/v1","ok":true,"class":"artifact_protocol","delegationId":"<DELEGATION_ID>","storyId":"US-DELTA-PREFLIGHT-SNAP-ZH","trigger":"host-guided","topology":"delta-team","qualityProfile":"standard","runId":"delta-<DELEGATION_ID>","stage":"builder","snapshot":{"workspaceRunId":"delta-<DELEGATION_ID>","members":[{"relativeLocator":"delta-<DELEGATION_ID>","head":"<GIT_SHA>"}],"manifestSha256":"<SHA256>","outputSha256":[{"path":"role-artifacts/builder/evidence.md","sha256":"<SHA256>"}]}}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 5`] = `
+"建造者预检失败：builder evidence artifact missing on disk: role-artifacts/builder/evidence.md
+
+{"ok":false,"class":"artifact_protocol","reason":"artifact_invalid","detail":"builder evidence artifact missing on disk: role-artifacts/builder/evidence.md"}
+"
+`;
+
+exports[`US-DELTA-015 — Builder preflight and formal checkpoint ownership > preflight human + JSON output is frozen in EN and ZH (green and red) 6`] = `
+"{"ok":false,"error":"unsupported_stage","detail":"roll delta preflight 仅支持受管理的建造者阶段（收到 'evaluator'）","stage":"evaluator"}
 "
 `;

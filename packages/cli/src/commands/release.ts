@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll release` subcommand, owning the whole release transaction in order.
+ */
+/**
  * US-REL-007 — `roll release`: the ONLY release command.
  *
  * The default flow owns the whole release transaction, in order, every
@@ -33,12 +36,13 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, isRollPackageName, planRelease, releaseTagForVersion, resolveVersionScheme, ROLL_PACKAGE_NAMES, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
+import { DEFAULT_REQUIRED_CHECK, requiredCheckVerdict, type CheckConclusion, EventBus, EVENTS_FILE, foldUnreleased, isChangelogReady, isRollPackageName, planRelease, releaseTagForVersion, resolveVersionScheme, ROLL_PACKAGE_NAMES, verifyRelease, type ReleaseDate, type ReleaseStep, type ReleaseVerifySeams } from "@roll/core";
 import { isTransientGhError } from "@roll/infra";
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
 import { c, renderState } from "../render.js";
 import { runConsistencyCheck } from "../lib/release-consistency.js";
 import { readConfirmLine } from "../lib/tty-confirm.js";
+import { configuredRequiredChecks } from "../lib/ci-doc-drift.js";
 
 function label(lang: Lang, key: string, ...args: ReadonlyArray<string | number>): string {
   if (v3Catalog[key] !== undefined) return t(v3Catalog, lang, key, ...args);
@@ -66,6 +70,10 @@ export interface ReleaseFlowDeps {
   clean: (cwd: string) => boolean;
   synced: (cwd: string) => boolean;
   tagExists: (cwd: string, tag: string) => boolean;
+  /** The checked-out, post-sync main SHA. Every tag target is explicit. */
+  headSha: (cwd: string) => string;
+  /** Read-only Git/GitHub evidence for an interrupted old release. */
+  recovery: ReleaseRecoveryDeps;
   readChangelog: (cwd: string) => string;
   writeChangelog: (cwd: string, text: string) => void;
   bumpVersion: (cwd: string, version: string) => void;
@@ -101,7 +109,7 @@ export interface ReleaseFlowDeps {
   ) => boolean;
   syncMain: (cwd: string) => boolean;
   consistencyGate: (cwd: string) => Promise<boolean> | boolean;
-  tag: (cwd: string, tag: string, version: string) => void;
+  tag: (cwd: string, tag: string, version: string, targetSha: string) => void;
   pushTag: (cwd: string, tag: string) => void;
   /**
    * FIX-368: record the just-pushed release as a `release:gate` FACT in the
@@ -113,11 +121,47 @@ export interface ReleaseFlowDeps {
    * a bookkeeping append. The default impl swallows every error. Optional so a
    * test can omit it; the flow guards the call regardless.
    */
-  recordReleaseFact?: (cwd: string, tag: string) => void;
+  recordReleaseFact?: (cwd: string, tag: string, targetSha: string) => void;
   confirm: (tag: string) => boolean;
   now: () => Date;
   /** Step progress sink (stdout in production; recorded in tests). */
   onStep?: (step: ReleaseStep, detail: string) => void;
+}
+
+/** A read-only fact source. Recovery never treats a failed query as absence. */
+export type ReleaseRecoveryFact<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: string };
+
+/** Minimal GitHub PR facts required to prove an old release really merged. */
+export interface ReleaseRecoveryPr {
+  number: number;
+  title: string;
+  state: string;
+  mergeSha: string | undefined;
+}
+
+/**
+ * Read-only seams for FIX-1514. They keep every Git/GitHub/tag observation
+ * deterministic in tests and make failed observations explicit in production.
+ */
+export interface ReleaseRecoveryDeps {
+  listReleasePrs: (cwd: string) => ReleaseRecoveryFact<ReadonlyArray<ReleaseRecoveryPr>>;
+  remoteTagExists: (cwd: string, tag: string) => ReleaseRecoveryFact<boolean>;
+  readFileAt: (cwd: string, sha: string, path: "package.json" | "CHANGELOG.md") => ReleaseRecoveryFact<string>;
+}
+
+export type ReleaseRecoveryResult =
+  | { status: "none" }
+  | { status: "recovered"; tag: string; version: string; targetSha: string }
+  | { status: "blocked"; reason: string };
+
+interface ReleaseRecoveryActions {
+  packageName: (cwd: string) => string;
+  recovery: ReleaseRecoveryDeps;
+  tag: (cwd: string, tag: string, version: string, targetSha: string) => void;
+  pushTag: (cwd: string, tag: string) => void;
+  recordReleaseFact?: (cwd: string, tag: string, targetSha: string) => void;
 }
 
 function git(cwd: string, args: string[]): string {
@@ -139,6 +183,101 @@ function ghSync(cwd: string, args: string[]): { code: number; stdout: string; st
       stderr: err.stderr != null ? String(err.stderr) : "",
     };
   }
+}
+
+function recoveryTagFromTitle(title: string): { tag: string; version: string } | undefined {
+  const match = /^Release: (v[^\s]+)$/.exec(title.trim());
+  if (match === null) return undefined;
+  const tag = match[1] ?? "";
+  const version = tag.replace(/^v/, "");
+  return tag === "v" || version === "" ? undefined : { tag, version };
+}
+
+function validSha(value: string | undefined): value is string {
+  return value !== undefined && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function packageIdentity(text: string): { name: string; version: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    const name = typeof record["name"] === "string" ? record["name"].trim() : "";
+    const version = typeof record["version"] === "string" ? record["version"].trim() : "";
+    return name === "" || version === "" ? undefined : { name, version };
+  } catch {
+    return undefined;
+  }
+}
+
+function changelogHasRelease(text: string, tag: string): boolean {
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^## ${escaped}(?:\\s+—\\s+\\d{4}-\\d{2}-\\d{2})?\\s*$`, "m").test(text);
+}
+
+/**
+ * Recover only one fully-proven old release. A zero-candidate result is not an
+ * error: it means there is no unfinished release and the ordinary flow can run.
+ * Every other uncertain state blocks before a local tag, file write, CI run, or
+ * publish action.
+ */
+export function recoverMergedRelease(cwd: string, actions: ReleaseRecoveryActions): ReleaseRecoveryResult {
+  const prFacts = actions.recovery.listReleasePrs(cwd);
+  if (!prFacts.ok) return { status: "blocked", reason: `release PR facts unreadable: ${prFacts.reason}` };
+
+  const unfinished: Array<{ pr: ReleaseRecoveryPr; tag: string; version: string }> = [];
+  for (const pr of prFacts.value) {
+    const release = recoveryTagFromTitle(pr.title);
+    if (release === undefined) continue;
+    const tagFact = actions.recovery.remoteTagExists(cwd, release.tag);
+    if (!tagFact.ok) return { status: "blocked", reason: `remote tag facts unreadable for ${release.tag}: ${tagFact.reason}` };
+    if (!tagFact.value) unfinished.push({ pr, ...release });
+  }
+
+  if (unfinished.length === 0) return { status: "none" };
+  if (unfinished.length !== 1) return { status: "blocked", reason: `expected exactly one unfinished release, found ${unfinished.length}` };
+
+  const candidate = unfinished[0];
+  if (candidate === undefined) return { status: "blocked", reason: "unfinished release selection failed" };
+  if (candidate.pr.state !== "MERGED") {
+    return { status: "blocked", reason: `release PR #${candidate.pr.number} is not merged (${candidate.pr.state})` };
+  }
+  if (!validSha(candidate.pr.mergeSha)) {
+    return { status: "blocked", reason: `release PR #${candidate.pr.number} has no readable merge SHA` };
+  }
+
+  const packageFact = actions.recovery.readFileAt(cwd, candidate.pr.mergeSha, "package.json");
+  if (!packageFact.ok) return { status: "blocked", reason: `package identity unreadable: ${packageFact.reason}` };
+  const oldPackage = packageIdentity(packageFact.value);
+  const expectedPackage = actions.packageName(cwd).trim();
+  if (oldPackage === undefined || expectedPackage === "" || oldPackage.name !== expectedPackage) {
+    return { status: "blocked", reason: "package identity does not match the current project" };
+  }
+  if (oldPackage.version !== candidate.version) {
+    return { status: "blocked", reason: `version identity does not match ${candidate.tag}` };
+  }
+
+  const changelogFact = actions.recovery.readFileAt(cwd, candidate.pr.mergeSha, "CHANGELOG.md");
+  if (!changelogFact.ok) return { status: "blocked", reason: `CHANGELOG identity unreadable: ${changelogFact.reason}` };
+  if (!changelogHasRelease(changelogFact.value, candidate.tag)) {
+    return { status: "blocked", reason: `CHANGELOG identity does not contain ${candidate.tag}` };
+  }
+
+  // Re-read the remote tag immediately before the first mutation: a concurrent
+  // maintainer wins, and we leave both Git and files untouched.
+  const finalTagFact = actions.recovery.remoteTagExists(cwd, candidate.tag);
+  if (!finalTagFact.ok) return { status: "blocked", reason: `remote tag facts unreadable for ${candidate.tag}: ${finalTagFact.reason}` };
+  if (finalTagFact.value) return { status: "blocked", reason: `tag ${candidate.tag} already exists` };
+
+  actions.tag(cwd, candidate.tag, candidate.version, candidate.pr.mergeSha);
+  actions.pushTag(cwd, candidate.tag);
+  try {
+    actions.recordReleaseFact?.(cwd, candidate.tag, candidate.pr.mergeSha);
+  } catch {
+    // The tag is already irreversible; bookkeeping stays best-effort exactly as
+    // in the ordinary release flow.
+  }
+  return { status: "recovered", tag: candidate.tag, version: candidate.version, targetSha: candidate.pr.mergeSha };
 }
 
 /**
@@ -260,10 +399,18 @@ export function runMirrorPack(
 export function publishInstructions(lang: Lang, version: string): string {
   const [primary, ...mirrors] = ROLL_PACKAGE_NAMES;
   const lines: string[] = [];
+  // FIX-1493: the wording follows the ACTUAL name count. This repo publishes one
+  // name; the multi-name phrasing only makes sense when a mirror exists, and
+  // telling the owner to "publish every name" when there is one is noise.
+  const multi = mirrors.length > 0;
   lines.push(
     lang === "zh"
-      ? `\n下一步：发布到 npm（每个名字都要发，缺一个就会漂移）：`
-      : `\nNext: publish to npm — once per name, a missed one drifts the scopes apart:`,
+      ? multi
+        ? `\n下一步：发布到 npm（每个名字都要发，缺一个就会漂移）：`
+        : `\n下一步：发布到 npm：`
+      : multi
+        ? `\nNext: publish to npm — once per name, a missed one drifts the scopes apart:`
+        : `\nNext: publish to npm:`,
   );
   lines.push(`  npm publish --access public                 # ${primary}@${version}`);
   for (const mirror of mirrors) {
@@ -275,7 +422,9 @@ export function publishInstructions(lang: Lang, version: string): string {
   }
   lines.push(
     lang === "zh"
-      ? `  roll release verify ${version}                 # 两个名字都核过才把草稿提为正式版\n`
+      // FIX-1493: was hardcoded "两个名字" (two names) — wrong the moment the
+      // alias list emptied. The gate checks every published name, however many.
+      ? `  roll release verify ${version}                 # 每个发布名都核过才把草稿提为正式版\n`
       : `  roll release verify ${version}                 # promotes the draft only when EVERY name checks out\n`,
   );
   return lines.join("\n");
@@ -352,6 +501,67 @@ function repoSlugSync(cwd: string): string | undefined {
   return v === "" ? undefined : v;
 }
 
+function readStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Production recovery facts. Every failed read remains a failed fact. */
+function realReleaseRecoveryDeps(): ReleaseRecoveryDeps {
+  return {
+    listReleasePrs: (cwd) => {
+      const result = ghSync(cwd, [
+        "pr", "list", "--state", "all", "--base", "main", "--limit", "100",
+        "--json", "number,title,state,mergeCommit",
+      ]);
+      if (result.code !== 0) {
+        const detail = (result.stderr || result.stdout).trim() || "gh pr list failed";
+        return { ok: false, reason: detail };
+      }
+      try {
+        const parsed: unknown = JSON.parse(result.stdout);
+        if (!Array.isArray(parsed)) return { ok: false, reason: "gh pr list returned a non-array" };
+        const prs: ReleaseRecoveryPr[] = [];
+        for (const value of parsed) {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false, reason: "gh pr list returned an invalid PR" };
+          const record = value as Record<string, unknown>;
+          const number = record["number"];
+          const title = readStringField(record, "title");
+          const state = readStringField(record, "state");
+          const merge = record["mergeCommit"];
+          const mergeSha =
+            typeof merge === "object" && merge !== null && !Array.isArray(merge)
+              ? readStringField(merge as Record<string, unknown>, "oid")
+              : undefined;
+          if (typeof number !== "number" || !Number.isInteger(number) || title === undefined || state === undefined) {
+            return { ok: false, reason: "gh pr list returned an incomplete PR" };
+          }
+          prs.push({ number, title, state, mergeSha });
+        }
+        return { ok: true, value: prs };
+      } catch {
+        return { ok: false, reason: "gh pr list returned invalid JSON" };
+      }
+    },
+    remoteTagExists: (cwd, tag) => {
+      try {
+        const refs = git(cwd, ["ls-remote", "--tags", "--refs", "origin", `refs/tags/${tag}`]);
+        return { ok: true, value: refs !== "" };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    readFileAt: (cwd, sha, path) => {
+      if (!validSha(sha)) return { ok: false, reason: "invalid commit SHA" };
+      try {
+        return { ok: true, value: git(cwd, ["show", `${sha}:${path}`]) };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  };
+}
+
 /**
  * FIX-353 — `gh pr create` resilient to the transient GraphQL EOF: retry a few
  * times, then fall back to the REST `gh api POST …/pulls` (which keeps working
@@ -422,6 +632,74 @@ export function openPrResilient(opts: {
  * auto-merge. A real "auto-merge not allowed" error surfaces the actionable
  * hint exactly as before.
  */
+/** What a self-driven merge attempt concluded. */
+export interface SelfMergeResult {
+  merged: boolean;
+  /** `pending` while checks are still running; anything else is terminal. */
+  reason: "merged" | "pending" | "no-checks" | "checks-failed" | "no-tip" | "merge-rejected";
+  detail?: string;
+}
+
+/**
+ * US-DELIV-014 — merge the release PR ourselves, for repos where GitHub's own
+ * auto-merge is unavailable (it requires branch protection, which a private
+ * repo on the Free plan cannot have).
+ *
+ * This deliberately reproduces the guarantee branch protection was providing,
+ * because nothing else will:
+ *
+ *   - it merges ONLY when every check has concluded successfully. A pending
+ *     check is `pending` (poll again), a failed one is terminal — never a merge.
+ *   - it pins the sha. `git ls-remote` is the real branch tip; the PR API's
+ *     `head` lags, and an unpinned squash merge has silently landed a stale
+ *     head in this repo before.
+ *
+ * Pure over its seams so both refusals and the pin are unit-testable.
+ */
+export function selfDrivenMerge(opts: {
+  slug: string;
+  prNum: string;
+  branch: string;
+  /** `git ls-remote origin refs/heads/<branch>` → "<sha>\trefs/heads/<branch>". */
+  lsRemote: (branch: string) => string;
+  /** The configured exact-SHA required set (default `test-ts`). */
+  requiredCheck?: string | readonly string[];
+  gh: (args: string[]) => { code: number; stdout: string; stderr: string };
+}): SelfMergeResult {
+  const tip = opts.lsRemote(opts.branch).trim().split(/\s+/)[0] ?? "";
+  if (!/^[0-9a-f]{40}$/.test(tip)) return { merged: false, reason: "no-tip", detail: tip };
+
+  // FIX-1487: ask by NAME. "No failure among the conclusions" counted a check
+  // that never ran as a check that passed — and `ci.yml` carries an `if:` that
+  // can skip the whole required job, so that bypass was reachable.
+  const checks = opts.gh(["api", `repos/${opts.slug}/commits/${tip}/check-runs`, "--jq", ".check_runs[] | .name + \"\\t\" + (.conclusion // \"null\")"]);
+  if (checks.code !== 0) return { merged: false, reason: "pending", detail: checks.stderr.trim() };
+  const rows = checks.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  if (rows.length === 0) return { merged: false, reason: "no-checks" };
+  const parsed: CheckConclusion[] = rows.map((l) => {
+    const [name, conclusion] = l.split("\t");
+    return { name: name ?? "", conclusion: conclusion === "null" ? null : conclusion };
+  });
+  const verdict = requiredCheckVerdict(parsed, opts.requiredCheck ?? DEFAULT_REQUIRED_CHECK);
+  if (!verdict.ok) {
+    if (verdict.reason === "pending") return { merged: false, reason: "pending" };
+    return { merged: false, reason: "checks-failed", detail: verdict.detail ?? verdict.reason };
+  }
+
+  const merge = opts.gh([
+    "api", "--method", "PUT", `repos/${opts.slug}/pulls/${opts.prNum}/merge`,
+    "-f", "merge_method=squash", "-f", `sha=${tip}`, "--jq", ".merged",
+  ]);
+  if (merge.code === 0 && merge.stdout.trim() === "true") return { merged: true, reason: "merged" };
+  if (/already merged/i.test(merge.stderr)) return { merged: true, reason: "merged" };
+  return { merged: false, reason: "merge-rejected", detail: (merge.stderr || merge.stdout).split("\n")[0]?.trim() };
+}
+
+/** True when the error text says this repo cannot arm GitHub's auto-merge. */
+export function autoMergeUnavailable(errText: string): boolean {
+  return /auto.?merge.*(not allowed|disabled|not enabled)|allow auto-?merge|protected branch|upgrade to github pro/i.test(errText);
+}
+
 export function enableAutoMergeResilient(opts: {
   cwd: string;
   prRef: string;
@@ -640,6 +918,11 @@ export function commitPushWithGate(opts: {
 }
 
 export function realReleaseDeps(): ReleaseFlowDeps {
+  // US-DELIV-014: set when this repo cannot arm GitHub's own auto-merge (it
+  // needs branch protection, which a private repo on the Free plan cannot
+  // have). The wait loop then drives the merge itself instead of watching for
+  // something that will never happen.
+  const selfDrive = { on: false };
   return {
     version: (cwd) => {
       try {
@@ -686,6 +969,14 @@ export function realReleaseDeps(): ReleaseFlowDeps {
         return true; // unknowable → treat as a collision, never overwrite
       }
     },
+    headSha: (cwd) => {
+      try {
+        return git(cwd, ["rev-parse", "HEAD"]);
+      } catch {
+        return "";
+      }
+    },
+    recovery: realReleaseRecoveryDeps(),
     readChangelog: (cwd) => readFileSync(join(cwd, "CHANGELOG.md"), "utf8"),
     writeChangelog: (cwd, text) => writeFileSync(join(cwd, "CHANGELOG.md"), text, "utf8"),
     bumpVersion: (cwd, version) => {
@@ -728,8 +1019,16 @@ export function realReleaseDeps(): ReleaseFlowDeps {
     // instead of silently waiting forever. FIX-353: now resilient to the
     // transient GraphQL EOF — retry, then REST PUT …/pulls/N/merge fallback
     // (branch protection still gates it; a non-green PR is never force-merged).
-    enableAutoMerge: (cwd, prRef) =>
-      enableAutoMergeResilient({ cwd, prRef, gh: (args) => ghSync(cwd, args) }),
+    enableAutoMerge: (cwd, prRef) => {
+      try {
+        enableAutoMergeResilient({ cwd, prRef, gh: (args) => ghSync(cwd, args) });
+      } catch (e) {
+        // Only a "this repo can't do auto-merge" refusal switches modes — any
+        // other failure is a real error and must still abort the release.
+        if (!autoMergeUnavailable((e as Error).message)) throw e;
+        selfDrive.on = true;
+      }
+    },
     // FIX-288 AC3: an empty commit pushed to the release branch fires a
     // `synchronize` event so a fresh PR's pull_request CI gets scheduled. The
     // empty commit is harmless: it squash-merges away into the single release
@@ -744,18 +1043,56 @@ export function realReleaseDeps(): ReleaseFlowDeps {
     // Each poll prints one feedback line (AC2). After NUDGE_AFTER quiet polls
     // with no scheduled checks, fire a `synchronize` (AC3) — a fresh PR's CI
     // sometimes never schedules. Returns false on close/timeout.
-    waitMerged: (cwd, prRef, _branch, hooks) => {
+    waitMerged: (cwd, prRef, branch, hooks) => {
       const start = Date.now();
       const deadline = start + 20 * 60_000;
       const NUDGE_AFTER = 4; // ~80s of no checks before we kick the PR once
       let quietPolls = 0;
       let nudged = false;
+      const prNum = /\/pull\/(\d+)/.exec(prRef)?.[1] ?? (/^\d+$/.test(prRef.trim()) ? prRef.trim() : "");
       while (Date.now() < deadline) {
         const waitedMin = Math.max(1, Math.round((Date.now() - start) / 60_000));
         try {
           const state = execFileSync("gh", ["pr", "view", prRef, "--json", "state", "--jq", ".state"], { cwd, encoding: "utf8" }).trim();
           if (state === "MERGED") return true;
           if (state === "CLOSED") return false;
+
+          // US-DELIV-014: no native auto-merge on this repo — merge it here,
+          // but only once every check has concluded successfully.
+          if (selfDrive.on && prNum !== "") {
+            const slug = repoSlugSync(cwd);
+            if (slug !== undefined) {
+              const requiredCheck = configuredRequiredChecks(cwd);
+              const res = selfDrivenMerge({
+                slug,
+                prNum,
+                branch,
+                lsRemote: (b) => {
+                  try {
+                    return execFileSync("git", ["ls-remote", "origin", `refs/heads/${b}`], { cwd, encoding: "utf8" });
+                  } catch {
+                    return "";
+                  }
+                },
+                // US-RULE-004c: read the tracked registry at merge time. Soft
+                // requires test-ts only; a future hard flip adds doc-drift.
+                ...(requiredCheck !== undefined
+                  ? { requiredCheck }
+                  : {}),
+                gh: (args) => ghSync(cwd, args),
+              });
+              if (res.merged) return true;
+              if (res.reason === "checks-failed") {
+                hooks.onWait(`#${prRef} — checks failed (${res.detail ?? "see CI"}); not merging`);
+                return false;
+              }
+              if (res.reason === "merge-rejected") {
+                hooks.onWait(`#${prRef} — merge rejected: ${res.detail ?? "unknown"}`);
+                return false;
+              }
+            }
+          }
+
           // AC3: no checks scheduled? count quiet polls; nudge once.
           let checks = "";
           try {
@@ -776,7 +1113,11 @@ export function realReleaseDeps(): ReleaseFlowDeps {
         } catch {
           /* transient gh error — keep polling */
         }
-        hooks.onWait(`#${prRef} — waited ${waitedMin}m, waiting for auto-merge / CI`);
+        hooks.onWait(
+          selfDrive.on
+            ? `#${prRef} — waited ${waitedMin}m, waiting for CI (roll drives the merge)`
+            : `#${prRef} — waited ${waitedMin}m, waiting for auto-merge / CI`,
+        );
         execFileSync("sleep", ["20"]);
       }
       return false;
@@ -794,8 +1135,8 @@ export function realReleaseDeps(): ReleaseFlowDeps {
       const code = await runConsistencyCheck(["check"], "roll release");
       return code === 0;
     },
-    tag: (cwd, tagName, version) => {
-      git(cwd, ["tag", "-a", tagName, "-m", `release v${version}`]);
+    tag: (cwd, tagName, version, targetSha) => {
+      git(cwd, ["tag", "-a", tagName, targetSha, "-m", `release v${version}`]);
     },
     pushTag: (cwd, tagName) => {
       git(cwd, ["push", "origin", tagName]);
@@ -839,10 +1180,11 @@ export interface ReleaseRunResult {
   step?: ReleaseStep;
   reason?: string;
   tag?: string;
+  recovered?: boolean;
 }
 
 /**
- * The transaction. Fail-loud and partial-release-free: every abort happens
+ * RL-REL-010: the transaction is fail-loud and partial-release-free: every abort happens
  * BEFORE the next irreversible step; nothing is tagged unless every gate
  * passed and the release PR is on main.
  */
@@ -878,6 +1220,25 @@ async function runReleaseFlowInner(
   if (deps.branch(cwd) !== "main") return abort("plan", "not on main");
   if (!deps.clean(cwd)) return abort("plan", "working tree dirty");
   if (!deps.synced(cwd)) return abort("plan", "main is behind origin — pull first");
+
+  // FIX-1514: a previous release may have merged after this process timed out.
+  // Before planning a new version, recover exactly one fully-proven old release.
+  // Dry-run remains side-effect free and therefore only previews the normal flow.
+  if (!opts.dryRun) {
+    const recovered = recoverMergedRelease(cwd, {
+      packageName: deps.packageName,
+      recovery: deps.recovery,
+      tag: deps.tag,
+      pushTag: deps.pushTag,
+      recordReleaseFact: deps.recordReleaseFact,
+    });
+    if (recovered.status === "blocked") return abort("plan", `release recovery stopped: ${recovered.reason}`);
+    if (recovered.status === "recovered") {
+      step("tag-push", `recovered ${recovered.tag} at ${recovered.targetSha}`);
+      return { status: "released", tag: recovered.tag, recovered: true };
+    }
+  }
+
   const d = deps.now();
   const date: ReleaseDate = { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
   // FIX-1247: anchor the version to THIS project's scheme — only roll itself
@@ -947,8 +1308,10 @@ async function runReleaseFlowInner(
   step("sync-main", "main up to date");
 
   if (deps.tagExists(cwd, plan.tag)) return abort("tag-push", `tag ${plan.tag} appeared concurrently`);
+  const targetSha = deps.headSha(cwd);
+  if (!validSha(targetSha)) return abort("tag-push", "current main SHA unreadable");
   mark("tag-push");
-  deps.tag(cwd, plan.tag, plan.nextVersion);
+  deps.tag(cwd, plan.tag, plan.nextVersion, targetSha);
   deps.pushTag(cwd, plan.tag);
   step("tag-push", plan.tag);
   // FIX-368: the release is now IRREVERSIBLE (the v* tag is pushed → publish).
@@ -956,7 +1319,7 @@ async function runReleaseFlowInner(
   // and guarded so a bookkeeping failure can never turn a completed release into
   // an abort. (The default dep already swallows; this double-guards a custom dep.)
   try {
-    deps.recordReleaseFact?.(cwd, plan.tag);
+    deps.recordReleaseFact?.(cwd, plan.tag, targetSha);
   } catch {
     /* never let release-fact bookkeeping affect the completed release */
   }

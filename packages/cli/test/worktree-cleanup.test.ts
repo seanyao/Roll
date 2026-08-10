@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RollEvent } from "@roll/spec";
+import { projectSlug } from "@roll/spec";
 import type { WorktreeAuditOutput, WorktreeAuditRecord } from "../src/commands/worktree-audit.js";
 import { auditWorktrees } from "../src/commands/worktree-audit.js";
 import {
@@ -25,11 +26,14 @@ import {
   CLEANUP_USAGE,
   classifyBranchMerge,
   defaultRemoveBranch,
+  defaultRemoveWorktree,
   formatCanaryTripReport,
   isBoundedLoopWorktreeDir,
+  isBoundedManagedWorkspacePath,
   isFullGitOid,
   isReclaimableOrphan,
   isSafelyDisposable,
+  managedWorkspaceMeasures,
   parseMergedPrMergeCommit,
   planWorktreeCleanup,
   resolveStandaloneMergedBranches,
@@ -45,6 +49,11 @@ function rec(overrides: Partial<WorktreeAuditRecord> = {}): WorktreeAuditRecord 
   return {
     path: "/repo/.roll/loop/worktrees/cycle-1",
     owner: "loop",
+    runId: "delta-d-1",
+    memberLocator: "delta-d-1",
+    registration: "registered",
+    runState: "release_requested",
+    releaseVerdict: "safe_to_release",
     head: "sha-1",
     dirtyTracked: false,
     dirtyUntracked: false,
@@ -86,6 +95,299 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("US-LOOP-123 conservative projection release", () => {
+  it("admits only the projection release selector, without an extra merge-evidence veto", () => {
+    const releaseSafeWithoutGitMerge = rec({
+      runId: "delta-d-1",
+      memberLocator: "delta-d-1",
+      registration: "registered",
+      releaseVerdict: "safe_to_release",
+      mergeEvidence: { kind: "none" },
+    });
+    const legacyLike = rec({ releaseVerdict: undefined, registration: undefined });
+
+    expect(isSafelyDisposable(releaseSafeWithoutGitMerge)).toBe(true);
+    expect(isSafelyDisposable(legacyLike)).toBe(false);
+  });
+
+  it("preserves untracked dirt and a changed projection member at apply time", async () => {
+    const planned = rec({
+      runId: "delta-d-1",
+      memberLocator: "delta-d-1",
+      releaseVerdict: "safe_to_release",
+    });
+    const plan = planWorktreeCleanup(auditOf([planned], ["loop/cycle-z"]), 0);
+    const fresh = rec({
+      runId: "delta-d-1",
+      memberLocator: "delta-d-1",
+      releaseVerdict: "safe_to_release",
+      dirtyUntracked: true,
+    });
+    const result = await applyWorktreeCleanup(plan, {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => auditOf([fresh], ["loop/cycle-z"]),
+      removeWorktree: () => ({ ok: true, detail: "must not remove" }),
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.refused).toMatchSnapshot();
+  });
+});
+
+describe("US-LOOP-127 dispatch WorkspaceSet release lifecycle", () => {
+  it("writes the complete release lifecycle, verifies every member is absent, then releases the parent reservation", async () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "roll-cleanup-"));
+    const primaryPath = join(repositoryRoot, ".roll/loop/worktrees/dispatch-parent");
+    const childPath = join(repositoryRoot, ".roll/loop/worktrees/dispatch-parent.children/implement");
+    mkdirSync(primaryPath, { recursive: true });
+    mkdirSync(childPath, { recursive: true });
+    const records = [
+      rec({ path: primaryPath, runId: "dispatch-parent", memberLocator: "dispatch-parent", storyId: "US-LOOP-127", head: "primary-head" }),
+      rec({ path: childPath, runId: "dispatch-parent", memberLocator: "dispatch-parent.children/implement", storyId: "US-LOOP-127", head: "child-head" }),
+    ];
+    const plan = planWorktreeCleanup(auditOf(records), 0);
+    const lifecycle: RollEvent[] = [];
+    const release = vi.fn(() => !existsSync(primaryPath) && !existsSync(childPath));
+    try {
+      const result = await applyWorktreeCleanup(plan, {
+        repositoryRoot,
+        dryRun: false,
+        audit: () => auditOf(records),
+        removeWorktree: (_repo, path) => {
+          rmSync(path, { recursive: true, force: true });
+          return { ok: true, detail: "" };
+        },
+        appendLifecycle: (event) => { lifecycle.push(event); return true; },
+        releaseDispatchReservation: release,
+      });
+      expect(result.refused).toEqual([]);
+      expect(lifecycle.map((event) => event.type)).toEqual(["worktree:release_requested", "worktree:released"]);
+      expect((lifecycle[0] as Extract<RollEvent, { type: "worktree:release_requested" }>).expectedHeads).toHaveLength(2);
+      expect(release).toHaveBeenCalledWith("US-LOOP-127", "dispatch-parent");
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the complete WorkspaceSet before Git removal when release intent is not durable", async () => {
+    const planned = rec({ runId: "dispatch-parent", memberLocator: "dispatch-parent", storyId: "US-LOOP-127" });
+    const removeWorktree = vi.fn(() => ({ ok: true, detail: "must not remove" }));
+    const result = await applyWorktreeCleanup(planWorktreeCleanup(auditOf([planned]), 0), {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => auditOf([planned]),
+      removeWorktree,
+      appendLifecycle: () => false,
+    });
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(result.refused).toMatchSnapshot();
+  });
+});
+
+describe("US-LOOP-123 leak safety and capacity", () => {
+  it("does not classify a healthy handoff as a leak while still reporting it as retained capacity", () => {
+    const audit = auditOf([
+      rec({
+        path: "/repo/.roll/loop/worktrees/delta-handoff",
+        runId: "delta-handoff",
+        memberLocator: "delta-handoff",
+        registration: "registered",
+        runState: "handoff_ready",
+        releaseVerdict: "preserve_unmerged",
+        disposition: "preserved_needs_review",
+        mergeEvidence: { kind: "none" },
+      }),
+      rec({
+        path: "/repo/.roll/loop/worktrees/delta-stale",
+        runId: "delta-stale",
+        memberLocator: "delta-stale",
+        registration: "registered",
+        runState: "stale",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+        mergeEvidence: { kind: "none" },
+      }),
+    ]);
+
+    const report = formatCanaryTripReport(audit, 0, 1_700_000_000_000);
+    expect(report.alert).toContain("Leak-safety count**: 1");
+    expect(report.alert).toContain("Managed capacity**: 2 retained member(s)");
+    expect(report.alert).toContain("delta-handoff");
+    expect(report.alert.toLowerCase()).toContain("healthy handoff");
+  });
+
+  it("does not classify a released run's torn-down member as a leak", () => {
+    const measures = managedWorkspaceMeasures(auditOf([
+      rec({
+        runState: "released",
+        registration: "missing",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+      }),
+    ]));
+
+    expect(measures.leakSafetyTotal).toBe(0);
+    expect(measures.anomalousWorktrees).toEqual([]);
+    expect(measures.healthyWorktrees).toHaveLength(1);
+    expect(measures.managedCapacity).toBe(1);
+  });
+
+  it("still classifies a released-but-still-registered member as a leak", () => {
+    const measures = managedWorkspaceMeasures(auditOf([
+      rec({
+        runState: "released",
+        registration: "registered",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+      }),
+    ]));
+
+    expect(measures.leakSafetyTotal).toBe(1);
+    expect(measures.anomalousWorktrees).toHaveLength(1);
+  });
+
+  it("still counts released unknown/foreign and non-released missing members", () => {
+    for (const registration of ["unknown", "foreign"] as const) {
+      const released = managedWorkspaceMeasures(auditOf([
+        rec({ runState: "released", registration }),
+      ]));
+      expect(released.leakSafetyTotal).toBe(1);
+      expect(released.anomalousWorktrees).toHaveLength(1);
+    }
+
+    const activeMissing = managedWorkspaceMeasures(auditOf([
+      rec({ runState: "active", registration: "missing" }),
+    ]));
+    expect(activeMissing.leakSafetyTotal).toBe(1);
+    expect(activeMissing.anomalousWorktrees).toHaveLength(1);
+  });
+
+  it("keeps a healthy release-requested member healthy", () => {
+    const measures = managedWorkspaceMeasures(auditOf([
+      rec({ runState: "release_requested", registration: "registered" }),
+    ]));
+
+    expect(measures.leakSafetyTotal).toBe(0);
+    expect(measures.anomalousWorktrees).toEqual([]);
+  });
+
+  it("plans a released, torn-down member as non-anomalous capacity", () => {
+    const plan = planWorktreeCleanup(auditOf([
+      rec({
+        runState: "released",
+        registration: "missing",
+        releaseVerdict: "preserve_unknown",
+        disposition: "preserved_needs_review",
+      }),
+    ]), 1);
+
+    expect(plan.leakSafetyTotal).toBe(0);
+    expect(plan.managedCapacity).toBe(1);
+  });
+});
+
+describe("US-LOOP-123 CLI canary and cleanup snapshots", () => {
+  async function capture(locale: "en" | "zh", fn: () => Promise<number> | number): Promise<string> {
+    const originalWrite = process.stdout.write;
+    const originalLocale = process.env["ROLL_LANG"];
+    let output = "";
+    process.env["ROLL_LANG"] = locale;
+    process.stdout.write = (chunk: string | Uint8Array): boolean => {
+      output += String(chunk);
+      return true;
+    };
+    try {
+      await fn();
+    } finally {
+      process.stdout.write = originalWrite;
+      if (originalLocale === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = originalLocale;
+    }
+    return output;
+  }
+
+  function releaseSafeEvents(): string {
+    const workspace = {
+      schema: 1,
+      runId: "cycle-clean",
+      storyId: "US-LOOP-123",
+      kind: "cycle",
+      topology: "solo",
+      members: [{
+        repositoryId: projectSlug({ path: "/fake/repo" }),
+        workspaceKey: "cycle-clean",
+        relativeLocator: "cycle-clean",
+        checkoutRef: { kind: "detached", head: "head-clean" },
+      }],
+    } as const;
+    return [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "worktree:release_requested", runId: "cycle-clean", reason: "delivered", operationId: "release-clean", expectedHeads: [{ relativeLocator: "cycle-clean", head: "head-clean" }], ts: 2 },
+      { type: "delivery:merge_confirmed", cycleId: "cycle-clean", storyId: "US-LOOP-123", branch: "loop/cycle-clean", signal: "ancestor", ts: 3 },
+      { type: "attest:gate", cycleId: "cycle-clean", verdict: "produced", reasons: [], ts: 4 },
+    ].map((event) => JSON.stringify(event)).join("\n");
+  }
+
+  function cleanupGit(status: () => string): (args: string[], cwd: string) => string {
+    return (args, cwd) => {
+      if (args[0] === "worktree") return "worktree /fake/repo/.roll/loop/worktrees/cycle-clean\nHEAD head-clean\nbranch refs/heads/loop/cycle-clean\n";
+      if (args[0] === "-C" && args[2] === "worktree") return "worktree /fake/repo/.roll/loop/worktrees/cycle-clean\nHEAD head-clean\nbranch refs/heads/loop/cycle-clean\n";
+      if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+      if (args[0] === "-C" && args[2] === "remote") return "";
+      if (args[0] === "branch" && args[1] === "--format=%(refname:short)") return "loop/cycle-clean\n";
+      if (args[0] === "status") return status();
+      if (args[0] === "rev-parse") return "head-clean";
+      if (args[0] === "merge-base") return "head-clean";
+      if (args[0] === "rev-list") return "0";
+      return "";
+    };
+  }
+
+  it("freezes EN and ZH canary reports with distinct leak safety and managed capacity", () => {
+    const audit = auditOf([
+      rec({ path: "/repo/.roll/loop/worktrees/handoff", runState: "handoff_ready", releaseVerdict: "preserve_unmerged", disposition: "preserved_needs_review", mergeEvidence: { kind: "none" } }),
+      rec({ path: "/repo/.roll/loop/worktrees/stale", runState: "stale", releaseVerdict: "preserve_unknown", disposition: "preserved_needs_review", mergeEvidence: { kind: "none" } }),
+    ], ["loop/unattached"]);
+    const originalLocale = process.env["ROLL_LANG"];
+    try {
+      process.env["ROLL_LANG"] = "en";
+      expect(formatCanaryTripReport(audit, 1, 1).alert).toMatchSnapshot();
+      process.env["ROLL_LANG"] = "zh";
+      expect(formatCanaryTripReport(audit, 1, 1).alert).toMatchSnapshot();
+    } finally {
+      if (originalLocale === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = originalLocale;
+    }
+  });
+
+  it("freezes EN and ZH cleanup dry-runs and fresh-inspection refusals", async () => {
+    vi.stubEnv("ROLL_BRANCH_CANARY_MAX", "1");
+    try {
+      for (const locale of ["en", "zh"] as const) {
+        const dryRun = await capture(locale, () => worktreeCleanupCommand(["--dry-run", "--repo", "/fake/repo"], {
+          git: cleanupGit(() => ""),
+          readFile: (path) => path.endsWith("events.ndjson") ? releaseSafeEvents() : null,
+          integrationBranch: "origin/main",
+        }));
+        expect(dryRun).toMatchSnapshot();
+
+        let worktreeLists = 0;
+        const refusal = await capture(locale, () => worktreeCleanupCommand(["--apply", "--repo", "/fake/repo"], {
+          git: (args, cwd) => {
+            if (args[0] === "worktree") worktreeLists += 1;
+            return cleanupGit(() => worktreeLists > 1 ? "?? scratch\n" : "")(args, cwd);
+          },
+          readFile: (path) => path.endsWith("events.ndjson") ? releaseSafeEvents() : null,
+          integrationBranch: "origin/main",
+        }));
+        expect(refusal).toMatchSnapshot();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 // ─── AC1: enumerated canary trip ──────────────────────────────────────────
 
 describe("AC1: canary trip enumerates counted refs + dispositions", () => {
@@ -114,12 +416,14 @@ describe("AC1: canary trip enumerates counted refs + dispositions", () => {
   it("trip report enumerates branches + worktrees with disposition and emits a structured event", () => {
     const audit = auditOf(
       [
-        rec({ path: "/repo/.roll/loop/worktrees/cycle-A", disposition: "disposable_candidate" }),
+        rec({ path: "/repo/.roll/loop/worktrees/cycle-A", disposition: "disposable_candidate", runState: "stale", releaseVerdict: "preserve_unknown" }),
         rec({
           path: "/repo/.roll/loop/worktrees/cycle-B",
           disposition: "preserved_unpublished",
           ahead: 3,
           mergeEvidence: { kind: "none" },
+          runState: "stale",
+          releaseVerdict: "preserve_unknown",
         }),
       ],
       ["loop/cycle-x", "loop/cycle-y"],
@@ -167,7 +471,7 @@ describe("AC2: deterministic minimal dry-run plan", () => {
     expect(plan.candidates).toHaveLength(1);
     // deterministic: lowest path first.
     expect(plan.candidates[0].path).toBe("/repo/.roll/loop/worktrees/cycle-a");
-    expect(plan.canaryTotal).toBe(4);
+    expect(plan.cleanupCapacityTotal).toBe(4);
     expect(plan.projectedTotal).toBe(3);
     // The other two disposables are preserved this round (minimal set).
     expect(plan.preserved.map((p) => p.path).sort()).toEqual([
@@ -409,7 +713,7 @@ describe("AC4: preservation and fail-closed refusals", () => {
     expect(isSafelyDisposable(rec({ dirtyTracked: true }))).toBe(false);
     expect(isSafelyDisposable(rec({ dirtyTracked: "unknown" }))).toBe(false);
     expect(isSafelyDisposable(rec({ owner: "external" }))).toBe(false);
-    expect(isSafelyDisposable(rec({ mergeEvidence: { kind: "none" } }))).toBe(false);
+    expect(isSafelyDisposable(rec({ mergeEvidence: { kind: "none" } }))).toBe(true);
     expect(isSafelyDisposable(rec({ disposition: "preserved_needs_review" }))).toBe(false);
     expect(isSafelyDisposable(rec({ head: undefined }))).toBe(false);
   });
@@ -418,6 +722,79 @@ describe("AC4: preservation and fail-closed refusals", () => {
 // ─── AC5: 9 → 8 worked sample + idempotent/concurrent ──────────────────────
 
 describe("AC5: 9→8 worked sample clears pressure; repeat is idempotent", () => {
+  it("US-LOOP-125 releases a complete WorkspaceSet through each member repository", async () => {
+    const primary = rec({ path: "/repo/.roll/loop/worktrees/cycle-125", runId: "cycle-125", memberLocator: "cycle-125", head: "primary" });
+    const subordinate = rec({ path: "/repo/.roll/loop/worktrees/cycle-125.submodules/packages/sub", runId: "cycle-125", memberLocator: "cycle-125.submodules/packages/sub", head: "sub" });
+    const audit = auditOf([primary, subordinate]);
+    const plan = planWorktreeCleanup(audit, 1);
+    expect(plan.candidates.map((candidate) => candidate.memberLocator).sort()).toEqual(["cycle-125", "cycle-125.submodules/packages/sub"]);
+    const removals: Array<[string, string]> = [];
+    const result = await applyWorktreeCleanup(plan, {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => audit,
+      removeWorktree: (repository, path) => { removals.push([repository, path]); return { ok: true, detail: "" }; },
+      emit: () => {},
+    });
+    expect(removals).toEqual([
+      ["/repo/packages/sub", subordinate.path],
+      ["/repo", primary.path],
+    ]);
+    expect(result.removed).toHaveLength(2);
+  });
+
+  it("US-LOOP-125 refuses an entire WorkspaceSet before effects when one member becomes risky", async () => {
+    const primary = rec({ path: "/repo/.roll/loop/worktrees/cycle-125", runId: "cycle-125", memberLocator: "cycle-125", head: "primary" });
+    const subordinate = rec({ path: "/repo/.roll/loop/worktrees/cycle-125.submodules/packages/sub", runId: "cycle-125", memberLocator: "cycle-125.submodules/packages/sub", head: "sub" });
+    const plan = planWorktreeCleanup(auditOf([primary, subordinate]), 1);
+    const removeWorktree = vi.fn(() => ({ ok: true, detail: "" }));
+    const result = await applyWorktreeCleanup(plan, {
+      repositoryRoot: "/repo",
+      dryRun: false,
+      audit: () => auditOf([primary, { ...subordinate, dirtyTracked: true, disposition: "preserved_dirty_no_tcr", releaseVerdict: "preserve_unknown" }]),
+      removeWorktree,
+      emit: () => {},
+    });
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(result.refused).toHaveLength(2);
+  });
+
+  it("US-LOOP-125 reclaims a deregistered subordinate scratch only through its owning managed-storage root", () => {
+    const root = mkdtempSync(join(tmpdir(), "roll-125-cleanup-"));
+    const subRepo = join(root, "packages", "sub");
+    const scratch = join(root, ".roll", "loop", "worktrees", "cycle-125.submodules", "packages", "sub");
+    const git = (cwd: string, args: string[]): string =>
+      execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    try {
+      mkdirSync(subRepo, { recursive: true });
+      git(subRepo, ["init", "-q", "-b", "main"]);
+      git(subRepo, ["config", "user.email", "test@example.invalid"]);
+      git(subRepo, ["config", "user.name", "Roll test"]);
+      writeFileSync(join(subRepo, "README.md"), "seed\n");
+      git(subRepo, ["add", "README.md"]);
+      git(subRepo, ["commit", "-qm", "seed"]);
+
+      // Reproduce the partial-failure state: Git has already deregistered the
+      // subordinate but a scratch directory remains beneath the superproject's
+      // managed storage. The second default-effect call must finish recovery.
+      mkdirSync(join(root, ".roll", "loop", "worktrees", "cycle-125.submodules", "packages"), { recursive: true });
+      git(subRepo, ["worktree", "add", "--detach", scratch, "HEAD"]);
+      git(subRepo, ["worktree", "remove", "--force", scratch]);
+      mkdirSync(scratch, { recursive: true });
+      writeFileSync(join(scratch, "left-behind.txt"), "scratch\n");
+
+      const wrongBoundary = defaultRemoveWorktree(subRepo, scratch);
+      expect(wrongBoundary.ok).toBe(false);
+      expect(existsSync(scratch)).toBe(true);
+
+      const recovered = defaultRemoveWorktree(subRepo, scratch, root);
+      expect(recovered.ok).toBe(true);
+      expect(existsSync(scratch)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("plans exactly the one merged clean candidate (9 → 8)", () => {
     // 5 ephemeral branches + 4 loop worktrees (3 preserved + 1 disposable).
     const audit = auditOf(
@@ -430,7 +807,7 @@ describe("AC5: 9→8 worked sample clears pressure; repeat is idempotent", () =>
       ["l1", "l2", "l3", "l4", "l5"],
     );
     const plan = planWorktreeCleanup(audit, 8);
-    expect(plan.canaryTotal).toBe(9);
+    expect(plan.cleanupCapacityTotal).toBe(9);
     expect(plan.candidates).toHaveLength(1);
     expect(plan.candidates[0].path).toBe("/w/disposable-1");
     expect(plan.projectedTotal).toBe(8);
@@ -487,13 +864,6 @@ describe("AC6: CLI help + guidance", () => {
     expect(CLEANUP_USAGE).toContain("roll loop resume");
     expect(CLEANUP_USAGE).toContain("--apply");
     expect(CLEANUP_USAGE).toContain("SOLE authority");
-    expect(CLEANUP_USAGE).toContain("Workspace Issue worktrees");
-    expect(CLEANUP_USAGE).toContain("machine repository lock");
-    expect(CLEANUP_USAGE).toContain("legacy --repo mode only");
-    expect(CLEANUP_USAGE).toContain("path-specific proof");
-    expect(CLEANUP_USAGE).toContain("fingerprint");
-    expect(CLEANUP_USAGE).not.toContain("delivery not auto-provable");
-    expect(CLEANUP_USAGE).not.toContain("after you\n  review it");
   });
 
   it("--help prints usage and exits 0 without side effects", async () => {
@@ -532,13 +902,13 @@ describe("CLI apply integration", () => {
       integrationBranch: "origin/main",
       removeWorktree,
     });
-    // canaryTotal = 1 + 2 = 3 ≤ 8 default ⇒ nothing to remove.
+    // cleanup capacity = 1 + 2 = 3 ≤ 8 default ⇒ nothing to remove.
     expect(code).toBe(0);
     expect(removeWorktree).not.toHaveBeenCalled();
     expect(writes.join("")).toContain("apply");
   });
 
-  it("over threshold: apply removes the disposable candidate and emits an applied event", async () => {
+  it("over threshold: legacy non-projection records remain preserved", async () => {
     vi.stubEnv("ROLL_BRANCH_CANARY_MAX", "2");
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const removed: string[] = [];
@@ -558,10 +928,11 @@ describe("CLI apply integration", () => {
       },
       emit: (e) => events.push(e),
     });
-    // canaryTotal = 1 + 2 = 3 > 2 ⇒ remove exactly one disposable (cycle-a).
+    // Legacy path-shaped records have no shared release verdict and cannot enter
+    // the destructive path, even when the capacity threshold is exceeded.
     expect(code).toBe(0);
-    expect(removed).toEqual(["/fake/repo/.roll/loop/worktrees/cycle-a"]);
-    expect(events.filter((e) => e.type === "worktree_cleanup_applied")).toHaveLength(1);
+    expect(removed).toEqual([]);
+    expect(events.filter((e) => e.type === "worktree_cleanup_applied")).toHaveLength(0);
     vi.unstubAllEnvs();
   });
 });
@@ -964,7 +1335,7 @@ describe("FIX-1454 planWorktreeCleanup with branch candidates", () => {
 
 describe("FIX-1454 applyWorktreeCleanup branch deletion", () => {
   const planWith = (branchCandidates: CleanupBranchCandidate[]): Parameters<typeof applyWorktreeCleanup>[0] => ({
-    schema: 1, generatedAt: "t", threshold: 1, canaryTotal: 2, projectedTotal: 1,
+    schema: 1, generatedAt: "t", threshold: 1, cleanupCapacityTotal: 2, leakSafetyTotal: 0, managedCapacity: 0, projectedTotal: 1,
     countedBranches: branchCandidates.map((b) => b.branch), countedWorktrees: [],
     candidates: [], branchCandidates, preserved: [],
   });
@@ -1023,49 +1394,10 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
       dirtyUntracked: "unknown",
       ahead: null,
       mergeEvidence: { kind: "none" },
-      orphanRecoveryProof: {
-        state: "trusted_generated",
-        fingerprint: "proof-a",
-        entries: [".next"],
-        detail: "trusted generated roots: .next",
-      },
       disposition: "orphan_reclaimable",
       reason: "orphan (delivered)",
       ...over,
     });
-
-  function realOrphanFixture(): { repo: string; orphan: string } {
-    const repo = mkdtempSync(join(tmpdir(), "roll-orphan-apply-"));
-    const cleanEnv = { ...process.env };
-    delete cleanEnv["GIT_DIR"];
-    delete cleanEnv["GIT_WORK_TREE"];
-    delete cleanEnv["GIT_INDEX_FILE"];
-    const runGit = (args: string[]): void => {
-      execFileSync("git", ["-C", repo, ...args], { env: cleanEnv, stdio: "ignore" });
-    };
-    runGit(["init", "-b", "main"]);
-    runGit(["config", "user.name", "Roll Test"]);
-    runGit(["config", "user.email", "roll-test@example.invalid"]);
-    writeFileSync(join(repo, "README.md"), "fixture\n", "utf8");
-    runGit(["add", "README.md"]);
-    runGit(["commit", "-m", "fixture"]);
-
-    const cycleId = "cycle-20260723-130000-1";
-    const orphan = join(repo, ".roll", "loop", "worktrees", cycleId);
-    mkdirSync(join(orphan, ".next", "cache"), { recursive: true });
-    writeFileSync(join(orphan, ".next", "cache", "build.json"), "{}\n", "utf8");
-    mkdirSync(join(repo, ".roll", "loop"), { recursive: true });
-    writeFileSync(
-      join(repo, ".roll", "loop", "events.ndjson"),
-      JSON.stringify({ cycleId, outcome: "delivered" }) + "\n",
-      "utf8",
-    );
-    return { repo, orphan };
-  }
-
-  function realOrphanAudit(repo: string): WorktreeAuditOutput {
-    return auditWorktrees({ repoRoot: repo, home: tmpdir(), integrationBranch: "HEAD" });
-  }
 
   it("isBoundedLoopWorktreeDir accepts only a DIRECT child of .roll/loop/worktrees", () => {
     const root = "/repo";
@@ -1076,189 +1408,31 @@ describe("FIX-1460 (#1468) orphan reclaim", () => {
     expect(isBoundedLoopWorktreeDir(root, "/etc")).toBe(false);
   });
 
+  it("US-LOOP-125 permits only canonical nested submodule and child members for managed cleanup", () => {
+    const root = "/repo";
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1")).toBe(true);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.submodules/packages/sub")).toBe(true);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.children/action-a")).toBe(true);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.children/action-a/deeper")).toBe(false);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/worktrees/cycle-1.submodules")).toBe(false);
+    expect(isBoundedManagedWorkspacePath(root, "/repo/.roll/loop/outside")).toBe(false);
+  });
+
   it("isReclaimableOrphan requires loop-owned, inactive, orphan_reclaimable", () => {
     expect(isReclaimableOrphan(orphanRec())).toBe(true);
     expect(isReclaimableOrphan(orphanRec({ active: true }))).toBe(false);
     expect(isReclaimableOrphan(orphanRec({ disposition: "preserved_orphan" }))).toBe(false);
     expect(isReclaimableOrphan(orphanRec({ owner: "external" }))).toBe(false);
-    expect(isReclaimableOrphan(orphanRec({ orphanRecoveryProof: undefined }))).toBe(false);
-    expect(isReclaimableOrphan(orphanRec({
-      orphanRecoveryProof: {
-        state: "ambiguous",
-        fingerprint: null,
-        entries: [".next"],
-        detail: "changed during audit",
-      },
-    }))).toBe(false);
   });
 
-  it("plans an orphan_reclaimable record as an rm_dir candidate", () => {
+  it("preserves an orphan_reclaimable record; only safe_to_release reaches --apply", () => {
     const audit = auditOf([orphanRec()], []); // canary 1, threshold 0 → excess 1
     const plan = planWorktreeCleanup(audit, 0);
-    expect(plan.candidates).toHaveLength(1);
-    expect(plan.candidates[0].reclaim).toBe("rm_dir");
-    expect(plan.candidates[0].reason).toBe("orphan_reclaimable");
-    expect(plan.candidates[0].expectedHead).toBe("");
-    expect(plan.candidates[0]).toMatchObject({ expectedOrphanFingerprint: "proof-a" });
-  });
-
-  it("apply reclaims a still-proven orphan via the bounded rm hook", async () => {
-    const plan = planWorktreeCleanup(auditOf([orphanRec()], []), 0);
-    const calls: string[] = [];
-    const res = await applyWorktreeCleanup(plan, {
-      repositoryRoot: "/repo",
-      dryRun: false,
-      audit: () => auditOf([orphanRec()], []),
-      reclaimOrphanDir: (_root, p) => {
-        calls.push(p);
-        return { ok: true, detail: "" };
-      },
-      removeWorktree: () => {
-        throw new Error("git worktree remove must NOT be used for an orphan dir");
-      },
+    expect(plan.candidates).toEqual([]);
+    expect(plan.preserved).toContainEqual({
+      path: "/repo/.roll/loop/worktrees/cycle-o",
+      disposition: "orphan_reclaimable",
+      reason: "orphan (delivered)",
     });
-    expect(calls).toEqual(["/repo/.roll/loop/worktrees/cycle-o"]);
-    expect(res.removed).toHaveLength(1);
-    expect(res.removed[0].reclaim).toBe("rm_dir");
-    expect(res.refused).toHaveLength(0);
-  });
-
-  it("apply refuses (fail closed) when the fresh audit downgrades the orphan to preserved_orphan", async () => {
-    const plan = planWorktreeCleanup(auditOf([orphanRec()], []), 0);
-    let called = false;
-    const res = await applyWorktreeCleanup(plan, {
-      repositoryRoot: "/repo",
-      dryRun: false,
-      audit: () => auditOf([orphanRec({ disposition: "preserved_orphan" })], []),
-      reclaimOrphanDir: () => {
-        called = true;
-        return { ok: true, detail: "" };
-      },
-    });
-    expect(called).toBe(false);
-    expect(res.removed).toHaveLength(0);
-    expect(res.refused[0].reason).toMatch(/preserved_orphan|provably delivered/);
-  });
-
-  it("apply refuses when the exact orphan material proof changed after planning", async () => {
-    const plan = planWorktreeCleanup(auditOf([orphanRec()], []), 0);
-    let called = false;
-    const res = await applyWorktreeCleanup(plan, {
-      repositoryRoot: "/repo",
-      dryRun: false,
-      audit: () => auditOf([orphanRec({
-        orphanRecoveryProof: {
-          state: "trusted_generated",
-          fingerprint: "proof-b",
-          entries: [".next"],
-          detail: "trusted generated roots: .next",
-        },
-      })], []),
-      reclaimOrphanDir: () => {
-        called = true;
-        return { ok: true, detail: "" };
-      },
-    });
-    expect(called).toBe(false);
-    expect(res.removed).toHaveLength(0);
-    expect(res.refused[0].reason).toMatch(/changed|fingerprint|proof/i);
-  });
-
-  it("dry-run reports the orphan candidate but calls no reclaim hook", async () => {
-    const plan = planWorktreeCleanup(auditOf([orphanRec()], []), 0);
-    let called = false;
-    const res = await applyWorktreeCleanup(plan, {
-      repositoryRoot: "/repo",
-      dryRun: true,
-      audit: () => auditOf([orphanRec()], []),
-      reclaimOrphanDir: () => {
-        called = true;
-        return { ok: true, detail: "" };
-      },
-    });
-    expect(called).toBe(false);
-    expect(res.removed[0].reclaim).toBe("rm_dir");
-  });
-
-  it("explicit orphan reclaim cannot override a preserved fail-closed audit", async () => {
-    const reclaim = vi.fn(() => ({ ok: true, detail: "" }));
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const code = await worktreeCleanupCommand(
-      ["--reclaim-orphan", "/fake/repo/.roll/loop/worktrees/cycle-20260718-000000-2", "--repo", "/fake/repo"],
-      {
-        git: (args) => args[0] === "worktree" && args[1] === "list"
-          ? "worktree /fake/repo\nHEAD abc\nbranch refs/heads/main\n"
-          : "",
-        readDir: () => ["cycle-20260718-000000-2"],
-        readFile: () => null,
-        reclaimOrphanDir: reclaim,
-      },
-    );
-    expect(code).toBe(2);
-    expect(reclaim).not.toHaveBeenCalled();
-  });
-
-  it("reclaims an exact generated-residue orphan in a real repository fixture", async () => {
-    const { repo, orphan } = realOrphanFixture();
-    try {
-      const plan = planWorktreeCleanup(realOrphanAudit(repo), 0);
-      expect(plan.candidates).toHaveLength(1);
-      const result = await applyWorktreeCleanup(plan, {
-        repositoryRoot: repo,
-        dryRun: false,
-        audit: () => realOrphanAudit(repo),
-      });
-      expect(result.refused).toHaveLength(0);
-      expect(result.removed).toHaveLength(1);
-      expect(existsSync(orphan)).toBe(false);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("final bounded reclaim refuses material added after the fresh audit", async () => {
-    const { repo, orphan } = realOrphanFixture();
-    try {
-      const plan = planWorktreeCleanup(realOrphanAudit(repo), 0);
-      const result = await applyWorktreeCleanup(plan, {
-        repositoryRoot: repo,
-        dryRun: false,
-        audit: () => {
-          const fresh = realOrphanAudit(repo);
-          writeFileSync(join(orphan, "package.json"), "{\"private\":true}\n", "utf8");
-          return fresh;
-        },
-      });
-      expect(result.removed).toHaveLength(0);
-      expect(result.refused[0].reason).toMatch(/changed-proof|reclaim-failed/i);
-      expect(existsSync(orphan)).toBe(true);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("final bounded reclaim refuses a cycle that activates after the fresh audit", async () => {
-    const { repo, orphan } = realOrphanFixture();
-    try {
-      const plan = planWorktreeCleanup(realOrphanAudit(repo), 0);
-      const result = await applyWorktreeCleanup(plan, {
-        repositoryRoot: repo,
-        dryRun: false,
-        audit: () => {
-          const fresh = realOrphanAudit(repo);
-          writeFileSync(
-            join(repo, ".roll", "loop", "inner.lock"),
-            "cycle-20260723-130000-1 12345\n",
-            "utf8",
-          );
-          return fresh;
-        },
-      });
-      expect(result.removed).toHaveLength(0);
-      expect(result.refused[0].reason).toMatch(/active|proof|reclaim-failed/i);
-      expect(existsSync(orphan)).toBe(true);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
   });
 });

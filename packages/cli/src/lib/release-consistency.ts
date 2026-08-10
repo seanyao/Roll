@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the release consistency audit orchestrator.
+ */
+/**
  * `roll consistency` — TS port of bin/roll cmd_consistency (5711-5736) plus the
  * full orchestrator lib/consistency_check.py (ported in full).
  *
@@ -20,7 +23,7 @@ import {
   CONSISTENCY_DIMENSION_LABELS,
   ensureDeliveriesFresh,
   queryStoryDelivery,
-  workspaceContextAuditReleaseGap,
+  splitBacklogRow,
   type ConsistencyDimension,
   type ExecPort,
   type FreshnessPort,
@@ -29,7 +32,6 @@ import { resolveIntegrationBranch } from "@roll/infra";
 import { resolveLang, STATUS_MARKER, t, v2Catalog, type Lang } from "@roll/spec";
 import { c, renderState, strw, trunc } from "../render.js";
 import { consistencyAuditCommand } from "./consistency-audit.js";
-import { auditRegisteredWorkspaceContextTree } from "./workspace-context-audit.js";
 
 const EXEC_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
@@ -50,12 +52,12 @@ const DIM_CHECKS: Record<ConsistencyDimension, (projectDir: string) => DimResult
   "truth-live": (p) => checkTruthLive(p),
 };
 
-export interface DimResult {
+interface DimResult {
   status: "pass" | "fail";
   gaps: string[];
   note?: string;
 }
-export interface Report {
+interface Report {
   overall: "pass" | "fail";
   dimensions: Record<string, DimResult>;
 }
@@ -271,7 +273,7 @@ function backlogRowFacts(backlogText: string): Map<string, { done: boolean; merg
     if (row === null) continue;
     const id = row[1] ?? "";
     if (id === "") continue;
-    const cells = line.split("|").map((cell) => cell.trim());
+    const cells = splitBacklogRow(line).map((cell) => cell.trim());
     const status = cells.at(-2) ?? line;
     facts.set(id, { done: line.includes(STATUS_MARKER.done), mergeRef: /#\d+|pull\/\d+|\bmerged\s+[0-9a-f]{7,40}\b/i.test(line), status });
   }
@@ -506,7 +508,124 @@ export function checkTruthLive(projectDir: string): DimResult {
 // shapes observed 2026-06-08: a story split that wrote backlog rows with no
 // card folders (broken links), and a ✅ Done row carrying an evidence link to
 // a report that was never produced. Pre-card-era Done rows remain informational;
-// card-era Done rows with ACs but no report are a hard gap.
+// card-era Done rows with ACs but no report are a hard gap. The one manual
+// exception (a card with no AC block and no report) must say why in the Done
+// status rather than silently turning into a green release check.
+const MANUAL_DONE_EPOCH_PATH = join("policy", "manual-done-epoch.json");
+const MANUAL_DONE_EPOCH_SCHEMA_VERSION = 1;
+
+interface ManualDoneEpoch {
+  schemaVersion: number;
+  baselineMetaCommit: string;
+  backlogPath: string;
+}
+
+type ManualDoneEpochResult =
+  | { ok: true; historicalDoneIds: Set<string> }
+  | { ok: false; gap: string };
+
+function doneIdsInBacklog(backlog: string): Set<string> {
+  const doneIds = new Set<string>();
+  for (const line of backlog.split("\n")) {
+    const row = /^\|\s*\[?((?:US|FIX|REFACTOR|IDEA)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\]?/.exec(line);
+    const id = row?.[1] ?? "";
+    if (id !== "" && line.includes(STATUS_MARKER.done)) doneIds.add(id);
+  }
+  return doneIds;
+}
+
+function readManualDoneEpoch(projectDir: string): ManualDoneEpochResult {
+  const metaDir = join(projectDir, ".roll");
+  const epochPath = join(metaDir, MANUAL_DONE_EPOCH_PATH);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readText(epochPath));
+  } catch {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch is missing or invalid (.roll/policy/manual-done-epoch.json) — restore the tracked record before release",
+    };
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch is invalid (.roll/policy/manual-done-epoch.json) — restore schemaVersion, baselineMetaCommit, and backlogPath",
+    };
+  }
+
+  const epoch = parsed as Partial<ManualDoneEpoch>;
+  if (
+    epoch.schemaVersion !== MANUAL_DONE_EPOCH_SCHEMA_VERSION ||
+    typeof epoch.baselineMetaCommit !== "string" ||
+    !/^[0-9a-f]{40}$/i.test(epoch.baselineMetaCommit) ||
+    epoch.backlogPath !== "backlog.md"
+  ) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch is invalid — use schemaVersion 1, a full baselineMetaCommit SHA, and backlogPath \"backlog.md\"",
+    };
+  }
+
+  const baseline = gitCapture(metaDir, ["rev-parse", "--verify", `${epoch.baselineMetaCommit}^{commit}`])?.trim();
+  if (baseline === undefined || baseline === "") {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch baseline cannot be resolved — restore the referenced roll-meta history or update the tracked epoch record deliberately",
+    };
+  }
+  try {
+    execFileSync("git", ["-C", metaDir, "merge-base", "--is-ancestor", baseline, "HEAD"], { stdio: "ignore" });
+  } catch {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch baseline is not an ancestor of current roll-meta history — restore the correct tracked epoch record before release",
+    };
+  }
+
+  const baselineBacklog = gitCapture(metaDir, ["show", `${baseline}:${epoch.backlogPath}`]);
+  if (baselineBacklog === null) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy epoch baseline backlog cannot be read — restore backlog.md at the recorded baseline or repair the tracked epoch record",
+    };
+  }
+
+  // A card is historical only if it stayed Done through every later committed
+  // backlog state. Baseline membership alone would let Done → Todo → Done evade
+  // the policy, even though the second completion is new work.
+  const historicalDoneIds = doneIdsInBacklog(baselineBacklog);
+  const postEpochCommits = gitCapture(metaDir, ["log", "--format=%H", `${baseline}..HEAD`, "--", epoch.backlogPath]);
+  if (postEpochCommits === null) {
+    return {
+      ok: false,
+      gap:
+        "manual Done policy history cannot be read after its baseline — restore roll-meta history before release",
+    };
+  }
+  for (const commit of postEpochCommits.split("\n").filter((value) => value !== "")) {
+    const commitBacklog = gitCapture(metaDir, ["show", `${commit}:${epoch.backlogPath}`]);
+    if (commitBacklog === null) {
+      return {
+        ok: false,
+        gap:
+          "manual Done policy history contains an unreadable backlog state — restore roll-meta history before release",
+      };
+    }
+    const doneIds = doneIdsInBacklog(commitBacklog);
+    for (const id of historicalDoneIds) {
+      if (!doneIds.has(id)) historicalDoneIds.delete(id);
+    }
+    if (historicalDoneIds.size === 0) break;
+  }
+  return { ok: true, historicalDoneIds };
+}
+
 function checkCards(projectDir: string): DimResult {
   const backlog = join(projectDir, ".roll", "backlog.md");
   const featuresDir = join(projectDir, ".roll", "features");
@@ -528,6 +647,9 @@ function checkCards(projectDir: string): DimResult {
     return { status: "pass", gaps: [], note: "features/ unreadable — skipped" };
   }
 
+  const epoch = readManualDoneEpoch(projectDir);
+  if (!epoch.ok) return { status: "fail", gaps: [epoch.gap] };
+
   const hasAcBlock = (epic: string, id: string): boolean => {
     try {
       const text = readText(join(featuresDir, epic, id, "spec.md"));
@@ -538,8 +660,9 @@ function checkCards(projectDir: string): DimResult {
   };
 
   const gaps: string[] = [];
-  /** FIX-1216: track exempt card IDs for observability. */
-  const exemptCards: string[] = [];
+  /** FIX-1513: track explicit manual exceptions for observability. */
+  const manualExceptionCards: string[] = [];
+  const historicalExceptionCards: string[] = [];
   let doneNoReportNoAc = 0;
   let doneNoFolder = 0;
   for (const line of readText(backlog).split("\n")) {
@@ -548,10 +671,20 @@ function checkCards(projectDir: string): DimResult {
     const id = row[1] ?? "";
     if (!cardEpic.has(id)) {
       // LIVE rows must own a card folder (a split that writes rows without
-      // cards breaks every link downstream). Pre-card-era ✅ Done rows are
-      // legitimate history — counted, not failed.
-      if (line.includes(STATUS_MARKER.done)) doneNoFolder += 1;
-      else gaps.push(`Live backlog row ${id} has no card folder (features/<epic>/${id}/spec.md)`);
+      // cards breaks every link downstream). A pre-policy Done row is
+      // legitimate history only when the immutable epoch proves this exact ID
+      // was already Done; a later row cannot use manual: to evade the folder
+      // contract.
+      if (line.includes(STATUS_MARKER.done) && epoch.historicalDoneIds.has(id)) {
+        doneNoFolder += 1;
+        historicalExceptionCards.push(id);
+      } else if (line.includes(STATUS_MARKER.done)) {
+        gaps.push(
+          `Done backlog row ${id} has no card folder (features/<epic>/${id}/spec.md) and cannot use \`manual:\` after the policy epoch`,
+        );
+      } else {
+        gaps.push(`Live backlog row ${id} has no card folder (features/<epic>/${id}/spec.md)`);
+      }
       continue;
     }
     // Evidence links must not dangle.
@@ -566,17 +699,32 @@ function checkCards(projectDir: string): DimResult {
       if (!existsSync(join(featuresDir, epic, id, "latest", `${id}-report.html`))) {
         if (hasAcBlock(epic, id)) {
           gaps.push(`Done backlog row ${id} has ACs but no attest report`);
+        } else if (epoch.historicalDoneIds.has(id)) {
+          historicalExceptionCards.push(id);
         } else {
-          doneNoReportNoAc += 1;
-          exemptCards.push(id);
+          const status = splitBacklogRow(line).map((cell) => cell.trim()).at(-2) ?? line;
+          const manualReason = /\bmanual:\s*(\S(?:.*\S)?)/i.exec(status)?.[1]?.trim();
+          if (manualReason === undefined || manualReason === "") {
+            gaps.push(
+              `Done backlog row ${id} has neither ACs nor an attest report — add a non-empty \`manual:\` explanation to the Done status`,
+            );
+          } else {
+            doneNoReportNoAc += 1;
+            manualExceptionCards.push(id);
+          }
         }
       }
     }
   }
   const result: DimResult = { status: gaps.length === 0 ? "pass" : "fail", gaps };
   const notes: string[] = [];
-  if (doneNoFolder > 0) notes.push(`${doneNoFolder} pre-card-era Done rows without a card folder`);
-  if (doneNoReportNoAc > 0) notes.push(`${doneNoReportNoAc} Done rows without AC blocks exempt from attest report: ${exemptCards.join(", ")}`);
+  if (historicalExceptionCards.length > 0) {
+    notes.push(`${historicalExceptionCards.length} historical Done rows predate the manual-Done policy`);
+  }
+  if (doneNoFolder > 0) notes.push(`${doneNoFolder} historical Done rows without a card folder`);
+  if (doneNoReportNoAc > 0) {
+    notes.push(`${doneNoReportNoAc} Done rows without AC blocks accepted with a manual explanation: ${manualExceptionCards.join(", ")}`);
+  }
   if (notes.length > 0) result.note = `${notes.join("; ")} (informational)`;
   return result;
 }
@@ -612,55 +760,12 @@ export function checkDocs(projectDir: string): DimResult {
 }
 
 // ─── site dimension: check_site ──────────────────────────────────────────────
-/**
- * Epics that legitimately have no landing-page presence (internal plumbing).
- *
- * US-LOOP-119: the card asked me to verify whether the `loop-scheduling` entry
- * still has an object. It does not — no such epic exists under `.roll/features/`,
- * so the entry is dropped below.
- *
- * VERIFYING THAT ALSO TURNED UP SOMETHING LARGER, recorded here rather than
- * silently fixed: this whole set is keyed on `### Feature:` headings, and the v3
- * backlog has none — `readDoneFeatures()` returns empty, so `check_site`
- * short-circuits before ever consulting this list. Every entry is therefore
- * currently inert, not just the one removed. That is a defect in the site
- * dimension itself (it silently passes), out of scope for a scheduling-retirement
- * card; see FIX-1485.
- */
-const SITE_INTERNAL_FEATURES = new Set([
-  "cycle-meta-sync", "loop-log-locality", "invoke-stream-visibility",
-  "loop-done-semantics", "loop-status-reader-path", "loop-result-eval",
-  "loop-data-layout", "hooks-path-enforcement", "dev-vm-isolation",
-  "test-quality-gates", "tcr-test-strategy", "test-preconditions",
-  "e2e-lifecycle", "skill-harness", "agent-compliance",
-  "convention-management", "github-actions", "pr-lifecycle",
-  "loop-lifecycle-ownership", "loop-ci-self-heal",
-  "cycle-log-archive", "agent-aware-execution",
-  "manual-only-retirement",
-  "context-feed-budget", "documentation", "github-issues-sync",
-  "notifications", "cycle-event-stream", "phase-tracing",
-  "loop-write-integrity", "cross-machine-sync", "remote-monitoring",
-  "cycle-history-rollup", "non-claude-usage-capture",
-  "loop-config-cli", "loop-exit-summary", "edit-render-fold",
-  "cli-redesign", "directory-restructure", "lifecycle-management",
-  "upstream-watch", "i18n-localization",
-]);
-
-function siteTokens(name: string): Set<string> {
-  const tk = name.toLowerCase();
-  const tokens = new Set<string>();
-  // t.lstrip("$") then split on [-/\s]+.
-  for (const part of tk.replace(/^\$+/, "").split(/[-/\s]+/)) {
-    if (part.length > 1) tokens.add(part);
-  }
-  return tokens;
-}
+const SITE_CHECK_NOTE = "checked top-level commands and guide links; story-to-site coverage is not configured";
 
 export function checkSite(projectDir: string): DimResult {
   const gaps = checkTopLevelCommands(activeSiteFiles(projectDir), SITE_HIDDEN_TOP_LEVEL_COMMANDS);
   const siteJs = join(projectDir, "site", "roll-data.js");
-  const backlog = join(projectDir, ".roll", "backlog.md");
-  if (!existsSync(siteJs) || !existsSync(backlog)) return { status: gaps.length === 0 ? "pass" : "fail", gaps };
+  if (!existsSync(siteJs)) return { status: gaps.length === 0 ? "pass" : "fail", gaps, note: SITE_CHECK_NOTE };
 
   const siteText = readText(siteJs);
 
@@ -679,43 +784,7 @@ export function checkSite(projectDir: string): DimResult {
     }
   }
 
-  const siteFeatures = new Set<string>();
-  for (const m of siteText.matchAll(/\bname:\s*"([^"]+)"/g)) {
-    const name = (m[1] ?? "").trim();
-    if (name) siteFeatures.add(name);
-  }
-
-  if (siteFeatures.size === 0) {
-    gaps.push(
-      "site/roll-data.js has no FEATURE_GROUPS feature names — site may be missing content",
-    );
-    return { status: "fail", gaps };
-  }
-
-  const allSiteTokens = new Set<string>();
-  for (const name of siteFeatures) for (const tok of siteTokens(name)) allSiteTokens.add(tok);
-
-  const doneFeatures = readDoneFeatures(readText(backlog));
-  // Preserve any gaps already found (retired-command scan, dangling guide refs)
-  // even when there are no `### Feature:` headings to token-match (FIX-375).
-  if (doneFeatures.size === 0) return { status: gaps.length === 0 ? "pass" : "fail", gaps };
-
-  for (const featName of doneFeatures.keys()) {
-    if (SITE_INTERNAL_FEATURES.has(featName)) continue;
-    const featTokens = siteTokens(featName.replaceAll("-", " "));
-    if (featTokens.size === 0) continue;
-    let matchCount = 0;
-    for (const tok of featTokens) if (allSiteTokens.has(tok)) matchCount++;
-    if (matchCount < featTokens.size / 2) {
-      gaps.push(
-        `Feature '${featName}' has Done stories but is not mentioned ` +
-          `on the landing page — site may be missing this capability`,
-      );
-    }
-  }
-  // The stale-reference loop in the python is a documented no-op (pass), so it
-  // adds no gaps; omitted intentionally.
-  return { status: gaps.length === 0 ? "pass" : "fail", gaps };
+  return { status: gaps.length === 0 ? "pass" : "fail", gaps, note: SITE_CHECK_NOTE };
 }
 
 // ─── i18n dimension: check_i18n ──────────────────────────────────────────────
@@ -892,46 +961,17 @@ function pyListRepr(items: string[]): string {
 // ─── orchestration ────────────────────────────────────────────────────────────
 /** Programmatic pass/fail for the seven dimensions — the `roll release` gate. */
 export function consistencyPasses(projectDir: string): boolean {
-  return buildConsistencyReport(projectDir).overall === "pass";
+  return runAll(projectDir).overall === "pass";
 }
 
-export function buildConsistencyReport(
-  projectDir: string,
-  dimensionChecks: Record<ConsistencyDimension, (projectDir: string) => DimResult> = DIM_CHECKS,
-): Report {
+function runAll(projectDir: string): Report {
   const report: Report = { overall: "pass", dimensions: {} };
   for (const dim of CONSISTENCY_DIMENSIONS) {
-    const result = dimensionChecks[dim](projectDir);
+    const result = DIM_CHECKS[dim](projectDir);
     report.dimensions[dim] = result;
     if (result.status === "fail") report.overall = "fail";
   }
-  const matrixPath = join(projectDir, "docs", "generated", "workspace-context-compatibility-matrix.json");
-  const allowlistPath = join(projectDir, "config", "workspace-context-audit-allowlist.json");
-  if (existsSync(matrixPath) || existsSync(allowlistPath)) {
-    const tests = report.dimensions["tests"] ?? { status: "pass", gaps: [] };
-    const contextGate = checkWorkspaceContextAudit(projectDir);
-    tests.gaps.push(...contextGate.gaps);
-    if (tests.gaps.length > 0) {
-      tests.status = "fail";
-      report.overall = "fail";
-    }
-    report.dimensions["tests"] = tests;
-  }
   return report;
-}
-
-/** The exact static authority check injected into the release tests dimension. */
-export function checkWorkspaceContextAudit(projectDir: string): DimResult {
-  try {
-    const contextAudit = auditRegisteredWorkspaceContextTree(projectDir);
-    const gap = workspaceContextAuditReleaseGap(contextAudit.summary);
-    return gap === null ? { status: "pass", gaps: [] } : { status: "fail", gaps: [gap] };
-  } catch (error) {
-    return {
-      status: "fail",
-      gaps: [`Workspace context audit could not run: ${error instanceof Error ? error.message : String(error)}`],
-    };
-  }
 }
 
 /** Port of format_human. */
@@ -1034,6 +1074,8 @@ function formatGateTable(report: Report, lang: Lang): string {
     const zhLabel = pad(c("dim", `  ${meta.zh}`), labelWidth);
     const zhCaption = c("muted", trunc(meta.whatZh, captionWidth - 1));
     out.push(`${zhLabel}${zhCaption}`);
+    const note = report.dimensions[dim]?.note;
+    if (note !== undefined) out.push(`   ${c("muted", `ℹ ${note}`)}`);
   }
   out.push("");
   // Footer: the gate rule + the machine pointer (separate-line bilingual).
@@ -1115,10 +1157,13 @@ function checkHelp(command: string): string {
     bilingual, site, truth-live) and produce a verdict-first table. Any failing
     dimension aborts the release.
     跑七维一致性、判定优先输出；任一维失败即中止发版。
+    Site checks cover surviving top-level command mentions and guide links only;
+    story-to-site coverage is not configured.
+    site 检查只覆盖仍存活的顶层命令引用和指南链接；不核对每张故事是否上站。
 
   ${command} check                # verdict-first seven-dimension table
   ${command} check --json         # machine-readable JSON (same computation)
-  ${command} audit --project-dir DIR [--json]  # US-TRUTH-002 shadow drift audit (read-only, exit 0)
+  ${command} audit [--json]       # US-TRUTH-002 shadow drift audit (read-only, exit 0)
 `;
 }
 
@@ -1153,7 +1198,7 @@ export function runConsistencyCheck(
       else if (a === "--project-dir") projectDir = rest[++i] ?? projectDir;
       else if (a.startsWith("--project-dir=")) projectDir = a.slice("--project-dir=".length);
     }
-    const report = buildConsistencyReport(projectDir);
+    const report = runAll(projectDir);
     if (renderMode === "table") {
       // Public command: NO_COLOR-aware verdict-first table; JSON carries f/w/?.
       if (!process.stdout.isTTY || (process.env["NO_COLOR"] ?? "") !== "") renderState.useColor = false;

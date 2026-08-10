@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders the grouped `roll loop --help` surface.
+ */
+/**
  * US-DOSSIER-035 — grouped `roll loop --help` (design frame 4).
  *
  * The flat ~18-verb pipe list becomes four labeled bands so a user instantly
@@ -27,8 +30,8 @@ const BANDS: Band[] = [
   // resident scheduler and are gone. `pause`/`resume` stay — PAUSE is a live gate
   // the correction circuit breaker writes automatically, so `resume` is the only
   // supported way out of a paused project.
-  { key: "control", color: "amber", en: "control", zh: "作动", verbs: "go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>" },
-  { key: "observe", color: "green", en: "observe", zh: "传感", verbs: "watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle" },
+  { key: "control", color: "amber", en: "control", zh: "作动", verbs: "go · goal · pause · resume · reset · recover · reconcile" },
+  { key: "observe", color: "green", en: "observe", zh: "传感", verbs: "watch · status · runs · log · events · signals · eval · cycles · cycle" },
   { key: "alerts", color: "red", en: "alerts", zh: "告警", verbs: "alert list · alert ack · alert resolve · alert log" },
   { key: "maintain", color: "muted", en: "maintain", zh: "维护", verbs: "gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list" },
   // Agent-invoked entry points — live, but not user-facing daily verbs. Listed

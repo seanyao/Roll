@@ -7,7 +7,6 @@ import {
   type NetworkInput,
   type NetworkOutput,
 } from "../src/index.js";
-import { TOOL_TEST_REPO_ID, toolWorkspaceContext } from "./tool-workspace-context.js";
 
 const originalEnv = { ...process.env };
 const servers: Server[] = [];
@@ -71,8 +70,6 @@ function invocation(input: NetworkInput, overrides: Partial<ToolPolicy> = {}): T
     caller: { cycleId: "cycle-1", storyId: "US-TOOL-009", agent: "codex" },
     policy: policy(overrides),
     ts: 100,
-    context: toolWorkspaceContext("US-TOOL-009"),
-    repoId: TOOL_TEST_REPO_ID,
   };
 }
 

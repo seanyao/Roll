@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the truth source declaration types.
+ */
+/**
  * US-TRUTH-000 — Truth Source Declaration (the field-level authority matrix).
  *
  * Roll's drift epidemic (FIX-243/244/248/249; the 2026-06-10 day where every
@@ -38,7 +41,7 @@ export interface DriftFixture {
 }
 
 /** One field-level truth declaration (AC2's six attributes + grace + fixtures). */
-export type TruthAggregate = "story" | "cycle" | "release" | "view-meta" | "goal" | "delegation";
+export type TruthAggregate = "story" | "cycle" | "release" | "view-meta" | "goal" | "delegation" | "execution";
 
 export interface TruthAnchor {
   /** Registry key — stable snake_case fact name. */
@@ -332,6 +335,17 @@ export const TRUTH_ANCHORS: readonly TruthAnchor[] = [
     derivedViews: ["roll delta status provenance display", "Supervisor Live role trace"],
     conflictPolicy: "the events are authoritative for accepted protocol facts; host-attested and adapter-observed are provenance labels, NOT verdicts about session freshness or model execution. A mismatch between event, manifest, and attestation → drift(fail).",
     unknownPolicy: "host-attested provenance is structurally unverifiable beyond non-empty/unique opaque tokens; claims may be structurally valid but unproven — cost is always ? (host_unobservable).",
+    rebuildability: "rebuildable",
+  },
+  {
+    field: "managed_workspace_lifecycle",
+    aggregate: "execution",
+    description: "A DeliveryRun's allocated managed workspace set and lifecycle transitions; delivery and evidence truth remain external inputs.",
+    authoritativeSource: "events.ndjson worktree:* lifecycle events",
+    writer: "managed workspace allocator / release recovery commands",
+    derivedViews: ["managed workspace projection", "audit/canary/cleanup candidates"],
+    conflictPolicy: "append-only lifecycle facts win; missing or conflicting Git inspection remains unknown/recovery-required and is never repaired by a mutable registry.",
+    unknownPolicy: "historical cycles and Delta delegations without lifecycle events remain legacy/unknown without synthetic workspace facts.",
     rebuildability: "rebuildable",
   },
 ];

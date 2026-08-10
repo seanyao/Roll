@@ -1,0 +1,105 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 1`] = `
+"Delta rig readiness · observed at 2026-08-05T00:00:00.000Z
+
+Ready candidates
+  codex / model-a
+    Configured roles: builder
+    Probe: Ready (the exact model returned the minimal token)
+    Observed: 2026-08-05T00:00:00.000Z · 12ms
+
+Note: a passing probe only shows that this exact model answered now. It does not prove a future long task, delivery, host-session freshness, or final role assignment; pins, exclusions, tags, cost caps, and role diversity still decide dispatch.
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 2`] = `
+"Delta rig readiness · Unknown
+The saved observation is stale (90s old); it is shown as unknown until refreshed.
+
+Needs confirmation
+  codex / model-a
+    Configured roles: builder
+    Reason: saved observation is stale; run --refresh
+
+Note: a passing probe only shows that this exact model answered now. It does not prove a future long task, delivery, host-session freshness, or final role assignment; pins, exclusions, tags, cost caps, and role diversity still decide dispatch.
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 3`] = `
+"Delta rig readiness · Unknown
+The saved observation no longer matches the configured candidates; it is shown as unknown until refreshed.
+
+Needs confirmation
+  codex / model-a
+    Configured roles: builder
+    Reason: saved observation is incompatible with current configuration; run --refresh
+
+Note: a passing probe only shows that this exact model answered now. It does not prove a future long task, delivery, host-session freshness, or final role assignment; pins, exclusions, tags, cost caps, and role diversity still decide dispatch.
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 4`] = `
+"Delta rig readiness · Unknown
+No saved readiness observation is available; run --refresh for a local probe.
+
+Needs confirmation
+  codex / model-a
+    Configured roles: builder
+    Reason: no saved readiness observation; run --refresh
+
+Note: a passing probe only shows that this exact model answered now. It does not prove a future long task, delivery, host-session freshness, or final role assignment; pins, exclusions, tags, cost caps, and role diversity still decide dispatch.
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 5`] = `
+"Delta 模型可派性 · 观测于 2026-08-05T00:00:00.000Z
+
+可作为候选
+  codex / model-a
+    已配置角色: 构建
+    探测: 通过（指定模型最小调用成功）
+    观测时间: 2026-08-05T00:00:00.000Z · 12ms
+
+说明：探测通过只表示该指定模型刚刚可响应；它不证明后续长任务、交付、宿主会话新鲜度或最终角色分配。派工仍须独立遵守 pin、排除规则、标签、成本上限和角色多样性规则。
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 6`] = `
+"Delta 模型可派性 · 未知
+保存的观测已过期（90s 前）；刷新前将显示为未知。
+
+待确认
+  codex / model-a
+    已配置角色: 构建
+    原因: 保存的观测已过期；运行 --refresh
+
+说明：探测通过只表示该指定模型刚刚可响应；它不证明后续长任务、交付、宿主会话新鲜度或最终角色分配。派工仍须独立遵守 pin、排除规则、标签、成本上限和角色多样性规则。
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 7`] = `
+"Delta 模型可派性 · 未知
+保存的观测与当前配置候选不匹配；刷新前将显示为未知。
+
+待确认
+  codex / model-a
+    已配置角色: 构建
+    原因: 保存的观测与当前配置不兼容；运行 --refresh
+
+说明：探测通过只表示该指定模型刚刚可响应；它不证明后续长任务、交付、宿主会话新鲜度或最终角色分配。派工仍须独立遵守 pin、排除规则、标签、成本上限和角色多样性规则。
+"
+`;
+
+exports[`US-DELTA-018 — rigs command and human projection > freezes English and Chinese current, stale, incompatible, and missing projections 8`] = `
+"Delta 模型可派性 · 未知
+缓存中没有就绪观测；运行 --refresh 执行本机探测。
+
+待确认
+  codex / model-a
+    已配置角色: 构建
+    原因: 没有保存的就绪观测；运行 --refresh
+
+说明：探测通过只表示该指定模型刚刚可响应；它不证明后续长任务、交付、宿主会话新鲜度或最终角色分配。派工仍须独立遵守 pin、排除规则、标签、成本上限和角色多样性规则。
+"
+`;

@@ -19,6 +19,55 @@ exports[`US-LANG-003 CLI language surface > config lang error output follows the
 }
 `;
 
+exports[`US-LANG-003 CLI language surface > config success output follows the selected locale without adjacent translations 1`] = `
+{
+  "en": {
+    "inactive": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ set dream-time = 03:20 in <HOME>/.roll/config.yaml
+note: nothing reads this — run \`roll dream run-once\` when you want a scan
+",
+    },
+    "lang": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ set lang = zh
+",
+    },
+    "write": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ set loop_dream_hour = 5 in <HOME>/.roll/config.yaml
+note: this key is inactive — nothing reads it
+",
+    },
+  },
+  "zh": {
+    "inactive": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ 已设置 dream-time = 03:20，写入 <HOME>/.roll/config.yaml
+说明:这个值没人读 —— 想扫就跑 \`roll dream run-once\`
+",
+    },
+    "lang": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ 已将语言设置为 en
+",
+    },
+    "write": {
+      "status": 0,
+      "stderr": "",
+      "stdout": "[roll] ✓ 已设置 loop_dream_hour = 5，写入 <HOME>/.roll/config.yaml
+说明:这个 key 已失效 —— 没有任何东西读它
+",
+    },
+  },
+}
+`;
+
 exports[`US-LANG-003 CLI language surface > doctor --help is locale-pinned and single-language 1`] = `
 {
   "en": "Usage: roll doctor [skills|language|pardon|repair-protection|--tools]
@@ -35,30 +84,26 @@ exports[`US-LANG-003 CLI language surface > loop --help is locale-pinned and sin
   "en": "Usage: roll loop <subcommand>
 The autonomous delivery loop — grouped control / observe / alerts / maintain.
 
-control   go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>
-observe   watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle
+control   go · goal · pause · resume · reset · recover · reconcile
+observe   watch · status · runs · log · events · signals · eval · cycles · cycle
 alerts    alert list · alert ack · alert resolve · alert log
 maintain  gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
 internal  run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
 [38;2;88;166;255mstates    [0mACTIVE (a session may drive cards) · PAUSED (you or a tripped breaker stopped autonomous progress → roll loop resume)
 [38;2;88;166;255mdrive     [0mopen an agent session and run roll loop go — nothing advances on its own
-
-Workspace selector alias: --ws <id|path> (canonical: --workspace <id|path>)
 ",
   "zh": "用法：roll loop <子命令>
 自治交付循环——按作动/传感/告警/维护分组。
 
-作动      go --workspace <id|path> · goal · pause --workspace <id|path> · resume --workspace <id|path> · reset · recover · reconcile --workspace <id|path>
-传感      watch · status [--workspace <id|path>|--all] · runs · log · events · signals · eval · cycles · cycle
+作动      go · goal · pause · resume · reset · recover · reconcile
+传感      watch · status · runs · log · events · signals · eval · cycles · cycle
 告警      alert list · alert ack · alert resolve · alert log
 维护      gc · fmt · mute · unmute · reconcile-pending · pardon-skip-list
 内部      run-once · story · notify · enforce-tcr · precheck-ci · hotfix-head-context · agent-routes · adversarial · review-resize · self-downgrade · exhaustion-split
 
 [38;2;88;166;255m状态      [0mACTIVE 运行中(会话可推进卡片) · PAUSED 已暂停(你或跳闸的熔断器停掉了自主推进 → roll loop resume)
 [38;2;88;166;255m驱动      [0m开一个 agent 会话跑 roll loop go —— 没有任何东西会自行推进
-
-Workspace selector 别名：--ws <ID|路径>（canonical：--workspace <ID|路径>）
 ",
 }
 `;

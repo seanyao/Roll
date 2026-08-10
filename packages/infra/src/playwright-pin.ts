@@ -1,4 +1,7 @@
 /**
+ * @responsibility Pins the Playwright version for deterministic headless Chromium.
+ */
+/**
  * FIX-394 — pinned Playwright version for deterministic headless Chromium.
  *
  * `@latest` drifts across releases; a pinned version keeps the browser version,
@@ -11,10 +14,9 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
 
 /** The single pinned Playwright version used by every headless-Chromium path. */
-export const PLAYWRIGHT_VERSION = "1.61.1";
+export const PLAYWRIGHT_VERSION = "1.52.0";
 
 /** npx-ready package reference for screenshot / install commands. */
 export const PLAYWRIGHT_PIN = `playwright@${PLAYWRIGHT_VERSION}`;
@@ -38,7 +40,6 @@ export function playwrightBrowsersPath(platform: NodeJS.Platform = process.platf
  * Playwright cache so we can tell pre-install / self-heal to skip.
  */
 export function chromiumInstalled(cacheDir?: string): boolean {
-  if (cacheDir === undefined) return existsSync(chromium.executablePath());
   const cache = cacheDir ?? playwrightBrowsersPath();
   try {
     const entries = readdirSync(cache);

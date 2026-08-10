@@ -178,9 +178,6 @@ non-green — it is never auto-promoted to a manual pass.
 
 `roll story validate` checks, at design time, that a spec is *born* with a
 visual-evidence AC (and, for a web surface, a declared product page to capture).
-For a canonical Workspace card, it also parses the same Runtime Story Contract
-used by `roll workspace issue init`; missing or invalid repository targets fail
-validation before build handoff.
 If the spec has a visual-evidence AC but no declared surface
 (`deliverable_url`, `deliverable_cmd`, `physical_terminal`, or
 `screenshot_exempt`), validation prints a soft must-declare warning and still

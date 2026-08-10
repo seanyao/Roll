@@ -1,0 +1,627 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-021 worked example > freezes the worked example as one EN/ZH/JSON view with feature totals > worked-example-en 1`] = `
+"
+Delivery view: delta-team
+Cards 2 · attempts 3
+- US-A: delivered
+  delta:d1 · failed · elapsed 1000ms
+  delta:d2 · handoff_ready · elapsed 1000ms
+- US-B: handoff_ready
+  delta:d3 · handoff_ready · elapsed 1000ms
+First-pass 0/0 (n/a; 1 incomplete excluded)
+Rework attempts after first 1
+Elapsed samples 3 · P50 1000ms · P95 1000ms
+Incomplete: missing_delta_delivery_publish, missing_designer_start, missing_evaluator_start
+"
+`;
+
+exports[`US-DELTA-021 worked example > freezes the worked example as one EN/ZH/JSON view with feature totals > worked-example-json 1`] = `
+{
+  "cards": [
+    {
+      "attempts": [
+        {
+          "attemptId": "delta:d1",
+          "cardId": "US-A",
+          "codes": [
+            "missing_designer_start",
+            "missing_evaluator_start",
+            "missing_delta_delivery_publish",
+          ],
+          "incomplete": true,
+          "kind": "delta",
+          "observedAtMs": 1000,
+          "outcome": "failed",
+          "sourceRefs": [
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 1,
+              "rawSha256": "bbb97c9df02ff4377e4865a6bff21e29b5d7af8751739b9f14a6b0f5a1484d7d",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 2,
+              "rawSha256": "024bda090543809fd347ccafc1170a8b55e6eb0c412ef6eb3f8a915f1b47991c",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 3,
+              "rawSha256": "a8ee4c55a985477e6b65d46d4795966170c823f4d7050fb64e5f9de805fed42e",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 4,
+              "rawSha256": "1718be685a5d2301ea92ce2e9c8d54a7b2dc9537e1d2e27ddad799263330a7cf",
+            },
+          ],
+          "tcr": {
+            "green": 0,
+            "incompleteAttempts": 0,
+            "red": 0,
+            "unattributed": 0,
+          },
+          "timing": {
+            "buildMs": 400,
+            "codes": [
+              "missing_designer_start",
+              "missing_evaluator_start",
+              "missing_delta_delivery_publish",
+            ],
+            "designMs": null,
+            "elapsedMs": 1000,
+            "evaluateMs": null,
+            "mergeTailMs": null,
+          },
+        },
+        {
+          "attemptId": "delta:d2",
+          "cardId": "US-A",
+          "codes": [
+            "missing_designer_start",
+            "missing_evaluator_start",
+          ],
+          "incomplete": true,
+          "kind": "delta",
+          "observedAtMs": 3000,
+          "outcome": "handoff_ready",
+          "sourceRefs": [
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 5,
+              "rawSha256": "8f14f74b10a463b0f8a151f613b46cacf23e42da208bf60121dcece7461e3947",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 6,
+              "rawSha256": "a8466e74696b1683c21911a49c26fb2c26c62ea02561fe2d151d4828015c5e89",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 7,
+              "rawSha256": "b1e2fa041d38ccd007611a431672fca5654c9239cc4abcf12b9805da622078a8",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 8,
+              "rawSha256": "1b9d0326d7dc34d87b7353338a924474d3d49dc7195f2593f32137d1ef609dec",
+            },
+          ],
+          "tcr": {
+            "green": 0,
+            "incompleteAttempts": 0,
+            "red": 0,
+            "unattributed": 0,
+          },
+          "timing": {
+            "buildMs": 500,
+            "codes": [
+              "missing_designer_start",
+              "missing_evaluator_start",
+            ],
+            "designMs": null,
+            "elapsedMs": 1000,
+            "evaluateMs": null,
+            "mergeTailMs": 400,
+          },
+        },
+      ],
+      "codes": [
+        "missing_delta_delivery_publish",
+        "missing_designer_start",
+        "missing_evaluator_start",
+      ],
+      "finalState": "delivered",
+      "finalTruth": {
+        "attestation": false,
+        "backlog": true,
+        "bindingIds": [
+          "delta:d1",
+          "delta:d2",
+        ],
+        "conflict": false,
+        "main": true,
+      },
+      "id": "US-A",
+      "incomplete": true,
+      "sourceRefs": [
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 1,
+          "rawSha256": "bbb97c9df02ff4377e4865a6bff21e29b5d7af8751739b9f14a6b0f5a1484d7d",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 2,
+          "rawSha256": "024bda090543809fd347ccafc1170a8b55e6eb0c412ef6eb3f8a915f1b47991c",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 3,
+          "rawSha256": "a8ee4c55a985477e6b65d46d4795966170c823f4d7050fb64e5f9de805fed42e",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 4,
+          "rawSha256": "1718be685a5d2301ea92ce2e9c8d54a7b2dc9537e1d2e27ddad799263330a7cf",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 5,
+          "rawSha256": "8f14f74b10a463b0f8a151f613b46cacf23e42da208bf60121dcece7461e3947",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 6,
+          "rawSha256": "a8466e74696b1683c21911a49c26fb2c26c62ea02561fe2d151d4828015c5e89",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 7,
+          "rawSha256": "b1e2fa041d38ccd007611a431672fca5654c9239cc4abcf12b9805da622078a8",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 8,
+          "rawSha256": "1b9d0326d7dc34d87b7353338a924474d3d49dc7195f2593f32137d1ef609dec",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 9,
+          "rawSha256": "8f0abcfc85e932faa67e1b96921274b34e7c58df5adb1332c8308b973f39b038",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 10,
+          "rawSha256": "823064bcfcfd229efbea63356a44f559de907de8f2c822f6e4449ec0b4f38708",
+        },
+      ],
+      "title": "repair after earlier attempt",
+      "unattributedTcr": 0,
+    },
+    {
+      "attempts": [
+        {
+          "attemptId": "delta:d3",
+          "cardId": "US-B",
+          "codes": [
+            "missing_designer_start",
+            "missing_evaluator_start",
+            "missing_delta_delivery_publish",
+          ],
+          "incomplete": true,
+          "kind": "delta",
+          "observedAtMs": 5000,
+          "outcome": "handoff_ready",
+          "sourceRefs": [
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 11,
+              "rawSha256": "2bef8056854b0bb0e70ab6780bdbaeddbd93aecdf02ba7ae4503a90e5c14a1fe",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 12,
+              "rawSha256": "c81c455aeddb19820ec3fea8909dd20b446884bda8b400eddfe477ca0827de84",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 13,
+              "rawSha256": "dc2fe84dbf1c2aad3ff13ac787f007201b52653b23dc1d814520475a626539bf",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 14,
+              "rawSha256": "c559cafc0c513109cd5256dea7b28338011ce03812d4de7d03df56670eba76ef",
+            },
+          ],
+          "tcr": {
+            "green": 0,
+            "incompleteAttempts": 0,
+            "red": 0,
+            "unattributed": 0,
+          },
+          "timing": {
+            "buildMs": 400,
+            "codes": [
+              "missing_designer_start",
+              "missing_evaluator_start",
+              "missing_delta_delivery_publish",
+            ],
+            "designMs": null,
+            "elapsedMs": 1000,
+            "evaluateMs": null,
+            "mergeTailMs": null,
+          },
+        },
+      ],
+      "codes": [
+        "missing_delta_delivery_publish",
+        "missing_designer_start",
+        "missing_evaluator_start",
+      ],
+      "finalState": "handoff_ready",
+      "finalTruth": {
+        "attestation": false,
+        "backlog": false,
+        "bindingIds": [
+          "delta:d3",
+        ],
+        "conflict": false,
+        "main": false,
+      },
+      "id": "US-B",
+      "incomplete": true,
+      "sourceRefs": [
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 11,
+          "rawSha256": "2bef8056854b0bb0e70ab6780bdbaeddbd93aecdf02ba7ae4503a90e5c14a1fe",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 12,
+          "rawSha256": "c81c455aeddb19820ec3fea8909dd20b446884bda8b400eddfe477ca0827de84",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 13,
+          "rawSha256": "dc2fe84dbf1c2aad3ff13ac787f007201b52653b23dc1d814520475a626539bf",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 14,
+          "rawSha256": "c559cafc0c513109cd5256dea7b28338011ce03812d4de7d03df56670eba76ef",
+        },
+      ],
+      "title": "handoff-ready card",
+      "unattributedTcr": 0,
+    },
+  ],
+  "codes": [
+    "missing_delta_delivery_publish",
+    "missing_designer_start",
+    "missing_evaluator_start",
+  ],
+  "diagnostics": [],
+  "incomplete": true,
+  "schemaVersion": 2,
+  "sourceRefs": [
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 1,
+      "rawSha256": "bbb97c9df02ff4377e4865a6bff21e29b5d7af8751739b9f14a6b0f5a1484d7d",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 2,
+      "rawSha256": "024bda090543809fd347ccafc1170a8b55e6eb0c412ef6eb3f8a915f1b47991c",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 3,
+      "rawSha256": "a8ee4c55a985477e6b65d46d4795966170c823f4d7050fb64e5f9de805fed42e",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 4,
+      "rawSha256": "1718be685a5d2301ea92ce2e9c8d54a7b2dc9537e1d2e27ddad799263330a7cf",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 5,
+      "rawSha256": "8f14f74b10a463b0f8a151f613b46cacf23e42da208bf60121dcece7461e3947",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 6,
+      "rawSha256": "a8466e74696b1683c21911a49c26fb2c26c62ea02561fe2d151d4828015c5e89",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 7,
+      "rawSha256": "b1e2fa041d38ccd007611a431672fca5654c9239cc4abcf12b9805da622078a8",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 8,
+      "rawSha256": "1b9d0326d7dc34d87b7353338a924474d3d49dc7195f2593f32137d1ef609dec",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 9,
+      "rawSha256": "8f0abcfc85e932faa67e1b96921274b34e7c58df5adb1332c8308b973f39b038",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 10,
+      "rawSha256": "823064bcfcfd229efbea63356a44f559de907de8f2c822f6e4449ec0b4f38708",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 11,
+      "rawSha256": "2bef8056854b0bb0e70ab6780bdbaeddbd93aecdf02ba7ae4503a90e5c14a1fe",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 12,
+      "rawSha256": "c81c455aeddb19820ec3fea8909dd20b446884bda8b400eddfe477ca0827de84",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 13,
+      "rawSha256": "dc2fe84dbf1c2aad3ff13ac787f007201b52653b23dc1d814520475a626539bf",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 14,
+      "rawSha256": "c559cafc0c513109cd5256dea7b28338011ce03812d4de7d03df56670eba76ef",
+    },
+  ],
+  "subject": {
+    "id": "delta-team",
+    "kind": "feature",
+    "title": "delta-team",
+  },
+  "summary": {
+    "attempts": 3,
+    "cards": 2,
+    "elapsed": {
+      "p50Ms": 1000,
+      "p95Ms": 1000,
+      "sampleSize": 3,
+      "totalMs": 3000,
+    },
+    "firstPassDeliveryRate": {
+      "denominator": 0,
+      "excludedIncomplete": 1,
+      "numerator": 0,
+      "value": null,
+    },
+    "redelegateRate": {
+      "denominator": 2,
+      "excludedIncomplete": 0,
+      "numerator": 1,
+      "value": 0.5,
+    },
+    "rework": {
+      "attemptsAfterFirst": 1,
+    },
+    "states": {
+      "active": 0,
+      "attested": 0,
+      "blocked": 0,
+      "delivered": 1,
+      "handoff_ready": 1,
+      "not_started": 0,
+      "unknown": 0,
+    },
+    "tcr": {
+      "green": 0,
+      "incompleteAttempts": 0,
+      "red": 0,
+      "unattributed": 0,
+    },
+  },
+  "window": {
+    "basis": "observed_fact_time",
+    "inclusive": true,
+  },
+}
+`;
+
+exports[`US-DELTA-021 worked example > freezes the worked example as one EN/ZH/JSON view with feature totals > worked-example-zh 1`] = `
+"
+交付视图：delta-team
+卡片 2 · 尝试 3
+- US-A：delivered
+  delta:d1 · failed · 耗时 1000ms
+  delta:d2 · handoff_ready · 耗时 1000ms
+- US-B：handoff_ready
+  delta:d3 · handoff_ready · 耗时 1000ms
+首轮交付 0/0 (n/a；排除不完整 1)
+返工后尝试 1
+耗时样本 3 · P50 1000ms · P95 1000ms
+不完整：missing_delta_delivery_publish, missing_designer_start, missing_evaluator_start
+"
+`;
+
+exports[`supervisor delivery > renders Chinese and exposes a malformed ledger diagnostic without throwing > zh 1`] = `
+"
+交付视图：US-X
+卡片 1 · 尝试 1
+- US-X：delivered
+  loop:c1 · active · 耗时 10ms
+首轮交付 0/0 (n/a；排除不完整 1)
+返工后尝试 0
+耗时样本 1 · P50 10ms · P95 10ms
+不完整：malformed_json, missing_loop_build_start, missing_merge_publish, unsupported_loop_stage_boundary
+"
+`;
+
+exports[`supervisor delivery > renders one unified, read-only current-truth view > en 1`] = `
+"
+Delivery view: US-X
+Cards 1 · attempts 1
+- US-X: delivered
+  loop:c1 · active · elapsed 10ms
+First-pass 0/0 (n/a; 1 incomplete excluded)
+Rework attempts after first 0
+Elapsed samples 1 · P50 10ms · P95 10ms
+Incomplete: missing_loop_build_start, missing_merge_publish, unsupported_loop_stage_boundary
+"
+`;
+
+exports[`supervisor delivery > renders one unified, read-only current-truth view > json 1`] = `
+{
+  "cards": [
+    {
+      "attempts": [
+        {
+          "attemptId": "loop:c1",
+          "cardId": "US-X",
+          "codes": [
+            "missing_loop_build_start",
+            "missing_merge_publish",
+            "unsupported_loop_stage_boundary",
+          ],
+          "incomplete": true,
+          "kind": "loop",
+          "observedAtMs": 10,
+          "outcome": "active",
+          "sourceRefs": [
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 1,
+              "rawSha256": "116cced96867caadea2a9c1965649b28bebfc96414eea34f944a62e0b98b5210",
+            },
+            {
+              "ledgerUri": "<fixture>/.roll/events.ndjson",
+              "line": 2,
+              "rawSha256": "a352d54d9025a924bf8a3875593a78da61299cba554bb9d39d911e585d99a1c1",
+            },
+          ],
+          "tcr": {
+            "green": 0,
+            "incompleteAttempts": 0,
+            "red": 0,
+            "unattributed": 0,
+          },
+          "timing": {
+            "buildMs": null,
+            "codes": [
+              "missing_loop_build_start",
+              "missing_merge_publish",
+              "unsupported_loop_stage_boundary",
+            ],
+            "designMs": null,
+            "elapsedMs": 10,
+            "evaluateMs": null,
+            "mergeTailMs": null,
+          },
+        },
+      ],
+      "codes": [
+        "missing_loop_build_start",
+        "missing_merge_publish",
+        "unsupported_loop_stage_boundary",
+      ],
+      "finalState": "delivered",
+      "finalTruth": {
+        "attestation": false,
+        "backlog": true,
+        "bindingIds": [
+          "loop:c1",
+        ],
+        "conflict": false,
+        "main": true,
+      },
+      "id": "US-X",
+      "incomplete": true,
+      "sourceRefs": [
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 1,
+          "rawSha256": "116cced96867caadea2a9c1965649b28bebfc96414eea34f944a62e0b98b5210",
+        },
+        {
+          "ledgerUri": "<fixture>/.roll/events.ndjson",
+          "line": 2,
+          "rawSha256": "a352d54d9025a924bf8a3875593a78da61299cba554bb9d39d911e585d99a1c1",
+        },
+      ],
+      "title": "fixture card",
+      "unattributedTcr": 0,
+    },
+  ],
+  "codes": [
+    "missing_loop_build_start",
+    "missing_merge_publish",
+    "unsupported_loop_stage_boundary",
+  ],
+  "diagnostics": [],
+  "incomplete": true,
+  "schemaVersion": 2,
+  "sourceRefs": [
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 1,
+      "rawSha256": "116cced96867caadea2a9c1965649b28bebfc96414eea34f944a62e0b98b5210",
+    },
+    {
+      "ledgerUri": "<fixture>/.roll/events.ndjson",
+      "line": 2,
+      "rawSha256": "a352d54d9025a924bf8a3875593a78da61299cba554bb9d39d911e585d99a1c1",
+    },
+  ],
+  "subject": {
+    "id": "US-X",
+    "kind": "card",
+    "title": "fixture card",
+  },
+  "summary": {
+    "attempts": 1,
+    "cards": 1,
+    "elapsed": {
+      "p50Ms": 10,
+      "p95Ms": 10,
+      "sampleSize": 1,
+      "totalMs": 10,
+    },
+    "firstPassDeliveryRate": {
+      "denominator": 0,
+      "excludedIncomplete": 1,
+      "numerator": 0,
+      "value": null,
+    },
+    "redelegateRate": {
+      "denominator": 0,
+      "excludedIncomplete": 0,
+      "numerator": 0,
+      "value": null,
+    },
+    "rework": {
+      "attemptsAfterFirst": 0,
+    },
+    "states": {
+      "active": 0,
+      "attested": 0,
+      "blocked": 0,
+      "delivered": 1,
+      "handoff_ready": 0,
+      "not_started": 0,
+      "unknown": 0,
+    },
+    "tcr": {
+      "green": 0,
+      "incompleteAttempts": 0,
+      "red": 0,
+      "unattributed": 0,
+    },
+  },
+  "window": {
+    "basis": "observed_fact_time",
+    "inclusive": true,
+  },
+}
+`;

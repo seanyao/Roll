@@ -1,4 +1,7 @@
 /**
+ * @responsibility Records a role's turn into the per-card round journal.
+ */
+/**
  * US-CYCLE-004 — best-effort runner hook that records a role's turn into the
  * per-card round-journal. Auto-writes from the spawn/gate paths so there is no
  * manual step. NEVER throws and NEVER blocks the cycle's critical path — a

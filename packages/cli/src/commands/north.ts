@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `roll north` subcommand, rendering the North Star report.
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -6,6 +9,7 @@ import {
   countJournalEntries,
   EventBus,
   latestJournalEntry,
+  splitBacklogRow,
   type NorthStarMetric,
   type NorthStarReport,
   type NorthStarBacklogEntry,
@@ -155,7 +159,7 @@ function readBacklog(root: string): NorthStarBacklogEntry[] {
   const entries: NorthStarBacklogEntry[] = [];
   for (const line of text.split("\n")) {
     if (!line.startsWith("|")) continue;
-    const cells = line.split("|").map((cell) => cell.trim()).filter((cell) => cell !== "");
+    const cells = splitBacklogRow(line).map((cell) => cell.trim()).filter((cell) => cell !== "");
     if (cells.length < 3 || /^-+$/.test(cells[0] ?? "")) continue;
     const idCell = cells[0] ?? "";
     const idMatch = /\b([A-Z][A-Z0-9]*(?:-[A-Z0-9a-z]+)*-\d+[a-z]?)\b/.exec(idCell);

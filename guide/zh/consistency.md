@@ -4,7 +4,10 @@
 merge 证据、验收报告、cycle 终态事件、发版闸事件才是事实。七个维度为：
 ① 代码 ↔ backlog 声明 · ② 卡片（每条活卡必须拥有
 `features/<epic>/<ID>/spec.md`，证据链接不许悬空；卡片制之后已交付且带 AC
-的故事必须拥有 `latest/<ID>-report.html`；卡片制之前的历史 Done 行只计数不拦截）·
+的故事必须拥有 `latest/<ID>-report.html`；没有验收项和报告的人工完成卡必须在
+Done 状态写 `manual:` 原因。规则启用前已经完成的同 ID 历史记录，只有受版本控制的
+`.roll/policy/manual-done-epoch.json` 基线和之后每一次已提交的 backlog 状态都证明它一直
+保持完成时，才只计数不拦截；记录缺失、损坏或与当前历史断开时会明确阻断发版）·
 ③ 文档（changelog / features / guide / README / --help）· ④ 测试 ·
 ⑤ locale 对等（guide en↔zh + i18n key）· ⑥ 网站 · ⑦ 真相活体
 （`ensureDeliveriesFresh` + `queryStoryDelivery` 必须证明发布增量里的每张卡
@@ -34,6 +37,9 @@ General → Pull Requests）；没开则发版会带着诚实的错误停下，�
 
 验收证据闸默认是 `hard`。`loop_safety.attest_gate: soft` 是显式项目策略，
 只用于迁移窗口；一致性检查仍会报告缺失或悬空的证据，避免缺口静默消失。
+
+网站维度只检查 site 文案里仍存活的公开顶层命令引用，并解析
+`guide/<lang>/*.md` 链接；它不会核对每个已完成故事是否都有网站页面。
 
 真相活体维度是防“假 Done”闸。它先从 `runs.jsonl` 和 first-parent `main`
 merge commit 重建交付投影，再对发布增量里的每个 story id 调

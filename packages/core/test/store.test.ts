@@ -13,6 +13,7 @@ import {
   markStatus,
   markStatusExact,
   parseBacklog,
+  splitBacklogRow,
 } from "../src/index.js";
 
 /**
@@ -64,6 +65,62 @@ describe("parseBacklog", () => {
     expect(items[1]?.status).toBe(DONE);
     expect(items[2]?.status).toBe("🔒 Blocked [waiting]");
     expect(items[0]?.desc).toBe("a bug");
+  });
+
+  it("FIX-1522: reads status from the true second-to-last cell when desc contains `\\|`", () => {
+    const items = parseBacklog("| FIX-1 | a \\| b | 📋 Todo |");
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toBe("FIX-1");
+    // Desc keeps the escaped pipe literally; status is NOT the text after it.
+    expect(items[0]?.desc).toBe("a \\| b");
+    expect(items[0]?.status).toBe(TODO);
+  });
+});
+
+describe("splitBacklogRow (FIX-1522 escaped pipes)", () => {
+  it("keeps an escaped pipe inside its cell (odd backslash run)", () => {
+    // `\|` in the source string is a single backslash followed by a pipe.
+    expect(splitBacklogRow("| FIX-1 | a \\| b | 📋 Todo |")).toEqual([
+      "",
+      " FIX-1 ",
+      " a \\| b ",
+      " 📋 Todo ",
+      "",
+    ]);
+    // The true status is the second-to-last cell.
+    const parts = splitBacklogRow("| FIX-1 | a \\| b | 📋 Todo |");
+    expect(parts[3]).toBe(" 📋 Todo ");
+  });
+
+  it("treats a pipe after THREE backslashes as escaped (odd run)", () => {
+    const parts = splitBacklogRow("| FIX-2 | x \\\\\\| y | 🔨 In Progress |");
+    expect(parts).toHaveLength(5);
+    expect(parts[2]).toBe(" x \\\\\\| y ");
+    expect(parts[3]).toBe(" 🔨 In Progress ");
+  });
+
+  it("splits a normal row exactly like split('|')", () => {
+    expect(splitBacklogRow("| FIX-3 | plain | ✅ Done |")).toEqual([
+      "",
+      " FIX-3 ",
+      " plain ",
+      " ✅ Done ",
+      "",
+    ]);
+  });
+
+  it("treats a pipe after TWO backslashes as a separator (even run)", () => {
+    expect(splitBacklogRow("a \\\\| b")).toEqual(["a \\\\", " b"]);
+  });
+
+  it("round-trips byte-identically through join('|')", () => {
+    for (const line of [
+      "| FIX-1 | a \\| b | 📋 Todo |",
+      "| FIX-2 | x \\\\\\| y | 🔨 In Progress |",
+      "| FIX-3 | plain | ✅ Done |",
+    ]) {
+      expect(splitBacklogRow(line).join("|")).toBe(line);
+    }
   });
 });
 
@@ -122,6 +179,16 @@ describe("markStatus", () => {
     const r = markStatus(content, "FIX-999", DONE);
     expect(r.count).toBe(0);
     expect(r.content).toBe(content);
+  });
+
+  it("FIX-1522: rewrites the real status cell and keeps `\\|` literal in the desc", () => {
+    const content = ["| FIX-1 | a \\| b | 📋 Todo |", "| FIX-2 | plain | 📋 Todo |"].join("\n");
+    const r = markStatus(content, "FIX-1", DONE);
+    expect(r.count).toBe(1);
+    // The status cell flips; the escaped pipe in the desc round-trips verbatim.
+    expect(r.content).toContain("| FIX-1 | a \\| b | ✅ Done |");
+    // Positive control: the normal-separator row is untouched.
+    expect(r.content).toContain("| FIX-2 | plain | 📋 Todo |");
   });
 
   it("preserves trailing newline and CRLF line endings", () => {
@@ -223,6 +290,15 @@ describe("markStatusExact (FIX-1475)", () => {
     const content = "| FIX-1475 | x | 📋 Todo |";
     expect(markStatusExact(content, "fix-1475", DONE).count).toBe(1);
     expect(markStatusExact(content, "FIX-9999", DONE).count).toBe(0);
+  });
+
+  it("FIX-1522: exact-id flip keeps `\\|` literal in the desc and reads the true status", () => {
+    const content = ["| FIX-1 | a \\| b | 📋 Todo |", "| FIX-1-followup | plain | 📋 Todo |"].join("\n");
+    const r = markStatusExact(content, "FIX-1", DONE);
+    expect(r.count).toBe(1);
+    expect(r.content).toContain("| FIX-1 | a \\| b | ✅ Done |");
+    // Positive control: the descendant row stays Todo.
+    expect(r.content).toContain("| FIX-1-followup | plain | 📋 Todo |");
   });
 });
 

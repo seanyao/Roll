@@ -42,6 +42,12 @@ defaults:
 only source for pairing candidates. Static config lists fair candidates; runtime
 auth/network/VPN/account failures skip candidates only for the current resolution.
 
+During the one-time migration, an enabled legacy `code` stage migrates only its
+code-capable reviewer pool to `defaults.story.roles.evaluate`. Legacy `score`,
+`design`, `test`, and `cycle` configuration is retired: score-only entries never
+enable code review, and Review Score remains mandatory independently of this
+retired file.
+
 ## Seeing what it does — observability
 
 Loop cycle evidence and role views show the pool (who can pair, their vendor,
@@ -53,9 +59,9 @@ has cost**:
 
   enabled: true · stages: [code]
 
-    ✓ claude  vendor=anthropic · [code]
-    ✓ codex   vendor=openai · [code]
-    · pi      vendor=pi · [code] · excluded: no heterogeneous partner
+    ✓ claude  model=claude-opus-5 vendor=anthropic · [code]
+    ✓ codex   model=gpt-5.3-codex vendor=openai · [code]
+    · pi      model=deepseek-v4-pro vendor=deepseek · [code]
 
   pairings to date: 7 (codex×4, kimi×3) · total cost $0.94 · 11 findings
 ```
@@ -67,11 +73,96 @@ second pair of eyes is spending, even without budget-adaptive throttling.
 
 When a stage fires, the selector keeps **only** agents that are installed,
 available, declared capable for that stage, able to run as a headless reviewer,
-and a **different vendor** from the working agent — then rotates among them
+and a **different vendor** from the working agent (computed from the resolved
+model — see below) — then rotates among them
 (seeded by the cycle id, so it is replayable). Agents with a track record are
 gently preferred (ε-greedy, ε≈0.2), but exploration is always preserved so no
 single pair monopolizes. If no qualified heterogeneous peer exists, that absence
 is itself recorded (`pair:none-available`) — never a silent skip.
+
+## What counts as "a different agent" — the model, not the name
+
+Isolation distance is computed from the **resolved model**, and the vendor is
+derived from that model. It is never inferred from the agent-entry name, because
+the name is wrong in both directions:
+
+- **Two entries, one model.** If `agents.yaml` pins two rigs to the same model,
+  they are NOT a heterogeneous pair. In this repo `pi` and `reasonix` both resolve
+  to `deepseek-v4-pro`, so pairing them would have one model reviewing its own
+  family's work while reporting "independently reviewed".
+- **One entry, many vendors.** `cursor` can run `claude-opus-5-thinking-high`
+  (anthropic) or `gpt-5.3-codex` (openai), and defaults to `auto`. Calling that
+  "one vendor" is fiction.
+
+Four distances, strongest to weakest:
+
+| Distance | Meaning |
+|---|---|
+| `vendor` | the reviewer's model is from a different, **known** vendor |
+| `model` | a different model (possibly the same vendor) |
+| `session` | the same model, but a freshly started session |
+| `off` | nothing required (must be written out explicitly) |
+
+**An unrecognised vendor can never satisfy `vendor`.** It degrades to the
+strongest distance that can be proven, and records why. "We could not tell" is
+never reported as "they differ". Adding a new agent or model means adding its
+model prefix in the same change, or every comparison involving it quietly drops a
+tier.
+
+**Selection reads configuration, not observation.** The model a peer will run is
+known before the spawn (its rig, else its registered default). Several agents ship
+deliberately stubbed usage extractors, so if selection depended on the observed
+model those agents could never satisfy a model/vendor distance at all. What the
+peer's own output claims it ran is reconciled afterwards and **warns** on a
+mismatch — it never revisits the decision.
+
+## Effort — one table for both axes
+
+Review strength and isolation strength are both facts about rigs, so one table
+expresses both: the gates that appear are the review strength, and each gate's
+value is the required distance.
+
+```yaml
+# .roll/agents.yaml
+effort:
+  code:  vendor      # code review: require a different vendor
+  score: vendor      # scoring: require a different vendor
+```
+
+Presets expand to the same thing: `standard` (both gates at `vendor` — the
+default), `light` (`code: vendor`, `score: off`), `off` (both off). A per-gate
+entry overrides the preset it sits on.
+
+Two deliberate refusals:
+
+- **The default is never `off`.** A missing section, an unknown preset, or an
+  invalid value all fall back to `standard` **and report an error** — switching
+  review off has to be typed out.
+- **Only `code` and `score` can be configured.** `design`, `test` and `cycle`
+  exist in the stage enum but have no production path; configuring one is a loud
+  error rather than a setting that silently never runs.
+
+## Reading the trade-off — `roll effort`
+
+```bash
+roll effort           # per (gate x achieved distance): samples, hits, cost
+roll effort --json
+```
+
+Read-only. Two things it refuses to do, both on purpose:
+
+- **A cell with fewer than 10 samples gets no hit rate**, and is named in the
+  output. A rate over a handful of samples reads like a trend and is not one; a
+  zero-sample cell rendered as "0%" is the "nobody reported a problem, therefore
+  there are none" fallacy.
+- **Observable and unobservable cost are never averaged together.** A cost of `0`
+  used to mean both "free" and "could not parse the usage" — those are now
+  separate columns, because a peer whose usage footer is unreadable did not work
+  for free.
+
+Verdicts recorded before the achieved distance existed as a field are counted
+apart (`untieredSamples`) rather than being assigned a distance that was never
+measured.
 
 ## Safety — pairing never blocks a cycle
 
@@ -92,10 +183,12 @@ pairing emits `pair:score` (score, verdict, cost) and writes
 
 ## Stages
 
-`code` and `score` are the defaults — a heterogeneous peer reviews the
-delivered diff, and another scores the finished cycle. `design`, `test`, and
-`cycle` extend the same mechanism to other checkpoints; enable them in
-`stages` when you want earlier or broader second eyes.
+The live code-review stage is `code`: a heterogeneous peer reviews the
+delivered diff when `story.evaluate` is configured. Review Score is a separate,
+mandatory finished-cycle check, so it is not configured as a pairing stage.
+`roll agent migrate` carries only enabled legacy `code` reviewer pools into
+`.roll/agents.yaml`; legacy `score`, `design`, `test`, and `cycle` entries are
+retired because they have no scoped code-review equivalent.
 
 ## Review Score — a peer grades the cycle, never the author
 

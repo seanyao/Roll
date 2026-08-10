@@ -1,4 +1,5 @@
 /**
+ * @responsibility Owns the story lease vocabulary that distinguishes picked from preempted cards.
  * Story lease — who claimed the card and when.
  *
  * FIX-1211: a lease distinguishes "the loop picked this" from "a human (or
@@ -37,8 +38,10 @@ import {
   closeSync,
   readFileSync,
   readdirSync,
+  statSync,
   unlinkSync,
   writeFileSync,
+  renameSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -47,13 +50,15 @@ import { randomUUID } from "node:crypto";
 export const HUMAN_SOFT_LEASE_HOURS = 24;
 
 /** Recognised claim sources. */
-export type LeaseSource = "cycle" | "human" | "supervisor" | "host-delegation";
+export type LeaseSource = "cycle" | "human" | "supervisor" | "host-delegation" | "skill-dispatch" | "delivery-reservation";
 
 const VALID_SOURCES: ReadonlySet<string> = new Set([
   "cycle",
   "human",
   "supervisor",
   "host-delegation",
+  "skill-dispatch",
+  "delivery-reservation",
 ]);
 
 /** A lease entry — who claimed a story and when. */
@@ -66,7 +71,7 @@ export interface LeaseEntry {
   source: LeaseSource;
   /** Host delegation identity — only meaningful when source === "host-delegation". */
   delegationId?: string;
-  /** Run ID for host delegation — only meaningful when source === "host-delegation". */
+  /** Run ID for a protocol-owned reservation. */
   runId?: string;
 }
 
@@ -366,7 +371,8 @@ export function injectClaimOps(ops: ClaimStepOps | null): void {
  * valid legacy entry exists for the same storyId and no canonical record
  * exists, the claim returns `exists` and no canonical record is created.
  *
- * Host-delegation claims MUST carry delegationId for match-only release.
+ * Host-delegation and Skill-dispatch claims carry their durable run identity
+ * for match-only release.
  *
  * @param dirPath  Path to the leases directory (e.g. `.roll/loop/leases`)
  * @param storyId  The story id to claim
@@ -380,6 +386,9 @@ export function claimStoryLease(
   // Host-delegation claims MUST carry delegationId for match-only release
   if (entry.source === "host-delegation" && !entry.delegationId) {
     throw new Error("claimStoryLease: host-delegation source requires delegationId");
+  }
+  if (entry.source === "skill-dispatch" && !entry.runId) {
+    throw new Error("claimStoryLease: skill-dispatch source requires runId");
   }
 
   // ═══ Step 0: Validate ALL legacy entries before any side effect ═══
@@ -555,7 +564,8 @@ export function claimStoryLease(
  * Match-only contract:
  * - `source` must match the lease entry's source.
  * - For `host-delegation` source: `delegationId` AND `runId` must all match.
- * - For `cycle` source: `pid` must also match.
+ * - For `cycle` source: `pid` must also match; when a durable `runId` is
+ *   recorded, it must match as well (legacy pid-only leases remain readable).
  * - Never deletes other owners' entries.
  *
  * Returns `true` if the lease was released, `false` if identity mismatch
@@ -588,8 +598,9 @@ export function releaseStoryLease(
   // Source must match
   if (existing.source !== identity.source) return false;
 
-  // For host-delegation: delegationId AND runId must both be non-empty and match.
-  if (identity.source === "host-delegation") {
+  // Protocol and durable delivery reservations are both identity-owned.  A
+  // merge, abandonment, or named continuation may release only its own run.
+  if (identity.source === "host-delegation" || identity.source === "delivery-reservation") {
     if (
       !identity.delegationId ||
       !identity.runId ||
@@ -600,10 +611,48 @@ export function releaseStoryLease(
     }
   }
 
+  // A dispatch reservation belongs to its parent DeliveryRun. Children never
+  // receive this identity, so they cannot release the Story reservation.
+  if (identity.source === "skill-dispatch") {
+    if (!identity.runId || existing.runId !== identity.runId) return false;
+  }
+
+  // FIX-1502 — a durable delivery reservation release shares the same mutex
+  // as adoption: verify the identity and unlink while holding it, so a pickup
+  // can never swap the record between our identity read and the unlink.  The
+  // lease filename therefore never disappears mid-swap; if the pickup holds
+  // the mutex right now, the release is refused and retried later.
+  if (identity.source === "delivery-reservation") {
+    const mutex = acquireAdoptionMutex(dirPath, storyId, "release");
+    if (mutex === undefined) return false;
+    try {
+      const current = (() => {
+        try { return decodeEntryStrict(JSON.parse(readFileSync(rp, "utf8").trim())); } catch { return undefined; }
+      })();
+      if (current?.source !== "delivery-reservation"
+        || current.delegationId !== identity.delegationId
+        || current.runId !== identity.runId) return false;
+      unlinkSync(rp);
+      fsyncDir(dirPath);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      releaseAdoptionMutex(dirPath, storyId, mutex);
+    }
+  }
+
+  // Other sources keep the historical refusal while a promotion, a named
+  // continuation transfer, or a pickup swap holds its short-lived mutex.
+  if (existsSync(join(dirPath, `.${storyId}.promotion.lock`))
+    || existsSync(join(dirPath, `.${storyId}.continuation.lock`))
+    || existsSync(join(dirPath, `.${storyId}.adoption.lock`))) return false;
+
   // For cycle: pid is REQUIRED and must match
   if (identity.source === "cycle") {
     if (identity.pid === undefined) return false;
     if (existing.pid !== identity.pid) return false;
+    if (existing.runId !== undefined && existing.runId !== identity.runId) return false;
   }
 
   // Match confirmed — remove the record
@@ -612,6 +661,504 @@ export function releaseStoryLease(
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Atomically turn the protocol guard into its durable delivery reservation.
+ *
+ * The lease filename is deliberately retained while its complete JSON record is
+ * replaced in the same directory.  A competing hard-link claimant therefore
+ * always observes a record: there is no release/reclaim gap between terminal
+ * handoff and normal delivery reconciliation.
+ */
+export function promoteHostDelegationLease(
+  dirPath: string,
+  storyId: string,
+  delegationId: string,
+  runId: string,
+): boolean {
+  const path = recordPath(dirPath, storyId);
+  if (!existsSync(path)) return false;
+  const promotionLock = join(dirPath, `.${storyId}.promotion.lock`);
+  type PromotionLock = Readonly<{
+    schema: "roll-lease-promotion-lock/v1";
+    pid: number;
+    token: string;
+    delegationId: string;
+    runId: string;
+    recordDev: number;
+    recordIno: number;
+  }>;
+  const writeDurable = (file: string, bytes: string, flags: string): void => {
+    const fd = openSync(file, flags);
+    try {
+      writeFileSync(fd, bytes, "utf8");
+      fdatasyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  };
+  const syncDir = (): void => {
+    const fd = openSync(dirPath, "r");
+    try { fdatasyncSync(fd); } finally { closeSync(fd); }
+  };
+  const lockOwnerAlive = (pid: number): boolean => {
+    if (pid === process.pid) return true;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const acquirePromotionLock = (): boolean => {
+    try {
+      // An exclusive, fsynced metadata lock makes a crashed owner
+      // distinguishable from a live matching owner.  The former version used a
+      // hard-link copy of the lease itself, so any matching lock looked stale
+      // and one concurrent promoter could delete another's active lock.
+      const stat = statSync(path);
+      const lock: PromotionLock = {
+        schema: "roll-lease-promotion-lock/v1",
+        pid: process.pid,
+        token: randomUUID(),
+        delegationId,
+        runId,
+        recordDev: stat.dev,
+        recordIno: stat.ino,
+      };
+      writeDurable(promotionLock, JSON.stringify(lock) + "\n", "wx");
+      syncDir();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!acquirePromotionLock()) {
+    // A process can die after taking the durable lock.  Recover only a lock
+    // whose owner is demonstrably dead and whose pinned record still names
+    // this exact handoff.  A matching *live* lock is never treated as stale.
+    try {
+      const locked = JSON.parse(readFileSync(promotionLock, "utf8").trim()) as PromotionLock;
+      const current = decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim()));
+      const currentStat = statSync(path);
+      const sameIdentity = (entry: LeaseEntry): boolean => entry.delegationId === delegationId && entry.runId === runId
+        && (entry.source === "host-delegation" || entry.source === "delivery-reservation");
+      // A rename has already committed the promotion if the canonical record
+      // is the durable reservation.  Its inode intentionally differs from the
+      // host guard inode captured by the old lock.  Treating that expected
+      // difference as foreign permanently wedged an otherwise completed
+      // handoff after a crash between rename and unlink.
+      const promotionAlreadyCommitted = current.source === "delivery-reservation" && sameIdentity(current);
+      if (locked.schema !== "roll-lease-promotion-lock/v1"
+        || locked.delegationId !== delegationId
+        || locked.runId !== runId
+        || lockOwnerAlive(locked.pid)
+        || !sameIdentity(current)
+        || (!promotionAlreadyCommitted && (currentStat.dev !== locked.recordDev || currentStat.ino !== locked.recordIno))) return false;
+      unlinkSync(promotionLock);
+      syncDir();
+    } catch {
+      return false;
+    }
+    if (!acquirePromotionLock()) return false;
+  }
+  let existing: LeaseEntry;
+  try {
+    existing = decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim()));
+  } catch {
+    try { unlinkSync(promotionLock); } catch { /* best effort */ }
+    return false;
+  }
+  if (existing.source === "delivery-reservation"
+    && existing.delegationId === delegationId
+    && existing.runId === runId) {
+    try { unlinkSync(promotionLock); } catch { /* best effort */ }
+    return true;
+  }
+  if (existing.source !== "host-delegation" || existing.delegationId !== delegationId || existing.runId !== runId) {
+    try { unlinkSync(promotionLock); } catch { /* best effort */ }
+    return false;
+  }
+  const next: LeaseEntry = {
+    claimedAt: existing.claimedAt,
+    source: "delivery-reservation",
+    delegationId,
+    runId,
+  };
+  const tmp = join(dirPath, `.${storyId}.${randomUUID()}.promotion.tmp`);
+  try {
+    writeDurable(tmp, JSON.stringify(next) + "\n", "wx");
+    // The durable lock pins the exact inode that was checked before the swap.
+    // releaseStoryLease refuses while it exists, so there is no ABA window.
+    const lock = JSON.parse(readFileSync(promotionLock, "utf8").trim()) as PromotionLock;
+    const currentStat = statSync(path);
+    if (lock.schema !== "roll-lease-promotion-lock/v1"
+      || lock.pid !== process.pid
+      || lock.delegationId !== delegationId
+      || lock.runId !== runId
+      || lock.recordDev !== currentStat.dev
+      || lock.recordIno !== currentStat.ino) {
+      try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+      return false;
+    }
+    renameSync(tmp, path);
+    syncDir();
+    return true;
+  } catch {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    return false;
+  } finally {
+    try { if (existsSync(promotionLock)) unlinkSync(promotionLock); } catch { /* best effort */ }
+  }
+}
+
+/** Closure is explicit: no terminal Delta handoff may free a reservation. */
+export type DeliveryReservationReleaseReason = "merged" | "abandoned" | "continuation_transferred";
+
+/** Release a durable host-Delta reservation after named delivery closure. */
+export function releaseDeliveryReservation(
+  dirPath: string,
+  storyId: string,
+  delegationId: string,
+  runId: string,
+  reason: DeliveryReservationReleaseReason,
+): boolean {
+  // Keep the reason in the public API: a caller must consciously select a
+  // delivery closure, rather than treating a terminal Delta event as release.
+  if (reason !== "merged" && reason !== "abandoned" && reason !== "continuation_transferred") return false;
+  return releaseStoryLease(dirPath, storyId, {
+    source: "delivery-reservation",
+    delegationId,
+    runId,
+  });
+}
+
+/**
+ * Atomically move a durable host-Delta reservation to a named continuation.
+ * The canonical lease file is never absent, so a competing Cycle cannot claim
+ * the Story between abandonment of one host session and pickup by its declared
+ * successor.
+ */
+export function transferDeliveryReservation(
+  dirPath: string,
+  storyId: string,
+  delegationId: string,
+  runId: string,
+  continuationRunId: string,
+): boolean {
+  if (continuationRunId === "" || continuationRunId === runId) return false;
+  const path = recordPath(dirPath, storyId);
+  if (!existsSync(path)) return false;
+  type TransferLock = Readonly<{
+    schema: "roll-lease-continuation-lock/v1";
+    pid: number;
+    delegationId: string;
+    runId: string;
+    continuationRunId: string;
+    recordDev: number;
+    recordIno: number;
+  }>;
+  const lockPath = join(dirPath, `.${storyId}.continuation.lock`);
+  const syncDir = (): void => {
+    const fd = openSync(dirPath, "r");
+    try { fdatasyncSync(fd); } finally { closeSync(fd); }
+  };
+  const alive = (pid: number): boolean => {
+    if (pid === process.pid) return true;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const readCurrent = (): LeaseEntry | undefined => {
+    try { return decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim())); } catch { return undefined; }
+  };
+  const clearCommittedDeadLock = (): boolean => {
+    // A rename has made the successor canonical, but a kill before `finally`
+    // can leave the old operation mutex behind.  Clean only the exact,
+    // demonstrably-dead owner; a live or different-successor lock is authority
+    // and must remain untouched.
+    try {
+      const lock = JSON.parse(readFileSync(lockPath, "utf8").trim()) as TransferLock;
+      if (lock.schema !== "roll-lease-continuation-lock/v1"
+        || lock.delegationId !== delegationId
+        || lock.runId !== runId
+        || lock.continuationRunId !== continuationRunId
+        || alive(lock.pid)) return false;
+      unlinkSync(lockPath);
+      syncDir();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // The already-transferred successor is idempotent success.  It is checked
+  // before acquiring the source CAS lock so a crash after rename is retryable.
+  // It must still retire the dead matching mutex: release is deliberately
+  // blocked while that lock exists.
+  const initial = readCurrent();
+  if (initial?.source === "delivery-reservation" && initial.delegationId === delegationId && initial.runId === continuationRunId) {
+    if (!existsSync(lockPath)) return true;
+    return clearCommittedDeadLock();
+  }
+  if (initial?.source !== "delivery-reservation" || initial.delegationId !== delegationId || initial.runId !== runId) return false;
+  const acquire = (): boolean => {
+    try {
+      const stat = statSync(path);
+      const lock: TransferLock = {
+        schema: "roll-lease-continuation-lock/v1", pid: process.pid,
+        delegationId, runId, continuationRunId, recordDev: stat.dev, recordIno: stat.ino,
+      };
+      const fd = openSync(lockPath, "wx");
+      try { writeFileSync(fd, JSON.stringify(lock) + "\n", "utf8"); fdatasyncSync(fd); } finally { closeSync(fd); }
+      syncDir();
+      return true;
+    } catch { return false; }
+  };
+  if (!acquire()) {
+    try {
+      const lock = JSON.parse(readFileSync(lockPath, "utf8").trim()) as TransferLock;
+      const current = readCurrent();
+      // A dead predecessor which already named our successor committed safely;
+      // clean the stale mutex and let the idempotent check above win.
+      if (current?.source === "delivery-reservation" && current.delegationId === delegationId && current.runId === continuationRunId) return clearCommittedDeadLock();
+      if (lock.schema !== "roll-lease-continuation-lock/v1" || alive(lock.pid)) return false;
+      const stat = statSync(path);
+      if (current?.source !== "delivery-reservation" || current.delegationId !== delegationId || current.runId !== runId
+        || stat.dev !== lock.recordDev || stat.ino !== lock.recordIno) return false;
+      unlinkSync(lockPath); syncDir();
+    } catch { return false; }
+    if (!acquire()) return false;
+  }
+  const tmp = join(dirPath, `.${storyId}.${randomUUID()}.continuation.tmp`);
+  try {
+    const fd = openSync(tmp, "wx");
+    try {
+      writeFileSync(fd, JSON.stringify({ ...initial, runId: continuationRunId }) + "\n", "utf8");
+      fdatasyncSync(fd);
+    } finally { closeSync(fd); }
+    // Re-read and compare the inode pinned by the exclusive lock immediately
+    // before rename.  Two different named successors therefore cannot both
+    // pass a stale read and last-writer-win.
+    const current = decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim()));
+    const lock = JSON.parse(readFileSync(lockPath, "utf8").trim()) as TransferLock;
+    const stat = statSync(path);
+    if (current.source !== "delivery-reservation" || current.delegationId !== delegationId || current.runId !== runId
+      || lock.schema !== "roll-lease-continuation-lock/v1" || lock.pid !== process.pid
+      || lock.delegationId !== delegationId || lock.runId !== runId || lock.continuationRunId !== continuationRunId
+      || stat.dev !== lock.recordDev || stat.ino !== lock.recordIno) return false;
+    renameSync(tmp, path);
+    syncDir();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    try { if (existsSync(lockPath)) unlinkSync(lockPath); } catch { /* best effort */ }
+  }
+}
+
+/**
+ * FIX-1502 — atomically adopt a redelegated reservation as a normal preparing
+ * host guard for a brand-new delegation.
+ *
+ * The canonical record is replaced in the same directory only while it still
+ * names exactly `fromDelegationId` + `continuationRunId` as a
+ * `delivery-reservation`: the named successor is the sole pickup authority.
+ * The lease filename is never absent during the swap, so no competing claimant
+ * can slip in between the old holder and the new run.  The old redelegate
+ * record format is deliberately not rewritten beyond this one atomic swap —
+ * retrying with the same new identity after a crash is idempotent success,
+ * while any other identity, name, or source is refused.
+ */
+
+// ── FIX-1502 — shared adoption/release mutex ─────────────────────────────────
+
+/**
+ * The per-story mutex serializing reservation adoption and release.  Both
+ * sides acquire the SAME lock file and pin the canonical record's inode, so
+ * the identity read, the CAS swap (adoption) or the unlink (release) all
+ * happen under one mutual exclusion — the lease filename is never absent
+ * between the old holder and the new run.
+ */
+export interface AdoptionMutex {
+  schema: "roll-lease-adoption-lock/v1";
+  pid: number;
+  /** Which operation holds the mutex; used only for dead-lock attribution. */
+  op: "adoption" | "release";
+  recordDev: number;
+  recordIno: number;
+}
+
+/** Path of the shared per-story adoption mutex. */
+export function adoptionMutexPath(dirPath: string, storyId: string): string {
+  return join(dirPath, `.${storyId}.adoption.lock`);
+}
+
+function fsyncDir(dirPath: string): void {
+  const fd = openSync(dirPath, "r");
+  try { fdatasyncSync(fd); } finally { closeSync(fd); }
+}
+
+function readAdoptionMutex(dirPath: string, storyId: string): AdoptionMutex | undefined {
+  try {
+    const lock = JSON.parse(readFileSync(adoptionMutexPath(dirPath, storyId), "utf8").trim()) as AdoptionMutex;
+    return lock.schema === "roll-lease-adoption-lock/v1" ? lock : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Retire a demonstrably-dead mutex owner.  A dead owner's op has either
+ * committed (its rename already replaced the record) or never will (it died
+ * before the rename); in both cases its mutex is stale garbage and may be
+ * removed so the next acquirer can proceed.
+ */
+export function retireDeadAdoptionMutex(dirPath: string, storyId: string): boolean {
+  const lock = readAdoptionMutex(dirPath, storyId);
+  if (lock === undefined || isPidAlive(lock.pid)) return false;
+  try {
+    unlinkSync(adoptionMutexPath(dirPath, storyId));
+    fsyncDir(dirPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Acquire the shared per-story adoption/release mutex.  Returns the mutex
+ * (with the canonical record's pinned inode) or undefined when a live owner
+ * holds it.  A dead predecessor's mutex is retired first, so a crash between
+ * verify and rename is safely retryable.
+ */
+export function acquireAdoptionMutex(
+  dirPath: string,
+  storyId: string,
+  op: "adoption" | "release",
+): AdoptionMutex | undefined {
+  const path = recordPath(dirPath, storyId);
+  if (!existsSync(path)) return undefined;
+  const lockPath = adoptionMutexPath(dirPath, storyId);
+  retireDeadAdoptionMutex(dirPath, storyId);
+  try {
+    const stat = statSync(path);
+    const lock: AdoptionMutex = {
+      schema: "roll-lease-adoption-lock/v1",
+      pid: process.pid,
+      op,
+      recordDev: stat.dev,
+      recordIno: stat.ino,
+    };
+    const fd = openSync(lockPath, "wx");
+    try {
+      writeFileSync(fd, JSON.stringify(lock) + "\n", "utf8");
+      fdatasyncSync(fd);
+    } finally { closeSync(fd); }
+    fsyncDir(dirPath);
+    return lock;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Release the mutex only when it is still exactly ours (same pid, op, and
+ * pinned inode).  Never removes another live operation's mutex.
+ */
+export function releaseAdoptionMutex(
+  dirPath: string,
+  storyId: string,
+  mutex: AdoptionMutex | undefined,
+): void {
+  if (mutex === undefined) return;
+  const lock = readAdoptionMutex(dirPath, storyId);
+  if (lock === undefined) return;
+  if (lock.pid !== mutex.pid || lock.op !== mutex.op
+    || lock.recordDev !== mutex.recordDev || lock.recordIno !== mutex.recordIno) return;
+  try {
+    unlinkSync(adoptionMutexPath(dirPath, storyId));
+  } catch { /* best effort */ }
+}
+
+/** FIX-1502 — deterministic test seam into the adoption CAS swap. */
+export interface AdoptionInterrupts {
+  /** Called while the adoption mutex is held, immediately before the rename. */
+  beforeRename?: () => void;
+}
+
+let _injectedAdoptionInterrupts: AdoptionInterrupts | null = null;
+
+/** Inject a test seam into the adoption CAS; pass null to reset. */
+export function injectAdoptionInterrupts(interrupts: AdoptionInterrupts | null): void {
+  _injectedAdoptionInterrupts = interrupts;
+}
+
+export function adoptContinuationReservation(
+  dirPath: string,
+  storyId: string,
+  fromDelegationId: string,
+  continuationRunId: string,
+  newDelegationId: string,
+  newRunId: string,
+): boolean {
+  if (continuationRunId === "" || newDelegationId === "" || newRunId === "") return false;
+  const path = recordPath(dirPath, storyId);
+  if (!existsSync(path)) return false;
+  const readCurrent = (): LeaseEntry | undefined => {
+    try { return decodeEntryStrict(JSON.parse(readFileSync(path, "utf8").trim())); } catch { return undefined; }
+  };
+  const isAdopted = (entry: LeaseEntry | undefined): boolean => entry?.source === "host-delegation"
+    && entry.delegationId === newDelegationId && entry.runId === newRunId;
+  const isRedelegatedToName = (entry: LeaseEntry | undefined): boolean => entry?.source === "delivery-reservation"
+    && entry.delegationId === fromDelegationId && entry.runId === continuationRunId;
+
+  // The already-adopted new guard is idempotent success: a crash after the CAS
+  // rename is retryable.  A stale dead mutex from that crash is retired so a
+  // later release of the new guard is never blocked forever.
+  const initial = readCurrent();
+  if (isAdopted(initial)) {
+    retireDeadAdoptionMutex(dirPath, storyId);
+    return true;
+  }
+  if (!isRedelegatedToName(initial)) return false;
+
+  // The reservation and a release of it share this mutex: adoption holds it
+  // through identity verify → temp write → rename, so a matching release can
+  // never unlink the record between our verification and the swap.  The lease
+  // filename therefore never disappears mid-swap.
+  const mutex = acquireAdoptionMutex(dirPath, storyId, "adoption");
+  if (mutex === undefined) return false;
+  const tmp = join(dirPath, `.${storyId}.${randomUUID()}.adoption.tmp`);
+  try {
+    // Under the mutex: re-read and prove the record is STILL the exact
+    // redelegation and still the file the mutex pinned.
+    const current = readCurrent();
+    const currentStat = statSync(path);
+    if (!isRedelegatedToName(current)
+      || currentStat.dev !== mutex.recordDev || currentStat.ino !== mutex.recordIno) return false;
+    const next: LeaseEntry = {
+      claimedAt: Date.now(),
+      source: "host-delegation",
+      delegationId: newDelegationId,
+      runId: newRunId,
+    };
+    const fd = openSync(tmp, "wx");
+    try {
+      writeFileSync(fd, JSON.stringify(next) + "\n", "utf8");
+      fdatasyncSync(fd);
+    } finally { closeSync(fd); }
+    // Compare-and-swap: re-verify the exact identity and inode immediately
+    // before the rename.  The mutex already excludes a concurrent release or
+    // adoption; the second check keeps the invariant honest under refactors.
+    const before = readCurrent();
+    const beforeStat = statSync(path);
+    if (!isRedelegatedToName(before)
+      || beforeStat.dev !== mutex.recordDev || beforeStat.ino !== mutex.recordIno) return false;
+    if (_injectedAdoptionInterrupts?.beforeRename) _injectedAdoptionInterrupts.beforeRename();
+    renameSync(tmp, path);
+    fsyncDir(dirPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    releaseAdoptionMutex(dirPath, storyId, mutex);
   }
 }
 
@@ -687,7 +1234,16 @@ export function isHumanSoftLeaseActive(entry: LeaseEntry, now: number): boolean 
  *
  * Returns the list of storyIds whose dead leases were cleaned (for alerting).
  */
-export function cleanDeadLeases(dirPath: string): string[] {
+export interface DeadLeaseCleanupOptions {
+  /**
+   * A caller that owns a durable lifecycle projection can retain a dead PID
+   * lease while its workspace is still ambiguous.  A dead process is not proof
+   * that its registered checkout may be handed to another delivery run.
+   */
+  readonly preserve?: (storyId: string, entry: LeaseEntry) => boolean;
+}
+
+export function cleanDeadLeases(dirPath: string, options: DeadLeaseCleanupOptions = {}): string[] {
   // BLOCK-3: Under the read-only legacy contract, cleanDeadLeases cleans
   // canonical records only. Legacy-only data is immutable — return no
   // cleaned IDs and perform no write (never create canonical survivor
@@ -709,7 +1265,8 @@ export function cleanDeadLeases(dirPath: string): string[] {
         if (
           decoded.pid !== undefined &&
           decoded.source !== "host-delegation" &&
-          !isPidAlive(decoded.pid)
+          !isPidAlive(decoded.pid) &&
+          options.preserve?.(storyId, decoded) !== true
         ) {
           unlinkSync(rp);
           cleaned.push(storyId);

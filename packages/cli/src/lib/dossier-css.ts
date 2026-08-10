@@ -1,4 +1,7 @@
 /**
+ * @responsibility Defines the Delivery Dossier design system layered on the shared chrome CSS.
+ */
+/**
  * US-DOSSIER-001a — the Delivery Dossier design system, layered ON TOP of
  * CHROME_CSS (which owns the palette, type stack, chrome bar and print rules).
  *

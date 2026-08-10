@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll idea` subcommand, the single user-facing card-capture entry point.
+ */
+/**
  * `roll idea <description>` — THE single user-facing card-capture entry point
  * (US-PORT-003 + REFACTOR-050 card-creation unification).
  *
@@ -26,18 +29,17 @@
  * Output follows the resolved locale (single-language).
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BacklogItem } from "@roll/core";
-import { BacklogStore, ConflictError, IDEA_SECTIONS, appendIdea, inferEpic, parseBacklog, planIdea } from "@roll/core";
+import { BacklogStore, ConflictError, IDEA_SECTIONS, appendBacklogRow, appendIdea, inferEpic, parseBacklog, planIdea } from "@roll/core";
 import { type Lang, resolveLang, t, v2Catalog, v3Catalog } from "@roll/spec";
-import { generateIndex, projectDataPath } from "../lib/archive.js";
+import { generateIndex } from "../lib/archive.js";
 import { UNCATEGORIZED } from "../lib/archive.js";
-import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
-import { writeStoryCardFiles } from "../lib/story-mint.js";
-import { requireWorkspaceAuthorities, requireWorkspaceMutationPath } from "../lib/workspace-project-authority.js";
+import { renderSpecMd, renderStoryPage } from "../lib/story-page.js";
 import { c, renderState } from "../render.js";
 
+const BACKLOG_PATH = ".roll/backlog.md";
 const STORY_ID_DIR_RE = /^(?:US-[A-Z]+-\d+[a-z]?|FIX-\d+[a-z]?|REFACTOR-\d+[a-z]?|IDEA-\d+[a-z]?|BUG-\d+[a-z]?)$/;
 
 /** Locale label, single-language: v3 keys fall back to v2 keys then the key. */
@@ -47,7 +49,7 @@ function label(lang: Lang, key: string, ...args: ReadonlyArray<string | number>)
 }
 
 function readCardFolderIds(projectPath: string): string[] {
-  const featuresDir = projectDataPath(projectPath, "features");
+  const featuresDir = join(projectPath, ".roll", "features");
   try {
     const epics = readdirSync(featuresDir, { withFileTypes: true });
     const ids: string[] = [];
@@ -73,16 +75,59 @@ function cardIdsAsBacklogItems(ids: readonly string[]): BacklogItem[] {
 /** FIX-1481: injectable seams so id allocation can see the REMOTE authoritative
  *  backlog (not just the possibly-stale local file) and be unit-tested. */
 export interface IdeaCommandDeps {
-  readonly projectPath?: string;
-  readonly backlogPath?: string;
-  readonly featuresDir?: string;
-  readonly canonical?: boolean;
   /** Ids present on the remote (`origin/main`) backlog. Best-effort: returns []
    *  when the remote is unreachable so allocation degrades to local, never blocks.
    *  Called with `fetch:true` for BOTH the allocation pool and the pre-write
    *  collision re-check — the re-check must fetch fresh to see a concurrent
    *  site's just-pushed id. */
   remoteBacklogIds?: (projectPath: string, opts?: { fetch?: boolean }) => string[];
+  /** Test seam for the cache refresh. A refresh failure must roll the whole
+   * card creation back instead of leaving a row without its card. */
+  generateIndex?: (projectPath: string) => Record<string, string>;
+  /** Test seam for the atomic directory claim.  A failed claim must never make
+   * cleanup remove a directory another invocation owns. */
+  renameCard?: (from: string, to: string) => void;
+}
+
+type ExplicitType = "us" | "fix" | "idea";
+
+interface ParsedIdeaArgs {
+  text: string;
+  explicitType?: ExplicitType;
+  error?: "missing-type" | "invalid-type";
+}
+
+/** Parse the one explicit creation choice without changing legacy no-flag
+ * capture behaviour.  Keeping this separate makes invalid input fail before
+ * any filesystem work starts. */
+function parseIdeaArgs(args: readonly string[]): ParsedIdeaArgs {
+  const typeAt = args.indexOf("--type");
+  const equals = args.find((arg) => arg.startsWith("--type="));
+  if (typeAt !== -1 && equals !== undefined) return { text: "", error: "invalid-type" };
+  let rawType: string | undefined;
+  const textArgs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--type") {
+      rawType = args[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--type=")) {
+      rawType = arg.slice("--type=".length);
+      continue;
+    }
+    if (!arg.startsWith("-")) textArgs.push(arg);
+  }
+  if (rawType === undefined && typeAt === -1 && equals === undefined) {
+    return { text: textArgs.join(" ").trim() };
+  }
+  if (rawType === undefined || rawType.startsWith("-")) return { text: "", error: "missing-type" };
+  const normalized = rawType.toLowerCase();
+  if (normalized !== "us" && normalized !== "fix" && normalized !== "idea") {
+    return { text: "", error: "invalid-type" };
+  }
+  return { text: textArgs.join(" ").trim(), explicitType: normalized };
 }
 
 /**
@@ -136,6 +181,7 @@ function realRemoteBacklogIds(projectPath: string, opts?: { fetch?: boolean }): 
 }
 
 export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number {
+  const json = args.includes("--json");
   const noColor =
     args.includes("--no-color") || !process.stdout.isTTY || (process.env["NO_COLOR"] ?? "") !== "";
   renderState.useColor = !noColor;
@@ -150,16 +196,16 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
     return 0;
   }
 
-  const textParts: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (isCanonicalWorkspaceSelectorToken(arg)) {
-      index += 1;
-      continue;
+  const parsedArgs = parseIdeaArgs(args);
+  if (parsedArgs.error !== undefined) {
+    if (json) {
+      process.stderr.write(`${JSON.stringify({ ok: false, error: parsedArgs.error, allowedTypes: ["us", "fix", "idea"] })}\n`);
+    } else {
+      process.stderr.write(`${label(lang, parsedArgs.error === "missing-type" ? "ideav3.type_missing" : "ideav3.type_invalid")}\n${label(lang, "ideav3.usage")}\n`);
     }
-    if (arg !== undefined && !arg.startsWith("-")) textParts.push(arg);
+    return 1;
   }
-  const text = textParts.join(" ").trim();
+  const text = parsedArgs.text;
   if (text === "") {
     process.stderr.write(`${label(lang, "ideav3.empty")}\n${label(lang, "ideav3.usage")}\n`);
     return 1;
@@ -167,14 +213,7 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
 
   const RED = noColor ? "" : "\x1b[0;31m";
   const NC = noColor ? "" : "\x1b[0m";
-  const projectPath = deps.projectPath ?? process.cwd();
-  const backlogPath = deps.backlogPath ?? join(projectPath, ".roll", "backlog.md");
-  const featuresDir = deps.featuresDir ?? projectDataPath(projectPath, "features");
-  if (deps.canonical === true && !requireWorkspaceAuthorities("roll idea", [
-    { path: backlogPath, kind: "file" },
-    { path: featuresDir, kind: "directory" },
-  ])) return 1;
-  if (!existsSync(backlogPath)) {
+  if (!existsSync(BACKLOG_PATH)) {
     process.stderr.write(
       `${RED}[roll]${NC} ${t(v2Catalog, lang, "backlog.roll_backlog_md_not_found_run")}\n`,
     );
@@ -182,7 +221,8 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
   }
 
   const store = new BacklogStore();
-  const snap = store.readBacklog(backlogPath);
+  const snap = store.readBacklog(BACKLOG_PATH);
+  const projectPath = process.cwd();
   const occupiedCardItems = cardIdsAsBacklogItems(readCardFolderIds(projectPath));
   const extraOccupiedIds: string[] = [];
   // FIX-1481: fold ids from the REMOTE authoritative backlog into the allocation
@@ -190,12 +230,14 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
   // this checkout has not synced. Unreachable remote → [] (degrade to local).
   const remoteIds = (deps.remoteBacklogIds ?? realRemoteBacklogIds)(projectPath, { fetch: true });
   const remoteItems = cardIdsAsBacklogItems(remoteIds);
-  if (remoteIds.length === 0) {
+  if (remoteIds.length === 0 && !json) {
     process.stderr.write(
       `${c("dim", lang === "zh" ? "· 远端 backlog 不可达,取号仅依据本地(可能与其他现场撞号)" : "· remote backlog unreachable — allocating from local only (may collide with other sites)")}\n`,
     );
   }
-  let plan = planIdea([...snap.items, ...occupiedCardItems, ...remoteItems], text);
+  const epic = inferEpic(text) ?? UNCATEGORIZED;
+  const explicitKind = parsedArgs.explicitType === "fix" ? "bug" : parsedArgs.explicitType;
+  let plan = planIdea([...snap.items, ...occupiedCardItems, ...remoteItems], text, explicitKind, epic);
 
   if (plan.violations.length > 0) {
     process.stderr.write(
@@ -207,19 +249,16 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
 
   // REFACTOR-050 AC1/AC3: create the full story card folder, same as `story new`.
   // Epic is inferred from the description text; falls back to "uncategorized".
-  const epic = inferEpic(text) ?? UNCATEGORIZED;
-  let cardDir = join(featuresDir, epic, plan.id);
-  while (true) {
-    if (deps.canonical === true && !requireWorkspaceMutationPath("roll idea", featuresDir, cardDir, "directory")) {
-      return 1;
-    }
-    if (!existsSync(join(cardDir, "spec.md"))) break;
+  let cardDir = join(projectPath, ".roll", "features", epic, plan.id);
+  while (existsSync(join(cardDir, "spec.md"))) {
     extraOccupiedIds.push(plan.id);
     plan = planIdea(
       [...snap.items, ...occupiedCardItems, ...remoteItems, ...cardIdsAsBacklogItems(extraOccupiedIds)],
       text,
+      explicitKind,
+      epic,
     );
-    cardDir = join(featuresDir, epic, plan.id);
+    cardDir = join(projectPath, ".roll", "features", epic, plan.id);
   }
 
   // FIX-1481 AC2: fail-loud if the chosen id was taken on the remote between the
@@ -236,59 +275,74 @@ export function ideaCommand(args: string[], deps: IdeaCommandDeps = {}): number 
     return 1;
   }
 
-  const card = {
-    id: plan.id,
-    title: text,
-    type: plan.kind,
-    epic: epic !== UNCATEGORIZED ? epic : undefined,
-    created: new Date().toISOString().slice(0, 10),
-  };
+  const nextBacklog = plan.kind === "us"
+    ? appendBacklogRow(snap.content, { id: plan.id, title: text, epic }).content
+    : appendIdea(snap.content, plan.id, plan.kind, text).content;
+  const stagingRoot = join(projectPath, ".roll");
+  let stagingDir: string | undefined;
+  let writtenHash: string | undefined;
+  let ownsCardDir = false;
+  const indexPath = join(stagingRoot, "index.json");
+  const previousIndex = existsSync(indexPath) ? readFileSync(indexPath, "utf8") : undefined;
   try {
-    writeStoryCardFiles(cardDir, card);
-  } catch (error) {
-    process.stderr.write(
-      `${RED}[roll]${NC} ${lang === "zh" ? "Story card 写入失败" : "failed to write Story card"}: ${error instanceof Error ? error.message : "unknown error"}\n`,
-    );
-    return 1;
-  }
-
-  try {
-    store.writeBacklog(backlogPath, snap.hash, (content) =>
-      appendIdea(content, plan.id, plan.kind, text, {
-        epic,
-        ...(deps.canonical === true ? { linkPrefix: "../features" } : {}),
-      }).content,
-    );
+    // Write a complete card outside its final ID path first.  A failed spec or
+    // page write therefore cannot leave a discoverable partial card.
+    stagingDir = mkdtempSync(join(stagingRoot, ".idea-card-"));
+    const card = {
+      id: plan.id,
+      title: text,
+      type: plan.kind === "bug" ? "bug" : plan.kind,
+      epic: epic !== UNCATEGORIZED ? epic : undefined,
+      created: new Date().toISOString().slice(0, 10),
+    };
+    writeFileSync(join(stagingDir, "spec.md"), renderSpecMd(card), "utf8");
+    writeFileSync(join(stagingDir, "index.html"), renderStoryPage(card), "utf8");
+    mkdirSync(join(projectPath, ".roll", "features", epic), { recursive: true });
+    writtenHash = store.writeBacklog(BACKLOG_PATH, snap.hash, () => nextBacklog);
+    (deps.renameCard ?? renameSync)(stagingDir, cardDir);
+    stagingDir = undefined;
+    ownsCardDir = true;
+    (deps.generateIndex ?? generateIndex)(projectPath);
   } catch (e) {
+    if (stagingDir !== undefined) rmSync(stagingDir, { recursive: true, force: true });
+    // Only this invocation's successful atomic rename grants ownership.  In a
+    // race, a different invocation can create cardDir between our born-once
+    // check and rename; a failed rename must leave that directory untouched.
+    if (ownsCardDir && existsSync(cardDir)) rmSync(cardDir, { recursive: true, force: true });
+    if (previousIndex === undefined) rmSync(indexPath, { force: true });
+    else writeFileSync(indexPath, previousIndex, "utf8");
+    if (writtenHash !== undefined) {
+      try {
+        store.writeBacklog(BACKLOG_PATH, writtenHash, () => snap.content);
+      } catch {
+        process.stderr.write(`${RED}[roll]${NC} ${label(lang, "ideav3.rollback_failed")}\n`);
+        return 1;
+      }
+    }
     // The optimistic-write guard fired: the backlog changed between read and
     // write. Emit a clean localized message instead of a raw stack trace.
     if (e instanceof ConflictError) {
       process.stderr.write(`${RED}[roll]${NC} ${label(lang, "ideav3.conflict")}\n`);
       return 1;
     }
-    throw e;
+    if (json) process.stderr.write(`${JSON.stringify({ ok: false, error: "write_failed" })}\n`);
+    else process.stderr.write(`${RED}[roll]${NC} ${label(lang, "ideav3.write_failed")}\n`);
+    return 1;
   }
 
-  const kindLabel = label(lang, plan.kind === "bug" ? "ideav3.kind_bug" : "ideav3.kind_idea");
-  const section = IDEA_SECTIONS[plan.kind].replace(/^#+\s*/, "");
+  const kindLabel = label(lang, plan.kind === "bug" ? "ideav3.kind_bug" : plan.kind === "us" ? "ideav3.kind_us" : "ideav3.kind_idea");
+  const section = plan.kind === "us" ? label(lang, "ideav3.kind_us") : IDEA_SECTIONS[plan.kind].replace(/^#+\s*/, "");
+  const family = plan.kind === "us" ? "US" : plan.kind === "bug" ? "FIX" : "IDEA";
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ ok: true, id: plan.id, family, type: plan.kind, epic, text })}\n`);
+    return 0;
+  }
   process.stdout.write(`\n${c("green", "📝 " + label(lang, "ideav3.recorded", plan.id))}\n\n`);
   process.stdout.write(`  ${c("dim", label(lang, "ideav3.type") + ":")}    ${kindLabel}\n`);
   process.stdout.write(`  ${c("dim", label(lang, "ideav3.section") + ":")} ${section}\n`);
   process.stdout.write(`  ${c("dim", label(lang, "ideav3.text") + ":")}    ${text}\n\n`);
 
-  process.stdout.write(
-    `  ${c("dim", label(lang, "ideav3.card_created", epic))}\n`,
-  );
-
-  // US-V4-001: maintain the lightweight `.roll/index.json` ID→epic CACHE at card
-  // creation (best-effort; the live-first locator works without it). The global
-  // dossier/epic page refresh is NO LONGER a delivery side effect — run
-  // `roll index` to (re)render those pages on demand.
-  try {
-    generateIndex(projectPath, deps.canonical === true ? "workspace" : "auto");
-  } catch {
-    /* index cache is best-effort; the locator re-derives via live walk */
-  }
+  process.stdout.write(`  ${c("dim", label(lang, "ideav3.card_created", epic))}\n`);
 
   return 0;
 }

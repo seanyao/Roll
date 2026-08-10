@@ -1,3 +1,6 @@
+/**
+ * @responsibility Projects cycle role attempts into renderable execution-cast rows.
+ */
 import {
   type CycleRoleAttempt,
   type CycleRoleAttemptState,

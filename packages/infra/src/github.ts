@@ -1,4 +1,7 @@
 /**
+ * @responsibility Drives the gh CLI for GitHub operations as the v2 loop does.
+ */
+/**
  * GitHub module — TS I/O adapters that drive the `gh` CLI exactly as the v2 loop
  * does (US-INFRA-003).
  *
@@ -149,8 +152,6 @@ export async function gh(args: readonly string[]): Promise<GhResult> {
   const result = await invokeInfraTool<GhRawInput, GhResult>({
     declaration: GH_RAW_DECLARATION,
     input: { args: [...args] },
-    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
-    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh(invocation.input.args)),
   });
   if (result.ok) return result.output;
@@ -537,8 +538,6 @@ export async function prCreate(input: PrCreateInput): Promise<string> {
   const r = await invokeInfraTool<GitHubPrCreateToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "create", ...input, base },
-    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
-    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh([
       "-R", invocation.input.slug, "pr", "create",
       "--base", invocation.input.base, "--head", invocation.input.head,
@@ -562,15 +561,17 @@ export type PrMergeMode = "auto" | "admin" | "plain";
  *   - plain (11587/11963/12015): failure NON-fatal (next tick retries).
  * The wrapper does not decide fatality — it surfaces the code; callers branch.
  */
-export async function prMerge(slug: string, ref: string, mode: PrMergeMode): Promise<GhResult> {
+export async function prMerge(slug: string, ref: string, mode: PrMergeMode, headSha?: string): Promise<GhResult> {
   const flags = mode === "auto" ? ["--auto"] : mode === "admin" ? ["--admin"] : [];
+  // FIX-1487: pin the sha that was actually verified. Without it, anything
+  // pushed between "checks are green" and this call gets merged unverified —
+  // and with no branch protection there is no server-side gate behind us.
+  const pin = headSha !== undefined && headSha !== "" ? ["--match-head-commit", headSha] : [];
   const result = await invokeInfraTool<GitHubPrMergeToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "merge", slug, ref, mode },
-    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
-    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh([
-      "-R", invocation.input.slug, "pr", "merge", invocation.input.ref, ...flags, "--squash", "--delete-branch",
+      "-R", invocation.input.slug, "pr", "merge", invocation.input.ref, ...flags, ...pin, "--squash", "--delete-branch",
     ])),
   });
   if (result.ok) return result.output;
@@ -585,8 +586,6 @@ export async function prReady(slug: string, ref: string): Promise<GhResult> {
   const result = await invokeInfraTool<GitHubPrReadyToolInput, GhResult>({
     declaration: GITHUB_PR_DECLARATION,
     input: { action: "ready", slug, ref },
-    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
-    scope: "machine_only",
     run: async (invocation) => ok(invocation, await rawGh([
       "-R", invocation.input.slug, "pr", "ready", invocation.input.ref,
     ])),
@@ -788,8 +787,6 @@ export async function runList(
   const r = await invokeInfraTool<GitHubCiStatusToolInput, GhResult>({
     declaration: GITHUB_CI_DECLARATION,
     input: { action: "status", slug, fields, commit: opts.commit, branch: opts.branch, limit: opts.limit },
-    // Legacy release orchestration helper; Agent-facing GitHubTool is Issue-scoped.
-    scope: "machine_only",
     run: async (invocation) => {
       const argv = ["-R", invocation.input.slug, "run", "list"];
       if (invocation.input.commit !== undefined) argv.push("--commit", invocation.input.commit);

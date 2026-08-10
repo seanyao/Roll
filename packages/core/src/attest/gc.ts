@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides which archived acceptance-report runs are safe to retain or delete.
  * US-META-001 — archive GC verdict (pure).
  *
  * A card folder accrues one run dir per attest (`<run-id>/` + screenshots +

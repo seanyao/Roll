@@ -1,4 +1,5 @@
 /**
+ * @responsibility Provides the policy-controlled allowlist of device emulation profiles.
  * US-BROW-014 — Device emulation diagnostic profiles.
  *
  * A finite, policy-controlled allowlist of Chrome device/viewport profiles.

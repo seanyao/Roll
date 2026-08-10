@@ -1,4 +1,5 @@
 /**
+ * @responsibility Adapts persisted fact rows into truth selectors as the one read path.
  * US-TRUTH-004 — the ONE adapter between persisted fact rows and the truth
  * selectors (US-TRUTH-003). dashboard / status / dossier consume THESE
  * functions instead of each re-parsing runs rows with their own literals —

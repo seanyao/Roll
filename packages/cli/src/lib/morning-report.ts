@@ -1,4 +1,7 @@
-import { CHROME_CONTROLS, CHROME_CSS, CHROME_SCRIPT, buildLoopDigestModel, type LoopDigestModel, type MorningRunRow } from "@roll/core";
+/**
+ * @responsibility Builds the morning report digest from the event stream.
+ */
+import { CHROME_CONTROLS, CHROME_CSS, CHROME_SCRIPT, buildLoopDigestModel, serializeEvent, type LoopDigestModel, type MorningRunRow } from "@roll/core";
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -173,22 +176,26 @@ export function writeLatestLoopDigest(
   const shouldNotifyDegraded = model.degraded && currentDegradedHash !== previousDegradedHash;
   try {
     mkdirSync(dirname(eventsPath), { recursive: true });
+    // FIX-1490: serializeEvent puts `ts` on the epoch-ms contract. These two
+    // appends used to JSON.stringify a SECONDS clock straight to disk — one of
+    // three writers that bypassed the bus (168 report:loop-digest + 33
+    // alert:notify seconds events survive on disk from this path alone).
     if (shouldNotifyDegraded) {
       appendFileSync(
         eventsPath,
-        `${JSON.stringify({
+        serializeEvent({
           type: "alert:notify",
           channel: "loop-digest",
           message: degradationMessage(model),
           ts: nowSec,
-        } satisfies RollEvent)}\n`,
+        } satisfies RollEvent),
         "utf8",
       );
     }
     writeDegradedStateHash(degradedState, model.degradedReasons, nowSec);
     appendFileSync(
       eventsPath,
-      `${JSON.stringify({
+      serializeEvent({
         type: "report:loop-digest",
         path: ".roll/reports/loop/latest.html",
         windowStart,
@@ -197,7 +204,7 @@ export function writeLatestLoopDigest(
         corrections: model.corrections,
         paused: model.paused,
         ts: nowSec,
-      } satisfies RollEvent)}\n`,
+      } satisfies RollEvent),
       "utf8",
     );
   } catch {

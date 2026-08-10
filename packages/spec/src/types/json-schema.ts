@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the shared JSON-schema type vocabulary.
+ */
 export type JsonPrimitive = string | number | boolean | null;
 
 export type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -19,9 +22,6 @@ export type JsonSchema = boolean | {
   readonly oneOf?: readonly JsonSchema[];
   readonly anyOf?: readonly JsonSchema[];
   readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly pattern?: string;
   readonly minimum?: number;
-  readonly maximum?: number;
   readonly minItems?: number;
 };

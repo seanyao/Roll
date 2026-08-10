@@ -139,7 +139,7 @@ npm uninstall -g @bipo-ape/roll
 **细节：**
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 不需要 Node.js、不需要 npm、不需要任何包管理器。脚本下载 tarball、解压到
@@ -150,7 +150,7 @@ curl -fsSL https://seanyao.github.io/roll/install | bash
 钉版本（生产环境推荐）：
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
+npm install -g @bipo-ape/roll
 ```
 
 ---
@@ -506,8 +506,9 @@ tmux 观测 pane 使用同一个 watch 入口。
      评审、冲突或权限原因。这不属于主 loop 的阶段。
    - `worktree_setup` > 30 秒 → `git fetch origin` 慢；通常是临时网络
      抖动。
-   - `preflight` > 30 秒 → 上轮留下了孤儿 worktree，loop 正在回收；
-     下一轮就好。
+   - `preflight` > 30 秒 → 受管工作区审计发现 stale、unknown 或未注册成员。检查
+     `roll worktree audit` 与 `roll supervisor live`；Roll 会保留现场并打印 owner
+     recovery action，不会自动删除或重建。
 
 阶段耗时也写进 `runs.jsonl` 的 `phases` 字段（每个阶段一个秒数键），
 可以跨多轮做后处理分析。

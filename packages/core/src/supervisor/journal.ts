@@ -1,4 +1,5 @@
 /**
+ * @responsibility Reads and renders the supervisor journal event stream.
  * US-OBS-048 — Supervisor journal read-side helpers.
  *
  * The journal is an append-only stream of `supervisor:journal` events written

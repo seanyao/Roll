@@ -1,11 +1,14 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   installRollCapture,
   renderRollCaptureInstallResult,
+  renderRollCaptureUpdatePrompt,
+  renderRollCaptureUpdateResult,
   runRollCapturePostinstall,
+  updateRollCapture,
   type RollCaptureInstallDeps,
   rollCaptureInstallInternals,
 } from "../src/lib/roll-capture-install.js";
@@ -68,6 +71,13 @@ function plist(version: string): string {
 <key>CFBundleShortVersionString</key><string>${version}</string>
 </dict></plist>
 `;
+}
+
+function installedApp(home: string, version = "0.1.0"): string {
+  const app = join(home, "Applications", "Roll Capture.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(app, "Contents", "Info.plist"), plist(version));
+  return app;
 }
 
 describe("US-PHYSICAL-005 Roll Capture installer", () => {
@@ -315,6 +325,115 @@ describe("US-PHYSICAL-005 Roll Capture installer", () => {
     expect(result.reason).toContain("simulated replace failure");
     expect(readFileSync(join(oldApp, "Contents", "Info.plist"), "utf8")).toContain("0.1.0");
     expect(existsSync(`${oldApp}.bak`)).toBe(false);
+  });
+
+  describe("US-PHYSICAL-016 explicit Capture.app update", () => {
+    it("shows the installed version, candidate, and target before a declined interactive update", async () => {
+      const home = tmp("update-declined");
+      const app = installedApp(home);
+      const prompts: string[] = [];
+      let downloads = 0;
+      const result = await updateRollCapture(
+        {
+          interactive: true,
+          readLine: () => "N",
+          onConfirmationRequired: (details) => prompts.push(renderRollCaptureUpdatePrompt(details, "en")),
+        },
+        deps({
+          home,
+          downloadAsset: async () => {
+            downloads += 1;
+            return Buffer.from("ZIP!");
+          },
+        }),
+      );
+
+      expect(result).toMatchObject({ status: "declined", appPath: app, installedVersion: "0.1.0", releaseTag: "v0.2.0" });
+      expect(prompts.join("\n")).toContain("installed 0.1.0");
+      expect(prompts.join("\n")).toContain("v0.2.0");
+      expect(prompts.join("\n")).toContain(app);
+      expect(downloads).toBe(0);
+      expect(readFileSync(join(app, "Contents", "Info.plist"), "utf8")).toContain("0.1.0");
+      expect(renderRollCaptureUpdateResult(result, "en")).toContain("not updated");
+    });
+
+    it("requires --yes for non-interactive updates and accepts it as explicit consent", async () => {
+      const declinedHome = tmp("update-noninteractive");
+      const declinedApp = installedApp(declinedHome);
+      const declined = await updateRollCapture({ interactive: false }, deps({ home: declinedHome }));
+      expect(declined).toMatchObject({ status: "declined" });
+      expect(readFileSync(join(declinedApp, "Contents", "Info.plist"), "utf8")).toContain("0.1.0");
+
+      const home = tmp("update-yes");
+      const app = installedApp(home);
+      const cachePath = join(home, ".roll", "cache", "roll-capture-readiness.json");
+      mkdirSync(join(home, ".roll", "cache"), { recursive: true });
+      writeFileSync(cachePath, "stale\n");
+      const accepted = await updateRollCapture({ interactive: false, yes: true }, deps({ home }));
+      expect(accepted).toMatchObject({ status: "updated", appPath: app, releaseTag: "v0.2.0" });
+      expect(readFileSync(join(app, "Contents", "Info.plist"), "utf8")).toContain("0.2.0");
+      expect(existsSync(cachePath)).toBe(false);
+      expect(renderRollCaptureUpdateResult(accepted, "zh")).toContain("roll doctor tools");
+    });
+
+    it("does not download or prompt when the release is equal, older, malformed, or lacks the expected asset", async () => {
+      const cases: Array<{ name: string; release: { tagName: string; assets: readonly { name: string; size: number; browserDownloadUrl: string }[] } }> = [
+        { name: "equal", release: { tagName: "v0.1.0", assets: [] } },
+        { name: "older", release: { tagName: "v0.0.9", assets: [] } },
+        { name: "malformed", release: { tagName: "release-next", assets: [] } },
+        { name: "missing asset", release: { tagName: "v0.2.0", assets: [] } },
+      ];
+      for (const testCase of cases) {
+        const home = tmp(`update-${testCase.name}`);
+        const app = installedApp(home);
+        let prompted = false;
+        let downloads = 0;
+        const result = await updateRollCapture(
+          { interactive: true, readLine: () => "y", onConfirmationRequired: () => { prompted = true; } },
+          deps({
+            home,
+            fetchLatestRelease: async () => testCase.release,
+            downloadAsset: async () => {
+              downloads += 1;
+              return Buffer.from("ZIP!");
+            },
+          }),
+        );
+        expect(["no-update", "manual"]).toContain(result.status);
+        expect(prompted).toBe(false);
+        expect(downloads).toBe(0);
+        expect(readFileSync(join(app, "Contents", "Info.plist"), "utf8")).toContain("0.1.0");
+      }
+    });
+
+    it("keeps the old bundle and removes the temporary extraction on bad assets and replacement failure", async () => {
+      const malformedHome = tmp("update-bad-asset");
+      const malformedApp = installedApp(malformedHome);
+      const malformed = await updateRollCapture(
+        { yes: true, interactive: false },
+        deps({ home: malformedHome, extractZip: async () => ({ ok: false, detail: "bad zip" }) }),
+      );
+      expect(malformed).toMatchObject({ status: "manual" });
+      expect(readFileSync(join(malformedApp, "Contents", "Info.plist"), "utf8")).toContain("0.1.0");
+      expect(readdirSync(join(malformedHome, "Applications")).filter((name) => name.startsWith(".roll-capture-update-"))).toEqual([]);
+
+      const home = tmp("update-rollback");
+      const oldApp = installedApp(home);
+      const replacement = await updateRollCapture(
+        { yes: true, interactive: false },
+        deps({
+          home,
+          renamePath: (from, to) => {
+            if (from.endsWith("Roll Capture.app") && to === oldApp) throw new Error("simulated update replacement failure");
+            renameSync(from, to);
+          },
+        }),
+      );
+      expect(replacement).toMatchObject({ status: "manual" });
+      expect(readFileSync(join(oldApp, "Contents", "Info.plist"), "utf8")).toContain("0.1.0");
+      expect(existsSync(`${oldApp}.bak`)).toBe(false);
+      expect(readdirSync(join(home, "Applications")).filter((name) => name.startsWith(".roll-capture-update-"))).toEqual([]);
+    });
   });
 
   it("default downloader succeeds anonymously without probing credentials", async () => {

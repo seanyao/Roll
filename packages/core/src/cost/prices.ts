@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves model list costs and currency from the faithful price table.
  * Cost / currency resolution — TS port of the frozen python `lib/model_prices.py`
  * (`_resolve` / `_resolve_name` / `compute_list_cost` / `currency_for`).
  *

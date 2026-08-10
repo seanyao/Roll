@@ -1,4 +1,5 @@
 /**
+ * @responsibility Plans the migration from legacy agent config to roll-agents/v1.
  * US-V4-017 — migration planner from legacy agent config to `roll-agents/v1`.
  *
  * Pure planner only: callers decide whether to write the returned target files.
@@ -125,13 +126,13 @@ function legacyRouteAgents(projectAgentsText: string | undefined): AgentName[] {
   return uniqueAgents(ordered.map((slot) => parsed.config.routing[slot]?.rig.agent as AgentName | undefined));
 }
 
-function pairingScoreAgents(pairingText: string | undefined, warnings: string[]): AgentName[] {
+function legacyCodePairingAgents(pairingText: string | undefined, warnings: string[]): AgentName[] {
   if (pairingText === undefined || pairingText.trim() === "") return [];
   try {
     const cfg = parsePairingConfig(pairingText);
-    if (!cfg.enabled) return [];
+    if (!cfg.enabled || !cfg.stages.includes("code")) return [];
     const agents = Object.entries(cfg.capability)
-      .filter(([, stages]) => stages.includes("score"))
+      .filter(([, stages]) => stages.includes("code"))
       .map(([agent]) => canonicalKnown(agent))
       .filter((agent): agent is AgentName => agent !== null);
     return uniqueAgents(agents);
@@ -249,16 +250,16 @@ export function planAgentScopeMigration(input: AgentScopeMigrationInput): AgentS
     summary.push(`${projectLegacyAgentsPath} v3 routes -> ${input.projectTargetPath} defaults.story.roles.execute = select [${routeAgents.join(", ")}]`);
   }
 
-  const scoreAgents = pairingScoreAgents(input.pairingText, warnings);
-  if (scoreAgents.length > 0 && project.roles.evaluate === undefined && projectDefaults.story?.roles.evaluate === undefined) {
+  const codePairingAgents = legacyCodePairingAgents(input.pairingText, warnings);
+  if (codePairingAgents.length > 0 && project.roles.evaluate === undefined && projectDefaults.story?.roles.evaluate === undefined) {
     projectDefaults.story = projectDefaults.story ?? { roles: {} };
     projectDefaults.story.roles.evaluate = {
       kind: "select",
-      from: scoreAgents,
+      from: codePairingAgents,
       require: ["evaluate"],
       strategy: "health-aware",
     };
-    summary.push(`${pairingPath} capability -> ${input.projectTargetPath} defaults.story.roles.evaluate = select [${scoreAgents.join(", ")}]`);
+    summary.push(`${pairingPath} code capability -> ${input.projectTargetPath} defaults.story.roles.evaluate = select [${codePairingAgents.join(", ")}]`);
   }
 
   const local = localAgent(input.projectLocalText);

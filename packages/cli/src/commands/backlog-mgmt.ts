@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll backlog` write and maintenance subcommands (block, defer, unblock, promote, lint).
+ */
+/**
  * `roll backlog` WRITE/maintenance subcommands — US-PORT-019. Ports the bash
  * `cmd_backlog` status-management arms off the frozen `bin/roll`:
  *   - block / defer / unblock / promote : rewrite the Status cell (BacklogStore).
@@ -11,6 +14,7 @@
  */
 import {
   BacklogStore,
+  splitBacklogRow,
   type UnstickEvent,
   applyStuckReverts,
   lintIdeaDescription,
@@ -20,15 +24,10 @@ import { resolveLang, STATUS_MARKER, t, v2Catalog, type Lang } from "@roll/spec"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claimStoryLease, type LeaseSource } from "@roll/core";
-import {
-  emitBacklogTarget,
-  emitBacklogTargetError,
-  resolveBacklogCommandTarget,
-  stripBacklogScopeArgs,
-  workspaceOwnsPath,
-  type BacklogTargetResolver,
-  type ResolvedBacklogTarget,
-} from "./backlog-target.js";
+import { projectSlug, sharedRoot } from "./dashboard.js";
+
+const BACKLOG_PATH = ".roll/backlog.md";
+const LEASE_PATH = ".roll/loop/leases";
 
 function lang(): Lang {
   return resolveLang({
@@ -45,31 +44,6 @@ function out(line: string): void {
 }
 function errLine(line: string): void {
   process.stderr.write(line + "\n");
-}
-
-export interface BacklogMgmtTargetDeps {
-  readonly resolveTarget?: BacklogTargetResolver;
-}
-
-function resolveOneTarget(
-  rawArgs: readonly string[],
-  operation: "read" | "mutation",
-  deps: BacklogMgmtTargetDeps,
-): ResolvedBacklogTarget | number {
-  const decision = (deps.resolveTarget ?? resolveBacklogCommandTarget)(rawArgs, operation);
-  if (!decision.ok) return emitBacklogTargetError(decision);
-  if ("aggregate" in decision) {
-    errLine("backlog: invalid_arguments — aggregate management commands are not supported");
-    return 1;
-  }
-  return decision;
-}
-
-function requireOwnedPaths(target: ResolvedBacklogTarget, paths: readonly string[]): boolean {
-  const escaped = paths.find((path) => !workspaceOwnsPath(target.canonicalRoot, path));
-  if (escaped === undefined) return true;
-  errLine(`backlog: invalid_target — Workspace-owned path escapes canonical root: ${escaped}`);
-  return false;
 }
 
 /**
@@ -98,28 +72,21 @@ export function backlogSetStatusCommand(
   subcmd: string,
   args: string[],
   store: BacklogStore = new BacklogStore(),
-  deps: BacklogMgmtTargetDeps = {},
 ): number {
-  const scoped = stripBacklogScopeArgs(args);
-  if (!scoped.ok) return 1;
-  const pattern = scoped.args[0] ?? "";
-  const reason = scoped.args[1] ?? "";
+  const pattern = args[0] ?? "";
+  const reason = args[1] ?? "";
   if (pattern === "") {
     errLine(`[roll] ${msg("backlog.usage_roll_backlog_pattern_reason", subcmd)}`);
     return 1;
   }
   const newStatus = statusFor(subcmd, reason);
   if (newStatus === null) return 1; // unreachable via the dispatcher
-  const target = resolveOneTarget(args, "mutation", deps);
-  if (typeof target === "number") return target;
-  if (!requireOwnedPaths(target, [target.backlogPath])) return 1;
-  if (!existsSync(target.backlogPath)) {
+  if (!existsSync(BACKLOG_PATH)) {
     errLine(`[roll] ${msg("backlog.roll_backlog_md_not_found_run")}`);
     return 1;
   }
-  emitBacklogTarget(target);
-  const snap = store.readBacklog(target.backlogPath);
-  const { count } = store.mark(target.backlogPath, snap.hash, pattern, newStatus);
+  const snap = store.readBacklog(BACKLOG_PATH);
+  const { count } = store.mark(BACKLOG_PATH, snap.hash, pattern, newStatus);
   if (count === 0) out(msg("backlog.no_items_matched", pattern));
   else {
     out(msg("backlog.updated_item_s", count, newStatus));
@@ -132,22 +99,19 @@ export function backlogSetStatusCommand(
 
 export interface ClaimDeps {
   nowMs: () => number;
-  resolveTarget?: BacklogTargetResolver;
 }
 
 function realClaimDeps(): ClaimDeps {
-  return { nowMs: () => Date.now(), resolveTarget: resolveBacklogCommandTarget };
+  return { nowMs: () => Date.now() };
 }
 
 /** `roll backlog claim <card> [--source human|supervisor]` — manual soft lease writer. */
 export function backlogClaimCommand(args: string[], deps: ClaimDeps = realClaimDeps(), store: BacklogStore = new BacklogStore()): number {
-  const scoped = stripBacklogScopeArgs(args);
-  if (!scoped.ok) return 1;
-  const pattern = scoped.args[0] ?? "";
+  const pattern = args[0] ?? "";
   let source: LeaseSource = "human";
-  for (let i = 1; i < scoped.args.length; i++) {
-    if (scoped.args[i] === "--source") {
-      const raw = scoped.args[i + 1] ?? "";
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--source") {
+      const raw = args[i + 1] ?? "";
       if (raw === "human" || raw === "supervisor") source = raw;
       else {
         errLine("usage: roll backlog claim <card> [--source human|supervisor]");
@@ -160,23 +124,18 @@ export function backlogClaimCommand(args: string[], deps: ClaimDeps = realClaimD
     errLine("usage: roll backlog claim <card> [--source human|supervisor]");
     return 1;
   }
-  const target = resolveOneTarget(args, "mutation", deps);
-  if (typeof target === "number") return target;
-  const leasePath = join(target.runtimeRoot, "locks", "leases");
-  if (!requireOwnedPaths(target, [target.backlogPath, leasePath])) return 1;
-  if (!existsSync(target.backlogPath)) {
+  if (!existsSync(BACKLOG_PATH)) {
     errLine(`[roll] ${msg("backlog.roll_backlog_md_not_found_run")}`);
     return 1;
   }
-  emitBacklogTarget(target);
-  const snap = store.readBacklog(target.backlogPath);
-  const { count } = store.mark(target.backlogPath, snap.hash, pattern, STATUS_MARKER.in_progress);
+  const snap = store.readBacklog(BACKLOG_PATH);
+  const { count } = store.mark(BACKLOG_PATH, snap.hash, pattern, STATUS_MARKER.in_progress);
   if (count === 0) {
     out(msg("backlog.no_items_matched", pattern));
     return 0;
   }
-  mkdirSync(dirname(leasePath), { recursive: true });
-  const result = claimStoryLease(leasePath, pattern, { source, claimedAt: deps.nowMs() });
+  mkdirSync(dirname(LEASE_PATH), { recursive: true });
+  const result = claimStoryLease(LEASE_PATH, pattern, { source, claimedAt: deps.nowMs() });
   if (result.status !== "claimed") {
     errLine(`claim failed: story ${pattern} already owned by ${result.status === "exists" ? result.existingSource : "unknown"}`);
     return 1;
@@ -213,7 +172,7 @@ export function lintBacklogContent(content: string): LintFinding[] {
     const line = (lines[i] ?? "").replace(/\r$/, "");
     if (!line.startsWith("|")) continue;
     if (/Story.*Description.*Status/.test(line) || line.includes("---")) continue;
-    const fields = line.split("|");
+    const fields = splitBacklogRow(line);
     const desc = (fields[2] ?? "").trim();
     if (desc === "") continue;
     const issues = lintRowIssues(desc);
@@ -234,11 +193,12 @@ export function lintBacklogContent(content: string): LintFinding[] {
 
 /** Injectable seams so tests drive slug / shared root / clock deterministically. */
 export interface UnstickDeps {
+  slug: () => string;
+  sharedRoot: () => string;
   nowMs: () => number;
-  resolveTarget?: BacklogTargetResolver;
 }
 function realUnstickDeps(): UnstickDeps {
-  return { nowMs: () => Date.now(), resolveTarget: resolveBacklogCommandTarget };
+  return { slug: () => projectSlug(), sharedRoot: () => sharedRoot(), nowMs: () => Date.now() };
 }
 
 function fmtAge(h: number): string {
@@ -252,31 +212,30 @@ function fmtAge(h: number): string {
  * (unless --dry-run) rewrites the backlog and appends an ALERT note. Always 0.
  */
 export function backlogUnstickCommand(args: string[], deps: UnstickDeps = realUnstickDeps()): number {
-  const scoped = stripBacklogScopeArgs(args);
-  if (!scoped.ok) return 1;
   let dryRun = false;
   let ttlHours = 4.0;
-  for (let i = 0; i < scoped.args.length; i++) {
-    if (scoped.args[i] === "--dry-run") dryRun = true;
-    else if (scoped.args[i] === "--ttl-hours") {
-      const n = Number(scoped.args[i + 1]);
+  let backlog = BACKLOG_PATH;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--dry-run") dryRun = true;
+    else if (args[i] === "--ttl-hours") {
+      const n = Number(args[i + 1]);
       if (Number.isFinite(n)) ttlHours = n;
       i++;
-    } else return 1;
+    } else if (args[i] === "--backlog") {
+      backlog = args[i + 1] ?? backlog;
+      i++;
+    }
   }
-  const target = resolveOneTarget(args, "mutation", deps);
-  if (typeof target === "number") return target;
-  const eventsPath = join(target.runtimeRoot, "events.ndjson");
-  const alertPath = join(target.runtimeRoot, "alerts", "unstick.md");
-  if (!requireOwnedPaths(target, [target.backlogPath, eventsPath, alertPath])) return 1;
-  if (!existsSync(target.backlogPath)) {
-    errLine(`backlog not found: ${target.backlogPath}`);
+  if (!existsSync(backlog)) {
+    errLine(`backlog not found: ${backlog}`);
     return 0;
   }
 
-  emitBacklogTarget(target);
+  const slug = deps.slug();
+  const loopDir = join(deps.sharedRoot(), "loop");
+  const eventsPath = join(loopDir, `events-${slug}.ndjson`);
   const events = existsSync(eventsPath) ? parseUnstickEvents(readFileSync(eventsPath, "utf8")) : [];
-  const content = readFileSync(target.backlogPath, "utf8");
+  const content = readFileSync(backlog, "utf8");
   const nowMs = deps.nowMs();
   const candidates = reconcileStuckBacklog(content, events, nowMs, ttlHours);
   if (candidates.length === 0) return 0;
@@ -288,8 +247,9 @@ export function backlogUnstickCommand(args: string[], deps: UnstickDeps = realUn
     return 0;
   }
 
-  writeFileSync(target.backlogPath, applyStuckReverts(content, candidates));
+  writeFileSync(backlog, applyStuckReverts(content, candidates));
 
+  const alertPath = join(loopDir, `ALERT-${slug}.md`);
   mkdirSync(dirname(alertPath), { recursive: true });
   const ts = new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, "Z");
   let alertBlock = "";
@@ -328,26 +288,21 @@ function parseUnstickEvents(ndjson: string): UnstickEvent[] {
   return events;
 }
 
-/** `roll backlog lint [--gate]` — warn (or gate-fail) on §4 violations. */
-export function backlogLintCommand(args: string[], deps: BacklogMgmtTargetDeps = {}): number {
-  const scoped = stripBacklogScopeArgs(args);
-  if (!scoped.ok) return 1;
+/** `roll backlog lint [--gate] [<path>]` — warn (or gate-fail) on §4 violations. */
+export function backlogLintCommand(args: string[]): number {
   let gate = false;
-  for (const a of scoped.args) {
+  let backlog = BACKLOG_PATH;
+  for (const a of args) {
     if (a === "--gate") gate = true;
-    else return 1;
+    else backlog = a;
   }
-  const target = resolveOneTarget(args, "read", deps);
-  if (typeof target === "number") return target;
-  if (!requireOwnedPaths(target, [target.backlogPath])) return 1;
-  if (!existsSync(target.backlogPath)) {
-    errLine(`[roll] backlog not found: ${target.backlogPath}`);
+  if (!existsSync(backlog)) {
+    errLine(`[roll] backlog not found: ${backlog}`);
     return 1;
   }
-  emitBacklogTarget(target);
-  const findings = lintBacklogContent(readFileSync(target.backlogPath, "utf8"));
+  const findings = lintBacklogContent(readFileSync(backlog, "utf8"));
   for (const f of findings) {
-    out(`${target.backlogPath}:${f.lineno}: ${f.sid} — ${f.issues}`);
+    out(`${backlog}:${f.lineno}: ${f.sid} — ${f.issues}`);
     out(`  ${f.desc}`);
   }
   out("");

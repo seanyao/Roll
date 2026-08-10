@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop adversarial` subcommand, aggregating adversarial-pairing cohort metrics.
+ */
+/**
  * `roll loop adversarial [--json]` — US-LOOP-104.
  *
  * The read-only shadow-run aggregate (design §9): fold the adversarial-pairing

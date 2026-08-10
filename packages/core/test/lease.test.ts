@@ -23,6 +23,13 @@ import {
   HUMAN_SOFT_LEASE_HOURS,
   readLeases,
   releaseStoryLease,
+  releaseDeliveryReservation,
+  promoteHostDelegationLease,
+  transferDeliveryReservation,
+  adoptContinuationReservation,
+  acquireAdoptionMutex,
+  releaseAdoptionMutex,
+  injectAdoptionInterrupts,
   writeLeases,
   setLease,
   removeLease,
@@ -418,6 +425,19 @@ describe("removeLease onlySource scoping (kimi review: cycle terminal must not w
 });
 
 describe("cleanDeadLeases (FIX-1232)", () => {
+  it("US-LOOP-124: preserves a crashed cycle lease when its durable workspace lifecycle is ambiguous", () => {
+    const dir = tmpLeaseDir();
+    try {
+      setLease(dir, "US-CRASH-124", { pid: 999_999_999, claimedAt: NOW, source: "cycle", runId: "cycle-crash" });
+      const cleaned = cleanDeadLeases(dir, {
+        preserve: (storyId, entry) => storyId === "US-CRASH-124" && entry.runId === "cycle-crash",
+      });
+      expect(cleaned).toEqual([]);
+      expect(readLeases(dir)["US-CRASH-124"]).toMatchObject({ runId: "cycle-crash" });
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
+  });
   it("removes dead PID entries and keeps live ones", () => {
     const dir = tmpLeaseDir();
     try {
@@ -1704,6 +1724,21 @@ describe("releaseStoryLease — match-only release (US-DELTA-003 directory)", ()
     }
   });
 
+  it("US-LOOP-124: refuses a same-process cycle release with a different durable run id", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimStoryLease(dir, "US-001", {
+        pid: process.pid, claimedAt: NOW, source: "cycle", runId: "cycle-owner",
+      });
+      expect(releaseStoryLease(dir, "US-001", {
+        source: "cycle", pid: process.pid, runId: "cycle-late-retry",
+      })).toBe(false);
+      expect(readLeases(dir)["US-001"]?.runId).toBe("cycle-owner");
+    } finally {
+      try { const { rmSync } = require("fs"); rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
   it("releases matching cycle lease by pid", () => {
     const dir = tmpLeaseDir();
     try {
@@ -2546,6 +2581,309 @@ describe("legacy story-leases.json compatibility", () => {
 
       // cleanDeadLeases on empty dir
       expect(cleanDeadLeases(dir)).toEqual([]);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 promotes and names the durable reservation release", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-reservation";
+      const runId = `delta-${delegationId}`;
+      expect(claimStoryLease(dir, "US-LOOP-126", {
+        claimedAt: NOW,
+        source: "host-delegation",
+        delegationId,
+        runId,
+      }).status).toBe("claimed");
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126", delegationId, runId)).toBe(true);
+      // Restart after the atomic rename is idempotent, not a foreign lease.
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126", delegationId, runId)).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126"]?.source).toBe("delivery-reservation");
+      expect(releaseDeliveryReservation(dir, "US-LOOP-126", delegationId, runId, "merged")).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126"]).toBeUndefined();
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 recovers an interrupted identity-pinned promotion lock", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-stale-promotion";
+      const runId = `delta-${delegationId}`;
+      expect(claimStoryLease(dir, "US-LOOP-126-STALE", {
+        claimedAt: NOW, source: "host-delegation", delegationId, runId,
+      }).status).toBe("claimed");
+      // Simulate a process death after a durable promotion lock.  A matching
+      // live owner must not be treated as stale merely because identities
+      // match, so the lock carries an explicitly dead PID and pinned inode.
+      const record = statSync(join(dir, "US-LOOP-126-STALE.lease"));
+      writeFileSync(join(dir, ".US-LOOP-126-STALE.promotion.lock"), JSON.stringify({
+        schema: "roll-lease-promotion-lock/v1",
+        pid: 999_999,
+        token: "dead-owner",
+        delegationId,
+        runId,
+        recordDev: record.dev,
+        recordIno: record.ino,
+      }) + "\n");
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126-STALE", delegationId, runId)).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126-STALE"]?.source).toBe("delivery-reservation");
+      expect(existsSync(join(dir, ".US-LOOP-126-STALE.promotion.lock"))).toBe(false);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 recognizes a completed promotion after rename before stale-lock cleanup", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-post-rename";
+      const runId = `delta-${delegationId}`;
+      const storyId = "US-LOOP-126-POST-RENAME";
+      expect(claimStoryLease(dir, storyId, {
+        claimedAt: NOW, source: "host-delegation", delegationId, runId,
+      }).status).toBe("claimed");
+      const oldRecord = statSync(join(dir, `${storyId}.lease`));
+      // Simulate the only dangerous crash interval: rename has made the
+      // reservation durable but the old-inode lock cleanup has not run.
+      setLease(dir, storyId, {
+        claimedAt: NOW, source: "delivery-reservation", delegationId, runId,
+      });
+      writeFileSync(join(dir, `.${storyId}.promotion.lock`), JSON.stringify({
+        schema: "roll-lease-promotion-lock/v1", pid: 999_999, token: "dead-after-rename",
+        delegationId, runId, recordDev: oldRecord.dev, recordIno: oldRecord.ino,
+      }) + "\n");
+      expect(promoteHostDelegationLease(dir, storyId, delegationId, runId)).toBe(true);
+      expect(existsSync(join(dir, `.${storyId}.promotion.lock`))).toBe(false);
+      expect(releaseDeliveryReservation(dir, storyId, delegationId, runId, "merged")).toBe(true);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 never steals a matching live promotion lock and transfers only to a named continuation", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-continuation";
+      const runId = `delta-${delegationId}`;
+      expect(claimStoryLease(dir, "US-LOOP-126-CONT", {
+        claimedAt: NOW, source: "host-delegation", delegationId, runId,
+      }).status).toBe("claimed");
+      const record = statSync(join(dir, "US-LOOP-126-CONT.lease"));
+      writeFileSync(join(dir, ".US-LOOP-126-CONT.promotion.lock"), JSON.stringify({
+        schema: "roll-lease-promotion-lock/v1", pid: process.pid, token: "live-owner",
+        delegationId, runId, recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126-CONT", delegationId, runId)).toBe(false);
+      unlinkSync(join(dir, ".US-LOOP-126-CONT.promotion.lock"));
+      expect(promoteHostDelegationLease(dir, "US-LOOP-126-CONT", delegationId, runId)).toBe(true);
+      expect(transferDeliveryReservation(dir, "US-LOOP-126-CONT", delegationId, runId, "named-successor")).toBe(true);
+      expect(transferDeliveryReservation(dir, "US-LOOP-126-CONT", delegationId, runId, "named-successor")).toBe(true);
+      expect(readLeases(dir)["US-LOOP-126-CONT"]?.runId).toBe("named-successor");
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("US-LOOP-126 retries a post-rename continuation only after retiring its dead matching lock", () => {
+    const dir = tmpLeaseDir();
+    try {
+      const delegationId = "delta-continuation-post-rename";
+      const runId = `delta-${delegationId}`;
+      const successor = "named-successor";
+      const storyId = "US-LOOP-126-CONT-POST-RENAME";
+      expect(claimStoryLease(dir, storyId, {
+        claimedAt: NOW, source: "delivery-reservation", delegationId, runId: successor,
+      }).status).toBe("claimed");
+      const record = statSync(join(dir, `${storyId}.lease`));
+      writeFileSync(join(dir, `.${storyId}.continuation.lock`), JSON.stringify({
+        schema: "roll-lease-continuation-lock/v1", pid: 999_999,
+        delegationId, runId, continuationRunId: successor,
+        recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      expect(transferDeliveryReservation(dir, storyId, delegationId, runId, successor)).toBe(true);
+      expect(existsSync(join(dir, `.${storyId}.continuation.lock`))).toBe(false);
+      // A different successor cannot use the cleanup retry to steal the
+      // completed reservation.
+      expect(transferDeliveryReservation(dir, storyId, delegationId, runId, "other-successor")).toBe(false);
+      expect(releaseDeliveryReservation(dir, storyId, delegationId, successor, "merged")).toBe(true);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+});
+
+describe("FIX-1502 — adoptContinuationReservation: atomic pickup of a redelegated reservation", () => {
+  const storyId = "FIX-1502-ADOPT";
+  const oldDelegation = "delta-old-owner";
+  const oldRun = `delta-${oldDelegation}`;
+  const successorName = "named-successor";
+  const newDelegation = "delta-new-owner";
+  const newRun = `delta-${newDelegation}`;
+
+  function claimRedelegatedReservation(dir: string): void {
+    expect(claimStoryLease(dir, storyId, {
+      claimedAt: NOW, source: "delivery-reservation", delegationId: oldDelegation, runId: successorName,
+    }).status).toBe("claimed");
+  }
+
+  it("swaps the named continuation reservation into a normal preparing host guard without a gap", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      const entry = readLeases(dir)[storyId];
+      expect(entry?.source).toBe("host-delegation");
+      expect(entry?.delegationId).toBe(newDelegation);
+      expect(entry?.runId).toBe(newRun);
+      // The adopted guard is a normal preparing occupancy: the new run can
+      // promote and conclude exactly like a fresh prepare.
+      expect(promoteHostDelegationLease(dir, storyId, newDelegation, newRun)).toBe(true);
+      expect(releaseDeliveryReservation(dir, storyId, newDelegation, newRun, "merged")).toBe(true);
+      expect(readLeases(dir)[storyId]).toBeUndefined();
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("is idempotent for the same new identity (crash after rename)", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      expect(readLeases(dir)[storyId]?.runId).toBe(newRun);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("refuses when the reservation names a different successor, delegation, or source", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      // Wrong successor name.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, "other-name", newDelegation, newRun)).toBe(false);
+      // Wrong source delegation.
+      expect(adoptContinuationReservation(dir, storyId, "delta-someone-else", successorName, newDelegation, newRun)).toBe(false);
+      // A fresh identity may still adopt while name and source delegation match.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, "delta-thief", "delta-delta-thief")).toBe(true);
+      // Now held by the new run; the old continuation name must not adopt again.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, "delta-second", "delta-delta-second")).toBe(false);
+      const entry = readLeases(dir)[storyId];
+      expect(entry?.source).toBe("host-delegation");
+      expect(entry?.delegationId).toBe("delta-thief");
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("refuses when no lease exists or the story is held by a non-reservation owner", () => {
+    const dir = tmpLeaseDir();
+    try {
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      expect(claimStoryLease(dir, storyId, {
+        claimedAt: NOW, source: "host-delegation", delegationId: oldDelegation, runId: oldRun,
+      }).status).toBe("claimed");
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      expect(readLeases(dir)[storyId]?.source).toBe("host-delegation");
+      expect(readLeases(dir)[storyId]?.runId).toBe(oldRun);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("blocks releases during the swap and recovers a dead matching adoption lock", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      const record = statSync(join(dir, `${storyId}.lease`));
+      writeFileSync(join(dir, `.${storyId}.adoption.lock`), JSON.stringify({
+        schema: "roll-lease-adoption-lock/v1", pid: process.pid,
+        fromDelegationId: oldDelegation, continuationRunId: successorName,
+        newDelegationId: newDelegation, newRunId: newRun,
+        recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      // A live matching owner holds the swap: neither adopt nor release may proceed.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      expect(releaseDeliveryReservation(dir, storyId, oldDelegation, successorName, "abandoned")).toBe(false);
+      // A dead matching lock is retired and the adoption completes.
+      writeFileSync(join(dir, `.${storyId}.adoption.lock`), JSON.stringify({
+        schema: "roll-lease-adoption-lock/v1", pid: 999_999,
+        fromDelegationId: oldDelegation, continuationRunId: successorName,
+        newDelegationId: newDelegation, newRunId: newRun,
+        recordDev: record.dev, recordIno: record.ino,
+      }) + "\n");
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      expect(existsSync(join(dir, `.${storyId}.adoption.lock`))).toBe(false);
+      expect(readLeases(dir)[storyId]?.runId).toBe(newRun);
+    } finally {
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("proves the lease never disappears: a matching release is refused while adoption holds the shared mutex through its CAS rename", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      let releaseDuringSwap: boolean | null = null;
+      let recordDuringSwap: LeaseEntry | undefined;
+      injectAdoptionInterrupts({
+        // Fires while the adoption mutex is held, immediately before the CAS
+        // rename: adoption has already verified the identity and written the
+        // successor record to a temp file.  A matching release of the OLD
+        // reservation must be refused and must never unlink the lease.
+        beforeRename: () => {
+          releaseDuringSwap = releaseDeliveryReservation(dir, storyId, oldDelegation, successorName, "abandoned");
+          recordDuringSwap = readLeases(dir)[storyId];
+        },
+      });
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(true);
+      // The release attempt inside the swap was refused and the record stayed.
+      expect(releaseDuringSwap).toBe(false);
+      expect(recordDuringSwap).toMatchObject({
+        source: "delivery-reservation",
+        delegationId: oldDelegation,
+        runId: successorName,
+      });
+      // The lease existed at every instant: still the reservation mid-swap,
+      // the new host guard after the swap.
+      const after = readLeases(dir)[storyId];
+      expect(after?.source).toBe("host-delegation");
+      expect(after?.delegationId).toBe(newDelegation);
+      expect(after?.runId).toBe(newRun);
+      expect(existsSync(join(dir, `${storyId}.lease`))).toBe(true);
+    } finally {
+      injectAdoptionInterrupts(null);
+      try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
+    }
+  });
+
+  it("adoption is refused while a release holds the shared mutex; the reservation is untouched until the release completes", () => {
+    const dir = tmpLeaseDir();
+    try {
+      claimRedelegatedReservation(dir);
+      // Simulate a release mid-flight: it holds the same mutex between its
+      // identity read and its unlink.
+      const mutex = acquireAdoptionMutex(dir, storyId, "release");
+      expect(mutex).toBeDefined();
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
+      // The reservation is untouched: no tmp, no partial swap, no gap.
+      expect(readLeases(dir)[storyId]).toMatchObject({
+        source: "delivery-reservation",
+        delegationId: oldDelegation,
+        runId: successorName,
+      });
+      expect(existsSync(join(dir, `${storyId}.lease`))).toBe(true);
+      // The release finishes; only then may the pickup proceed.
+      releaseAdoptionMutex(dir, storyId, mutex);
+      expect(releaseDeliveryReservation(dir, storyId, oldDelegation, successorName, "abandoned")).toBe(true);
+      expect(readLeases(dir)[storyId]).toBeUndefined();
+      // After a true release the reservation is gone: adoption now refuses.
+      expect(adoptContinuationReservation(dir, storyId, oldDelegation, successorName, newDelegation, newRun)).toBe(false);
     } finally {
       try { rmSync(dirname(dir), { recursive: true, force: true }); } catch { /* ok */ }
     }

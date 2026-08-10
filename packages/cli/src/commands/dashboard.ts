@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop status` subcommand, rendering the loop health dashboard.
+ */
+/**
  * `roll loop status` — TS port of lib/roll-loop-status.py (US-CLI-006).
  *
  * Renders the loop health dashboard. Byte-aligned with the python oracle
@@ -14,6 +17,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "n
 import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
 import { resolveLoopRunState } from "./loop-state.js";
+import { renderHandoffStatus } from "./loop-runner-readout.js";
 import {
   COLS,
   c,
@@ -38,7 +42,7 @@ import {
   systemPidAlive,
   type PidAlive,
 } from "@roll/infra";
-import { getAgentSpec } from "@roll/core";
+import { getAgentSpec, ROLL_REPO_URL } from "@roll/core";
 import { computeListCost, currencyFor } from "./prices-cost.js";
 import { exemptionStats, renderExemptionSignal } from "../runner/exemption-stats.js";
 import { screenLockWaitReason } from "../runner/screen-lock-events.js";
@@ -860,7 +864,7 @@ function repairOrphanCyclesFromGit(
     const m = gitMerges[cy.label];
     if (!m) continue;
     if (cy.outcome === "running" || cy.outcome === "unknown") cy.outcome = "done";
-    if (m.pr && !cy.pr) cy.pr = `https://github.com/seanyao/roll/pull/${m.pr}`;
+    if (m.pr && !cy.pr) cy.pr = `${ROLL_REPO_URL}/pull/${m.pr}`;
     if (m.pr) {
       cy.pr_num = parseInt(m.pr, 10);
       cy.pr_outcome = "merged";
@@ -1507,6 +1511,24 @@ interface RenderArgs {
   rtDir: string | null;
 }
 
+/**
+ * US-CYCLE-013 F3 — push the §8 handoff truth projection into the dashboard
+ * render when the runtime event stream carries cycle-handoff/v1 facts. The
+ * rendered lines carry the LITERAL handoff states, the ready holder ABOVE the
+ * queue, and the queue rows (position / sequence / reason / next action) —
+ * never inferred from publish/merge-wait phases. The dashboard lang maps
+ * `"both" → "en"` (the projection renders in one language). Flag-off behavior
+ * is byte-identical: no handoff facts ⇒ no section ⇒ no diff.
+ */
+function renderHandoffSection(out: string[], rtDir: string | null, lang: "both" | "en" | "zh"): void {
+  if (rtDir === null) return;
+  const lines = renderHandoffStatus(join(rtDir, "events.ndjson"), lang === "zh" ? "zh" : "en");
+  if (lines.length === 0) return;
+  out.push(sectionHeadLine("HANDOFF", "交接状态", "cycle-handoff/v1 · two-slot"));
+  for (const line of lines) out.push("  " + line);
+  out.push("");
+}
+
 function render(
   out: string[],
   events: RawEvent[],
@@ -1692,6 +1714,11 @@ function render(
     for (const diagnostic of dt) out.push("  " + deliveryGateDiagnosticLine(diagnostic));
   }
   out.push("");
+
+  // US-CYCLE-013 F3 — the §8 handoff truth projection, right after the status
+  // eyebrow / live-cycle block and before the ROLLUP section. Flag-off
+  // behavior is byte-identical: no cycle-handoff facts ⇒ no section.
+  renderHandoffSection(out, rtDir, lang);
 
   out.push(c("faint", "─".repeat(COLS)));
   out.push("");

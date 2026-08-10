@@ -6,8 +6,7 @@ Roll 管理的故事。
 ## 1. 安装
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
-# 或
+npm install -g @bipo-ape/roll
 npm install -g @bipo-ape/roll
 ```
 

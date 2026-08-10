@@ -1,17 +1,20 @@
 /**
+ * @responsibility Runs the `roll capture` subcommand for capture-policy migration, evidence repair, and readiness status.
+ */
+/**
  * `roll capture` — US-EVID-032 capture policy migration, evidence-only repair,
  * and readiness status.
  *
- *   roll capture status  [--workspace <id|path>] [--json]
+ *   roll capture status  [--project <path>] [--json]
  *     Show v2 gateway + renderer readiness and the effective capture policy,
  *     each with an actionable reason (AC4).
  *
- *   roll capture migrate [--workspace <id|path>] [--revert] [--dry-run] [--json]
+ *   roll capture migrate [--project <path>] [--revert] [--dry-run] [--json]
  *     Enable best_effort ONLY when the v2 gateway AND renderer are both ready;
  *     otherwise retain the existing policy with an explicit reason. Idempotent
  *     and reversible (`--revert`). Writes .roll/policy.yaml unless --dry-run (AC1).
  *
- *   roll capture repair <story-id> [--workspace <id|path>] [--health <path>] [--json]
+ *   roll capture repair <story-id> [--project <path>] [--health <path>] [--json]
  *     Evidence-only repair for a `degraded-infrastructure` record: re-run the
  *     capture lanes and re-resolve evidence health WITHOUT reopening the
  *     completed build. Refuses (never rebuilds) for a failed delivery or any
@@ -20,7 +23,7 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join } from "node:path";
 import {
   isEvidenceOnlyRepairable,
   planCapturePolicyMigration,
@@ -43,10 +46,9 @@ import {
   type ControlledLocalWindowCaptureResult,
   type ControlledPrepareAction,
 } from "@roll/infra";
-import { ROLL_CAPTURE_PROTOCOL_V1, resolveLang, t, v3Catalog, type Lang, type WorkspaceExecutionAuthorityPaths } from "@roll/spec";
+import { ROLL_CAPTURE_PROTOCOL_V1, resolveLang, t, v3Catalog, type Lang } from "@roll/spec";
 import { configLang } from "./lang.js";
 import { collectCapturePolicyReadiness, renderCapturePolicyReadinessDoctorSection, resolveCaptureHostRoot, type CapturePolicyReadiness } from "../lib/capture-policy-readiness.js";
-import { requireWorkspaceAuthorities, requireWorkspaceMutationPath } from "../lib/workspace-project-authority.js";
 
 /** Resolve the display language for this command, including configLang. */
 function msgLang(): Lang {
@@ -67,10 +69,6 @@ function captureUsage(): string {
 }
 
 export interface CaptureCommandDeps {
-  /** Selected project/Workspace root. */
-  projectPath?: string;
-  /** Canonical Workspace project-data authorities. Omitted for legacy callers. */
-  authorities?: WorkspaceExecutionAuthorityPaths;
   /** Read a text file; null when absent/unreadable. */
   readFileText?: (path: string) => string | null;
   /** Atomically write policy / health text. */
@@ -166,7 +164,7 @@ async function captureRefresh(args: string[], deps: CaptureCommandDeps): Promise
 async function captureLocalWindow(args: string[], deps: CaptureCommandDeps): Promise<number> {
   const storyId = flagValue(args, "--story");
   const url = flagValue(args, "--url");
-  const projectRoot = deps.projectPath ?? flagValue(args, "--project") ?? process.cwd();
+  const projectRoot = flagValue(args, "--project") ?? process.cwd();
   const runId = flagValue(args, "--run") ?? `local-${(deps.now ?? (() => new Date()))().toISOString().replace(/[^0-9]/gu, "")}`;
   const rawPrepare = flagValue(args, "--prepare");
   const json = args.includes("--json");
@@ -200,7 +198,7 @@ async function captureLocalWindow(args: string[], deps: CaptureCommandDeps): Pro
       storyId,
       runId,
       kind: "web",
-      out: join(deps.authorities?.evidence ?? join(projectRoot, ".roll", "captures"), "controlled-local", storyId, runId, `controlled-window-${captureId}.png`),
+      out: join(projectRoot, ".roll", "captures", "controlled-local", storyId, runId, `controlled-window-${captureId}.png`),
       timeoutMs: 60_000,
       createdAt: now.toISOString(),
     },
@@ -277,19 +275,11 @@ function safeSegment(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/u.test(value) && !value.includes("..");
 }
 
-function contained(root: string, target: string): boolean {
-  const child = relative(root, target);
-  return child === "" || (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child));
-}
-
 // ── status (AC4) ──────────────────────────────────────────────────────────────
 
 function captureStatus(args: string[], deps: CaptureCommandDeps): number {
-  const projectRoot = deps.projectPath ?? flagValue(args, "--project") ?? process.cwd();
-  const readiness = (deps.readiness ?? ((root: string) => collectCapturePolicyReadiness({
-    projectRoot: root,
-    ...(deps.authorities === undefined ? {} : { policyPath: deps.authorities.policy }),
-  })))(projectRoot);
+  const projectRoot = flagValue(args, "--project") ?? process.cwd();
+  const readiness = (deps.readiness ?? ((root: string) => collectCapturePolicyReadiness({ projectRoot: root })))(projectRoot);
   if (args.includes("--json")) {
     process.stdout.write(JSON.stringify(readiness, null, 2) + "\n");
     return 0;
@@ -301,16 +291,13 @@ function captureStatus(args: string[], deps: CaptureCommandDeps): number {
 // ── migrate (AC1) ─────────────────────────────────────────────────────────────
 
 function captureMigrate(args: string[], deps: CaptureCommandDeps): number {
-  const projectRoot = deps.projectPath ?? flagValue(args, "--project") ?? process.cwd();
+  const projectRoot = flagValue(args, "--project") ?? process.cwd();
   const dryRun = args.includes("--dry-run");
   const revert = args.includes("--revert");
   const json = args.includes("--json");
   const readFileText = deps.readFileText ?? defaultReadFileText;
   const writeFileText = deps.writeFileText ?? defaultWriteFileText;
-  const policyPath = deps.authorities?.policy ?? join(projectRoot, ".roll", "policy.yaml");
-  if (deps.authorities !== undefined && !requireWorkspaceAuthorities("roll capture migrate", [
-    { path: policyPath, kind: "file" },
-  ])) return 1;
+  const policyPath = join(projectRoot, ".roll", "policy.yaml");
   const policyYaml = readFileText(policyPath) ?? "";
 
   if (revert) {
@@ -325,10 +312,7 @@ function captureMigrate(args: string[], deps: CaptureCommandDeps): number {
     return 0;
   }
 
-  const readiness = (deps.readiness ?? ((root: string) => collectCapturePolicyReadiness({
-    projectRoot: root,
-    ...(deps.authorities === undefined ? {} : { policyPath: deps.authorities.policy }),
-  })))(projectRoot);
+  const readiness = (deps.readiness ?? ((root: string) => collectCapturePolicyReadiness({ projectRoot: root })))(projectRoot);
   const capabilities: CaptureMigrationCapabilities = {
     gateway: { available: readiness.gateway.available, reason: readiness.gateway.reason },
     renderer: { available: readiness.renderer.available, reason: readiness.renderer.reason },
@@ -347,8 +331,8 @@ function captureMigrate(args: string[], deps: CaptureCommandDeps): number {
 // ── repair (AC2) ──────────────────────────────────────────────────────────────
 
 /** Default location of the durable evidence-health fact for a story's latest run. */
-export function evidenceHealthFactPath(projectRoot: string, storyId: string, evidenceRoot?: string): string {
-  return join(evidenceRoot ?? join(projectRoot, ".roll", "features", "_evidence-health"), `${storyId}.json`);
+export function evidenceHealthFactPath(projectRoot: string, storyId: string): string {
+  return join(projectRoot, ".roll", "features", "_evidence-health", `${storyId}.json`);
 }
 
 function defaultReadHealthFact(path: string): EvidenceHealthFact | null {
@@ -367,26 +351,9 @@ async function captureRepair(args: string[], deps: CaptureCommandDeps): Promise<
     process.stderr.write(msg("capture.repair.usage") + "\n");
     return 1;
   }
-  const projectRoot = deps.projectPath ?? flagValue(args, "--project") ?? process.cwd();
+  const projectRoot = flagValue(args, "--project") ?? process.cwd();
   const json = args.includes("--json");
-  const evidenceHealthRoot = deps.authorities === undefined
-    ? undefined
-    : join(deps.authorities.evidence, "_health");
-  const requestedHealthPath = flagValue(args, "--health");
-  const healthPath = evidenceHealthRoot === undefined || requestedHealthPath === undefined
-    ? requestedHealthPath ?? evidenceHealthFactPath(projectRoot, storyId, evidenceHealthRoot)
-    : resolve(
-        requestedHealthPath.startsWith("evidence/") ? projectRoot : evidenceHealthRoot,
-        requestedHealthPath,
-      );
-  if (evidenceHealthRoot !== undefined && !contained(deps.authorities?.evidence ?? evidenceHealthRoot, healthPath)) {
-    process.stderr.write(`roll capture repair: authority_outside: ${healthPath}\n`);
-    return 1;
-  }
-  if (
-    deps.authorities !== undefined &&
-    !requireWorkspaceMutationPath("roll capture repair", deps.authorities.evidence, healthPath, "file")
-  ) return 1;
+  const healthPath = flagValue(args, "--health") ?? evidenceHealthFactPath(projectRoot, storyId);
   const readHealthFact = deps.readHealthFact ?? defaultReadHealthFact;
   const writeFileText = deps.writeFileText ?? defaultWriteFileText;
 
@@ -414,11 +381,7 @@ async function captureRepair(args: string[], deps: CaptureCommandDeps): Promise<
       expectedAcIds: [],
     };
   const runId = `repair-${(deps.now ?? (() => new Date()))().toISOString().replace(/[^0-9]/gu, "")}`;
-  const runDir = join(
-    evidenceHealthRoot ?? join(projectRoot, ".roll", "features", "_evidence-health"),
-    "repairs",
-    `${storyId}-${runId}`,
-  );
+  const runDir = join(projectRoot, ".roll", "features", "_evidence-health", "repairs", `${storyId}-${runId}`);
 
   const outcome = await repairDegradedEvidence(
     prior,

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop reconcile` subcommand, the I/O adapter for reconcile-from-main.
+ */
+/**
  * `roll loop reconcile [--json]` — US-DELIV-002.
  *
  * The IO adapter for the layered reconcile-from-main pure function. Gathers
@@ -61,13 +64,22 @@ import {
 // the SAME facts (one truth engine, no parallel probes).
 import { branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvidence, resolveRepoSlug } from "../lib/delivery-facts.js";
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
-import { markDoneGuarded } from "../runner/done-guard.js";
-import {
-  deliveryLoopReconcileUsage,
-  reconcileWorkspaceDeliveries,
-  type DeliveryCommandDeps,
-} from "./delivery.js";
 import { settleDeliveredCycle, gitPlaneVerifier, hasMergeConfirmedEvent } from "./loop-reconcile-merge.js";
+import { configuredRequiredChecks } from "../lib/ci-doc-drift.js";
+import { reconcileHostDeltaReservationClosures } from "../lib/delta-allocation.js";
+import { hostDeltaDeliveryBinding } from "../lib/delta-delivery-binding.js";
+
+/** Keep story merges on the same registry-selected exact-SHA check set as releases. */
+function applyConfiguredRequiredChecks(cwd: string, facts: ReconcileFacts): void {
+  try {
+    const required = configuredRequiredChecks(cwd);
+    if (required !== undefined) facts.requiredChecks = required;
+  } catch {
+    // A malformed policy must not silently downgrade to test-ts. This sentinel
+    // cannot be supplied by the CI workflow, so the named verdict fails closed.
+    facts.requiredChecks = ["rules-registry-invalid"];
+  }
+}
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -92,23 +104,6 @@ const RECONCILE_USAGE_ZH = [
   "  --dry-run    只报告判定，不写事件、不合入。",
   "",
 ].join("\n");
-
-/**
- * US-WS-015: the public `roll loop reconcile` surface is now a Workspace-scoped
- * alias of `roll delivery reconcile`. The legacy cycle reconciler below remains
- * the runner's internal delivery engine, but the user-facing alias must fold
- * Issue facts through the exact same path as the delivery command.
- */
-export function loopDeliveryReconcileCommand(
-  args: string[],
-  deps: DeliveryCommandDeps = {},
-): number {
-  if (args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
-    process.stdout.write(deliveryLoopReconcileUsage());
-    return 0;
-  }
-  return reconcileWorkspaceDeliveries(args, deps.resolveTarget);
-}
 
 // ── Ports ─────────────────────────────────────────────────────────────────────
 
@@ -177,6 +172,11 @@ function applyPrCloudState(facts: ReconcileFacts, st: PrCloudState): void {
       // "keep waiting", NOT failure — collapsing them to false made the
       // reconciler condemn still-running (or unpolled) checks as failed.
       facts.ciGreen = st.ci === "green" ? true : st.ci === "red" ? false : undefined;
+      // FIX-1487: remember WHICH sha that verdict came from.
+      facts.headSha = st.headSha;
+      // FIX-1489: and the NAMED per-check conclusions on that sha — merge permission
+      // is a named judgment, not the SKIPPED-tolerant aggregate above.
+      if (st.checks !== undefined) facts.checks = st.checks;
       facts.prDraft = st.draft;
       facts.prMergeable = st.mergeable;
       return;
@@ -416,6 +416,13 @@ export async function runReconcileTick(
 ): Promise<ReconcileTickResult> {
   const slug = resolveRepoSlug(cwd);
 
+  // Host-guided Delta has no synthetic Cycle to release its reservation.  Main
+  // reconciliation is therefore its production closure owner as well.  This
+  // is deliberately before the no-awaiting-cycles return: an externally
+  // reconciled host delivery must not be stranded just because no Cycle is
+  // currently pending.
+  reconcileHostDeltaReservationClosures(cwd);
+
   // Read awaiting cycles from event stream.
   let cycles = readAwaitingCycles(cwd);
   if (opts?.storyFilter !== undefined) {
@@ -469,6 +476,7 @@ export async function runReconcileTick(
       attestPresent: false,
       nowMs: now,
     };
+    applyConfiguredRequiredChecks(cwd, facts);
 
     // L1: PR state via gh.
     if (provider !== undefined && cyc.prNumber !== undefined && slug !== undefined) {
@@ -759,11 +767,13 @@ export async function runReconcileTick(
       else waiting++;
     }
     if (result.kind === "terminal") {
+      const binding = hostDeltaDeliveryBinding(readAllEvents(eventsPath) as readonly Record<string, unknown>[], cyc.storyId, cyc.cycleId);
       bus.appendEvent(eventsPath, {
         type: "delivery:abandoned",
         cycleId: cyc.cycleId,
         storyId: cyc.storyId,
         reason: result.reason,
+        ...(binding === undefined ? {} : binding),
         ts: now,
       });
     }
@@ -775,7 +785,8 @@ export async function runReconcileTick(
         if (slug !== undefined && cyc.prNumber !== undefined) {
           let outcome: "merged" | "blocked" | "gh_down" = "gh_down";
           try {
-            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain");
+            // FIX-1487: pin the verified head — see prMerge.
+            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain", facts.headSha);
             outcome = mergeResult.code === 0 ? "merged" : "blocked";
           } catch {
             outcome = "gh_down";
@@ -912,6 +923,7 @@ export async function loopReconcileCommand(
       attestPresent: false,
       nowMs: now,
     };
+    applyConfiguredRequiredChecks(cwd, facts);
 
     // L1: PR state via gh.
     if (provider !== undefined && cyc.prNumber !== undefined && slug !== undefined) {
@@ -997,11 +1009,13 @@ export async function loopReconcileCommand(
       }
     }
     if (result.kind === "terminal" && !dryRun) {
+      const binding = hostDeltaDeliveryBinding(readAllEvents(eventsPath) as readonly Record<string, unknown>[], cyc.storyId, cyc.cycleId);
       deps.bus.appendEvent(eventsPath, {
         type: "delivery:abandoned",
         cycleId: cyc.cycleId,
         storyId: cyc.storyId,
         reason: result.reason,
+        ...(binding === undefined ? {} : binding),
         ts: now,
       });
     }
@@ -1015,7 +1029,8 @@ export async function loopReconcileCommand(
         if (slug !== undefined && cyc.prNumber !== undefined) {
           let outcome: "merged" | "blocked" | "gh_down" = "gh_down";
           try {
-            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain");
+            // FIX-1487: pin the verified head — see prMerge.
+            const mergeResult: GhResult = await prMerge(slug, String(cyc.prNumber), "plain", facts.headSha);
             outcome = mergeResult.code === 0 ? "merged" : "blocked";
           } catch {
             // gh binary not found / unspawnable → gh_down

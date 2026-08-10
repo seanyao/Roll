@@ -1,0 +1,295 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-LOOP-129 managed-runtime help > freezes single-locale EN/ZH delta, worktree, and Supervisor help 1`] = `
+{
+  "en": {
+    "audit": "Usage: roll worktree audit [--json] [--repo <path>]
+  Read-only audit of all git worktrees registered for this repo.
+  Classifies ownership, dirt, merge evidence, and disposition.
+  --json    print schema-1 JSON output
+  --repo    override the project root (default: current directory)
+",
+    "cleanup": "Usage: roll worktree cleanup [--dry-run | --apply] [--json] [--repo <path>]
+  Safely release a managed WorkspaceSet; the worktree audit is the SOLE authority.
+  A release requires confirmed merge, accepted attest, and a fresh
+  \`safe_to_release\` result for EVERY registered member. \`handoff_ready\` is not
+  delivery: any handoff, unknown, stale, dirty, active, external, or unregistered
+  member means the entire Story reservation is preserved. Nothing is selected merely because
+  it is old, and recovery is non-destructive until the owner resolves the blocker.
+
+  Always dry-run first. Default (no flag) is --dry-run.
+  --dry-run  print the audit-derived release/refusal plan. Never mutates Git
+             state or clears a reservation.
+  --apply    re-run the audit before release; any changed head, new dirt, missing
+             path, or concurrent activation fails closed without substitution.
+             Resolve the blocker, then resume explicitly: roll loop resume
+  --json     emit the same schema-1 plan (dry-run) or result (apply) as JSON
+  --repo     override the project root (default: current directory)
+  --reclaim-orphan <path>  (FIX-1460) bounded-rm ONE named orphan loop dir
+             (deregistered from git; delivery not auto-provable) after you
+             review it. Fails closed unless it is an inactive loop orphan
+             inside .roll/loop/worktrees. Orphans never enter --apply.
+",
+    "deliveryHelp": "Usage: roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]
+
+  Read-only unified feature delivery view. One card has one final delivery
+  conclusion; every attempt stays visible under that card, and loop cycles and
+  Delta delegations are interleaved by time in a single view — there is no
+  loop view and no Delta view to pick between.
+
+  - Final state: not_started | active | blocked | handoff_ready | delivered | attested | unknown
+    A delivered/attested card is the only final "done" conclusion; handoff_ready
+    is a handoff, not a delivery.
+  - Attempts: each admitted loop cycle or Delta delegation remains listed, so a
+    card repaired after an earlier failed attempt shows both attempts.
+  - Samples: timing (elapsed, build, merge tail), TCR green/red, first-pass and
+    rework numbers always show their sample size; a missing or contradictory
+    boundary renders n/a, never a zero or a success.
+  - Incomplete history stays incomplete: ? / n/a / an Incomplete: line in the
+    terminal, null plus codes in --json. A visible 0 means a known zero.
+
+  Safety boundary: this command reads facts only. It cannot route an agent,
+  retry work, change the backlog, merge a PR, or attest a card.
+
+  <id>        a card id (card wins) or a registered feature id (its cards)
+  --from      inclusive lower bound on observed event time (RFC 3339/ISO instant)
+  --to        inclusive upper bound on observed event time
+  --json      exact projection schema (version 2) with sources and diagnostics",
+    "delta": "Usage: roll delta <prepare|validate|conclude|recover-held|rigs|status|help>
+
+  Delta Team (host-guided) = the current host main session (implicit Supervisor)
+  plus host-native Designer/Builder/Evaluator sub-agent sessions, driven through
+  roll delta. Roll never spawns, resumes, or configures any session, including
+  yours.
+
+  Managed-runtime boundary:
+    - prepare for solo or delta-team atomically holds the Story delivery reservation,
+      creates one managed WorkspaceSet beneath .roll/loop/worktrees, and returns its
+      detached checkout and publish-ref identity. Start the Builder only there.
+    - host-guided full-delta-team is refused before side effects; Full Delta attaches
+      to an existing Cycle WorkspaceSet and never creates a nested Delta workspace.
+    - handoff_ready preserves the reservation and workspace. It is NOT Done, a merge,
+      an attest verdict, or a DeliveryRecord. Cleanup needs confirmed merge plus
+      accepted attest and a fresh all-member inspection.
+    - Legacy/external paths remain visible as unknown or unmanaged; Roll never adopts
+      or deletes them automatically.
+
+  Honest protocol boundary:
+    - Host attestation is structural validation only (non-empty/unique tokens that
+      correspond across resolution/event/manifest); never proof of a fresh session
+      or that a model executed.
+    - Presets live in ~/.roll/delta-team/presets.yaml (host-local config only).
+    - Host-guided cost renders ? (host_unobservable) — never estimated or zeroed.
+
+  Host-guided delegation lifecycle commands (protocol-only; no agent spawning).
+
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]
+    Atomically reserve delivery, allocate the managed workspace, and create the immutable frame.
+    --continuation-run only takes over a task that was explicitly redelegated to <name>
+    (owner_redelegate --continuation-run <name>): it verifies the recorded redelegation,
+    creates a fresh standard delta run, and swaps the occupancy atomically — it never
+    touches any other task.
+
+  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
+    Validate a role-stage submission through the protocol-validator boundary.
+
+  roll delta preflight --delegation <id> --stage builder [--json]
+    After the Builder's final green TCR commit, run this read-only self-check
+    before formal validation. It writes no events or lease/frame/workspace/checkpoint
+    state, does not prove a model executed, and never replaces the Evaluator or formal gate.
+
+
+  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
+    Read immutable event and delivery truth. It never selects a rig, changes priority, or merges.
+
+
+  roll delta rigs [--refresh]
+    Read the local exact-model readiness snapshot; --refresh runs bounded local probes and publishes only a complete snapshot.
+  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
+    Record owner-approved terminal binding (Option C: handoff_ready/handoff_only).
+    owner_redelegate transfers the reservation to the named successor; the successor
+    takes over with roll delta prepare --continuation-run <name>.
+
+  roll delta recover-held --delegation <old-id> --continuation-run <name> --confirm <old-id> [--json]
+    Explicitly recover only a legacy owner_hold reservation incorrectly named to this successor.
+
+  roll delta status [--story <id>|--delegation <id>] [--json]
+    Read-only delegation status projection from event truth.
+
+  roll delta help
+    Print this help.
+
+  Managed Builder handoff:
+    Save \`roll delta preflight --delegation <id> --stage builder --json\` stdout outside the managed frame.
+    A red preflight is repaired in the same frame, then preflight runs green before one formal validate
+    with \`--preflight-receipt <path>\`; a missing, stale, or malformed receipt writes no lifecycle event.
+",
+    "dispatch": "Usage: roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>
+       roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>
+       roll worktree dispatch release <story-id> <dispatch-run-id>
+       roll worktree dispatch confirm <story-id> <dispatch-run-id> [--json]
+       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <text> --confirm <story-id> [--json]
+  Allocate one parent Skill DeliveryRun and detached child workspaces below .roll/loop/worktrees.
+  <json> is an array of { actionId, declaredFileScope }. Only the parent run may publish, attest, close, release, or stop.
+  confirm only finalizes a run after independent merge, accepted-attest, and clean-workspace checks.
+  stop only abandons a clean, unmerged, unpublished run; its branches and retained commits stay available for audit.
+",
+    "supervisor": "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]
+  status           observe + advise summary (alias for no subcommand)
+  observe          structured project facts (backlog, truth coverage, PRs, release readiness)
+  advise           Supervisor decisions (advisory; persistent changes need owner confirmation)
+  next             what should Roll do next?
+  why              why is the project stuck?
+  live             read-only Supervisor live board with Designer/Builder/Evaluator panes and shared DeliveryRun truth
+  live --watch     redraw the role board in-place until Ctrl-C; use --interval <sec>
+  live --collab    follow the multi-cycle collaboration stream; add --once for a snapshot
+  metrics          read-only queue, dependency, delivery, and reconciliation lag projection; never routes work, changes priority, or merges
+  delivery         read-only unified feature delivery view — one card, one final conclusion; every attempt visible; never routes, retries, changes backlog, merges, or attests
+  journal          structured supervisor narrative stream: list/record decisions, verifications, rescues
+  health           agent toolchain health: auth/network/setup/worktree classification and routing
+  route            Role route trace: --role builder|designer|evaluator|peer_reviewer [--story <id>]
+  repair-evidence  repair missing acceptance evidence for a green PR and restore merge-ready status",
+    "worktree": "Usage: roll worktree <audit|cleanup|dispatch> [options]
+  audit    Read-only audit of registered Git worktrees: ownership, dirt, merge evidence, and disposition.
+  cleanup  Audit-derived managed WorkspaceSet release or non-destructive refusal: release only after confirmed merge, accepted attest, and every member is safe_to_release (--dry-run first, then --apply).
+  dispatch Allocate a parent-owned managed WorkspaceSet; only the parent run may publish, attest, close, or release.
+",
+  },
+  "zh": {
+    "audit": "用法：roll worktree audit [--json] [--repo <path>]
+  只读审计本仓库已注册的 Git 工作树。
+  输出归属、脏改动、合并证据和处置；外部或旧记录只呈现，不自动认领。
+  --json    输出 schema-1 JSON
+  --repo    覆盖项目根目录（默认：当前目录）
+",
+    "cleanup": "用法：roll worktree cleanup [--dry-run | --apply] [--json] [--repo <path>]
+  只以工作树审计为唯一权威安全释放受管 WorkspaceSet。释放必须同时满足已确认合并、已接受
+  attest，以及每个已注册成员重新审计为 \`safe_to_release\`。handoff_ready 不等于已交付；任一
+  成员处于交接、未知、过期、脏、活动、外部或未注册状态，整个 Story 预留都会保留。不会只因
+  路径陈旧而选择它；在所有者解决阻塞前，恢复始终非破坏性。
+
+  默认（无标志）为 --dry-run，绝不修改 Git 状态或清除预留。
+  --dry-run  输出由审计导出的释放/拒绝计划。
+  --apply    释放前重新审计；HEAD、脏改动、路径或并发活动变化即失败关闭，绝不替换对象。
+             解决阻塞后手动恢复：roll loop resume
+  --json     输出同一 schema-1 计划（演练）或结果（执行）JSON
+  --repo     覆盖项目根目录（默认：当前目录）
+  --reclaim-orphan <path>  审查后回收一个点名的、已解除 Git 注册的受管孤儿目录；绝不自动回收。
+",
+    "deliveryHelp": "用法：roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]
+
+  只读统一功能交付视图。一张卡只有一个最终交付结论；每次尝试都保留在该卡下，
+  loop cycle 与 Delta 委派按时间交错显示在同一个视图里——不存在需要二选一的
+  loop 视图或 Delta 视图。
+
+  - 最终状态：not_started | active | blocked | handoff_ready | delivered | attested | unknown
+    只有 delivered/attested 才是最终"完成"结论；handoff_ready 是交接，不是交付。
+  - 尝试：每条已准入的 loop cycle 或 Delta 委派都会列出，因此一张卡在早期尝试
+    失败后修复，会同时显示两次尝试。
+  - 样本量：耗时（elapsed、build、merge tail）、TCR 绿/红、首轮与返工数字总是
+    显示样本量；边界缺失或矛盾时渲染 n/a，绝不渲染成零或成功。
+  - 缺失的历史保持不完整：终端里是 ? / n/a / Incomplete: 行，--json 里是 null
+    加 codes。可见的 0 表示已知为零。
+
+  安全边界：本命令只读事实。它不能路由 agent、重试工作、改变 backlog、合并 PR，
+  也不能 attest 卡片。
+
+  <id>        卡片 id（卡片优先）或已注册的 feature id（其全部卡片）
+  --from      事件记录时间的含下界（RFC 3339/ISO 瞬时）
+  --to        事件记录时间的含上界
+  --json      输出精确投影 schema（版本 2），含来源与诊断",
+    "delta": "用法：roll delta <prepare|validate|conclude|recover-held|rigs|status|help>
+
+  Delta Team（host-guided）= 当前宿主主会话（隐式 Supervisor）加上由宿主 native
+  能力创建的 Designer/Builder/Evaluator 子会话，通过 roll delta 驱动。Roll 从不
+  spawn、resume 或配置任何会话（包括你自己的）。
+
+  受管运行时边界：
+    - solo 或 delta-team 的 prepare 会原子持有 Story 交付预留，在
+      .roll/loop/worktrees 下创建一个受管 WorkspaceSet，并返回 detached checkout
+      和 publish-ref 身份。Builder 只能在该工作区开始。
+    - host-guided full-delta-team 会在副作用前被拒绝；Full Delta 只附着到既有 Cycle
+      WorkspaceSet，绝不创建嵌套 Delta 工作区。
+    - handoff_ready 会保留预留和工作区；它不是 Done、merge、attest 裁定或
+      DeliveryRecord。清理必须有已确认合并、已接受 attest 和新鲜的全成员检查。
+    - 旧路径/外部路径只会作为 unknown 或 unmanaged 可见；Roll 从不自动认领或删除。
+
+  如实的协议边界：
+    - 宿主 attestation 仅结构校验（token 非空/唯一且在 resolution/事件/manifest 间
+      对应）；绝不证明会话新起或模型执行过。
+    - preset 放在 ~/.roll/delta-team/presets.yaml（仅宿主本地配置）。
+    - host-guided 成本渲染 ? (host_unobservable)——绝不估算或写零。
+
+  宿主导引的委派生命周期命令（仅协议层；不启任何 agent）。
+
+  roll delta prepare <story-id> --trigger host-guided --topology solo|delta-team|full-delta-team --profile standard|verified|designed --preset <id> --resolution <path> [--continuation-run <name>] [--json]
+    原子预留交付、分配受管工作区，并创建不可变帧。
+    --continuation-run 只接手明确转交给 <name> 的任务（owner_redelegate --continuation-run
+    <name>）：它会核对已落盘的转交记录，创建全新的标准 delta 运行，并原子替换占用——
+    绝不触碰其他任务。
+
+  roll delta validate --delegation <id> --stage designer|builder|evaluator|peer [--json]
+    经过协议校验边界验证角色阶段提交。
+
+  roll delta preflight --delegation <id> --stage builder [--json]
+    Builder 完成最后一次 green TCR 提交后、正式校验前运行此只读自检。它不写事件或
+    lease/帧/工作区/检查点状态，不证明模型执行，也绝不替代 Evaluator 或正式闸门。
+
+
+  roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]
+    只读不可变事件和交付真相；绝不选择模型组合、改变优先级或合并。
+
+
+  roll delta rigs [--refresh]
+    读取本机指定模型就绪快照；--refresh 执行有界的本地探测，且只发布完整快照。
+  roll delta conclude --delegation <id> --delivery-disposition owner_continue|owner_hold|owner_redelegate [--continuation-run <name>] [--json]
+    记录 owner 批准的终止绑定（Option C：handoff_ready/handoff_only）。
+    owner_redelegate 会把占用转交给指定继任名字；继任者用 roll delta prepare
+    --continuation-run <name> 接手。
+
+  roll delta recover-held --delegation <旧委派-id> --continuation-run <继任名称> --confirm <旧委派-id> [--json]
+    仅在明确确认后恢复历史 owner_hold 暂缓记录中被错误改名给该继任者的预留。
+
+  roll delta status [--story <id>|--delegation <id>] [--json]
+    从事件真相只读投影委派状态。
+
+  roll delta help
+    打印此帮助。
+
+  受管 Builder 交接：
+    把 \`roll delta preflight --delegation <id> --stage builder --json\` 的 stdout 保存在受管帧外。
+    预检失败在同一帧修复、预检通过后，才用 \`--preflight-receipt <path>\` 做一次正式 validate；
+    收据缺失、过期或格式损坏时不写生命周期事件。
+",
+    "dispatch": "用法：roll worktree dispatch allocate <story-id> <dispatch-run-id> --actions <json>
+       roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>
+       roll worktree dispatch release <story-id> <dispatch-run-id>
+       roll worktree dispatch confirm <story-id> <dispatch-run-id> [--json]
+       roll worktree dispatch stop <story-id> <dispatch-run-id> --reason <原因> --confirm <story-id> [--json]
+  分配一个由父 Skill DeliveryRun 持有、位于 .roll/loop/worktrees 下的受管 WorkspaceSet。
+  <json> 为 { actionId, declaredFileScope } 数组；只有父运行可发布、验收、关闭、释放或停止。
+  confirm 只会收尾已合入、已验收且所有目录干净的运行。
+  stop 只会停止干净、未合入、未发布的运行；分支和保留提交会留下供核对。
+",
+    "supervisor": "用法：roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]
+  status           observe + advise 摘要（无子命令的别名）
+  observe          项目结构化事实（backlog、真相覆盖、PR、发布就绪度）
+  advise           Supervisor 建议（持久化更改需 owner 确认）
+  next / why       下一步与阻塞原因
+  live             只读实时面板：Designer/Builder/Evaluator 和共同 DeliveryRun 真相
+  live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>
+  live --collab    跟随多周期协作流；加 --once 读取快照
+  metrics          只读投影：排队、依赖、交付与对账耗时；绝不路由工作、改变优先级或合并
+  delivery         只读统一功能交付视图——一张卡一个最终结论；每次尝试可见；绝不路由、重试、改 backlog、合并或 attest
+  journal          Supervisor 叙事流：列出/记录决策、验证、救援
+  health           agent 工具链健康：auth/network/setup/worktree 分类与路由
+  route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]
+  repair-evidence  修复绿色 PR 缺失的验收证据并恢复 merge-ready 状态",
+    "worktree": "用法：roll worktree <audit|cleanup|dispatch> [options]
+  audit    只读审计所有已注册 Git 工作树：归属、脏改动、合并证据与处置。
+  cleanup  按审计结果释放受管 WorkspaceSet，或以非破坏性方式拒绝：仅在已确认合并、已接受 attest 且所有成员均为 safe_to_release 后释放（先 --dry-run，再 --apply）。
+  dispatch 分配由父 DeliveryRun 持有的受管 WorkspaceSet；只有父运行可发布、验收、关闭或释放。
+",
+  },
+}
+`;

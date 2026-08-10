@@ -16,10 +16,8 @@ afterAll(() => {
 function project(): string {
   const p = realpathSync(mkdtempSync(join(tmpdir(), "roll-storynew-")));
   dirs.push(p);
-  mkdirSync(join(p, "features"), { recursive: true });
-  mkdirSync(join(p, "backlog"), { recursive: true });
-  mkdirSync(join(p, "runtime"), { recursive: true });
-  writeFileSync(join(p, "backlog", "index.md"), "| US-NEW-1 | x | 📋 Todo |\n");
+  mkdirSync(join(p, ".roll", "features"), { recursive: true });
+  writeFileSync(join(p, ".roll", "backlog.md"), "| US-NEW-1 | x | 📋 Todo |\n");
   return p;
 }
 
@@ -35,16 +33,7 @@ function inProj(p: string, args: string[]): { code: number; out: string; err: st
   // @ts-expect-error capture
   process.stderr.write = (s: string): boolean => ((err += String(s)), true);
   try {
-    return { code: storyNewCommand(args, { resolveTarget: () => ({
-      ok: true,
-      workspaceId: "test",
-      workspaceRoot: p,
-      canonicalRoot: p,
-      backlogPath: join(p, "backlog", "index.md"),
-      storyRoot: join(p, "features"),
-      runtimeRoot: join(p, "runtime"),
-      configPath: join(p, "runtime", "backlog-sync.yaml"),
-    }) }), out, err };
+    return { code: storyNewCommand(args), out, err };
   } finally {
     process.stdout.write = w;
     process.stderr.write = e;
@@ -58,25 +47,25 @@ describe("roll story new — FIX-250", () => {
   it("appends the backlog row (📋 Todo) under the same epic", () => {
     const p = project();
     writeFileSync(
-      join(p, "backlog", "index.md"),
-      "| ID | D | S |\n|--|--|--|\n| [FIX-1](../features/pay/FIX-1/spec.md) | x | ✅ Done |\n",
+      join(p, ".roll", "backlog.md"),
+      "| ID | D | S |\n|--|--|--|\n| [FIX-1](.roll/features/pay/FIX-1/spec.md) | x | ✅ Done |\n",
     );
     const r = inProj(p, ["US-PAY-009", "--title", "refund flow", "--epic", "pay"]);
     expect(r.code).toBe(0);
-    const backlog = readFileSync(join(p, "backlog", "index.md"), "utf8");
-    expect(backlog).toContain("| [US-PAY-009](../features/pay/US-PAY-009/spec.md) | refund flow | 📋 Todo |");
+    const backlog = readFileSync(join(p, ".roll", "backlog.md"), "utf8");
+    expect(backlog).toContain("| [US-PAY-009](.roll/features/pay/US-PAY-009/spec.md) | refund flow | 📋 Todo |");
     expect(r.out).toContain("backlog row appended");
   });
 
   it("an already-present row stays untouched (idempotent)", () => {
     const p = project();
     writeFileSync(
-      join(p, "backlog", "index.md"),
-      "| ID | D | S |\n|--|--|--|\n| [US-DUP-1](../features/e/US-DUP-1/spec.md) | already | 🔨 In Progress |\n",
+      join(p, ".roll", "backlog.md"),
+      "| ID | D | S |\n|--|--|--|\n| [US-DUP-1](.roll/features/e/US-DUP-1/spec.md) | already | 🔨 In Progress |\n",
     );
     const r = inProj(p, ["US-DUP-1", "--title", "already", "--epic", "e2"]);
     expect(r.code).toBe(0);
-    const backlog = readFileSync(join(p, "backlog", "index.md"), "utf8");
+    const backlog = readFileSync(join(p, ".roll", "backlog.md"), "utf8");
     expect(backlog).toContain("🔨 In Progress"); // not duplicated, not flipped
     expect((backlog.match(/\| \[US-DUP-1\]/g) ?? []).length).toBe(1); // one ROW (the link path repeats the id)
   });
@@ -85,8 +74,8 @@ describe("roll story new — FIX-250", () => {
     const p = project();
     const r = inProj(p, ["US-BATCH-1", "--title", "t", "--epic", "e", "--no-index"]);
     expect(r.code).toBe(0);
-    expect(existsSync(join(p, "features", "e", "US-BATCH-1", "spec.md"))).toBe(true);
-    expect(existsSync(join(p, "index.json"))).toBe(false); // deferred
+    expect(existsSync(join(p, ".roll", "features", "e", "US-BATCH-1", "spec.md"))).toBe(true);
+    expect(existsSync(join(p, ".roll", "index.json"))).toBe(false); // deferred
   });
 });
 
@@ -116,12 +105,12 @@ describe("roll story new — US-META-009", () => {
     const p = project();
     const r = inProj(p, ["US-NEW-1", "--title", "一条新故事", "--epic", "alpha"]);
     expect(r.code).toBe(0);
-    const spec = readFileSync(join(p, "features", "alpha", "US-NEW-1", "spec.md"), "utf8");
+    const spec = readFileSync(join(p, ".roll", "features", "alpha", "US-NEW-1", "spec.md"), "utf8");
     expect(spec).toContain("id: US-NEW-1");
     expect(spec).toContain("title: 一条新故事");
     expect(spec).toContain("epic: alpha");
-    expect(existsSync(join(p, "features", "alpha", "US-NEW-1", "index.html"))).toBe(true);
-    const idx = JSON.parse(readFileSync(join(p, "index.json"), "utf8")) as { stories: Record<string, string> };
+    expect(existsSync(join(p, ".roll", "features", "alpha", "US-NEW-1", "index.html"))).toBe(true);
+    const idx = JSON.parse(readFileSync(join(p, ".roll", "index.json"), "utf8")) as { stories: Record<string, string> };
     expect(idx.stories["US-NEW-1"]).toBe("alpha");
   });
 
@@ -142,7 +131,7 @@ describe("roll story new — US-META-009", () => {
   it("defaults epic to uncategorized", () => {
     const p = project();
     expect(inProj(p, ["IDEA-9", "--title", "想法"]).code).toBe(0);
-    expect(existsSync(join(p, "features", "uncategorized", "IDEA-9", "spec.md"))).toBe(true);
+    expect(existsSync(join(p, ".roll", "features", "uncategorized", "IDEA-9", "spec.md"))).toBe(true);
   });
 
   it("US-V4-001: minting does NOT refresh the global dossier front page (no delivery side effect)", () => {
@@ -151,11 +140,11 @@ describe("roll story new — US-META-009", () => {
     // The global front page is rendered ON DEMAND by `roll index`, never as a
     // side effect of minting a card. Card creation only writes the story's own
     // spec + skeleton page + the lightweight index.json cache.
-    expect(existsSync(join(p, "features", "index.html"))).toBe(false);
+    expect(existsSync(join(p, ".roll", "features", "index.html"))).toBe(false);
     // The story's own skeleton page is still written at creation (renderStoryPage).
-    expect(existsSync(join(p, "features", "alpha", "US-NEW-1", "index.html"))).toBe(true);
+    expect(existsSync(join(p, ".roll", "features", "alpha", "US-NEW-1", "index.html"))).toBe(true);
     // The index.json cache records the new card's epic for live-walk-free lookups.
-    const idx = JSON.parse(readFileSync(join(p, "index.json"), "utf8")) as { stories: Record<string, string> };
+    const idx = JSON.parse(readFileSync(join(p, ".roll", "index.json"), "utf8")) as { stories: Record<string, string> };
     expect(idx.stories["US-NEW-1"]).toBe("alpha");
   });
 });

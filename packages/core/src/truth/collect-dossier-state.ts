@@ -1,4 +1,5 @@
 /**
+ * @responsibility Consolidates the dossier collectors into one truth snapshot.
  * US-OBS-016 — collectDossierState: the ONE read-side selector that consolidates
  * the ~18 collectors into a single TruthSnapshot. All data routing goes through
  * truth-adapter selectors; no new bespoke parsers.

@@ -9,18 +9,13 @@
 
 **[English README](README.md)**
 
-[![官网](https://img.shields.io/badge/官网-seanyao.github.io%2Froll-blue)](https://seanyao.github.io/roll/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@bipo-ape/roll.svg)](https://www.npmjs.com/package/@bipo-ape/roll)
-[![CI](https://github.com/seanyao/roll/actions/workflows/ci.yml/badge.svg)](https://github.com/seanyao/roll/actions/workflows/ci.yml)
+[![CI](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml/badge.svg)](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml)
 
 Roll 是 Supervisor-led 的 CLI harness：把 AI agent 解析为按 Story 收口的规划、构建、评估、git、CI 与验收证据流程。支持 Claude、Codex、Kimi、Pi、Antigravity、Reasonix 等本机可用 agent。
 
 ## 安装
-
-```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
-```
 
 ```bash
 npm install -g @bipo-ape/roll
@@ -35,6 +30,9 @@ macOS 上通过 npm 安装时，会顺手从 `seanyao/roll-capture` 最新 GitHu
 安装 `Roll Capture.app` 到 `~/Applications`，用于物理截图。CI、headless、非 macOS、
 离线下载失败或 `ROLL_SKIP_CAPTURE_INSTALL=1` 都会静默跳过且不让安装失败；`roll setup`
 和 `roll doctor tools` 会继续报告同一套就绪度与修复路径。
+要更新已安装的 Capture.app，请运行 `roll setup --update-capture`。命令会先显示
+已安装版本、可用版本和目标位置，只有输入 `y` 才替换；无人值守脚本必须明确给出
+`--yes`。拒绝、下载失败或替换失败都会保留原来的 App。
 
 ## 使用
 
@@ -136,13 +134,6 @@ easy/default/hard/fallback route slots 仍作为兼容输入可迁移，但不�
 管理模型。使用 `roll agent` 查看 scope/role/pool，使用
 `roll agent migrate --dry-run` 预览迁移。
 
-Workspace-first 模式下，稳定的 `workspaceId` 是身份；一台机器可以保持多个 active
-Workspace，每个变更命令必须显式或确定性解析到一个目标。Workspace 保存 Requirement、
-backlog 与 Story/Issue 交付记录，代码只出现在 `issues/<storyId>/<repoAlias>/` worktree；
-`~/.roll/repos/<repoId>.git` 是多个 Workspace 可复用、可重建且不进入交付真相链的机器
-bare cache。完整的创建、目标解析、多仓 Story、exact-SHA 验收和历史迁移流程见
-[Workspace 指南](guide/zh/workspaces.md)。
-
 ## 接入样例
 
 **从零开始的新项目**
@@ -188,30 +179,25 @@ roll loop go
 标上浪费 agent token。需要暂停时运行 `roll loop pause` 会持久化暂停标记；
 准备好后用 `roll loop resume` 恢复。
 
-例外：显式配置 `publish_mode: local` 的 campaign 只落到本地 integration branch；
-在全部本地验收通过且 owner 打开远端发布闸之前，不会 push 或创建 PR。
-
 ## 命令
 
 | 命令 | 说明 |
 |------|------|
-| `roll agent [--workspace <ID\|路径>\|migrate\|list\|readiness\|cast]` | 查看机器 Agent Scope/就绪度，或只读解析一个 Workspace 的角色分工 |
-| `roll backlog [show\|sync\|block\|defer\|lint\|…] [--workspace <ID\|路径>]` | 查看和管理一个明确 Workspace 的待办；`--all` 仅限只读 |
+| `roll agent [migrate\|list\|cast]` | Agent Scope、已安装 agent 与角色分工 |
+| `roll backlog [sync\|block\|defer\|lint\|…]` | 查看、管理、lint 和同步待办 |
 | `roll config [lang\|prices\|tune\|…]` | 配置语言、价格和建议式调参 |
-| `roll delivery <list\|show\|reconcile> [--workspace <ID\|路径>]` | 查看 Issue 各仓 PR/CI/merge 事实与 exact-SHA 集成验收；`list --all` 仅限只读 |
-| `roll design [--from-file <path>] [--agent <name>] [--workspace <ID\|路径>]` | 在一个明确 Workspace authority 上交互式启动 `$roll-design` |
+| `roll design [--from-file <path>] [--agent <name>]` | 交互式启动 `$roll-design`；详细设计会生成自包含 Design Review Page |
 | `roll doctor [skills\|tools\|language]` | 诊断安装、skills、工具、权限与语言漂移 |
 | `roll help [--lang en\|zh] [name]` | 查看内置 Charter / guide；`roll --help` 显示 CLI usage |
-| `roll idea "<一句话描述>" --workspace <ID\|路径>` | 在一个明确 Workspace backlog 中捕获并分类卡片 |
+| `roll idea "<一句话描述>"` | 捕获并分类一张 backlog 卡 |
 | `roll init` | 诊断当前目录并路由 setup/onboard |
-| `roll loop <on\|go\|pause\|resume> --workspace <ID\|路径>` / `roll loop status --all` | 运行或变更一个 Workspace scheduler；聚合状态仅限只读 |
+| `roll loop <on\|off\|go\|watch\|runs\|cycles\|cycle\|alert\|…>` | 运行、观察和维护自主执行循环 |
 | `roll next` | 接续 init/onboard，只给一个最合适的下一步 |
 | `roll north [--json] [--no-color]` | 北极星终端面板：自主运行时长、交付率、修复税和归因错误 |
 | `roll release [--dry-run\|--showcase]` | 发版计划/流程与 golden-path showcase 支撑 |
-| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup skills\|offboard` | 安装/同步约定，修复 Roll Capture.app 就绪度，或移除 Roll 管理的项目产物 |
+| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup --update-capture [--yes]` / `roll setup skills\|offboard` | 安装/同步约定；经明确确认安全更新 Roll Capture.app；修复就绪度，或移除 Roll 管理的项目产物 |
 | `roll status [ci\|pulse] [--json]` | 项目健康、CI 状态和交付脉搏 |
 | `roll test [--where] [--reset]` | 通过隔离适配器运行测试 |
-| `roll workspace <init\|issue\|requirement\|doctor\|migrate\|list\|show\|register\|activate\|pause\|archive>` | 初始化/定位 Workspace、诊断并有界修复漂移、检查/应用/续跑/回滚历史迁移，并管理生命周期 |
 | `roll update` | 升级全局 Roll 并重新同步约定 |
 | `roll --version` / `roll -v` | 显示已安装的 roll 版本 |
 
@@ -258,6 +244,65 @@ AC 状态、无豁免可视卡缺截图，都会拒合。PR body 里的 `Roll-Ev
 
 `roll supervisor live` 是已交付的 CLI-first 多角色看板。它默认打印一帧快照，适合脚本和快速查看；`roll supervisor live --watch` 会让同一个看板保持打开，并从同一条事件驱动 view model 原地刷新。浏览器/TUI 版 Supervisor Live Console 仍是未来工作，必须复用这个 view model。
 
+### 功能交付视图
+
+要查看一个 feature 或单张卡实际是如何交付的，运行
+`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]`。
+它是一张只读视图：一张卡只有一个最终交付结论，每次尝试都保留在该卡下，
+耗时/TCR/返工数字总是显示样本量，缺失的历史保持不完整（`?` / `n/a`），
+而不是变成零或成功。它不能路由 agent、重试工作、改变 backlog、合并 PR 或
+attest 卡片。完整的[交付指标词典](guide/zh/delivery-metrics.md)给出了
+worked example 与精确的来源事实。
+
+`roll delta metrics [--from <epoch-ms|ISO>] [--to <epoch-ms|ISO>] [--json]`
+仍是保留的 Delta-only 细节词典；查看 feature 或卡片请先使用统一的
+`roll supervisor delivery` 视图。它从不可变事件和交付事实只读推导尝试数、耗时、TCR、重新交接和组合多样性。窗口和百分位
+样本会明确显示；缺失或矛盾事实保持不完整，绝不会变成零或成功。它绝不选择模型组合、
+改变 backlog 顺序或合并 PR。
+
+### Delta rig 本机就绪诊断
+
+请宿主担当 Delta 角色之前，先用 `roll delta rigs` 查看它的本机诊断。不带标志的普通读取
+只渲染最近一次完整的本机观测：不会启动模型、写快照，也不会改动工作区、租约、派工、
+角色解析或事件。只有当你想对每个精确配置的 `{adapter, cliModelId}` 做有界探测并发布一份
+完整的新本机快照时，才使用 `roll delta rigs --refresh`。
+
+例如，已配置的 Codex 候选按其精确的本地模型映射探测（等价于
+`codex exec --model <cliModelId> ...`），绝不使用默认模型。找不到可执行文件会显示为
+**不可用**并提示安装；没有已验证安全的指定模型非交互选择方式的适配器同样显示为
+**不可用**，且不会执行。**未知**包括过期或不兼容的缓存、超时、令牌输出未验证以及
+未分类失败；修好界面显示的问题后再刷新。就绪文件保存在本机 `$ROLL_HOME` 下
+（`delta-team/rig-adapters.yaml` 与 `delta-team/rig-readiness/…`），只是诊断证据：
+它们不是 Delta 生命周期存储，prepare、角色解析、角色准入、租约与交付对账都不会读取。
+
+输出一次调用只使用一种语言：`ROLL_LANG` 是单进程覆盖，然后是持久化的
+`roll config lang` 偏好，再是 `LC_ALL`、`LANG` 和英文；中文操作者可用
+`ROLL_LANG=zh roll delta rigs --refresh` 获得完整的简体中文本机诊断。**通过**
+只表示这个指定模型在记录的观测时间返回了固定的最小令牌。它绝不证明后续长任务、
+交付、宿主会话新鲜度或最终角色分配；真正做决定的是 pin、排除规则、标签、
+成本上限和角色多样性。
+
+### Delta Builder 预检
+
+Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builder validate 前，运行
+`roll delta preflight --delegation <id> --stage builder --json`。预检只读、可在同一帧修复，
+不产生生命周期成功，也不证明模型执行，更不替代独立 Evaluator 或正式的 fail-closed 校验。
+流程是：预检失败 → 在同一帧修复 → 预检通过 → 正式 validate；它不是自动重试或 fallback。
+
+`roll supervisor metrics [--json]` 仍是保留的流程滞后投影（排队/依赖/合并/CI/对账）；统一的 `roll supervisor delivery <id>` 视图才是读取 feature 交付结论的主要方式。它从事件账本推导逐卡与聚合的排队、依赖、首个动作、合并、PR/CI 和对账耗时；终端输出会写明观察窗口、样本量、`nearest-rank` 百分位算法以及每一项缺失的上游事实，JSON 保留同样的不确定性。依赖等待会区分“未完成依赖阻塞”和“依赖已满足但尚未派发”。`handoff_ready` 仍然只是交接，绝不会被显示为已交付。
+完整的[交付指标词典](guide/zh/delivery-metrics.md)列出两条命令的来源事实、分子/分母、
+时间边界、未知行为与建议性边界；artifact 缺失不是关于模型调用的证据。
+
+## 规则注册表与文档漂移
+
+[`policy/rules.yaml`](policy/rules.yaml) 是已注册 redline、doc-drift 模式以及源码到文档映射的唯一机器可读权威。README、指南、验证说明和生成的[职责地图](docs/maps/)只解释这份注册表，不再声明第二份策略。`node scripts/audit-rules.mjs` 报告的是**已注册 N** 条规则仍然有效；这不是“仓库所有可能规则均已覆盖”的声明。
+
+[`policy/rules-inventory.yaml`](policy/rules-inventory.yaml) 是规则候选文件上的可审计覆盖面谓词：声明的 roots、include 模式与带理由的排除项，逐条分类 registered 或 out-of-scope。覆盖面 = 该谓词 + 其排除项，绝非关键字搜索式完备性；审计对未分类候选与孤儿锚点报错，而不是假定所有规则都已注册。
+
+当前 `doc_drift: soft` 由注册表驱动且可观测：已声明的源码面变更而其声明文档未同步时，会输出诊断，但 soft 命中仍以 exit 0 结束。不存在豁免路径。在本仓形态下，命名 CI 检查对手工 GitHub UI 合并同样只是 advisory：CI 记录结果，但不写 Roll 事件，也不认证合并决定。
+
+hard doc-drift 执行**尚未启用**。启用前必须先有可信的 owner 授权与校准设计。peer 会话、交互式 TTY 或 `actor` 字段都不是 owner 身份认证，文档不得把它们说成认证。将其翻为 hard 由 US-RULE-006 跟踪，该卡处于 **Hold**：loop 不得自动拾取；激活前必须先完成可信 owner 授权与校准设计。
+
 ## 仓库结构
 
 开发态是 pnpm monorepo，发布态是单一 npm 包。
@@ -278,12 +323,12 @@ template/      roll init 安装的项目脚手架
 
 | | |
 |---|---|
-| **从这里开始** | [快速上手](guide/zh/getting-started.md) · [Workspace-first 交付](guide/zh/workspaces.md) · [概述与架构](guide/zh/overview.md) · [工程方法论](guide/zh/methodology.md) |
-| **日常使用** | [Loop（自主执行器）](guide/zh/loop.md) · [Context Engineering](guide/zh/context.md) · [APE Context 迁移](guide/zh/context-ape-migration.md) · [Workspace Doctor](guide/zh/workspace-doctor.md) · [工具与策略](guide/zh/tools.md) · [浏览器操作（受管通道 + 交互通道）](guide/zh/browser-operations.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
+| **从这里开始** | [快速上手](guide/zh/getting-started.md) · [概述与架构](guide/zh/overview.md) · [工程方法论](guide/zh/methodology.md) |
+| **日常使用** | [Loop（自主执行器）](guide/zh/loop.md) · [工具与策略](guide/zh/tools.md) · [浏览器操作（受管通道 + 交互通道）](guide/zh/browser-operations.md) · [配置](guide/zh/configuration.md) · [价格与成本](guide/zh/pricing.md) · [FAQ](guide/zh/faq.md) |
 | **质量机制** | [验收证据（`roll attest`）](guide/zh/acceptance-evidence.md) · [证据生命周期](guide/zh/acceptance-evidence.md#三段式生命周期) · [一致性与发版闸](guide/zh/consistency.md) · [跨 Agent 配对](guide/zh/pairing.md) · [Peer 评审](guide/zh/peer.md) · [测试隔离](guide/zh/test-isolation.md) |
 | **底层设计** | [架构：分层·领域·不变量](docs/architecture.md) · [验证体系](docs/verification.md) · [理念宣言](docs/manifesto.md) |
 
-完整指南目录：[guide/zh/README.md](guide/zh/README.md) —— agent 路由、peer 评审、feedback、backlog 同步、接入模式等。
+完整指南目录：[guide/zh/](guide/zh/) —— agent 路由、peer 评审、feedback、backlog 同步、接入模式等。
 
 ## 贡献
 

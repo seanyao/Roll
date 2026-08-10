@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects hard machine-checkable facts into evidence.json.
+ */
+/**
  * US-ATTEST-003 — evidence collector: sweep the HARD, machine-checkable facts
  * a finished story left behind and freeze them into `evidence.json`.
  *
@@ -140,6 +143,9 @@ export interface CaptureCommandFact {
   exitCode: number;
   stdoutTail: string;
   stderrTail: string;
+  /** FIX-1484: on failure, full redacted streams persisted under the run dir
+   *  (paths relative to it); the capped tails above stay display-only. */
+  outputDump?: { stdout?: string; stderr?: string };
 }
 
 export interface CollectOptions {

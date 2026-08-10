@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the machine-global About page content model.
+ */
+/**
  * US-DOSSIER-041 — the About machine-global page, rebuilt to the CORRECT content
  * model (the design reference's ABOUT ROLL TAB).
  *
@@ -23,6 +26,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { bi } from "@roll/core";
+import { GENERATED_INVARIANTS } from "@roll/spec";
 import { machineMasthead, machinePalette, renderMachineShell, type ProjectRegistryEntry, type TruthConsoleBrand } from "./truth-console.js";
 
 /** One bilingual string. */
@@ -149,22 +153,6 @@ export const ROLL_PRINCIPLES: AboutPrincipleGroup[] = [
   },
 ];
 
-/** The 12 behavior invariants (design ref: INVARIANTS) — I1..I12. */
-export const ROLL_INVARIANTS: AboutInvariant[] = [
-  { n: "I1", t: { en: "Heartbeat ≤60s; watchdog reaps & writes terminal", zh: "心跳 ≤60s；超时回收并落终态" } },
-  { n: "I2", t: { en: "SIGKILL-safe re-entry detects orphans", zh: "SIGKILL 重入检测孤儿并安全接管" } },
-  { n: "I3", t: { en: "≤1 open PR per story", zh: "同一 Story 至多一个 open PR" } },
-  { n: "I4", t: { en: "main = truth; exit-0 / green CI ≠ delivered", zh: "主干即真相；退出码/CI 绿 ≠ 已交付" } },
-  { n: "I5", t: { en: "One bad story never freezes the rest", zh: "一个坏 Story 不冻结其他工作" } },
-  { n: "I6", t: { en: "Repeated failure → pause + alert, human decides", zh: "连败 → 暂停+告警，人决策" } },
-  { n: "I7", t: { en: "Path is identity — per-project .roll/loop/", zh: "路径即身份 — 每项目独立 .roll/loop/" } },
-  { n: "I8", t: { en: "State rebuilt from immutable events; atomic append", zh: "状态从不可变事件重建；原子追加" } },
-  { n: "I9", t: { en: "Optimistic lock; exact-line story match", zh: "乐观锁；整行精确匹配" } },
-  { n: "I10", t: { en: "Predictable routing; probe before spawn", zh: "可预测路由；spawn 前探活" } },
-  { n: "I11", t: { en: "Per-cycle cost recorded; budget guardrail", zh: "逐周期记成本；预算限幅" } },
-  { n: "I12", t: { en: "One cycle one story, fresh ctx, TCR green-or-revert", zh: "一周期一故事、全新上下文、TCR 绿或回退" } },
-];
-
 export interface AboutDeps {
   /** Does this repo-relative doc exist? (used only to cite the source honestly) */
   docExists: (rel: string) => boolean;
@@ -181,7 +169,10 @@ export function collectAbout(deps: AboutDeps): AboutVM {
     loop: ROLL_LOOP,
     domains: ROLL_DOMAINS,
     principles: ROLL_PRINCIPLES,
-    invariants: ROLL_INVARIANTS,
+    invariants: GENERATED_INVARIANTS.map((inv) => ({
+      n: inv.id,
+      t: { en: inv.projection.about.en, zh: inv.projection.about.zh },
+    })),
     manifestoPresent: deps.docExists("docs/manifesto.md"),
     architecturePresent: deps.docExists("docs/architecture.md"),
   };

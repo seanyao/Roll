@@ -7,15 +7,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { planAgentScopeMigration } from "@roll/core";
 import { buildDesignScorePrompt, buildPairScorePrompt, buildReviewPrompt, enabledPairingStages, pairingDispatch, reviewTimeoutMs, runPairing, type PairEvent, type RunPairingDeps } from "../src/runner/pairing-gate.js";
 
-function project(legacyYaml: string | null): { dir: string; rt: string } {
+function project(scope: "evaluate" | null, legacyYaml?: string): { dir: string; rt: string } {
   const dir = mkdtempSync(join(tmpdir(), "roll-pair-"));
   mkdirSync(join(dir, ".roll"), { recursive: true });
-  // The pairing gate is now configured only through the scoped evaluate role.
-  // `legacyYaml` remains a compact fixture input for enabled/disabled coverage;
-  // it is deliberately never written or read by production code.
-  if (legacyYaml !== null && !/^enabled:\s*false/m.test(legacyYaml)) {
+  if (scope === "evaluate") {
     writeScopedAgents(dir, `schema: roll-agents/v1
 scope: project
 defaults:
@@ -28,6 +26,7 @@ defaults:
         strategy: least-recent
 `);
   }
+  if (legacyYaml !== undefined) writeFileSync(join(dir, ".roll", "pairing.yaml"), legacyYaml, "utf8");
   const rt = join(dir, "rt");
   mkdirSync(rt, { recursive: true });
   return { dir, rt };
@@ -37,12 +36,9 @@ function writeScopedAgents(dir: string, yaml: string): void {
   writeFileSync(join(dir, ".roll", "agents.yaml"), yaml);
 }
 
-// Static pairing config declares fair supported candidates. Runtime auth/VPN/account
-// health is filtered by availability/readiness, not by permanent config exclusion.
-const ENABLED = `enabled: true\nstages: [code]\ncapability:\n  kimi: [code]\n  pi: [code]\n  reasonix: [code]\n`;
-// US-PAIR-004: a config that enables every stage and declares each agent
-// capable across them, so stage plumbing can be exercised independently.
-const ALL_STAGES = `enabled: true\nstages: [design, test, code, cycle]\ncapability:\n  kimi: [design, test, code, cycle]\n  pi: [design, test, code, cycle]\n  reasonix: [design, test, code, cycle]\n`;
+// Runtime pairing is enabled only by the scoped evaluate role.
+const ENABLED = "evaluate" as const;
+const SCORE_CFG = "evaluate" as const;
 const highComplexity = async (): Promise<string[]> => ["a.ts", "b.ts", "c.ts", "d.ts"]; // >3 → high
 
 function deps(over: Partial<RunPairingDeps> = {}): { d: RunPairingDeps; events: PairEvent[] } {
@@ -149,14 +145,14 @@ describe("pairingDispatch — REFACTOR-065 unified review dispatch", () => {
 });
 
 describe("runPairing — US-PAIR-003", () => {
-  it("file absent = off (never silent magic)", async () => {
+  it("evaluate role absent = off", async () => {
     const { dir, rt } = project(null);
     const { d } = deps();
     expect((await runPairing(dir, dir, rt, "c1", "kimi", "code", d)).status).toBe("off");
   });
 
-  it("disabled config = off", async () => {
-    const { dir, rt } = project(`enabled: false\nstages: [code]\n`);
+  it("a legacy config file cannot enable code review", async () => {
+    const { dir, rt } = project(null, `enabled: true\nstages: [code]\ncapability:\n  pi: [code]\n`);
     const { d } = deps();
     expect((await runPairing(dir, dir, rt, "c1", "kimi", "code", d)).status).toBe("off");
   });
@@ -199,7 +195,7 @@ describe("runPairing — US-PAIR-003", () => {
     expect(events.indexOf(verdicts[0]!)).toBeGreaterThan(events.indexOf(selecteds[0]!));
   });
 
-  it("US-V4-018: runs code pairing from scoped evaluate role when pairing.yaml is absent", async () => {
+  it("US-V4-018: runs code pairing from the scoped evaluate role", async () => {
     const { dir, rt } = project(null);
     writeScopedAgents(dir, `schema: roll-agents/v1
 scope: project
@@ -405,14 +401,34 @@ describe("runPairing — scoped stage policy", () => {
 });
 
 describe("enabledPairingStages — executor stage iteration seam (US-PAIR-004)", () => {
-  it("file absent = no stages (pairing off, never silent magic)", () => {
+  it("evaluate role absent = no review stage", () => {
     const { dir } = project(null);
     expect(enabledPairingStages(dir)).toEqual([]);
   });
 
-  it("disabled config = no stages even if stages are listed", () => {
-    const { dir } = project(`enabled: false\nstages: [design, code]\n`);
+  it("legacy stages cannot enable review", () => {
+    const { dir } = project(null, `enabled: true\nstages: [design, code]\ncapability:\n  pi: [design, code]\n`);
     expect(enabledPairingStages(dir)).toEqual([]);
+  });
+
+  it("uses a migrated legacy code pool for code review, while a score-only pool leaves code review off", () => {
+    const codeOnly = project(null);
+    const codePlan = planAgentScopeMigration({
+      pairingText: "enabled: true\nstages: [code]\ncapability:\n  pi: [code]\n",
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    writeScopedAgents(codeOnly.dir, codePlan.project.text);
+    expect(enabledPairingStages(codeOnly.dir)).toEqual(["code"]);
+
+    const scoreOnly = project(null);
+    const scorePlan = planAgentScopeMigration({
+      pairingText: "enabled: true\nstages: [score]\ncapability:\n  pi: [score]\n",
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    writeScopedAgents(scoreOnly.dir, scorePlan.project.text);
+    expect(enabledPairingStages(scoreOnly.dir)).toEqual([]);
   });
 
   it("scoped evaluate enables the code stage", () => {
@@ -420,25 +436,22 @@ describe("enabledPairingStages — executor stage iteration seam (US-PAIR-004)",
     expect(enabledPairingStages(dir)).toEqual(["code"]);
   });
 
-  it("legacy stage lists do not affect scoped pairing", () => {
-    const { dir } = project(ALL_STAGES);
+  it("scoped evaluate always enables only the code review stage", () => {
+    const { dir } = project(ENABLED);
     expect(enabledPairingStages(dir)).toEqual(["code"]);
   });
 
   it("a malformed legacy config does not affect scoped pairing", () => {
-    const { dir } = project(`enabled: true\nstages: [bogus-stage]\n`);
+    const { dir } = project(ENABLED, `enabled: true\nstages: [bogus-stage]\n`);
     expect(enabledPairingStages(dir)).toEqual(["code"]);
   });
 
-  // kimi pair-review (US-PAIR-004): a duplicate stage in pairing.yaml must not
-  // fire pairing twice — that would burn two peers, emit duplicate events, and
-  // (for `code`) write the legacy evidence path twice. De-dupe, keep first-seen order.
-  it("legacy stage lists cannot alter the scoped code stage", () => {
-    const { dir } = project(`enabled: true\nstages: [code, code, design, code]\n`);
+  it("legacy duplicate stages cannot alter scoped review triggering", () => {
+    const { dir } = project(ENABLED, `enabled: true\nstages: [code, code, design, code]\n`);
     expect(enabledPairingStages(dir)).toEqual(["code"]);
   });
 
-  it("US-V4-018: reads code review stages from scoped evaluate role when pairing.yaml is absent", () => {
+  it("US-V4-018: reads code review stages from scoped evaluate role", () => {
     const { dir } = project(null);
     writeScopedAgents(dir, `schema: roll-agents/v1
 scope: project
@@ -454,33 +467,6 @@ defaults:
 `);
     expect(enabledPairingStages(dir)).toEqual(["code"]);
   });
-
-  it("reads Workspace evaluate casting from agents.yaml and ignores repository-local project policy", () => {
-    const { dir } = project(null);
-    writeFileSync(join(dir, "workspace.yaml"), "schema: roll-workspace/v1\nworkspace_id: ws-test\n");
-    writeFileSync(join(dir, "agents.yaml"), `schema: roll-agents/v1
-scope: workspace
-inherits: machine
-roles: {}
-defaults:
-  story:
-    roles:
-      evaluate:
-        kind: fixed
-        agent: pi
-`);
-    writeScopedAgents(dir, `schema: roll-agents/v1
-scope: project
-defaults:
-  story:
-    roles:
-      evaluate:
-        kind: fixed
-        agent: reasonix
-`);
-
-    expect(enabledPairingStages(dir)).toEqual(["code"]);
-  });
 });
 
 // ── US-PAIR-009: score stage — heterogeneous peer scores the cycle ───────────
@@ -491,10 +477,6 @@ import { readStoryReviewScores } from "../src/lib/review-score.js";
 
 const FIX1044_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "score");
 const readScoreFixture = (name: string): string => readFileSync(join(FIX1044_FIXTURES, name), "utf8");
-
-// This fixture keeps the declared-capable scorers narrow on purpose; supported
-// agents outside the fixture may still be used by runtime escalation.
-const SCORE_CFG = `enabled: true\nstages: [code, score]\ncapability:\n  kimi: [code, score]\n  pi: [code, score]\n  reasonix: [code, score]\n`;
 
 function scoreDeps(over: Partial<RunScorePairingDeps> = {}): { d: RunScorePairingDeps; events: PairEvent[] } {
   const events: PairEvent[] = [];
@@ -510,13 +492,12 @@ function scoreDeps(over: Partial<RunScorePairingDeps> = {}): { d: RunScorePairin
 }
 
 describe("runScorePairing — US-PAIR-009", () => {
-  it("FIX-343: MANDATORY — scores even with NO pairing.yaml / stage not enabled", async () => {
-    // The score stage is no longer gated on pairing.yaml: a repo with no config
-    // (and one with only `code` enabled) still produces a peer Review Score.
+  it("FIX-343: MANDATORY — scores with no evaluate role", async () => {
+    // The score stage is independent of the code-review trigger.
     const off = project(null);
     const { d } = scoreDeps();
     expect((await runScorePairing(off.dir, off.rt, "c1", "kimi", "US-X-001", "roll-build", "summary", d)).status).toBe("scored");
-    const noScore = project(ENABLED); // stages: [code] only — score stage still fires
+    const noScore = project(ENABLED); // code review is enabled; score still follows its own protocol
     expect((await runScorePairing(noScore.dir, noScore.rt, "c1", "kimi", "US-X-002", "roll-build", "summary", scoreDeps().d)).status).toBe("scored");
   });
 
@@ -598,8 +579,8 @@ describe("runScorePairing — US-PAIR-009", () => {
     expect(readStoryReviewScores(dir, "US-X-001")).toHaveLength(0); // NO fallback note — the cycle honestly fails
   });
 
-  it("US-V4-018: scoped evaluate role is preferred over legacy pairing.yaml for score candidates", async () => {
-    const { dir, rt } = project(`enabled: true\nstages: [code, score]\ncapability:\n  pi: [code, score]\n`);
+  it("US-V4-018: scoped evaluate role is the only score candidate source", async () => {
+    const { dir, rt } = project(ENABLED, `enabled: true\nstages: [code, score]\ncapability:\n  pi: [code, score]\n`);
     writeScopedAgents(dir, `schema: roll-agents/v1
 scope: project
 defaults:
@@ -1238,8 +1219,8 @@ function retryDeps(over: Partial<RetryPeerConsultDeps> = {}): { d: RetryPeerCons
 }
 
 describe("retryPeerConsult — FIX-293 AC-H3 (bounded retry, config-independent)", () => {
-  it("fires WITHOUT pairing.yaml (always-on gate, not opt-in) and writes the gate's evidence file", async () => {
-    const { rt } = project(null); // no pairing.yaml — the gate retry still runs
+  it("fires without an evaluate role (always-on gate, not opt-in) and writes the gate's evidence file", async () => {
+    const { rt } = project(null); // the gate retry remains independent of pairing configuration
     const wt = rt; // diff is injected, so worktree path is irrelevant here
     const { d, events } = retryDeps();
     const r = await retryPeerConsult(wt, rt, "c-retry", d);
@@ -1941,5 +1922,106 @@ describe("US-CYCLE-008 — risk-tier-driven evaluation panel", () => {
     expect(fan.limit).toBe(3);
     expect(tried.length).toBeGreaterThanOrEqual(2); // parallel panel
     expect(tried.length).toBeLessThanOrEqual(3); // bounded
+  });
+});
+
+describe("US-PAIR-020 — the isolation decision is recorded per dispatch", () => {
+  // This repo's real rigs: pi and reasonix are BOTH pinned to deepseek-v4-pro.
+  const models: Record<string, string> = {
+    kimi: "kimi-k2",
+    codex: "gpt-5.3-codex",
+    pi: "deepseek-v4-pro",
+    reasonix: "deepseek-v4-pro",
+  };
+  const resolveModel = (a: string): string => models[a] ?? "";
+  const baseDeps = (events: PairEvent[], candidates: string[], workingAgent: string) => ({
+    cycleId: "c-tier",
+    workingAgent,
+    stage: "code" as const,
+    candidates,
+    sameTypeFallback: { allowed: false },
+    fallbackPolicy: "none" as const,
+    mode: "serial-take-first" as const,
+    blockOnNoWinner: false,
+    diff: "diff",
+    timeoutMs: 10,
+    event: (e: PairEvent) => events.push(e),
+    now: () => 1,
+    reviewPeer: async () => ({ verdict: "agree" as const, findings: [], cost: 0 }),
+  });
+  const selected = (events: PairEvent[]): Extract<PairEvent, { type: "pair:selected" }>[] =>
+    events.filter((e): e is Extract<PairEvent, { type: "pair:selected" }> => e.type === "pair:selected");
+
+  it("records declared + achieved when the ask is met", async () => {
+    const events: PairEvent[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["codex"], "kimi"),
+      tierPlan: { declared: "vendor", resolveModel },
+    });
+    const ev = selected(events)[0];
+    expect(ev?.declaredTier).toBe("vendor");
+    expect(ev?.achievedTier).toBe("vendor");
+    expect(ev?.degradedFrom, "not degraded — the ask was met").toBeUndefined();
+    expect(ev?.tierReason).toContain("openai");
+  });
+
+  it("records the degradation when no farther candidate exists", async () => {
+    // reviewer reasonix vs builder pi — two entries, ONE model.
+    const events: PairEvent[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["reasonix"], "pi"),
+      tierPlan: { declared: "vendor", resolveModel },
+    });
+    const ev = selected(events)[0];
+    expect(ev?.declaredTier).toBe("vendor");
+    expect(ev?.achievedTier, "same model → only a fresh session separates them").toBe("session");
+    expect(ev?.degradedFrom).toBe("vendor");
+    expect(ev?.tierReason).toContain("deepseek-v4-pro");
+  });
+
+  it("distinguishes 'could not open the farther candidate' via the attempt reason", async () => {
+    // codex (vendor-far) fails to open; reasonix (same model as builder pi) answers.
+    const events: PairEvent[] = [];
+    const tried: string[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["codex", "reasonix"], "pi"),
+      tierPlan: { declared: "vendor", resolveModel },
+      reviewPeer: async (peer: string) => {
+        tried.push(peer);
+        return peer === "codex" ? null : { verdict: "agree" as const, findings: [], cost: 0 };
+      },
+    });
+    expect(tried).toEqual(["codex", "reasonix"]);
+    const evs = selected(events);
+    // First attempt aimed at the vendor-far peer and was recorded as such.
+    expect(evs[0]?.achievedTier).toBe("vendor");
+    expect(evs[0]?.reason).toBe("ranked_candidate");
+    // The fallback records BOTH that it degraded and that it followed a failure —
+    // which is what separates "nothing farther existed" from "it would not open".
+    expect(evs[1]?.reason).toBe("fallback_after_failure");
+    expect(evs[1]?.degradedFrom).toBe("vendor");
+    expect(evs[1]?.achievedTier).toBe("session");
+  });
+
+  it("a failed peer is not retried within the round", async () => {
+    const events: PairEvent[] = [];
+    const tried: string[] = [];
+    await pairingDispatch({
+      ...baseDeps(events, ["codex", "reasonix"], "pi"),
+      tierPlan: { declared: "vendor", resolveModel },
+      reviewPeer: async (peer: string) => {
+        tried.push(peer);
+        return peer === "codex" ? null : { verdict: "agree" as const, findings: [], cost: 0 };
+      },
+    });
+    expect(tried.filter((p) => p === "codex"), "the failing peer is tried once, then dropped").toHaveLength(1);
+  });
+
+  it("omitting tierPlan records no tier fields (back-compat)", async () => {
+    const events: PairEvent[] = [];
+    await pairingDispatch(baseDeps(events, ["codex"], "kimi"));
+    const ev = selected(events)[0];
+    expect(ev?.declaredTier).toBeUndefined();
+    expect(ev?.achievedTier).toBeUndefined();
   });
 });

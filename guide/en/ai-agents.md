@@ -7,9 +7,8 @@ model is:
 Scope -> Role -> Binding -> Agent -> optional Model
 ```
 
-The same shape repeats at every level. A machine declares capability; a Project
-can bind legacy repository work, while a registered Workspace casts roles through
-`machine -> workspace -> story -> skill` and a story or skill can narrow those
+The same shape repeats at every level. A machine can declare the agents it has,
+a project can bind roles for its work, and a story or skill can narrow those
 bindings when needed.
 
 ## Agent-Domain Files
@@ -18,10 +17,6 @@ bindings when needed.
   machine-level roles such as `supervise`.
 - `.roll/agents.yaml` is Project Scope. It binds project/story roles such as
   `supervise`, `execute`, and `evaluate`.
-- `<workspace>/agents.yaml` is Workspace Scope. It is a closed casting-only file:
-  `roles` plus `defaults.story` / `defaults.skill`. It cannot declare agents,
-  models, disabled state, or capacity, and Workspace runtime never falls back to
-  repository-local Project Scope.
 
 `~/.roll/config.yaml` may still exist for generic preferences and legacy
 migration input, but it is no longer the primary authoring surface for agent
@@ -32,13 +27,7 @@ roll agent                      # show Machine Scope, effective Project Scope, a
 roll agent migrate --dry-run    # preview conversion from legacy files
 roll agent migrate              # write roll-agents/v1 files
 roll agent list                 # show installed agents
-roll agent readiness [agent]    # show machine readiness
-roll agent --workspace <id>     # show read-only effective Workspace casting and trace
 ```
-
-`roll agent list` and `roll agent readiness` are machine views and never change
-with cwd or active Workspace. Runtime auth/network/quota signals affect only the
-current trace; Roll does not rewrite either policy file.
 
 ## Roles
 
@@ -91,35 +80,7 @@ agents:
 roles:
   supervise:
     use: codex
-capacity:
-  global: auto
-  default_per_agent: 1
-  agents:
-    codex: 2
-  heartbeat_seconds: 30
-  stale_after_seconds: 120
 ```
-
-## Machine Process Capacity
-
-`capacity` is a closed Machine Scope policy; Project and Workspace files cannot
-declare or enlarge it. `global: auto` sums the enabled per-agent slots. If the
-whole block is absent, each enabled machine agent receives one slot and the
-global limit is that sum.
-
-Every Builder, test-author, implementer, and attacker process must acquire one
-exact-owned lease before spawn. Per-agent limits aggregate across models and
-account/context keys. When no slot is available, the cycle records a neutral
-`waiting_capacity` result, returns the Story to Todo, and retries on a later
-eligible tick without fallback or failure accounting. Inspect current acquired
-or waiting agent/model/retry state with:
-
-```bash
-roll loop status --all
-```
-
-Lease events contain only routing identity and timing; auth, quota, network, and
-credential state are not persisted into capacity policy or status.
 
 ## Fair Eligibility
 
@@ -238,6 +199,58 @@ Roles hand off through named, checksummed artifacts and the event stream — nev
 raw chat. The Builder is the sole worktree writer; Designer, Evaluator, and Peer
 are read-only except for their own artifact directory. Peer is optional advisory
 input to the Evaluator, never a substitute for it.
+
+### Local exact-model rig readiness
+
+`roll delta rigs` is a human-facing, machine-local diagnostic for the exact
+models referenced by local Delta presets. With no flag it only renders the
+pointer-selected cached observation. It does not spawn a process, contact a
+service, write configuration or a snapshot, append a project event, or change a
+workspace, lease, dispatch, role resolution, or delivery fact.
+
+Run `roll delta rigs --refresh` only when the owner wants a new bounded local
+observation. It derives the same configured candidates, probes each exact
+`{adapter, cliModelId}`, and publishes a snapshot only after every candidate has
+an observation. For example, a Codex mapping uses the exact selector
+`codex exec --model <cliModelId> ...`, never the default model. A missing
+executable is **blocked** with an installation action. An adapter without a
+verified safe exact-model noninteractive surface is **blocked** and is not run.
+
+The view groups results as **ready**, **blocked**, or **unknown**. A compatible
+old snapshot is unknown/stale; a fingerprint mismatch is unknown/incompatible;
+a timeout, malformed fixed-token output, or unclassified failure is unknown.
+Fix the shown condition and refresh. Do not treat a current ready observation as
+proof of a later long-running invocation, delivery, host-session freshness, or
+final role assignment. The normal resolution still applies pins, exclusions,
+tags, cost caps, and role diversity.
+
+One invocation is one language: `ROLL_LANG` is a one-process override, then
+the persisted `roll config lang` preference, then `LC_ALL`, `LANG`, and English.
+For a Chinese operator, `ROLL_LANG=zh roll delta rigs --refresh` gives the same
+local diagnostic entirely in Simplified Chinese.
+
+After its final green TCR commit and before its one formal Builder validation,
+the Builder runs
+`roll delta preflight --delegation <id> --stage builder --json` as a read-only
+self-check: it applies the same structural checks as formal validation
+(prepared context, managed workspace identity and detached heads, manifest and
+output digests, containment, identity/attestation, and Builder evidence format)
+but appends no event and changes no lease, frame, workspace, or checkpoint. A
+failed preflight is a local diagnostic the Builder can repair in the same
+delegation/frame. It emits no lifecycle success and does not prove that a model
+executed; it never replaces formal fail-closed validation or the independent
+Evaluator. Save its JSON output outside the managed frame, then pass it
+to `roll delta validate --delegation <id> --stage builder
+--preflight-receipt <path>`. The formal gate compares that receipt with fresh
+heads and artifact bytes before it can advance the delegation; a missing,
+malformed, stale, or mismatched receipt writes no lifecycle event, so the
+Builder can preflight again.
+
+**Worked Builder handoff:** `red preflight → repair in the same frame → green
+preflight → formal validate`. For example, a missing Builder evidence file makes
+preflight red; the Builder adds that file in the current frame, reruns preflight,
+and only then supplies the green receipt to the one formal validate. This is
+local repair, not a blocked delegation and not an automatic retry or fallback.
 
 **Honest boundaries — these are stated by the protocol and must not be
 overclaimed:**

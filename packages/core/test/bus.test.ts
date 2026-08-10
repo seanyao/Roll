@@ -53,10 +53,15 @@ describe("appendEvent", () => {
   it("ensures the file then appends exactly one newline-terminated line", () => {
     const store = fakeStore();
     const bus = new EventBus(store);
-    const ev: RollEvent = { type: "loop:fire", loop: "main", ts: 1000 };
+    // FIX-1490: a REAL epoch-seconds stamp is promoted to ms. This used to be
+    // asserted with `ts: 1000` → 1000000, which froze an artifact rather than the
+    // contract — 1000 cannot be an epoch-seconds timestamp, and rescaling values
+    // that small is what corrupted the relative-duration renderers once the same
+    // normalization was applied on the read side.
+    const ev: RollEvent = { type: "loop:fire", loop: "main", ts: 1_780_682_826 };
     const line = bus.appendEvent(EVENTS, ev);
     expect(store.appendCalls).toBe(1);
-    expect(line).toBe('{"type":"loop:fire","loop":"main","ts":1000000}\n');
+    expect(line).toBe('{"type":"loop:fire","loop":"main","ts":1780682826000}\n');
     expect(store.readText(EVENTS)).toBe(line);
   });
 
@@ -247,8 +252,10 @@ describe("rotation awareness", () => {
   });
 
   it("serializeEvent + file-name constants", () => {
-    expect(serializeEvent({ type: "loop:fire", loop: "main", ts: 1 })).toBe(
-      '{"type":"loop:fire","loop":"main","ts":1000}\n',
+    // FIX-1490: real epoch-seconds → ms (see the appendEvent test above for why
+    // this no longer uses a toy value).
+    expect(serializeEvent({ type: "loop:fire", loop: "main", ts: 1_780_682_826 })).toBe(
+      '{"type":"loop:fire","loop":"main","ts":1780682826000}\n',
     );
     expect(EVENTS_FILE).toBe("events.ndjson");
     expect(RUNS_FILE).toBe("runs.jsonl");

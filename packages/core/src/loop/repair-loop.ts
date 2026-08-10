@@ -1,4 +1,5 @@
 /**
+ * @responsibility Runs the strictly bounded repair loop between evaluate and execute.
  * US-V4-007 — bounded repair loop between evaluate and execute.
  *
  * Shape: evaluate blocking finding → execute repair → evaluate rerun. This loop

@@ -1,3 +1,6 @@
+/**
+ * @responsibility Drives the bounded adversarial review round state machine.
+ */
 export interface AdversarialState {
   round: number;
   dryStreak: number;

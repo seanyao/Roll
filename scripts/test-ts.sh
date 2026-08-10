@@ -28,7 +28,11 @@ for _arg in "$@"; do
   if [ "$_arg" = "--affected" ]; then SCOPE="affected"; fi
 done
 
-pnpm -r build
+# CI builds before the story-ID guard. Reuse that build when the caller has
+# already completed it; all other invocations retain the self-contained gate.
+if [ "${ROLL_TEST_SKIP_BUILD:-0}" != "1" ]; then
+  pnpm -r build
+fi
 node scripts/audit-role-taxonomy.mjs
 if [ "$SCOPE" = "affected" ]; then
   # `--changed` (no ref) = tests covering the working-tree / uncommitted change
@@ -88,7 +92,19 @@ if [ -n "$_TREE" ]; then
   # full-verify), SCOPE=affected → mode:"changed" (the per-commit `vitest
   # --changed` subset, NOT a full verify). `scope` is kept for back-compat.
   if [ "$SCOPE" = "full" ]; then _MODE="full"; else _MODE="changed"; fi
-  printf '{"ts":%s,"tree":"%s","mode":"%s","scope":"%s"}\n' "$(date +%s)" "$_TREE" "$_MODE" "$SCOPE" \
+  # A story-associated roll test passes its pre-minted round id through the
+  # child environment. Preserve it additively so post-commit can close the
+  # same observed round; legacy proofs stay byte-compatible in shape.
+  _ROUND_JSON=""
+  if [ -n "${ROLL_TCR_ROUND_ID:-}" ] && [ -n "${ROLL_STORY_ID:-}" ]; then
+    _DELEG_JSON=""
+    if [ -n "${ROLL_DELEGATION_ID:-}" ]; then
+      _DELEG_JSON=",\"delegationId\":\"$ROLL_DELEGATION_ID\""
+    fi
+    _FINISHED_MS="$(node -p 'Date.now()')"
+    _ROUND_JSON=",\"roundId\":\"$ROLL_TCR_ROUND_ID\",\"storyId\":\"$ROLL_STORY_ID\",\"testFinishedAtMs\":$_FINISHED_MS$_DELEG_JSON"
+  fi
+  printf '{"ts":%s,"tree":"%s","mode":"%s","scope":"%s"%s}\n' "$(date +%s)" "$_TREE" "$_MODE" "$SCOPE" "$_ROUND_JSON" \
     > "$REPO_ROOT/.roll/last-test-pass"
 fi
 echo "✓ TS suites green (scope: $SCOPE) — test-pass proof written (mode: $_MODE)"

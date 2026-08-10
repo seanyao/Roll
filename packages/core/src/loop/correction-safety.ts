@@ -1,3 +1,6 @@
+/**
+ * @responsibility Applies circuit-breaker safety limits to repeated correction signals.
+ */
 import type { RollEvent } from "@roll/spec";
 import type { LoopSafetyConfig } from "../policy/engine.js";
 

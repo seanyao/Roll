@@ -1,12 +1,11 @@
 /**
- * US-PAIR-001 — Cross-Agent Pairing selector + pairing.yaml parser.
+ * US-PAIR-001 — Cross-Agent Pairing selector + legacy migration parser.
  * Pure-function tests: vendor heterogeneity, rational hard filter, seeded
  * round-robin rotation, fail-loud empties, and config parse + cross-check.
  */
 import { describe, expect, it } from "vitest";
 import {
   agentVendor,
-  defaultPairingConfig,
   heteroAvailable,
   isHeterogeneous,
   normalizeAgentScopeConfig,
@@ -14,7 +13,6 @@ import {
   pairingPoolView,
   parsePairingConfig,
   PairingConfigError,
-  renderPairingConfig,
   selectPairingCandidates,
   type PairingConfig,
 } from "../src/index.js";
@@ -218,50 +216,7 @@ describe("parsePairingConfig", () => {
   });
 });
 
-describe("defaultPairingConfig + renderPairingConfig (legacy pairing scaffold)", () => {
-  it("enables when ≥2 distinct vendors, declares all installed code+score-capable", () => {
-    // kimi + pi are two supported vendors.
-    const c = defaultPairingConfig(["kimi", "pi"]);
-    expect(c.enabled).toBe(true);
-    expect(c.stages).toEqual(["code", "score"]);
-    expect(c.capability).toEqual({ kimi: ["code", "score"], pi: ["code", "score"] });
-  });
-  it("disabled when fewer than 2 vendors", () => {
-    expect(defaultPairingConfig(["kimi"]).enabled).toBe(false);
-  });
-  it("US-PAIR-009: score is a legal stage and ships in the generated default", () => {
-    const c = parsePairingConfig("enabled: true\nstages: [code, score]\ncapability:\n  pi: [score]\n");
-    expect(c.stages).toEqual(["code", "score"]);
-    expect(c.capability).toEqual({ pi: ["score"] });
-    const d = defaultPairingConfig(["kimi", "pi"]);
-    expect(d.stages).toEqual(["code", "score"]);
-    expect(d.capability["kimi"]).toEqual(["code", "score"]);
-  });
-  it("fair pool: default config includes every installed supported agent", () => {
-    // Historical local auth failures are runtime health, not static policy.
-    const d = defaultPairingConfig(["claude", "kimi", "pi"]);
-    expect(d.enabled).toBe(true);
-    expect(d.capability).toEqual({ claude: ["code", "score"], kimi: ["code", "score"], pi: ["code", "score"] });
-    expect(renderPairingConfig(d)).toContain("claude: [code, score]");
-    // Runtime availability still filters the live score-stage selector.
-    const picked = selectPairingCandidates({
-      installed: ["claude", "kimi", "pi"],
-      isAvailable: (a) => a !== "claude",
-      workingAgent: "kimi",
-      stage: "score",
-      cfg: cfg({ enabled: false, stages: [], capability: {} }),
-      cycleId: "c1",
-    });
-    expect(picked).not.toContain("claude");
-  });
-  it("FIX-328: default config excludes profile-less agents from review pools", () => {
-    // kimi + pi are registered supported agents; profile-less agents are excluded.
-    const d = defaultPairingConfig(["kimi", "made-up-a", "made-up-b", "pi"]);
-    expect(d.enabled).toBe(true);
-    expect(d.capability).toEqual({ kimi: ["code", "score"], pi: ["code", "score"] });
-    expect(renderPairingConfig(d)).not.toContain("made-up-a:");
-    expect(renderPairingConfig(d)).not.toContain("made-up-b:");
-  });
+describe("pairing selection invariants", () => {
   it("FIX-328: score candidates exclude installed profile-less agents", () => {
     // Worker is kimi. Profile-less agents are excluded from the score pool.
     // FIX-1044: the builder (kimi) is ALSO excluded — another known agent (pi) is
@@ -328,7 +283,7 @@ describe("defaultPairingConfig + renderPairingConfig (legacy pairing scaffold)",
   });
 
   it("FIX-343: the score stage is MANDATORY — qualifies even when pairing is disabled / no score stage / no capability", () => {
-    // A repo with NO pairing.yaml (cfg.enabled=false, empty stages/capability)
+    // A repo with no scoped evaluator binding (cfg.enabled=false, empty stages/capability)
     // still owes a Review Score: the selector must yield installed supported
     // agents. A single-agent env of kimi still yields that agent (a fresh
     // same-type session is the minimum independence).
@@ -351,17 +306,6 @@ describe("defaultPairingConfig + renderPairingConfig (legacy pairing scaffold)",
       cycleId: "c1",
     });
     expect(claudeOnly).toEqual(["claude"]); // fresh same-type session
-  });
-  it("renders explicit, re-parseable yaml (round-trip)", () => {
-    const c = defaultPairingConfig(["kimi", "pi", "reasonix"]);
-    const yaml = renderPairingConfig(c);
-    expect(yaml).toContain("enabled: true");
-    expect(yaml).toContain("stages: [code, score]");
-    expect(yaml).toContain("# Scoped evaluate roles in .roll/agents.yaml take precedence");
-    expect(parsePairingConfig(yaml)).toEqual(c); // explicit defaults survive a round-trip
-  });
-  it("disabled config carries the reason as a comment", () => {
-    expect(renderPairingConfig(defaultPairingConfig(["kimi"]))).toContain("# Disabled:");
   });
 });
 
@@ -587,7 +531,11 @@ describe("authCooldownExclusions (FIX-1056 same-envelope auth cooldown)", () => 
   // a genuinely auth-blocked agy is excluded and the NEXT eligible candidate is
   // chosen, while a passing (no-streak) agy stays fully eligible.
   const installed = ["reasonix", "agy", "kimi"];
-  const cfg = defaultPairingConfig(installed);
+  const cfg: PairingConfig = {
+    enabled: true,
+    stages: ["code", "score"],
+    capability: { reasonix: ["code", "score"], agy: ["code", "score"], kimi: ["code", "score"] },
+  };
   const availableExcept = (cd: Map<string, number>) => (a: string): boolean => !cd.has(a);
 
   it("agy stays eligible when it has NOT hit the auth-failure threshold (readiness passes)", () => {
@@ -630,5 +578,41 @@ describe("aggregatePairingCost — pair:excluded (FIX-346)", () => {
 
   it("empty stream → no excluded peers", () => {
     expect(aggregatePairingCost([]).excludedPeers).toEqual({});
+  });
+});
+
+describe("FIX-1491 — a peer that stated no verdict produces NO review", () => {
+  // The investigation expected to find "auth failure parsed as agree/0 findings".
+  // It is NOT there: the review path refuses on timeout, non-zero exit, AND a
+  // missing VERDICT line. These tests pin that refusal so a later "helpful"
+  // default cannot turn an empty response into a fabricated green light.
+  it("empty output is refused, never defaulted to agree", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    expect(parsePeerReviewOutput("")).toEqual({ ok: false, reason: "no_verdict_line" });
+  });
+
+  it("a broken-credential style error dump is refused", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    const authNoise = "Error: authentication required\nPlease run `login` first.\n";
+    expect(parsePeerReviewOutput(authNoise).ok).toBe(false);
+  });
+
+  it("prose that merely discusses agreeing is refused", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    // No VERDICT: line — a model that ignored the protocol must not be read as a pass.
+    expect(parsePeerReviewOutput("I agree this looks fine overall.").ok).toBe(false);
+  });
+
+  it("accepts a real verdict and collects its findings", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    const r = parsePeerReviewOutput("VERDICT: refine\nFINDING: off-by-one in the loop\nFINDING: missing null check\n");
+    expect(r).toEqual({ ok: true, verdict: "refine", findings: ["off-by-one in the loop", "missing null check"] });
+  });
+
+  it("an explicit agree with zero findings is a REAL review, not an artifact", async () => {
+    const { parsePeerReviewOutput } = await import("../src/agent/peer-review.js");
+    // This matters for reading history: claude's 27 zero-finding verdicts are
+    // genuine 'agree' responses, not auth artifacts — the auth path never reaches here.
+    expect(parsePeerReviewOutput("VERDICT: agree\n")).toEqual({ ok: true, verdict: "agree", findings: [] });
   });
 });

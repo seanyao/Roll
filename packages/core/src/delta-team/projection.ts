@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects delegation status views from the delegation event stream.
  * US-DELTA-001 — Pure visible-mode projection and delegation status.
  *
  * Consumes events (folded from the delegation event stream) and produces

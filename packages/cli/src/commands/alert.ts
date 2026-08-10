@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop alert` subcommand, adapting core alert-loop decisions to the CLI presentation.
+ */
+/**
  * `roll loop alert` — TS port of bin/roll cmd_alert (14056-14104) + _alert_log
  * (14112-14149) + _alert_log_file (14246-14249). The DECISION layer is reused
  * from @roll/core's alert-loop (cli depends on core): alertConsumeAction,

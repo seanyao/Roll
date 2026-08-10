@@ -10,8 +10,7 @@
  * readiness diagnostic reuses that same envelope, and NO credential value is ever
  * surfaced.
  */
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +23,6 @@ import {
   agyAuthContextDir,
   agyEnv,
   buildSpawnCommand,
-  realAgentSpawn,
 } from "../src/runner/agent-spawn.js";
 
 const tmpDirs: string[] = [];
@@ -190,53 +188,6 @@ describe("FIX-1231 — codex git isolation", () => {
   });
 });
 
-describe("FIX-1473 — spawned agents discover Git from cwd", () => {
-  it("removes inherited repository-binding GIT_* variables for every agent", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "roll-fix1473-agent-env-"));
-    tmpDirs.push(repo);
-    execFileSync("git", ["init", "-q", "-b", "cycle"], { cwd: repo });
-
-    const shim = join(repo, "claude-shim");
-    writeFileSync(
-      shim,
-      [
-        "#!/usr/bin/env node",
-        'const { execFileSync } = require("node:child_process");',
-        'const names = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"];',
-        "for (const name of names) {",
-        "  const value = process.env[name] ?? '';",
-        "  if (value !== '') { process.stderr.write(`${name}=${value}\\n`); process.exit(41); }",
-        "}",
-        'process.stdout.write(`top=${execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim()}\\n`);',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(shim, 0o755);
-
-    const result = await realAgentSpawn("claude", {
-      cwd: repo,
-      skillBody: "X",
-      bin: shim,
-      env: {
-        ...process.env,
-        GIT_DIR: "/poison/git-dir",
-        GIT_WORK_TREE: "/poison/work-tree",
-        GIT_COMMON_DIR: "/poison/common-dir",
-        GIT_INDEX_FILE: "/poison/index",
-        GIT_OBJECT_DIRECTORY: "/poison/objects",
-        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/poison/alternates",
-        GIT_NAMESPACE: "poison",
-      },
-      timeoutMs: 15_000,
-    });
-
-    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
-    expect(result.stdout).toContain(`top=${realpathSync(repo)}`);
-    expect(result.stderr).toBe("");
-  });
-});
-
 describe("cursor is a builder again (reverses the FIX-1257 config-only downgrade)", () => {
   const projectAgentsYaml = fileURLToPath(new URL("../../../.roll/agents.yaml", import.meta.url));
   // .roll/ is the nested PRIVATE roll-meta repo — absent in CI checkouts. The
@@ -253,10 +204,10 @@ describe("cursor is a builder again (reverses the FIX-1257 config-only downgrade
       .filter((s) => s !== "");
   }
 
-  it.skipIf(!hasProjectConfig)("project agents.yaml includes cursor in the builder (execute) pool", () => {
+  it.skipIf(!hasProjectConfig)("project agents.yaml excludes codex and keeps cursor in the builder (execute) pool", () => {
     const yaml = readFileSync(projectAgentsYaml, "utf8");
     const builders = poolAgents(yaml, "execute");
-    expect(builders).toContain("codex");
+    expect(builders).not.toContain("codex");
     expect(builders).toContain("claude");
     expect(builders).toContain("cursor");
   });

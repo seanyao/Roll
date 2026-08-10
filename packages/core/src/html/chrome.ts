@@ -1,4 +1,5 @@
 /**
+ * @responsibility Renders the shared page chrome for every generated dossier page.
  * Shared page chrome for every generated meta page (features index → story
  * card → acceptance report) — the「交付档案 · Delivery Dossier」visual language.
  *

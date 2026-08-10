@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the `peer` subcommand, driving an external peer review session.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

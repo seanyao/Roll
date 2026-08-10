@@ -1,3 +1,6 @@
+/**
+ * @responsibility Assembles the built-in tool declarations from the infra tool adapters.
+ */
 import { BashTool, browserTools, fsTools, gitTools, githubTools, mcpTools, networkTools } from "@roll/infra";
 import type { ToolDeclaration } from "@roll/spec";
 
@@ -5,7 +8,7 @@ export function collectBuiltinToolDeclarations(projectRoot: string): ToolDeclara
   const tools: Array<{ declaration: ToolDeclaration }> = [
     new BashTool(),
     ...browserTools(),
-    ...fsTools(),
+    ...fsTools(projectRoot),
     ...gitTools(),
     ...githubTools(),
     ...mcpTools(projectRoot),

@@ -271,7 +271,13 @@ describe("US-DOSSIER-010 — truth.json next to index.html", () => {
     // it never existed) — the whole point of the fix.
     const realAfter = existsSync(realRegistry) ? readFileSync(realRegistry, "utf8") : null;
     expect(realAfter).toBe(realBefore);
-  }, 15_000);
+    // US-INSTALL-008: 45s, not 15s. This case copies a tree and runs a full
+    // `roll index`; it asserts BEHAVIOUR, never speed. The product repo moved to
+    // a private repo on the Free plan, whose Actions runners are ~2.4x slower
+    // than the public-repo runners it used to get (measured: same suite 2.5-3min
+    // → 6-7.5min), and 15s stopped being enough. A timeout that fails on a
+    // slower machine is testing the machine.
+  }, 45_000);
 
   it("FIX-307: self-register and page chrome use the derived git remote project name", async () => {
     const p = project(REPO_ROOT);

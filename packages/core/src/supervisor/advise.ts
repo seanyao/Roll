@@ -1,4 +1,5 @@
 /**
+ * @responsibility Turns supervisor facts into structured advisory decisions.
  * US-V4-008 — Supervisor v0: ADVISE.
  *
  * Turns {@link SupervisorFacts} into structured {@link SupervisorDecision}

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Links completed browser operations to authoritative physical capture requests.
  * US-BROW-006 — CaptureBridge: the only component that links a browser operation
  * run to a Roll Capture physical screenshot request.
  *

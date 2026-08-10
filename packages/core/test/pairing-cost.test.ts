@@ -15,11 +15,47 @@ import { describe, expect, it } from "vitest";
 import type { RollEvent } from "@roll/spec";
 import {
   aggregatePairingCost,
+  observedModelFrom,
   pairingHistory,
   peerReviewCost,
+  peerReviewCostFact,
   selectPairingCandidates,
   type PairingConfig,
 } from "../src/index.js";
+
+describe("US-PAIR-014 — a cost of 0 must not mean both 'free' and 'unknown'", () => {
+  it("reports unobservable (not 0) when the peer's usage cannot be parsed", () => {
+    const fact = peerReviewCostFact("kimi", "no usage footer here at all");
+    expect(fact.basis).toBe("unobservable");
+    if (fact.basis === "unobservable") expect(fact.reason).toBe("no_usage_parsed");
+  });
+
+  it("reports unobservable when the extractor is a deliberate stub", () => {
+    // pi/agy extractors are always-null stubs — that is NOT "the review was free".
+    expect(peerReviewCostFact("pi", "model: whatever\ninput tokens: 10").basis).toBe("unobservable");
+  });
+
+  it("reports an estimated cost when usage really did parse", () => {
+    const fact = peerReviewCostFact("codex", ["model: gpt-5.3-codex", "input tokens: 1,200", "output tokens: 340"].join("\n"));
+    expect(fact.basis).toBe("estimated");
+    if (fact.basis === "estimated") expect(fact.usd).toBeGreaterThan(0);
+  });
+
+  it("keeps peerReviewCost's number contract for existing callers", () => {
+    expect(peerReviewCost("kimi", "garbage")).toBe(0);
+  });
+
+  it("aggregation counts unobservable rows separately instead of averaging them as free", () => {
+    const evs: RollEvent[] = [
+      { type: "pair:verdict", cycleId: "c1", peer: "codex", verdict: "refine", findings: 2, cost: 0.05, costBasis: "estimated", stage: "code", ts: 1 },
+      { type: "pair:verdict", cycleId: "c2", peer: "kimi", verdict: "agree", findings: 0, cost: 0, costBasis: "unobservable", stage: "code", ts: 2 },
+    ];
+    const agg = aggregatePairingCost(evs);
+    expect(agg.totalCost).toBeCloseTo(0.05, 6);
+    expect(agg.unobservableCostRows).toBe(1);
+    expect(agg.observedCostRows).toBe(1);
+  });
+});
 
 const cfg = (over: Partial<PairingConfig> = {}): PairingConfig => ({
   enabled: true,
@@ -200,5 +236,19 @@ d9("aggregatePairingCost — pair:score (US-PAIR-009)", () => {
     e9(s.byPeer).toEqual({ codex: 1, kimi: 1 });
     e9(s.totalCost).toBeCloseTo(0.15);
     e9(s.totalFindings).toBe(2);
+  });
+});
+
+describe("US-PAIR-011 — observedModelFrom is reconciliation-only", () => {
+  it("reports the model a parseable peer claims it ran", () => {
+    const observed = observedModelFrom("codex", ["model: gpt-5.3-codex", "input tokens: 10", "output tokens: 5"].join("\n"));
+    expect(observed).toBe("gpt-5.3-codex");
+  });
+
+  it("returns empty (never a guess) when the peer reports nothing parseable", () => {
+    // pi/agy extractors are deliberate stubs. Selection must NOT depend on this —
+    // otherwise those agents could never satisfy a model/vendor isolation tier.
+    expect(observedModelFrom("pi", "model: deepseek-v4-pro\ninput tokens: 10")).toBe("");
+    expect(observedModelFrom("kimi", "no footer at all")).toBe("");
   });
 });

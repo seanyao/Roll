@@ -1,3 +1,6 @@
+/**
+ * @responsibility Installs the roll-capture binary with verified integrity.
+ */
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -38,6 +41,7 @@ export interface RollCaptureRelease {
 }
 
 export type RollCaptureInstallStatus = "installed" | "already-installed" | "skipped" | "manual";
+export type RollCaptureUpdateStatus = "updated" | "no-update" | "declined" | "skipped" | "manual";
 
 export interface RollCaptureInstallResult {
   status: RollCaptureInstallStatus;
@@ -46,6 +50,26 @@ export interface RollCaptureInstallResult {
   releaseTag?: string;
   installedVersion?: string;
   updateAvailable?: boolean;
+}
+
+/** The result of the deliberately opt-in Capture.app update path. */
+export interface RollCaptureUpdateResult {
+  status: RollCaptureUpdateStatus;
+  reason: string;
+  appPath?: string;
+  releaseTag?: string;
+  installedVersion?: string;
+}
+
+export interface RollCaptureUpdateOptions {
+  /** `--yes` is the only non-interactive confirmation. */
+  yes?: boolean;
+  /** Tests and embedders supply the actual terminal capability explicitly. */
+  interactive?: boolean;
+  /** Called only after the candidate, installed version, and target are known. */
+  readLine?: () => string | null;
+  /** Invoked immediately before stdin is read, after the asset is known usable. */
+  onConfirmationRequired?: (details: Pick<RollCaptureUpdateResult, "appPath" | "releaseTag" | "installedVersion">) => void;
 }
 
 export interface RollCaptureInstallDeps {
@@ -159,6 +183,101 @@ export async function installRollCapture(deps: RollCaptureInstallDeps = defaultR
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Update the canonical per-user Capture.app bundle, but only after a separate
+ * explicit confirmation. This intentionally does not share the postinstall
+ * behaviour: seeing a newer release is never consent to replace an app.
+ */
+export async function updateRollCapture(
+  opts: RollCaptureUpdateOptions = {},
+  deps: RollCaptureInstallDeps = defaultRollCaptureInstallDeps(),
+): Promise<RollCaptureUpdateResult> {
+  const gate = installGate(deps);
+  if (gate !== null) return { status: "skipped", reason: gate.reason };
+
+  const targetApp = join(deps.home, "Applications", APP_NAME);
+  if (!deps.exists(targetApp)) {
+    return { status: "manual", reason: "no Roll Capture.app is installed in ~/Applications", appPath: targetApp };
+  }
+  const installedVersion = readInstalledVersion(targetApp, deps);
+  if (installedVersion === undefined || normalizeVersion(installedVersion) === "") {
+    return { status: "manual", reason: "installed Roll Capture.app has no readable version", appPath: targetApp };
+  }
+
+  const deadlineMs = Date.now() + DOWNLOAD_TIMEOUT_MS;
+  const remainingMs = () => Math.max(1, deadlineMs - Date.now());
+  let release: RollCaptureRelease;
+  try {
+    release = await deps.fetchLatestRelease(remainingMs());
+  } catch (error) {
+    return updateManual(`release lookup failed: ${errorMessage(error)}`, targetApp, installedVersion);
+  }
+  const candidateVersion = normalizeVersion(release.tagName);
+  if (!isNewerVersion(candidateVersion, normalizeVersion(installedVersion))) {
+    return {
+      status: "no-update",
+      reason: candidateVersion === "" ? "latest release has no usable version" : "installed version is current or newer",
+      appPath: targetApp,
+      releaseTag: release.tagName,
+      installedVersion,
+    };
+  }
+  const asset = release.assets.find((candidate) => candidate.name === ASSET_NAME);
+  if (asset === undefined) return updateManual(`latest release has no ${ASSET_NAME} asset`, targetApp, installedVersion, release.tagName);
+
+  const interactive = opts.interactive ?? process.stdin.isTTY === true;
+  if (opts.yes !== true && interactive) {
+    opts.onConfirmationRequired?.({ appPath: targetApp, releaseTag: release.tagName, installedVersion });
+  }
+  const accepted = opts.yes === true || (interactive && (opts.readLine?.() ?? "").trim().toLowerCase() === "y");
+  if (!accepted) {
+    const reason = opts.yes === true ? "confirmation failed" : interactive ? "update was not confirmed" : "use --yes in a non-interactive terminal";
+    return { status: "declined", reason, appPath: targetApp, releaseTag: release.tagName, installedVersion };
+  }
+
+  try {
+    const bytes = await deps.downloadAsset(asset, remainingMs());
+    if (bytes.byteLength !== asset.size) {
+      return updateManual(`download size mismatch: expected ${asset.size} bytes, got ${bytes.byteLength}`, targetApp, installedVersion, release.tagName);
+    }
+    const workDir = mkdtempSync(join(deps.home, "Applications", ".roll-capture-update-"));
+    const zipPath = join(workDir, ASSET_NAME);
+    const extractDir = join(workDir, "extract");
+    try {
+      mkdirSync(extractDir, { recursive: true });
+      writeFileSync(zipPath, bytes);
+      const extracted = await deps.extractZip(zipPath, extractDir, remainingMs());
+      if (!extracted.ok) return updateManual(extracted.detail, targetApp, installedVersion, release.tagName);
+      const app = findExtractedApp(extractDir);
+      if (app === null) return updateManual("zip did not contain Roll Capture.app", targetApp, installedVersion, release.tagName);
+      const executable = findBundleExecutable(app);
+      if (executable === null) return updateManual("Roll Capture.app has no executable in Contents/MacOS", targetApp, installedVersion, release.tagName);
+      chmodSync(executable, statSync(executable).mode | 0o111);
+      replaceAppAtomically(app, targetApp, deps);
+      invalidateRollCaptureReadinessCache(deps);
+      return { status: "updated", reason: "updated", appPath: targetApp, releaseTag: release.tagName, installedVersion };
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    return updateManual(`update failed: ${errorMessage(error)}`, targetApp, installedVersion, release.tagName);
+  }
+}
+
+export function renderRollCaptureUpdateResult(result: RollCaptureUpdateResult, lang: Lang): string {
+  if (lang === "zh") return renderZhUpdate(result);
+  return renderEnUpdate(result);
+}
+
+/** The prompt is rendered separately so callers can show all facts before reading stdin. */
+export function renderRollCaptureUpdatePrompt(result: Pick<RollCaptureUpdateResult, "appPath" | "releaseTag" | "installedVersion">, lang: Lang): string {
+  const path = result.appPath ?? join("~", "Applications", APP_NAME);
+  if (lang === "zh") {
+    return `Roll Capture.app：已安装 ${result.installedVersion ?? "未知"}；可更新到 ${result.releaseTag ?? "未知"}。\n目标位置：${path}\n要替换吗？[y/N] `;
+  }
+  return `Roll Capture.app: installed ${result.installedVersion ?? "unknown"}; compatible release ${result.releaseTag ?? "unknown"} is available.\nTarget: ${path}\nReplace it? [y/N] `;
 }
 
 export function renderRollCaptureInstallResult(result: RollCaptureInstallResult, lang: Lang): string {
@@ -519,6 +638,34 @@ function normalizeVersion(value: string): string {
   return value.trim().replace(/^v/i, "");
 }
 
+/** Compare normal dotted numeric release versions without treating a mere tag
+ * difference as permission to downgrade an installed companion app. */
+function isNewerVersion(candidate: string, installed: string): boolean {
+  const parse = (value: string): number[] | null => {
+    if (!/^\d+(?:\.\d+)*$/.test(value)) return null;
+    return value.split(".").map((part) => Number(part));
+  };
+  const next = parse(candidate);
+  const current = parse(installed);
+  if (next === null || current === null) return false;
+  const length = Math.max(next.length, current.length);
+  for (let index = 0; index < length; index += 1) {
+    const delta = (next[index] ?? 0) - (current[index] ?? 0);
+    if (delta !== 0) return delta > 0;
+  }
+  return false;
+}
+
+function updateManual(reason: string, appPath: string, installedVersion: string, releaseTag?: string): RollCaptureUpdateResult {
+  return {
+    status: "manual",
+    reason,
+    appPath,
+    installedVersion,
+    ...(releaseTag !== undefined ? { releaseTag } : {}),
+  };
+}
+
 function manual(reason: string, releaseTag?: string): RollCaptureInstallResult {
   return { status: "manual", reason, ...(releaseTag !== undefined ? { releaseTag } : {}) };
 }
@@ -545,6 +692,30 @@ function renderZh(result: RollCaptureInstallResult): string {
   }
   if (result.status === "skipped") return `Roll Capture.app 安装已跳过（${renderZhReason(result.reason)}）。`;
   return `Roll Capture.app 自动安装失败（${result.reason}）；请手动安装，打开一次并授予屏幕录制权限。`;
+}
+
+function renderEnUpdate(result: RollCaptureUpdateResult): string {
+  if (result.status === "updated") {
+    return `Roll Capture.app updated to ${result.releaseTag ?? "the selected release"}. Run roll doctor tools to confirm readiness.`;
+  }
+  if (result.status === "no-update") {
+    return `Roll Capture.app was not updated: ${result.reason}.`;
+  }
+  if (result.status === "declined") {
+    return `Roll Capture.app was not updated: ${result.reason}. Run roll setup --update-capture when you are ready.`;
+  }
+  if (result.status === "skipped") return `Roll Capture.app update skipped (${result.reason}).`;
+  return `Roll Capture.app update failed (${result.reason}); the installed app was kept unchanged.`;
+}
+
+function renderZhUpdate(result: RollCaptureUpdateResult): string {
+  if (result.status === "updated") {
+    return `Roll Capture.app 已更新到 ${result.releaseTag ?? "所选版本"}。请运行 roll doctor tools 确认就绪状态。`;
+  }
+  if (result.status === "no-update") return `Roll Capture.app 未更新：${result.reason}。`;
+  if (result.status === "declined") return `Roll Capture.app 未更新：${result.reason}。准备好后请运行 roll setup --update-capture。`;
+  if (result.status === "skipped") return `Roll Capture.app 更新已跳过（${result.reason}）。`;
+  return `Roll Capture.app 更新失败（${result.reason}）；已保留原来的应用。`;
 }
 
 function renderZhReason(reason: string): string {
@@ -586,4 +757,5 @@ export const rollCaptureInstallInternals = {
   downloadAsset: defaultDownloadAsset,
   fetchLatestRelease: defaultFetchLatestRelease,
   parseRelease,
+  isNewerVersion,
 };

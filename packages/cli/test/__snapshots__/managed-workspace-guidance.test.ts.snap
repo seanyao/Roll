@@ -1,0 +1,13 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-LOOP-124 localized lifecycle guidance > freezes the complete EN and ZH refusal/recovery contract 1`] = `
+"[US-LOOP-124] reservation refused for US-LOOP-124: owned by cycle; recovery required before a new worktree can be allocated
+US-LOOP-124: allocation recovery_required for US-LOOP-124; allocated event exists but Git target is missing
+US-LOOP-124: release recovery_required for cycle-124; HEAD changed after the durable release request — preserved"
+`;
+
+exports[`US-LOOP-124 localized lifecycle guidance > freezes the complete EN and ZH refusal/recovery contract 2`] = `
+"[US-LOOP-124] 已拒绝为 US-LOOP-124 保留：当前由 cycle 持有；须先恢复，才能分配新的 worktree
+US-LOOP-124：US-LOOP-124 的分配需要恢复；allocated event exists but Git target is missing
+US-LOOP-124：cycle-124 的释放需要恢复；HEAD changed after the durable release request — 已保留"
+`;

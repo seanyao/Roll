@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# US-DELTA-011 — append the round's `tcr:committed` observation fact.
+#
+# The `roll test` gate mints a roundId and records it (with the story/delegation
+# association) in .roll/last-test-pass; this hook correlates the landed commit
+# with that round and appends ONE versioned ndjson fact to .roll/loop/events.ndjson.
+#
+# Honesty contract:
+#   - proofAgeMs is test-completion → commit from REAL millisecond clocks; an
+#     absent proof clock emits the loud -1 sentinel and a reversed clock emits
+#     the negative age as-is — the projection reads both as unknown,
+#     never as fresh proof;
+#   - a proof without round correlation (legacy proof, story-less gate run)
+#     emits NOTHING — a telemetry gap stays a gap, never a fabricated round.
+#
+# Best-effort observability: this hook never blocks, never prints on the happy
+# path, and exits 0 on every gap.
+set -uo pipefail
+
+TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$TOP" ] || exit 0
+PROOF="$TOP/.roll/last-test-pass"
+[ -f "$PROOF" ] || exit 0
+
+_field() { grep -o "\"$1\":\"[^\"]*\"" "$PROOF" | head -1 | sed "s/\"$1\":\"//;s/\"$//" || true; }
+
+FINISHED_MS=$(grep -o '"testFinishedAtMs":[0-9]*' "$PROOF" | head -1 | grep -o '[0-9]*' || true)
+ROUND=$(_field roundId)
+STORY=$(_field storyId)
+DELEGATION=$(_field delegationId)
+
+# No round correlation → no event (legacy proof or story-less run).
+{ [ -n "$ROUND" ] && [ -n "$STORY" ]; } || exit 0
+
+COMMIT_SHA=$(git rev-parse HEAD)
+COMMIT_TS_MS=$(node -p 'Date.now()' 2>/dev/null || true)
+[ -n "$COMMIT_SHA" ] && [ -n "$COMMIT_TS_MS" ] || exit 0
+
+# Real age in ms; -1 is the loud "test completion clock absent" sentinel.
+if [ -n "$FINISHED_MS" ]; then
+  AGE_MS=$(( COMMIT_TS_MS - FINISHED_MS ))
+else
+  AGE_MS=-1
+fi
+
+DELEGATION_JSON=""
+if [ -n "$DELEGATION" ]; then
+  DELEGATION_JSON=",\"delegationId\":\"$DELEGATION\""
+fi
+
+mkdir -p "$TOP/.roll/loop"
+printf '{"type":"tcr:committed","v":1,"storyId":"%s"%s,"roundId":"%s","commitSha":"%s","proofAgeMs":%d,"ts":%d}\n' \
+  "$STORY" "$DELEGATION_JSON" "$ROUND" "$COMMIT_SHA" "$AGE_MS" "$COMMIT_TS_MS" \
+  >> "$TOP/.roll/loop/events.ndjson" 2>/dev/null || true
+exit 0

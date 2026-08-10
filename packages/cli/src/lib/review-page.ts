@@ -1,3 +1,6 @@
+/**
+ * @responsibility Renders the design-review page HTML.
+ */
 import { CHROME_CSS } from "@roll/core";
 import type { DesignReviewBlock, DesignReviewPage, Lang } from "@roll/spec";
 import { escapeHtml } from "./markdown.js";

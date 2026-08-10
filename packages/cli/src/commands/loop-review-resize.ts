@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop review-resize` subcommand, re-splitting stories flagged too large.
+ */
+/**
  * `roll loop review-resize <story-id>`
  *
  * US-AGENT-041 — the reviewer-triggered self-downgrade. After a delivery is

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Provides the opt-in policy-gated performance diagnostic profile.
  * US-BROW-012 — Optional DevTools performance diagnostic profile.
  *
  * A single, opt-in, policy-gated performance diagnostic profile. It collects a

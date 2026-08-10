@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the RollEvent published-language types.
+ */
+/**
  * RollEvent — the published language (BC7, I8): every loop appends these to
  * events.ndjson; all state is rebuilt from this stream, no separate cache.
  * Schema per specs/architecture §3 (v2-aligned).
@@ -18,55 +21,27 @@ import type {
   DeltaTerminalOutcome,
   TerminalBinding,
   DeliveryDisposition,
+  DeltaContinuationProvenance,
+  AttemptCause,
+  RoleAvailabilityProbeOutcome,
+  RoleAvailabilityTransportClass,
 } from "./delta-team.js";
 import type { GoalReviewMode, GoalSafetyGate, GoalScope, GoalStatus, GoalTransitionActor } from "./goal.js";
 import type { LoopType } from "./loop.js";
 import type { BlockCause, FailureClass, TerminalEvent, TerminalOutcome } from "./terminal.js";
 import type { TaskLevel } from "./story.js";
 import type { BuilderFinalizationFacts, BuilderFinalizationVerdict } from "./builder.js";
-import type { ContractError, ContractResult } from "./workspace.js";
-import type { ContextDiagnosticCode } from "./context.js";
+import type { WorktreeLifecycleEvent } from "./managed-workspace.js";
+import { normalizeManagedWorkspaceSet, type ManagedWorkspaceSet } from "./managed-workspace.js";
 
-export const LEGACY_PROJECT_EVENT_MIGRATION_V1 = "roll.legacy-project-event-migration/v1" as const;
-
-export const WORKSPACE_ISSUE_INIT_FAILURE_CODES = [
-  "rejected",
-  "manifest_conflict",
-  "apply_failed",
-  "symlink_escape",
-  "unexpected",
-] as const;
-
-export type WorkspaceIssueInitFailureCode = (typeof WORKSPACE_ISSUE_INIT_FAILURE_CODES)[number];
-
-export interface LegacyProjectEventPayload {
-  readonly type: string;
-  readonly ts: number;
-  readonly [key: string]: unknown;
-}
-
-export interface LegacyProjectEventMigrationInput {
-  readonly schema: typeof LEGACY_PROJECT_EVENT_MIGRATION_V1;
-  readonly projectSlug: string;
-  readonly event: LegacyProjectEventPayload;
-}
+/**
+ * US-PAIR-014 — why a recorded cost figure is what it is.
+ * `estimated` = derived from the price table (never an invoice).
+ * `unobservable` = the peer's usage could not be parsed, so 0 is NOT "free".
+ */
+export type CostBasis = "estimated" | "unobservable";
 
 export type RollEvent =
-  | {
-      type: "context:read";
-      workspaceId: string;
-      storyId?: string;
-      providerId: string;
-      branch: string;
-      startedAt: string;
-      durationMs: number;
-      fetchOutcome: "completed" | "failed" | "not_started";
-      revision?: string;
-      bytes: number;
-      diagnosticCodes: readonly ContextDiagnosticCode[];
-      snapshotId: string;
-      ts: number;
-    }
   // Loop lifecycle (BC2)
   | { type: "loop:fire"; loop: LoopType; ts: number }
   | { type: "loop:idle"; loop: LoopType; nextFire: number; ts: number }
@@ -74,15 +49,6 @@ export type RollEvent =
   | { type: "loop:paused"; loop: LoopType; ts: number }
   | { type: "loop:resumed"; loop: LoopType; ts: number }
   | { type: "loop:pending"; loop: LoopType; cycleId: string; reason: string; suspended: Array<{ agent: string; cause: string; detail?: string }>; ts: number }
-  | {
-      type: "workspace:issue_init_failed";
-      workspaceId: string;
-      storyId: string;
-      cycleId: string;
-      code: WorkspaceIssueInitFailureCode;
-      repairJournal: string | null;
-      ts: number;
-    }
   // FIX-1268: the screen is locked and at least one physical-surface card was held.
   // Emitted once per idle cycle that is blocked solely (or primarily) by this gate.
   | { type: "loop:screen_locked"; cycleId: string; storyId?: string; locked: boolean; reason: string; ts: number }
@@ -94,49 +60,6 @@ export type RollEvent =
   | { type: "loop:dormant_failed"; loop: LoopType; ts: number; reason: string; error: string }
   // Cycle (BC2) — cycle:end anchors reconcile + cost accounting
   | { type: "cycle:start"; cycleId: string; storyId: string; agent: AgentId; model: string; ts: number }
-  | {
-      type: "workspace:waiting_capacity";
-      workspaceId: string;
-      storyId: string;
-      cycleId: string;
-      spawnId: string;
-      agent: AgentId;
-      model: string;
-      retryAt: number;
-      contenders: readonly AgentId[];
-      suspect: boolean;
-      ts: number;
-    }
-  | {
-      type: "workspace:capacity_acquired";
-      workspaceId: string;
-      storyId: string;
-      cycleId: string;
-      spawnId: string;
-      agent: AgentId;
-      model: string;
-      ts: number;
-    }
-  | {
-      type: "workspace:capacity_heartbeat";
-      workspaceId: string;
-      storyId: string;
-      cycleId: string;
-      spawnId: string;
-      agent: AgentId;
-      model: string;
-      ts: number;
-    }
-  | {
-      type: "workspace:capacity_released";
-      workspaceId: string;
-      storyId: string;
-      cycleId: string;
-      spawnId: string;
-      agent: AgentId;
-      model: string;
-      ts: number;
-    }
   // US-V4-004: the selected Story execution profile, recorded once per cycle at
   // route-resolve (before execute). standard = builder only (current behavior).
   | { type: "execution:profile"; cycleId: string; storyId: string; profile: ExecutionProfile; reason: string; ts: number }
@@ -157,6 +80,9 @@ export type RollEvent =
   | { type: "cycle:phase"; cycleId: string; phase: CyclePhase; ts: number }
   | { type: "cycle:stdout"; cycleId: string; data: string; ts: number }
   | { type: "cycle:tcr"; cycleId: string; commitHash: string; message: string; ts: number; commitTs?: number }
+  // US-DELTA-011 — precise TCR round + test-proof timing observations
+  // (versioned variants declared at the bottom of this file).
+  | TcrObservationEvent
   | { type: "cycle:first_edit"; cycleId: string; commitHash: string; ts: number }
   // US-OBS-042 — observable TCR micro-step rhythm. These are advisory
   // supervisor/evaluator facts: they make rhythm visible and reviewable, but
@@ -392,14 +318,36 @@ export type RollEvent =
   | { type: "delivery:merge_confirmed"; cycleId: string; storyId: string; branch: string; prNumber?: number; signal: "ancestor" | "patch_id" | "merge_commit"; mergeCommit?: string; ts: number }
   // A published PR was closed without merging. This is terminal for the
   // cycle and releases its delivery lease without claiming delivery.
-  | { type: "delivery:abandoned"; cycleId: string; storyId: string; reason: "pr_closed_unmerged"; ts: number }
+  | {
+      type: "delivery:abandoned";
+      cycleId: string;
+      storyId: string;
+      reason: "pr_closed_unmerged";
+      /** Host Delta closure must name the exact terminal reservation. */
+      delegationId?: string;
+      runId?: string;
+      ts: number;
+    }
   // Reconcile-from-main backfill (emitter lands with US-DELIV-002): a strong
   // signal (PR-state / patch-id) confirmed the cycle's change on main.
   // E3: `delivered_local` — a local-only delivery landed the cycle on the LOCAL
   // integration branch (no push / no PR / no remote merge). `mergedBy:"runner"`,
   // `mergeCommit` = the local landing SHA, `signal:"patch_id"` (the local commit
   // identity, not a PR state).
-  | { type: "delivery:reconciled"; cycleId: string; storyId: string; state: "delivered" | "delivered_external" | "delivered_local" | "superseded"; mergedBy: "runner" | "external"; mergeCommit: string; signal: "pr_state" | "patch_id" | "backlog_attest"; patchId?: string; ts: number }
+  | {
+      type: "delivery:reconciled";
+      cycleId: string;
+      storyId: string;
+      state: "delivered" | "delivered_external" | "delivered_local" | "superseded";
+      mergedBy: "runner" | "external";
+      mergeCommit: string;
+      signal: "pr_state" | "patch_id" | "backlog_attest";
+      patchId?: string;
+      /** Host Delta closure must name the exact terminal reservation. */
+      delegationId?: string;
+      runId?: string;
+      ts: number;
+    }
   // Alert (BC2/BC6)
   | { type: "alert:notify"; channel: string; message: string; ts: number }
   // Supervisor journal (US-OBS-048) — structured narrative of decisions,
@@ -495,7 +443,13 @@ export type RollEvent =
   // (ranked_candidate / fallback_after_* / same_agent_retry / fanout) make the
   // serial cost-aware dispatch auditable — the supervisor sees WHY a peer was
   // chosen. Both optional for back-compat with the pre-FIX-1054 (parallel) logs.
-  | { type: "pair:selected"; cycleId: string; workingAgent: string; peer: string; stage: string; attempt?: number; reason?: string; ts: number }
+  // US-PAIR-020: the isolation decision, recorded per dispatch. Without
+  // `achievedTier` the question "does raising isolation actually help?" is
+  // unanswerable no matter how long the stream runs — nothing recorded how far
+  // apart the reviewer actually was. `degradedFrom` + `tierReason` say WHY it is
+  // not stronger, distinguishing "no farther candidate exists" from "the farther
+  // candidate would not open".
+  | { type: "pair:selected"; cycleId: string; workingAgent: string; peer: string; stage: string; attempt?: number; reason?: string; declaredTier?: string; achievedTier?: string; degradedFrom?: string; tierReason?: string; ts: number }
   // FIX-1054 — SERIAL dispatch is the default: once a peer's result is accepted,
   // the remaining ranked candidates are SKIPPED (never spawned). This event makes
   // the un-spent candidates visible AS a policy decision (not zero-cost attempts).
@@ -505,16 +459,21 @@ export type RollEvent =
   // repeated prior failures, owner quorum). This records the reason + the fan-out
   // limit + the concurrently-dispatched peers so fan-out is never a silent default.
   | { type: "pair:fanout"; cycleId: string; stage: string; reason: string; limit: number; peers: string[]; ts: number }
+  // US-PAIR-014: `costBasis` says WHY the cost figure is what it is. Optional for
+  // back-compat: a legacy row has no basis, and a bare `cost: 0` on such a row is
+  // exactly the "free or unknown?" ambiguity this field removes. 5 of 7 agents hit
+  // the unparseable path, so treating 0 as "free" made aggregate cost meaningless.
+  // "estimated" is also honest that the figure comes from the price table, not an invoice.
   // US-PAIR-004: `stage` is optional for back-compat with PAIR-003 (code-only)
   // logs; multi-stage pairing stamps it so verdicts are distinguishable per stage.
-  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: "agree" | "refine" | "object"; findings: number; cost: number; stage?: string; ts: number }
+  | { type: "pair:verdict"; cycleId: string; peer: string; verdict: "agree" | "refine" | "object"; findings: number; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; modelMismatch?: string; stage?: string; ts: number }
   // US-PAIR-009: the score stage's outcome — a heterogeneous peer scored the cycle.
   // FIX-344: `stage` widens to `"design"` for the roll-design peer Review Score
   // path. roll-design has NO loop cycle (no commitsAhead/worktree), so its
   // independent peer score is triggered at skill wrap-up via `roll pair score
   // --design` and stamped `stage: "design"` so the design score is distinguishable
   // from a build/fix cycle's `stage: "score"` in the same event stream.
-  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: "good" | "ok" | "regression"; cost: number; stage: "score" | "design"; ts: number }
+  | { type: "pair:score"; cycleId: string; peer: string; score: number; verdict: "good" | "ok" | "regression"; cost: number; costBasis?: CostBasis; model?: string; observedModel?: string; modelMismatch?: string; stage: "score" | "design"; ts: number }
   | { type: "pair:none-available"; cycleId: string; stage: string; reason: string; ts: number }
   // FIX-910 — per-attempt score-stage failure attribution (unparseable / timeout /
   // auth-block / exit-error), emitted from the executor's scorePeer closure so
@@ -580,6 +539,25 @@ export type RollEvent =
   // Attest gate (FIX-207) — every actual delivery records whether a fresh
   // acceptance report was produced ("produced") or silently skipped ("skipped").
   | { type: "attest:gate"; cycleId: string; verdict: "produced" | "skipped"; reasons: string[]; ts: number }
+  // A host-guided Delta has no synthetic runner Cycle, so a successful
+  // story-scoped `roll attest` records its report separately.  This is evidence
+  // of the rendered report, not a runner-gate verdict.
+  | { type: "attest:host_delta"; cycleId: string; storyId: string; delegationId: string; reportPath: string; ts: number }
+  // US-RULE-004a — doc-drift gate in SOFT mode: a declared doc surface's
+  // sources changed without its declared docs (verdict from the shared pure
+  // checkDocDrift). This is an auditable FACT, never an adjudication: there is
+  // deliberately NO actor field (nothing here accepts actor=owner), no verdict
+  // claim, and a soft hit never blocks (exit 0). hitId is a stable hash of
+  // cycle/story/baseline/matched-surface set, so a retry appends no duplicate.
+  | {
+      type: "doc_drift_soft_hit";
+      hitId: string;
+      cycleId: string;
+      storyId: string;
+      baseline: string;
+      surfaces: string[];
+      ts: number;
+    }
   // Visual-evidence build-preflight gate (FIX-311b) — the shift-left of the
   // attest gate. BEFORE the agent spawns, the picked card's spec is checked
   // against the design-phase visual-evidence contract. `ok` ⇒ the spec can
@@ -696,8 +674,10 @@ export type RollEvent =
   // A canary count NEVER becomes a blanket deletion: action derives from audit.
   | {
       type: "branch_canary_tripped";
+      /** Leak-safety total; healthy retained capacity is reported separately. */
       total: number;
       threshold: number;
+      managedCapacity: number;
       ephemeralBranches: string[];
       worktrees: Array<{ path: string; disposition: string }>;
       ts: number;
@@ -705,7 +685,9 @@ export type RollEvent =
   | {
       type: "worktree_cleanup_planned";
       threshold: number;
-      canaryTotal: number;
+      cleanupCapacityTotal: number;
+      leakSafetyTotal: number;
+      managedCapacity: number;
       dryRun: boolean;
       candidates: Array<{ path: string; expectedHead: string; branch?: string; cycleId?: string }>;
       preserved: Array<{ path: string; disposition: string }>;
@@ -725,6 +707,10 @@ export type RollEvent =
       reason: string;
       ts: number;
     }
+  // US-LOOP-122 — append-only managed-workspace lifecycle. Absolute paths,
+  // live Git registration, delivery truth, and release verdicts deliberately
+  // stay outside this Execution event aggregate.
+  | WorktreeLifecycleEvent
   // US-TRUTH-001 — the versioned complete-or-reasoned terminal record. One per
   // cycle from schema v1 on; events older than the switch are GRANDFATHERED
   // (read under legacy rules, never retro-rewritten).
@@ -749,6 +735,10 @@ export type RollEvent =
       presetId: string;
       presetSha256: string;
       hostId: string;
+      /** Explicit cutover discriminator.  Absent records are legacy only. */
+      workspaceSchema?: 2;
+      /** FIX-1502 — present when this run picked up a redelegated reservation. */
+      continuation?: DeltaContinuationProvenance;
       ts: number;
     }
   | {
@@ -783,21 +773,76 @@ export type RollEvent =
       delegationId: string;
       storyId: string;
       role: DeltaRole;
+      /** Exact managed run that admitted this post-cutover Builder artifact. */
+      runId?: string;
       path: string;
       sha256: string;
       manifestPath: string;
       sessionId: string;
       roleInstanceId: string;
       identityProvenance: IdentityProvenance;
+      /**
+       * The detached Builder commit admitted by managed-workspace validation.
+       * It is a delivery candidate, never a merge claim: the attest bridge
+       * must still prove that this exact commit reached the integration ref.
+       */
+      deliveryCommit?: string;
+      /** Immutable tree of deliveryCommit; enables PR-anchored squash proof. */
+      deliveryTree?: string;
+      /** Publish ref allocated with the managed primary member. */
+      publishRef?: string;
+      /**
+       * Repository-scoped delivery facts.  A WorkspaceSet can span the primary
+       * repository and a target submodule, so a primary ref/tree must never be
+       * used to prove a submodule Builder commit (or vice versa).
+       */
+      deliveryMembers?: Array<{
+        repositoryId: string;
+        relativeLocator: string;
+        /** Immutable member base allocated before the Builder's detached work. */
+        deliveryBase?: string;
+        deliveryCommit: string;
+        deliveryTree: string;
+        /** Whether the primary delivery changed this subordinate gitlink. */
+        deliveryState?: "changed" | "unchanged";
+        publishRef?: string;
+      }>;
       ts: number;
     }
   | {
       type: "delta:terminal";
       delegationId: string;
       storyId: string;
+      /** Durable host run identity when this terminal owns a reservation. */
+      runId?: string;
       outcome: DeltaTerminalOutcome;
       terminalBinding: TerminalBinding;
       deliveryDisposition?: DeliveryDisposition;
+      /** Post-cutover handoff has atomically promoted the protocol guard. */
+      reservationSource?: "delivery-reservation";
+      /** Named holder when a host session hands its reservation to a successor. */
+      continuationRunId?: string;
+      ts: number;
+    }
+  | {
+      /** FIX-1517 — explicit authorization to recover one legacy held lease. */
+      type: "delta:hold_recovered";
+      delegationId: string;
+      storyId: string;
+      /** The immutable run that was previously concluded owner_hold. */
+      runId: string;
+      /** The only successor name authorized to use the existing pickup CAS. */
+      continuationRunId: string;
+      confirmation: "explicit";
+      ts: number;
+    }
+  | {
+      /** Durable closure of a host-Delta delivery reservation after main truth. */
+      type: "delta:reservation_closed";
+      delegationId: string;
+      storyId: string;
+      runId: string;
+      reason: "merged" | "abandoned";
       ts: number;
     }
   | {
@@ -813,11 +858,363 @@ export type RollEvent =
       reason: DeltaBlockReason | HistoricalDeltaBlockReason;
       detail: string;
       ts: number;
-    };
+    }
+  | DeltaAttemptOutcomeEvent
+  | DeltaRoleAvailabilityObservedEvent
+  // US-CYCLE-013 — durable build/tail handoff (schema cycle-handoff/v1).
+  // A completed build becomes a durable, resumable handoff instead of burning
+  // its review/test/publish/merge tail inside the same uninterruptible run.
+  // All of these live behind ROLL_CYCLE_HANDOFF_V1=1 (default off); an older
+  // reader refuses a v1-affected cycle (`upgrade_required`) rather than
+  // misreading the events. Unknown/new shapes remain parseable forever via the
+  // lenient parseEventLine; the strict per-type parser is parseCycleHandoffEvent.
+  | CycleHandoffEvent;
+
+/**
+ * US-DELTA-012 — immutable, bounded explanation of one terminal delivery
+ * attempt. `unknown` means the stream did not contain enough evidence to name a
+ * cause; it is never a guessed diagnosis.
+ */
+export interface DeltaAttemptOutcomeEvent {
+  readonly type: "delta:attempt_outcome";
+  readonly v: 1;
+  readonly delegationId: string;
+  readonly storyId: string;
+  readonly cause: AttemptCause;
+  readonly evidenceRef: string;
+  readonly terminalFact: "blocked" | "handoff_ready";
+  readonly ts: number;
+}
+
+/**
+ * US-DELTA-012 — a host/model availability observation.  It records only an
+ * observed selection/probe fact; absence of an artifact must never be read as
+ * proof that an invocation did not happen.
+ */
+export interface DeltaRoleAvailabilityObservedEvent {
+  readonly type: "delta:role_availability_observed";
+  readonly v: 1;
+  readonly delegationId: string;
+  readonly storyId: string;
+  readonly role: DeltaRole;
+  readonly hostId: string;
+  readonly modelId: string;
+  readonly transportClass: RoleAvailabilityTransportClass;
+  readonly probeOutcome: RoleAvailabilityProbeOutcome;
+  readonly probeLatencyMs?: number;
+  readonly selection: "selected" | "excluded";
+  readonly reason: string;
+  readonly invocationObserved: false;
+  readonly ts: number;
+}
+
+// ── US-CYCLE-013 — cycle-handoff/v1 event family ─────────────────────────────
+// Durable build/tail handoff: a completed build becomes a resumable handoff
+// instead of burning its review/test/publish/merge tail inside the same run.
+// Semantics pinned here (also in code comments):
+//   - `cycle:builder_ready` is the durable, non-terminal Builder-complete fact,
+//     written only after the Builder evidence/TCR validator accepts the committed
+//     head and BEFORE any capacity decision. `cycle:end` is never evidence of
+//     this transition. The ready holder still occupies the one build slot.
+//   - `cycle:builder_handoff` is a separate, later atomic promotion from that
+//     ready fact into the unique tail slot (releases build + acquires tail in
+//     one fold). Sole writer: the scheduler under the project-wide mutex.
+//   - `cycle:admitted` is appended by the scheduler/runner under the mutex with
+//     a fresh fence; the worker spawns only after the durable append.
+//   - `cycle:cleanup_completed` is the only fact that releases the workspace
+//     lease and story delivery lease for the handoff path.
+//   - A repeated event with the same idempotency key is a no-op; same key with a
+//     different payload is `handoff:conflict` and blocks that cycle.
+// The writer replays the affected cycle before appending. Unknown schemas/events
+// are retained by generic readers; an older runner refuses the v1-affected cycle
+// (`upgrade_required`) rather than misreading them.
+
+/** The exact allocated immutable identity of one admitted cycle build. */
+export interface HandoffIdentity {
+  readonly schema: "cycle-handoff/v1";
+  readonly cycleId: string;
+  readonly storyId: string;
+  /** Exact allocated immutable workspace identity (sole creator: the allocator). */
+  readonly workspace: ManagedWorkspaceSet;
+  readonly branch: string;
+  /** Commit verified after Builder TCR. */
+  readonly builderHead: string;
+  /** Integration/main SHA at allocation. */
+  readonly baseSha: string;
+  readonly builderEvidenceRefs: readonly string[];
+  readonly builderValidationRef: string;
+  readonly profile: "standard" | "verified" | "designed";
+  /** 1-based attempt for this story's delivery (fresh attempt ⇒ fresh fence). */
+  readonly attempt: number;
+  /** Fresh random fence per admission. */
+  readonly fence: string;
+}
+
+export interface CycleBuilderHandoffEvent {
+  readonly type: "cycle:builder_handoff";
+  readonly eventId: string;
+  readonly idempotencyKey: `handoff:${string}:${number}:${string}`;
+  readonly identity: HandoffIdentity;
+  /** The exact `ready:<storyId>:<attempt>:<fence>` key being promoted. */
+  readonly previousReadyKey: string;
+  readonly next: "evaluate_or_test";
+  readonly ts: number;
+}
+
+export interface CycleBuilderReadyEvent {
+  readonly type: "cycle:builder_ready";
+  readonly eventId: string;
+  readonly idempotencyKey: `ready:${string}:${number}:${string}`;
+  readonly identity: HandoffIdentity;
+  readonly reason: "tail_capacity_full" | "promotion_pending";
+  readonly ts: number;
+}
+
+export interface CycleAdmissionEvent {
+  readonly type: "cycle:admitted";
+  readonly eventId: string;
+  readonly idempotencyKey: `admit:${string}:${number}`;
+  readonly identity: HandoffIdentity;
+  readonly source?: "freshness_rebase";
+  readonly queueSequence: number;
+  readonly ts: number;
+}
+
+/** Tail lifecycle facts: started/completed/cancelled + recovery + cleanup. */
+export interface CycleTailEvent {
+  readonly type:
+    | "cycle:tail_started"
+    | "cycle:tail_completed"
+    | "cycle:tail_cancelled"
+    | "cycle:serial_recovery"
+    | "cycle:cleanup_started"
+    | "cycle:cleanup_completed";
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly cycleId: string;
+  readonly attempt: number;
+  readonly fence: string;
+  readonly reason?: string;
+  readonly evidenceRefs?: readonly string[];
+  readonly releasedWorkspace?: boolean;
+  readonly ts: number;
+}
+
+export type CycleTailCancelledReason =
+  | "stale_fence"
+  | "identity_mismatch"
+  | "repair_required"
+  | "freshness_conflict"
+  | "freshness_test_failed"
+  | "freshness_unknown"
+  | "freshness_timeout"
+  | "child_failure";
+
+export type CycleQueueReason =
+  | "build_slot_full"
+  | "tail_slot_full"
+  | "delivery_lease_held"
+  | "recovery_required";
+
+export interface CycleQueueEvent {
+  readonly type: "cycle:queued" | "cycle:queue_rejected";
+  readonly eventId: string;
+  readonly idempotencyKey: `queue:${string}:${number}`;
+  readonly storyId: string;
+  readonly requestedByCycleId: string;
+  readonly queueSequence: number;
+  readonly reason: CycleQueueReason;
+  readonly ts: number;
+}
+
+export type FreshnessVerdict = "continue" | "conflict" | "test_failed" | "unknown" | "timeout";
+
+export interface CycleMainFreshnessEvent {
+  readonly type: "cycle:main_freshness";
+  readonly eventId: string;
+  readonly idempotencyKey: `freshness:${string}:${string}`;
+  readonly cycleId: string;
+  readonly fence: string;
+  readonly predecessorMergeSha: string;
+  readonly recordedBaseSha: string;
+  readonly builderHead: string;
+  readonly verdict: FreshnessVerdict;
+  readonly evidenceRefs: readonly string[];
+  readonly ts: number;
+}
+
+export interface CycleRebasedAttemptEvent {
+  readonly type: "cycle:rebased_attempt_planned" | "cycle:rebased_attempt_validated";
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly cycleId: string;
+  readonly sourceAttempt: number;
+  readonly sourceFence: string;
+  readonly candidateRef: string;
+  readonly candidateHead: string;
+  readonly predecessorMergeSha: string;
+  readonly identity?: HandoffIdentity;
+  readonly validationRef?: string;
+  readonly evidenceRefs: readonly string[];
+  readonly ts: number;
+}
+
+export type CycleHandoffEvent =
+  | CycleBuilderHandoffEvent
+  | CycleBuilderReadyEvent
+  | CycleAdmissionEvent
+  | CycleTailEvent
+  | CycleQueueEvent
+  | CycleMainFreshnessEvent
+  | CycleRebasedAttemptEvent;
+
+export const CYCLE_HANDOFF_EVENT_TYPES = [
+  "cycle:builder_handoff",
+  "cycle:builder_ready",
+  "cycle:admitted",
+  "cycle:tail_started",
+  "cycle:tail_completed",
+  "cycle:tail_cancelled",
+  "cycle:serial_recovery",
+  "cycle:cleanup_started",
+  "cycle:cleanup_completed",
+  "cycle:queued",
+  "cycle:queue_rejected",
+  "cycle:main_freshness",
+  "cycle:rebased_attempt_planned",
+  "cycle:rebased_attempt_validated",
+] as const;
+
+export type CycleHandoffEventType = (typeof CYCLE_HANDOFF_EVENT_TYPES)[number];
+
+const HANDOFF_PROFILES = ["standard", "verified", "designed"] as const;
+const TAIL_CANCEL_REASONS = [
+  "stale_fence",
+  "identity_mismatch",
+  "repair_required",
+  "freshness_conflict",
+  "freshness_test_failed",
+  "freshness_unknown",
+  "freshness_timeout",
+  "child_failure",
+] as const;
+const QUEUE_REASONS = ["build_slot_full", "tail_slot_full", "delivery_lease_held", "recovery_required"] as const;
+const FRESHNESS_VERDICTS = ["continue", "conflict", "test_failed", "unknown", "timeout"] as const;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "" && value.length > 0;
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPositiveInt(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 1;
+}
+
+/** Strict runtime validation of one {@link HandoffIdentity} (schema cycle-handoff/v1). */
+export function parseHandoffIdentity(value: unknown): HandoffIdentity | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (r["schema"] !== "cycle-handoff/v1") return null;
+  if (!isNonEmptyString(r["cycleId"]) || !isNonEmptyString(r["storyId"])) return null;
+  if (!isNonEmptyString(r["branch"]) || !isNonEmptyString(r["builderHead"]) || !isNonEmptyString(r["baseSha"])) return null;
+  if (!isStringArray(r["builderEvidenceRefs"]) || !isNonEmptyString(r["builderValidationRef"])) return null;
+  if (!(HANDOFF_PROFILES as readonly unknown[]).includes(r["profile"])) return null;
+  if (!isPositiveInt(r["attempt"]) || !isNonEmptyString(r["fence"])) return null;
+  if (!normalizeManagedWorkspaceSet(r["workspace"]).ok) return null;
+  return value as HandoffIdentity;
+}
+
+/**
+ * Strict runtime parse of a `cycle:*` handoff row: every required field must be
+ * present with the right type; the identity workspace must normalize; the
+ * idempotencyKey must carry its semantic prefix. Returns null for anything else
+ * — readers skip invalid rows loudly (with a diagnostic), never coerce them into
+ * facts (mirrors parseTcrObservationEvent).
+ */
+export function parseCycleHandoffEvent(value: unknown): CycleHandoffEvent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (!isNonEmptyString(r["eventId"])) return null;
+  if (!isNonEmptyString(r["idempotencyKey"])) return null;
+  if (!isFiniteNumber(r["ts"])) return null;
+  const type = r["type"];
+  switch (type) {
+    case "cycle:builder_handoff": {
+      if (!/^handoff:.+:\d+:.+$/.test(String(r["idempotencyKey"]))) return null;
+      const identity = parseHandoffIdentity(r["identity"]);
+      if (identity === null) return null;
+      if (!isNonEmptyString(r["previousReadyKey"]) || r["next"] !== "evaluate_or_test") return null;
+      return value as CycleBuilderHandoffEvent;
+    }
+    case "cycle:builder_ready": {
+      if (!/^ready:.+:\d+:.+$/.test(String(r["idempotencyKey"]))) return null;
+      const identity = parseHandoffIdentity(r["identity"]);
+      if (identity === null) return null;
+      if (r["reason"] !== "tail_capacity_full" && r["reason"] !== "promotion_pending") return null;
+      return value as CycleBuilderReadyEvent;
+    }
+    case "cycle:admitted": {
+      if (!/^admit:.+:\d+$/.test(String(r["idempotencyKey"]))) return null;
+      const identity = parseHandoffIdentity(r["identity"]);
+      if (identity === null) return null;
+      if (r["source"] !== undefined && r["source"] !== "freshness_rebase") return null;
+      if (!isFiniteNumber(r["queueSequence"])) return null;
+      return value as CycleAdmissionEvent;
+    }
+    case "cycle:tail_started":
+    case "cycle:tail_completed":
+    case "cycle:tail_cancelled":
+    case "cycle:serial_recovery":
+    case "cycle:cleanup_started":
+    case "cycle:cleanup_completed": {
+      if (!isNonEmptyString(r["cycleId"]) || !isPositiveInt(r["attempt"]) || !isNonEmptyString(r["fence"])) return null;
+      if (r["reason"] !== undefined && !isNonEmptyString(r["reason"])) return null;
+      if (r["evidenceRefs"] !== undefined && !isStringArray(r["evidenceRefs"])) return null;
+      if (r["releasedWorkspace"] !== undefined && typeof r["releasedWorkspace"] !== "boolean") return null;
+      if (type === "cycle:tail_cancelled" && !(TAIL_CANCEL_REASONS as readonly unknown[]).includes(r["reason"])) return null;
+      if (type === "cycle:cleanup_completed" && typeof r["releasedWorkspace"] !== "boolean") return null;
+      return value as CycleTailEvent;
+    }
+    case "cycle:queued":
+    case "cycle:queue_rejected": {
+      if (!/^queue:.+:\d+$/.test(String(r["idempotencyKey"]))) return null;
+      if (!isNonEmptyString(r["storyId"]) || !isNonEmptyString(r["requestedByCycleId"])) return null;
+      if (!isFiniteNumber(r["queueSequence"])) return null;
+      if (!(QUEUE_REASONS as readonly unknown[]).includes(r["reason"])) return null;
+      return value as CycleQueueEvent;
+    }
+    case "cycle:main_freshness": {
+      if (!/^freshness:.+:.+$/.test(String(r["idempotencyKey"]))) return null;
+      if (!isNonEmptyString(r["cycleId"]) || !isNonEmptyString(r["fence"])) return null;
+      if (!isNonEmptyString(r["predecessorMergeSha"]) || !isNonEmptyString(r["recordedBaseSha"]) || !isNonEmptyString(r["builderHead"])) return null;
+      if (!(FRESHNESS_VERDICTS as readonly unknown[]).includes(r["verdict"])) return null;
+      if (!isStringArray(r["evidenceRefs"])) return null;
+      return value as CycleMainFreshnessEvent;
+    }
+    case "cycle:rebased_attempt_planned":
+    case "cycle:rebased_attempt_validated": {
+      if (!isNonEmptyString(r["cycleId"]) || !isPositiveInt(r["sourceAttempt"]) || !isNonEmptyString(r["sourceFence"])) return null;
+      if (!isNonEmptyString(r["candidateRef"]) || !isNonEmptyString(r["candidateHead"]) || !isNonEmptyString(r["predecessorMergeSha"])) return null;
+      if (r["identity"] !== undefined && parseHandoffIdentity(r["identity"]) === null) return null;
+      if (r["validationRef"] !== undefined && !isNonEmptyString(r["validationRef"])) return null;
+      if (!isStringArray(r["evidenceRefs"])) return null;
+      if (type === "cycle:rebased_attempt_validated" && (r["identity"] === undefined || r["validationRef"] === undefined)) return null;
+      return value as CycleRebasedAttemptEvent;
+    }
+    default:
+      return null;
+  }
+}
 
 /** Supervisor journal action kinds (US-OBS-048). */
-export const SUPERVISOR_JOURNAL_ACTIONS = ["decide", "verify", "rescue", "escalate", "note"] as const;
-export type SupervisorJournalAction = (typeof SUPERVISOR_JOURNAL_ACTIONS)[number];
+export const SUPERVISOR_JOURNAL_ACTIONS = ["decide", "verify", "rescue", "escalate", "note"] as const;export type SupervisorJournalAction = (typeof SUPERVISOR_JOURNAL_ACTIONS)[number];
 
 export type RollEventType = RollEvent["type"];
 
@@ -826,6 +1223,40 @@ export type RollEventType = RollEvent["type"];
  * malformed JSON, or objects without a string `type` and numeric `ts` —
  * readers must skip bad lines, never crash (I8: rebuild always succeeds).
  */
+/**
+ * Bounds of the "this is epoch SECONDS, not milliseconds" window.
+ *
+ * A real roll timestamp in seconds is at least 1e9 (2001-09-09) and always below
+ * 1e12 (the year 33658 in seconds — but only 2001 in ms). Only values inside
+ * `[1e9, 1e12)` are promoted.
+ *
+ * The range matters, not just the ceiling: small synthetic values used as test
+ * fixtures (`ts: 120_000`, i.e. 1970) CANNOT be a real epoch-seconds stamp, so
+ * they are left exactly as they are. A bare `< 1e12` floor check would silently
+ * rescale them and corrupt every relative-duration computation built on them.
+ */
+export const EVENT_TS_SECONDS_MIN = 1_000_000_000;
+export const EVENT_TS_MS_FLOOR = 1_000_000_000_000;
+
+/**
+ * FIX-1490 — an event `ts` is epoch MILLISECONDS. Normalize a value that is
+ * demonstrably epoch seconds onto that contract; leave everything else alone.
+ *
+ * Why this is needed on BOTH sides: the write-side normalization (2026-06-18,
+ * c881f0ab) only covers `serializeEvent`, but three writers hand-rolled their own
+ * `appendFileSync` and bypassed it — so 5,483 of 22,293 historical events carry
+ * seconds, mixed WITHIN the same event types. Reading them as ms renders 2026
+ * dates as 1970 and silently poisons every time-bucketed aggregation.
+ *
+ * Explicit and idempotent by construction — never a silent `* 1000` sprinkled at
+ * call sites (a value already in ms is returned unchanged).
+ */
+export function eventTsMs(ts: number): number {
+  if (!Number.isFinite(ts)) return ts;
+  if (ts < EVENT_TS_SECONDS_MIN || ts >= EVENT_TS_MS_FLOOR) return ts;
+  return ts * 1000;
+}
+
 export function parseEventLine(line: string): RollEvent | null {
   const trimmed = line.trim();
   if (trimmed === "") return null;
@@ -837,60 +1268,111 @@ export function parseEventLine(line: string): RollEvent | null {
   }
   if (typeof obj !== "object" || obj === null) return null;
   const rec = obj as Record<string, unknown>;
+  // FIX-1490 deliberately does NOT normalize `ts` here. `parseEventLine` is the
+  // universal read primitive, and most of its callers compare event ts against
+  // ANOTHER event's ts (self-consistent, unit-agnostic). Rewriting the value for
+  // everyone silently broke relative-duration renderers and the loop-digest
+  // window. Only the handful of consumers that compare ts against an external
+  // clock need the ms contract — they call `eventTsMs` at that comparison.
   if (typeof rec["type"] !== "string" || typeof rec["ts"] !== "number") return null;
   return obj as RollEvent;
 }
 
+// ── US-DELTA-011 — versioned TCR observation variants ────────────────────────
+// Contract: delta-delivery-metrics-design.md §Contract schema. Every row is a
+// discriminated RollEvent variant with `storyId`, optional `delegationId`,
+// `ts`, and a stable schema version (`v: 1`). Values that could reveal command
+// output are a content digest (`outputSha256`), never raw output.
+
+/** A Builder TCR round began (the test gate started for one story round). */
+export interface TcrRoundStartedEvent {
+  type: "tcr:round_started";
+  v: 1;
+  storyId: string;
+  delegationId?: string;
+  roundId: string;
+  role: "builder";
+  hostId: string;
+  modelId: string;
+  headSha: string;
+  ts: number;
+}
+
+/** The round's test run finished — carries the digest of the output, never the output. */
+export interface TcrTestFinishedEvent {
+  type: "tcr:test_finished";
+  v: 1;
+  storyId: string;
+  delegationId?: string;
+  roundId: string;
+  command: string;
+  affectedScope: string;
+  exitCode: number;
+  wallMs: number;
+  outputSha256: string;
+  ts: number;
+}
+
+/** The round's commit landed; `proofAgeMs` is test-completion → commit at the boundary. */
+export interface TcrCommittedEvent {
+  type: "tcr:committed";
+  v: 1;
+  storyId: string;
+  delegationId?: string;
+  roundId: string;
+  commitSha: string;
+  proofAgeMs: number;
+  ts: number;
+}
+
+export type TcrObservationEvent =
+  | TcrRoundStartedEvent
+  | TcrTestFinishedEvent
+  | TcrCommittedEvent;
+
+export const TCR_OBSERVATION_TYPES = [
+  "tcr:round_started",
+  "tcr:test_finished",
+  "tcr:committed",
+] as const;
+
 /**
- * Migration-only parser for historical single-Project event records. The
- * wrapper deliberately has no top-level event `type`/`ts`, so it cannot enter
- * the runtime RollEvent stream through parseEventLine.
+ * Strict runtime parse of a `tcr:*` observation row: every required field must
+ * be present with the right type and `v` must be the live schema version.
+ * Returns null for anything else — readers skip invalid rows loudly (with a
+ * diagnostic), never coerce them into facts.
  */
-export function parseLegacyProjectEventMigrationInput(
-  value: unknown,
-): ContractResult<LegacyProjectEventMigrationInput> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return {
-      ok: false,
-      errors: [{ code: "invalid_type", path: "migration", message: "legacy migration input must be an object" }],
-    };
+export function parseTcrObservationEvent(value: unknown): TcrObservationEvent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  // This v1 schema permits an output digest only. Reject common raw-output
+  // fields rather than accepting a row that could leak test content into the
+  // durable event ledger.
+  if ("output" in r || "stdout" in r || "stderr" in r || "rawOutput" in r) return null;
+  if (r["v"] !== 1) return null;
+  if (typeof r["storyId"] !== "string" || r["storyId"] === "") return null;
+  if (r["delegationId"] !== undefined && typeof r["delegationId"] !== "string") return null;
+  if (typeof r["roundId"] !== "string" || r["roundId"] === "") return null;
+  if (typeof r["ts"] !== "number" || !Number.isFinite(r["ts"])) return null;
+  switch (r["type"]) {
+    case "tcr:round_started":
+      if (r["role"] !== "builder") return null;
+      if (typeof r["hostId"] !== "string" || r["hostId"] === "") return null;
+      if (typeof r["modelId"] !== "string" || r["modelId"] === "") return null;
+      if (typeof r["headSha"] !== "string" || r["headSha"] === "") return null;
+      return value as TcrRoundStartedEvent;
+    case "tcr:test_finished":
+      if (typeof r["command"] !== "string" || r["command"] === "") return null;
+      if (typeof r["affectedScope"] !== "string" || r["affectedScope"] === "") return null;
+      if (typeof r["exitCode"] !== "number" || !Number.isFinite(r["exitCode"])) return null;
+      if (typeof r["wallMs"] !== "number" || !Number.isFinite(r["wallMs"]) || r["wallMs"] < 0) return null;
+      if (typeof r["outputSha256"] !== "string" || !/^[a-f0-9]{64}$/.test(r["outputSha256"])) return null;
+      return value as TcrTestFinishedEvent;
+    case "tcr:committed":
+      if (typeof r["commitSha"] !== "string" || r["commitSha"] === "") return null;
+      if (typeof r["proofAgeMs"] !== "number" || !Number.isFinite(r["proofAgeMs"])) return null;
+      return value as TcrCommittedEvent;
+    default:
+      return null;
   }
-  const input = value as Record<string, unknown>;
-  const errors: ContractError[] = [];
-  const allowed = new Set(["schema", "projectSlug", "event"]);
-  for (const key of Object.keys(input)) {
-    if (!allowed.has(key)) {
-      errors.push({ code: "unknown_field", path: key, message: "legacy migration input contains an unknown field" });
-    }
-  }
-  if (input["schema"] !== LEGACY_PROJECT_EVENT_MIGRATION_V1) {
-    errors.push({ code: "unknown_version", path: "schema", message: `expected ${LEGACY_PROJECT_EVENT_MIGRATION_V1}` });
-  }
-  const projectSlug = input["projectSlug"];
-  if (typeof projectSlug !== "string" || projectSlug.trim() === "") {
-    errors.push({ code: "invalid_type", path: "projectSlug", message: "projectSlug must be a non-empty string" });
-  }
-  const event = input["event"];
-  if (typeof event !== "object" || event === null || Array.isArray(event)) {
-    errors.push({ code: "invalid_type", path: "event", message: "legacy event must be an object" });
-  } else {
-    const record = event as Record<string, unknown>;
-    if (typeof record["type"] !== "string" || record["type"].trim() === "") {
-      errors.push({ code: "invalid_type", path: "event.type", message: "legacy event type must be a non-empty string" });
-    }
-    if (typeof record["ts"] !== "number" || !Number.isFinite(record["ts"])) {
-      errors.push({ code: "invalid_type", path: "event.ts", message: "legacy event ts must be a finite number" });
-    }
-  }
-  if (errors.length > 0 || typeof projectSlug !== "string" || typeof event !== "object" || event === null || Array.isArray(event)) {
-    return { ok: false, errors };
-  }
-  return {
-    ok: true,
-    value: {
-      schema: LEGACY_PROJECT_EVENT_MIGRATION_V1,
-      projectSlug,
-      event: event as LegacyProjectEventPayload,
-    },
-  };
 }

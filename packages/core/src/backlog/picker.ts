@@ -1,4 +1,5 @@
 /**
+ * @responsibility Picks the next workable backlog story in fixed type-prefix order.
  * StoryPicker — TS port of the v2 "pick the next workable story" path.
  *
  * v2 oracle (frozen bash, bin/roll):
@@ -587,3 +588,7 @@ export function assessBacklog(
   // No todo, no in_progress/hold → everything visible is Done (or cut).
   return { hasWork: false, reason: "all_done" };
 }
+
+// ─── US-LOOP-079k: dormancy suppression ──────────────────────────────────────
+
+

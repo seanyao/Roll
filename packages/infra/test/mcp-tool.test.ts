@@ -12,7 +12,6 @@ import {
   type McpOutput,
   type McpServerConfig,
 } from "../src/index.js";
-import { TOOL_TEST_REPO_ID, toolWorkspaceContext } from "./tool-workspace-context.js";
 
 const policy = (overrides: Partial<ToolPolicy> = {}): ToolPolicy => ({
   enabled: true,
@@ -21,11 +20,7 @@ const policy = (overrides: Partial<ToolPolicy> = {}): ToolPolicy => ({
   ...overrides,
 });
 
-function invocation(
-  input: McpInput,
-  overrides: Partial<ToolPolicy> = {},
-  canonicalRoot = "/workspaces/tool-tests",
-): ToolInvocation<McpInput> {
+function invocation(input: McpInput, overrides: Partial<ToolPolicy> = {}): ToolInvocation<McpInput> {
   return {
     invocationId: "inv-mcp",
     toolId: "mcp.call" as ToolInvocation<McpInput>["toolId"],
@@ -33,8 +28,6 @@ function invocation(
     caller: { cycleId: "cycle-1", storyId: "US-TOOL-010", agent: "codex" },
     policy: policy(overrides),
     ts: 100,
-    context: toolWorkspaceContext("US-TOOL-010", canonicalRoot),
-    repoId: TOOL_TEST_REPO_ID,
   };
 }
 
@@ -224,13 +217,13 @@ describe("US-TOOL-010 McpTool", () => {
     const root = mkdtempSync(join(tmpdir(), "roll-mcp-bypass-"));
     try {
       const result = await new McpTool({ projectRoot: root }).execute(
-        invocation({ serverName: "chrome-devtools", toolName: "navigate" }, {}, root),
+        invocation({ serverName: "chrome-devtools", toolName: "navigate" }),
         deps(),
       );
 
       expect(result.ok).toBe(false);
       const { BrowserOperationLedger } = await import("@roll/core");
-      expect(new BrowserOperationLedger().read(join(root, "runtime", "events", "browser-operations.ndjson"))).toMatchObject([
+      expect(new BrowserOperationLedger().read(join(root, ".roll", "browser-operations", "events.ndjson"))).toMatchObject([
         { type: "browser:mcp-bypass-denied", reason: { code: "generic_mcp_bypass_denied" } },
       ]);
     } finally {

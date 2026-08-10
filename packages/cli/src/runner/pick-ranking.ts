@@ -1,3 +1,6 @@
+/**
+ * @responsibility Ranks the next eligible card picks deterministically.
+ */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";

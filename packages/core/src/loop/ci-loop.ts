@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides CI monitoring, the pre-run CI gate and red heal-or-alert.
  * CI Loop — pure decision layer for CI monitoring, the pre-run CI gate, and the
  * bounded red→heal-or-alert decision (US-LOOP-004 / v2 US-LOOP-046/047/048/050,
  * US-LOOP-062a, FIX-103).

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Computes bounded evaluation scores from normalized evidence.
  * Evals — six-dimension cycle quality score (US-CORE-012).
  *
  * Direct port of the scoring half of `lib/loop_result_eval.py` (read FULLY).

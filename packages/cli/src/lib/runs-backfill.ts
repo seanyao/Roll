@@ -1,4 +1,7 @@
 /**
+ * @responsibility Backfills merge-evidence records into the live loop.
+ */
+/**
  * FIX-243 — wire the merge-evidence backfill (v2 `_loop_backfill_merged`,
  * bin/roll:13713-13759) into the live loop.
  *

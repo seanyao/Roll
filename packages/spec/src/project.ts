@@ -1,4 +1,7 @@
 /**
+ * @responsibility Defines the path-as-identity project slug contract (I7).
+ */
+/**
  * Project identity — path-as-identity contract (I7), TS port of v2
  * `_project_slug` (US-SCAF-005, diff-tested against the frozen bash oracle).
  *

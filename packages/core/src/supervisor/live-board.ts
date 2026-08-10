@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects the read-only supervisor live board from the event stream.
  * US-V4-013 — Supervisor Live Board view model.
  *
  * Pure projection from RollEvent stream to a read-only team board. It does not

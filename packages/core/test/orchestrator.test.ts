@@ -11,7 +11,7 @@
  *   - event-sourcing round-trip: replay simulated events through spec
  *     parseEventLine + foldCycle and assert the rebuilt terminal state (I8).
  */
-import { AGENT_CAPACITY_LEASE_SCHEMA, parseEventLine, type AgentCapacityLease, type RollEvent } from "@roll/spec";
+import { parseEventLine, type RollEvent } from "@roll/spec";
 import { describe, expect, it } from "vitest";
 import {
   type CycleCommand,
@@ -31,8 +31,6 @@ import {
   watchdogVerdict,
   cycleTimeoutVerdict,
   stallVerdict,
-  planRepositoryCommands,
-  repositoryEventIdentity,
   finalizeBuilder,
   handoffKindFor,
   type BuilderFinalizationFacts,
@@ -45,82 +43,12 @@ import {
   CYCLE_STALL_THRESHOLD_SEC,
   STALL_STARTUP_GRACE_SEC,
 } from "../src/index.js";
-import type { RepositoryExecutionContext, RepositoryExecutionMap } from "@roll/spec";
 
 const CTX: CycleContext = {
   cycleId: "20260605-013000-12345",
   branch: "loop/cycle-20260605-013000-12345",
   loop: "main",
 };
-
-function acquiredLease(state: CycleState): AgentCapacityLease {
-  const pending = state.pendingSpawn;
-  if (pending === undefined) throw new Error("test expected pending capacity spawn");
-  return {
-    schema: AGENT_CAPACITY_LEASE_SCHEMA,
-    key: pending.key,
-    owner: {
-      leaseId: `lease:${pending.spawnId}`,
-      ownerToken: `token:${pending.spawnId}`,
-      workspaceId: state.ctx.repositoryExecution?.workspaceId ?? "test-workspace",
-      storyId: state.ctx.storyId ?? "",
-      cycleId: state.ctx.cycleId,
-      spawnId: pending.spawnId,
-      host: "test-host",
-      pid: 123,
-      processStartedAtMs: 1,
-    },
-    acquiredAtMs: 1,
-    heartbeatAtMs: 1,
-  };
-}
-
-/** Existing orchestrator scenarios model a ready machine slot. Capacity-specific
- * tests below call cycleStep directly to inspect the acquire/wait boundary. */
-function stepWithCapacity(state: CycleState, event: CycleEvent): { state: CycleState; commands: CycleCommand[] } {
-  const first = cycleStep(state, event);
-  if (!first.commands.some((command) => command.kind === "acquire_capacity")) return first;
-  const pending = first.state.pendingSpawn;
-  if (pending === undefined) throw new Error("acquire command missing pending spawn state");
-  const acquired = cycleStep(first.state, {
-    type: "capacity_acquired",
-    spawnId: pending.spawnId,
-    lease: acquiredLease(first.state),
-  });
-  return { state: acquired.state, commands: [...first.commands, ...acquired.commands] };
-}
-
-function repository(
-  repoId: string,
-  alias: string,
-  access: "read" | "write",
-): RepositoryExecutionContext {
-  return {
-    repoId,
-    alias,
-    access,
-    requiredDelivery: access === "write",
-    worktreePath: `/workspace/issues/US-WS-010/${alias}`,
-    baseSha: `${alias}-base`,
-    headSha: `${alias}-head`,
-    commands: {
-      test: [`pnpm --dir ${alias} test`],
-      integration: [`pnpm --dir ${alias} test:integration`],
-    },
-  };
-}
-
-function workspaceContext(repositories: RepositoryExecutionMap): CycleContext {
-  return {
-    ...CTX,
-    storyId: "US-WS-010",
-    repositoryExecution: {
-      workspaceId: "ws-20260717001",
-      issueRoot: "/workspace/issues/US-WS-010",
-      repositories,
-    },
-  };
-}
 
 /** Drive a list of events through the stepper from a fresh start, collecting the
  *  command kinds in order (the SEQUENCE assertions read these). */
@@ -129,7 +57,7 @@ function walk(events: CycleEvent[]): { state: CycleState; kinds: string[]; comma
   const kinds: string[] = [];
   const commands: CycleCommand[] = [];
   for (const ev of events) {
-    const r = stepWithCapacity(state, ev);
+    const r = cycleStep(state, ev);
     state = r.state;
     for (const c of r.commands) {
       kinds.push(c.kind);
@@ -162,181 +90,6 @@ describe("classifyCaptured — pre-publish six-state (bin/roll:9127-9157)", () =
   });
   it("exit 0 + commits → built (bin/roll:9142)", () => {
     expect(classifyCaptured({ usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 2 })).toBe("built");
-  });
-});
-
-describe("US-WS-010 — one Story Cycle carries a repository execution map", () => {
-  const writable = repository("repo-111111111111", "sot1", "write");
-  const secondWritable = repository("repo-222222222222", "sot2", "write");
-  const readonly = repository("repo-333333333333", "reference", "read");
-
-  it("projects cardinality one through the same repository command contract", () => {
-    const ctx = workspaceContext({ [writable.repoId]: writable });
-
-    expect(planRepositoryCommands(ctx, "test")).toEqual({
-      ok: true,
-      commands: [
-        {
-          operation: "test",
-          workspaceId: "ws-20260717001",
-          storyId: "US-WS-010",
-          cycleId: CTX.cycleId,
-          repoId: writable.repoId,
-        },
-      ],
-    });
-
-    const terminalEvents: CycleEvent[] = [
-      { type: "start", ctx },
-      { type: "preflight_done" },
-      { type: "worktree_created" },
-      { type: "story_picked", storyId: "US-WS-010" },
-      { type: "route_resolved", agent: "codex", model: "" },
-      { type: "agent_exited", exit: 0, timedOut: false },
-      {
-        type: "facts_captured",
-        facts: { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 1 },
-      },
-      { type: "published", result: { status: 0 } },
-      { type: "cleaned" },
-    ];
-    const workspaceResult = walk(terminalEvents);
-    const legacyResult = walk([
-      ...terminalEvents.slice(0, 1).map(() => ({ type: "start", ctx: CTX }) as const),
-      ...terminalEvents.slice(1),
-    ]);
-    expect(workspaceResult.state.terminal).toBe(legacyResult.state.terminal);
-    expect(workspaceResult.kinds).toEqual(legacyResult.kinds);
-  });
-
-  it("plans deterministic per-repository commands while retaining one Cycle lifecycle", () => {
-    const repositories = {
-      [secondWritable.repoId]: secondWritable,
-      [writable.repoId]: writable,
-    } satisfies RepositoryExecutionMap;
-    const ctx = workspaceContext(repositories);
-
-    expect(planRepositoryCommands(ctx, "tcr")).toEqual({
-      ok: true,
-      commands: [
-        {
-          operation: "tcr",
-          workspaceId: "ws-20260717001",
-          storyId: "US-WS-010",
-          cycleId: CTX.cycleId,
-          repoId: writable.repoId,
-        },
-        {
-          operation: "tcr",
-          workspaceId: "ws-20260717001",
-          storyId: "US-WS-010",
-          cycleId: CTX.cycleId,
-          repoId: secondWritable.repoId,
-        },
-      ],
-    });
-
-    const { commands } = walk([
-      { type: "start", ctx },
-      { type: "preflight_done" },
-      { type: "worktree_created" },
-      { type: "story_picked", storyId: "US-WS-010" },
-      { type: "route_resolved", agent: "codex", model: "" },
-    ]);
-    expect(commands.filter((command) => command.kind === "spawn_agent")).toHaveLength(1);
-    expect(
-      commands.filter(
-        (command) => command.kind === "emit_event" && command.event.type === "cycle:start",
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("allows read-only repositories as context but rejects edit, TCR and publish selection", () => {
-    const ctx = workspaceContext({
-      [writable.repoId]: writable,
-      [readonly.repoId]: readonly,
-    });
-
-    expect(planRepositoryCommands(ctx, "context")).toMatchObject({
-      ok: true,
-      commands: [
-        { operation: "context", repoId: writable.repoId },
-        { operation: "context", repoId: readonly.repoId },
-      ],
-    });
-    for (const operation of ["edit", "tcr", "publish"] as const) {
-      expect(planRepositoryCommands(ctx, operation, [readonly.repoId])).toEqual({
-        ok: false,
-        code: "read_only_repository",
-        repoId: readonly.repoId,
-        operation,
-      });
-    }
-  });
-
-  it("binds repository events to Workspace, Story, Cycle and repository identity", () => {
-    const ctx = workspaceContext({ [writable.repoId]: writable });
-
-    expect(repositoryEventIdentity(ctx, writable.repoId)).toEqual({
-      ok: true,
-      identity: {
-        workspaceId: "ws-20260717001",
-        storyId: "US-WS-010",
-        cycleId: CTX.cycleId,
-        repoId: writable.repoId,
-      },
-    });
-    expect(repositoryEventIdentity(ctx, "repo-ffffffffffff")).toEqual({
-      ok: false,
-      code: "unknown_repository",
-      repoId: "repo-ffffffffffff",
-    });
-  });
-
-  it("rejects a map key that disagrees with the repository identity", () => {
-    const ctx = workspaceContext({ "repo-ffffffffffff": writable });
-
-    expect(planRepositoryCommands(ctx, "context")).toEqual({
-      ok: false,
-      code: "invalid_repository_map",
-    });
-  });
-
-  it("blocks committed Workspace work while repository verification is pending", () => {
-    expect(classifyCaptured({
-      usedWorktree: true,
-      agentExecuted: true,
-      agentExit: 0,
-      timedOut: false,
-      commitsAhead: 2,
-      repositoryVerificationPending: true,
-    })).toBe("blocked");
-  });
-
-  it("blocks verified Workspace work at the repository publish handoff", () => {
-    expect(classifyCaptured({
-      usedWorktree: true,
-      agentExecuted: true,
-      agentExit: 0,
-      timedOut: false,
-      commitsAhead: 2,
-      repositoryPublishPending: true,
-    })).toBe("blocked");
-  });
-
-  it.each([
-    { label: "dirty with commits", commitsAhead: 2 },
-    { label: "dirty only", commitsAhead: 0 },
-  ])("blocks $label before legacy handoff classification", ({ commitsAhead }) => {
-    expect(classifyCaptured({
-      usedWorktree: true,
-      agentExecuted: true,
-      agentExit: 0,
-      timedOut: false,
-      commitsAhead,
-      worktreeDirty: true,
-      repositoryVerificationPending: true,
-    })).toBe("blocked");
   });
 });
 
@@ -603,7 +356,7 @@ describe("US-DELIV-013 — published cycles await reconciliation", () => {
       { type: "facts_captured", facts: { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 1 } },
       { type: "published", result: { status: 0 } },
     ] satisfies CycleEvent[]) {
-      const r = stepWithCapacity(state, ev);
+      const r = cycleStep(state, ev);
       state = r.state;
       commands.push(...r.commands);
     }
@@ -640,7 +393,7 @@ describe("US-DELIV-001 — AWAITING_MERGE suspension: publish releases the loop 
       { type: "facts_captured", facts: { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 1 } },
       { type: "published", result: { status: 0 } },
     ] satisfies CycleEvent[]) {
-      const r = stepWithCapacity(state, ev);
+      const r = cycleStep(state, ev);
       state = r.state;
       commands.push(...r.commands);
     }
@@ -791,8 +544,8 @@ describe("happy-path phase walk → done", () => {
     const { state, kinds } = walk([
       { type: "start", ctx: CTX },
       { type: "preflight_done" },
-      { type: "worktree_created" },
       { type: "story_picked", storyId: "US-1" },
+      { type: "worktree_created" },
       { type: "route_resolved", agent: "claude", model: "sonnet" },
       { type: "agent_exited", exit: 0, timedOut: false },
       { type: "facts_captured", facts: { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 2 } },
@@ -803,16 +556,12 @@ describe("happy-path phase walk → done", () => {
     // FIX-382: cycle:start moved from worktree_created to route_resolved.
     expect(kinds).toEqual([
       "preflight",
-      "create_worktree",
       "pick_story",
+      "create_worktree",
       "resume_worktree", // RESUME-PRIOR-WORK re-point (post-pick, before route/spawn)
       "resolve_route",
       "emit_event", // cycle:start (FIX-382: now emitted at route_resolved with real storyId+agent)
-      "acquire_capacity",
-      "emit_event", // workspace:capacity_acquired
       "spawn_agent",
-      "release_capacity",
-      "emit_event", // workspace:capacity_released
       "capture_facts",
       "emit_event", // FIX-1068: builder finalization gate verdict before peer/attest/PR/cleanup
       "publish_pr",
@@ -886,110 +635,6 @@ describe("happy-path phase walk → done", () => {
   });
 });
 
-describe("US-WS-017b — capacity is the sole spawn transition", () => {
-  function routedState(): { state: CycleState; commands: CycleCommand[] } {
-    let state = initialCycleState(CTX);
-    for (const event of [
-      { type: "start", ctx: CTX },
-      { type: "preflight_done" },
-      { type: "worktree_created" },
-      { type: "story_picked", storyId: "US-CAPACITY" },
-    ] satisfies CycleEvent[]) {
-      state = cycleStep(state, event).state;
-    }
-    return cycleStep(state, { type: "route_resolved", agent: "codex", model: "gpt-capacity" });
-  }
-
-  it("records one pending spawn and emits no process before acquisition", () => {
-    const routed = routedState();
-    expect(routed.commands.map((command) => command.kind)).toEqual(["emit_event", "acquire_capacity"]);
-    expect(routed.commands.some((command) => command.kind === "spawn_agent")).toBe(false);
-    expect(routed.state.pendingSpawn).toMatchObject({
-      spawnId: `${CTX.cycleId}:agent:1`,
-      key: { agent: "codex", model: "gpt-capacity" },
-      process: { kind: "agent", agent: "codex", attempt: 1 },
-    });
-  });
-
-  it("starts only the matching pending process after exact acquisition", () => {
-    const routed = routedState();
-    const pending = routed.state.pendingSpawn!;
-    const acquired = cycleStep(routed.state, {
-      type: "capacity_acquired",
-      spawnId: pending.spawnId,
-      lease: acquiredLease(routed.state),
-    });
-    expect(acquired.commands.map((command) => command.kind)).toEqual(["emit_event", "spawn_agent"]);
-    expect(acquired.state.pendingSpawn).toBeUndefined();
-    expect(acquired.state.activeCapacity?.owner.spawnId).toBe(pending.spawnId);
-  });
-
-  it("rejects mismatched acquisition and never spawns unleased work", () => {
-    const routed = routedState();
-    const rejected = cycleStep(routed.state, {
-      type: "capacity_acquired",
-      spawnId: "other-spawn",
-      lease: acquiredLease(routed.state),
-    });
-    expect(rejected.state.terminal).toBe("failed");
-    expect(rejected.commands.some((command) => command.kind === "spawn_agent")).toBe(false);
-    expect(rejected.commands.some((command) => command.kind === "append_alert")).toBe(true);
-  });
-
-  it("capacity exhaustion is a redacted zero-spawn neutral terminal", () => {
-    const routed = routedState();
-    const pending = routed.state.pendingSpawn!;
-    const waiting = cycleStep(routed.state, {
-      type: "waiting_capacity",
-      spawnId: pending.spawnId,
-      retryAtMs: 9_000,
-      contenders: [
-        { agent: "codex", cycleId: "private-cycle-one" },
-        { agent: "codex", cycleId: "private-cycle-two" },
-      ],
-      suspect: false,
-    });
-    expect(waiting.state.terminal).toBe("waiting_capacity");
-    expect(waiting.commands.some((command) => command.kind === "spawn_agent")).toBe(false);
-    const event = waiting.commands.find(
-      (command): command is Extract<CycleCommand, { kind: "emit_event" }> =>
-        command.kind === "emit_event" && command.event.type === "workspace:waiting_capacity",
-    );
-    expect(event?.event).toMatchObject({
-      type: "workspace:waiting_capacity",
-      agent: "codex",
-      model: "gpt-capacity",
-      retryAt: 9_000,
-      contenders: ["codex"],
-      suspect: false,
-    });
-    expect(JSON.stringify(event)).not.toContain("private-cycle");
-    expect(waiting.commands.find((command) => command.kind === "append_run")).toMatchObject({
-      status: "waiting_capacity",
-      outcome: "waiting_capacity",
-    });
-  });
-
-  it("releases the active lease before retry acquisition", () => {
-    const routed = routedState();
-    const pending = routed.state.pendingSpawn!;
-    const acquired = cycleStep(routed.state, {
-      type: "capacity_acquired",
-      spawnId: pending.spawnId,
-      lease: acquiredLease(routed.state),
-    });
-    const retry = cycleStep(acquired.state, { type: "agent_exited", exit: 1, timedOut: false });
-    expect(retry.commands.map((command) => command.kind)).toEqual([
-      "release_capacity",
-      "emit_event",
-      "sleep_backoff",
-      "acquire_capacity",
-    ]);
-    expect(retry.state.activeCapacity).toBeUndefined();
-    expect(retry.state.pendingSpawn?.process).toMatchObject({ kind: "agent", attempt: 2 });
-  });
-});
-
 // ── failure branches ─────────────────────────────────────────────────────────
 
 describe("failure branches", () => {
@@ -1040,40 +685,21 @@ describe("failure branches", () => {
     });
   });
 
-  it("worktree setup fail → failed + tolerant worktree cleanup", () => {
+  it("US-LOOP-124: worktree setup failure preserves a recovery-required target", () => {
     const { state, kinds } = walk([
       { type: "start", ctx: CTX },
       { type: "preflight_done" },
       { type: "worktree_failed" },
     ]);
     expect(state.terminal).toBe("failed");
-    expect(kinds.slice(-5)).toEqual(["emit_event", "append_run", "release_lock", "cleanup_environment", "cleanup_worktree"]);
-  });
-
-  it("repository setup fail → failed before routing and releases cycle-owned resources", () => {
-    const { state, commands } = walk([
-      { type: "start", ctx: CTX },
-      { type: "preflight_done" },
-      { type: "worktree_created" },
-      { type: "repository_setup_failed", storyId: "US-WS-011" },
-    ]);
-
-    expect(state.terminal).toBe("failed");
-    expect(state.ctx.storyId).toBe("US-WS-011");
-    expect(commands.map((command) => command.kind).slice(-5)).toEqual([
-      "emit_event",
-      "append_run",
-      "release_lock",
-      "cleanup_environment",
-      "cleanup_worktree",
-    ]);
-    expect(commands.some((command) => command.kind === "resolve_route" || command.kind === "spawn_agent")).toBe(false);
+    expect(kinds.slice(-4)).toEqual(["emit_event", "append_run", "release_lock", "cleanup_environment"]);
+    expect(kinds).not.toContain("cleanup_worktree");
   });
 
   it("agent fail after retry budget → failed + ALERT (I6, no agent-swap)", () => {
     let state = initialCycleState(CTX);
     const drive = (ev: CycleEvent): CycleCommand[] => {
-      const r = stepWithCapacity(state, ev);
+      const r = cycleStep(state, ev);
       state = r.state;
       return r.commands;
     };
@@ -1084,14 +710,7 @@ describe("failure branches", () => {
     drive({ type: "route_resolved", agent: "pi", model: "k2" });
     // attempt 1 fails → retry to 2
     let cmds = drive({ type: "agent_exited", exit: 1, timedOut: false });
-    expect(cmds.map((c) => c.kind)).toEqual([
-      "release_capacity",
-      "emit_event",
-      "sleep_backoff",
-      "acquire_capacity",
-      "emit_event",
-      "spawn_agent",
-    ]);
+    expect(cmds.map((c) => c.kind)).toEqual(["sleep_backoff", "spawn_agent"]);
     expect(state.attempt).toBe(2);
     // attempt 2 fails → retry to 3
     cmds = drive({ type: "agent_exited", exit: 1, timedOut: false });
@@ -1099,14 +718,7 @@ describe("failure branches", () => {
     // attempt 3 fails → exhausted → failed terminal + alert
     cmds = drive({ type: "agent_exited", exit: 1, timedOut: false });
     expect(state.terminal).toBe("failed");
-    expect(cmds.map((c) => c.kind)).toEqual([
-      "release_capacity",
-      "emit_event",
-      "append_alert",
-      "emit_event",
-      "append_run",
-      "release_lock",
-    ]);
+    expect(cmds.map((c) => c.kind)).toEqual(["append_alert", "emit_event", "append_run", "release_lock"]);
     // I6: no spawn_agent / no route-swap among the terminal commands.
     expect(cmds.some((c) => c.kind === "spawn_agent")).toBe(false);
   });
@@ -1179,10 +791,10 @@ describe("failure branches", () => {
     expect(built.kinds).toContain("publish_pr");
   });
 
-  it("route_resolved acquires machine capacity before spawning", () => {
+  it("route_resolved spawns the agent directly (budget gate removed)", () => {
     let state = initialCycleState(CTX);
     const drive = (ev: CycleEvent): CycleCommand[] => {
-      const r = stepWithCapacity(state, ev);
+      const r = cycleStep(state, ev);
       state = r.state;
       return r.commands;
     };
@@ -1192,12 +804,7 @@ describe("failure branches", () => {
     drive({ type: "story_picked", storyId: "US-1" });
     const cmds = drive({ type: "route_resolved", agent: "claude", model: "opus" });
     // FIX-382: route_resolved now emits cycle:start (with resolved storyId+agent) before spawn.
-    expect(cmds.map((c) => c.kind)).toEqual([
-      "emit_event",
-      "acquire_capacity",
-      "emit_event",
-      "spawn_agent",
-    ]);
+    expect(cmds.map((c) => c.kind)).toEqual(["emit_event", "spawn_agent"]);
     expect(state.phase).toBe("execute");
     expect(state.attempt).toBe(1);
   });
@@ -1427,7 +1034,7 @@ describe("timeout breach mid-execute → clean teardown ORDER", () => {
   it("agent_exited with timedOut short-circuits to teardown (no retry, bin/roll:9066)", () => {
     let state = initialCycleState(CTX);
     const drive = (ev: CycleEvent): CycleCommand[] => {
-      const r = stepWithCapacity(state, ev);
+      const r = cycleStep(state, ev);
       state = r.state;
       return r.commands;
     };
@@ -1440,8 +1047,6 @@ describe("timeout breach mid-execute → clean teardown ORDER", () => {
     expect(state.terminal).toBe("blocked");
     expect(state.done).toBe(true);
     expect(cmds.map((c) => c.kind)).toEqual([
-      "release_capacity",
-      "emit_event",
       "kill_agent",
       "measure_worktree",
       "emit_event",
@@ -1458,7 +1063,7 @@ describe("timeout breach mid-execute → clean teardown ORDER", () => {
   it("FIX-1474 agent_exited with lost:true → aborted terminal teardown (no retry, no blocked)", () => {
     let state = initialCycleState(CTX);
     const drive = (ev: CycleEvent): CycleCommand[] => {
-      const r = stepWithCapacity(state, ev);
+      const r = cycleStep(state, ev);
       state = r.state;
       return r.commands;
     };
@@ -1471,8 +1076,6 @@ describe("timeout breach mid-execute → clean teardown ORDER", () => {
     expect(state.terminal).toBe("aborted");
     expect(state.done).toBe(true);
     expect(cmds.map((c) => c.kind)).toEqual([
-      "release_capacity",
-      "emit_event",
       "kill_agent",
       "measure_worktree",
       "emit_event",
@@ -1484,7 +1087,7 @@ describe("timeout breach mid-execute → clean teardown ORDER", () => {
     expect(cmds[cmds.length - 1]?.kind).toBe("release_lock");
     expect(cmds.some((c) => c.kind === "cleanup_worktree")).toBe(false);
     // The terminal records the aborted outcome — never the timeout's blocked.
-    const emit = cmds.find((c) => c.kind === "emit_event" && c.event.type === "cycle:end");
+    const emit = cmds.find((c) => c.kind === "emit_event");
     expect(emit).toMatchObject({ event: { type: "cycle:end", outcome: "aborted_no_delivery" } });
     const run = cmds.find((c) => c.kind === "append_run");
     expect(run).toMatchObject({ status: "aborted", outcome: "aborted_no_delivery" });
@@ -1736,8 +1339,7 @@ describe("US-LOOP-102 — adversarial-pairing subsequence (verified/designed)", 
   const emittedEvents = (commands: CycleCommand[]): string[] =>
     commands
       .filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event")
-      .map((c) => c.event.type)
-      .filter((type) => !type.startsWith("workspace:capacity_"));
+      .map((c) => c.event.type);
 
   /** Drive to the point where the adversarial subsequence begins (execute). */
   const upToExecute: CycleEvent[] = [
@@ -1952,5 +1554,184 @@ describe("US-LOOP-102 — adversarial-pairing subsequence (verified/designed)", 
     expect(commands.some((c) => c.kind === "spawn_agent")).toBe(true);
     expect(commands.some((c) => c.kind === "spawn_role")).toBe(false);
     expect(emittedEvents(commands)).toEqual(["cycle:start"]);
+  });
+});
+
+// ── US-CYCLE-013 — durable build/tail handoff stepper (matrix #2, #17) ───────
+
+const HAN_WS = {
+  schema: 1 as const,
+  runId: "c-hand",
+  storyId: "US-HAND",
+  kind: "cycle" as const,
+  topology: "solo" as const,
+  members: [{
+    repositoryId: "repo-id",
+    workspaceKey: "cycle-c-hand",
+    relativeLocator: "cycle-c-hand",
+    checkoutRef: { kind: "detached" as const, head: "base-sha" },
+    publishRef: "refs/heads/loop/cycle-c-hand",
+  }],
+};
+
+const HAN_IDENTITY = {
+  schema: "cycle-handoff/v1" as const,
+  cycleId: "c-hand",
+  storyId: "US-HAND",
+  workspace: HAN_WS,
+  branch: "loop/cycle-c-hand",
+  builderHead: "head-sha",
+  baseSha: "base-sha",
+  builderEvidenceRefs: ["ev-1"],
+  builderValidationRef: "builder-validation:c-hand:1",
+  profile: "standard" as const,
+  attempt: 1,
+  fence: "fence-1",
+};
+
+const BUILT_FACTS = { usedWorktree: true, agentExit: 0, timedOut: false, commitsAhead: 2 };
+
+describe("US-CYCLE-013 — build handoff stepper (facts_captured + handoff)", () => {
+  it("a built capture with handoff data emits builder_ready and stops NON-terminal (handedOff)", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    state = cycleStep(state, { type: "preflight_done" }).state;
+    state = cycleStep(state, { type: "story_picked", storyId: "US-HAND" }).state;
+    state = cycleStep(state, { type: "worktree_created" }).state;
+    state = cycleStep(state, { type: "route_resolved", agent: "claude", model: "opus" }).state;
+    state = cycleStep(state, { type: "agent_exited", exit: 0, timedOut: false }).state;
+    const result = cycleStep(state, {
+      type: "facts_captured",
+      facts: BUILT_FACTS,
+      handoff: { identity: HAN_IDENTITY, readyKey: "ready:US-HAND:1:fence-1", tailFree: false },
+    });
+    expect(result.state.handedOff).toBe(true);
+    expect(result.state.done).toBe(false); // NOT a terminal — no cycle:end
+    const emits = result.commands.filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event");
+    const ready = emits.find((c) => c.event.type === "cycle:builder_ready");
+    expect(ready).toBeDefined();
+    if (ready !== undefined && ready.event.type === "cycle:builder_ready") {
+      expect(ready.event.reason).toBe("tail_capacity_full");
+      expect(ready.event.identity.cycleId).toBe("c-hand");
+      expect(ready.event.idempotencyKey).toBe("ready:US-HAND:1:fence-1");
+    }
+    expect(result.commands.some((c) => c.kind === "emit_event" && c.event.type === "cycle:end")).toBe(false);
+  });
+
+  it("a tail-free built capture emits builder_ready with promotion_pending", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    state = cycleStep(state, { type: "preflight_done" }).state;
+    state = cycleStep(state, { type: "story_picked", storyId: "US-HAND" }).state;
+    state = cycleStep(state, { type: "worktree_created" }).state;
+    state = cycleStep(state, { type: "route_resolved", agent: "claude", model: "opus" }).state;
+    state = cycleStep(state, { type: "agent_exited", exit: 0, timedOut: false }).state;
+    const result = cycleStep(state, {
+      type: "facts_captured",
+      facts: BUILT_FACTS,
+      handoff: { identity: HAN_IDENTITY, readyKey: "ready:US-HAND:1:fence-1", tailFree: true },
+    });
+    const ready = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:builder_ready");
+    if (ready !== undefined && ready.event.type === "cycle:builder_ready") {
+      expect(ready.event.reason).toBe("promotion_pending");
+    }
+    expect(result.state.handedOff).toBe(true);
+  });
+
+  it("handoff_recorded is an inert confirmation (no duplicate ready append)", () => {
+    let state = initialCycleState(CTX);
+    state = cycleStep(state, { type: "start", ctx: CTX }).state;
+    state = cycleStep(state, { type: "preflight_done" }).state;
+    state = cycleStep(state, { type: "story_picked", storyId: "US-HAND" }).state;
+    state = cycleStep(state, { type: "worktree_created" }).state;
+    state = cycleStep(state, { type: "route_resolved", agent: "claude", model: "opus" }).state;
+    state = cycleStep(state, { type: "agent_exited", exit: 0, timedOut: false }).state;
+    state = cycleStep(state, {
+      type: "facts_captured",
+      facts: BUILT_FACTS,
+      handoff: { identity: HAN_IDENTITY, readyKey: "ready:US-HAND:1:fence-1", tailFree: false },
+    }).state;
+    const confirm = cycleStep(state, { type: "handoff_recorded" });
+    expect(confirm.commands).toEqual([]);
+    expect(confirm.state.handedOff).toBe(true);
+  });
+});
+
+describe("US-CYCLE-013 — tail-mode stepper (tail_resumed → tail_event)", () => {
+  function tailState(): CycleState {
+    return {
+      ...initialCycleState({ ...CTX, cycleId: "c-hand", branch: "loop/cycle-c-hand", storyId: "US-HAND" }),
+      phase: "publish",
+      tailIdentity: HAN_IDENTITY,
+    };
+  }
+
+  it("tail_resumed emits cycle:tail_started + publish_pr (evaluation/publish tail)", () => {
+    const result = cycleStep(tailState(), { type: "tail_resumed", identity: HAN_IDENTITY });
+    const kinds = result.commands.map((c) => c.kind);
+    expect(kinds).toContain("emit_event");
+    expect(kinds).toContain("publish_pr");
+    const started = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:tail_started");
+    expect(started).toBeDefined();
+    if (started !== undefined && started.event.type === "cycle:tail_started") {
+      expect(started.event.cycleId).toBe("c-hand");
+      expect(started.event.fence).toBe("fence-1");
+    }
+  });
+
+  it("tail_event tail_completed drives the ordinary terminal (cleanup + cycle:end), never a second build", () => {
+    const result = cycleStep(tailState(), { type: "tail_event", kind: "tail_completed", status: "published" });
+    expect(result.state.done).toBe(true);
+    expect(result.state.terminal).toBe("published");
+    const completed = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:tail_completed");
+    expect(completed).toBeDefined();
+    expect(result.commands.some((c) => c.kind === "cleanup_worktree")).toBe(true);
+    expect(result.commands.some((c) => c.kind === "emit_event" && c.event.type === "cycle:end")).toBe(true);
+  });
+
+  it("tail_event tail_failed cancels into serial_recovery with leases retained (no cycle:end)", () => {
+    const result = cycleStep(tailState(), { type: "tail_event", kind: "tail_failed", reason: "repair_required" });
+    expect(result.state.recoveryRecorded).toBe(true);
+    expect(result.state.done).toBe(false);
+    const cancelled = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:tail_cancelled");
+    expect(cancelled).toBeDefined();
+    const recovery = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:serial_recovery");
+    expect(recovery).toBeDefined();
+    expect(result.commands.some((c) => c.kind === "emit_event" && c.event.type === "cycle:end")).toBe(false);
+    expect(result.commands.some((c) => c.kind === "cleanup_worktree")).toBe(false);
+  });
+
+  it("freshness_result conflict routes the tail to serial_recovery (main_freshness + tail_cancelled + serial_recovery)", () => {
+    const result = cycleStep(tailState(), {
+      type: "freshness_result",
+      verdict: "conflict",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+    });
+    expect(result.state.recoveryRecorded).toBe(true);
+    const types = result.commands.filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event").map((c) => c.event.type);
+    expect(types).toContain("cycle:main_freshness");
+    expect(types).toContain("cycle:tail_cancelled");
+    expect(types).toContain("cycle:serial_recovery");
+    const freshness = result.commands.find((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event" && c.event.type === "cycle:main_freshness");
+    if (freshness !== undefined && freshness.event.type === "cycle:main_freshness") {
+      expect(freshness.event.verdict).toBe("conflict");
+    }
+  });
+
+  it("freshness_result continue pins a rebased attempt (main_freshness + rebased_attempt_planned)", () => {
+    const result = cycleStep(tailState(), {
+      type: "freshness_result",
+      verdict: "continue",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+    });
+    const types = result.commands.filter((c): c is Extract<CycleCommand, { kind: "emit_event" }> => c.kind === "emit_event").map((c) => c.event.type);
+    expect(types).toContain("cycle:main_freshness");
+    expect(types).toContain("cycle:rebased_attempt_planned");
+    expect(types).toContain("cycle:serial_recovery");
+    expect(result.state.recoveryRecorded).toBe(true);
   });
 });

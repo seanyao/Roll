@@ -1,3 +1,6 @@
+/**
+ * @responsibility Enforces tool-call policy, retry and sandbox defaults.
+ */
 import { readFile } from "node:fs/promises";
 import type { ToolDefaults, ToolId, ToolPolicy, ToolRetry, ToolSandbox } from "@roll/spec";
 

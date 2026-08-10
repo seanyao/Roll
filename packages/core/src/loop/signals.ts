@@ -1,4 +1,5 @@
 /**
+ * @responsibility Declares the single turning-point signal table for the whole loop.
  * US-PORT-012 — the single signal口径 ("一处定义两处消费").
  *
  * One table decides "what is a turning-point signal" for the whole loop. Two

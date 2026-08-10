@@ -37,6 +37,10 @@ defaults:
 `.roll/pairing.yaml` 不再是运行时输入；scoped `evaluate` role 是结对候选的唯一来源。
 静态配置列公平候选，auth/network/VPN/account 等运行时失败只在本次 resolution 中跳过候选。
 
+一次性迁移时，只有启用的旧 `code` stage 会把其中具备代码复查能力的候选迁入
+`defaults.story.roles.evaluate`。旧的 `score`、`design`、`test`、`cycle` 配置语义已废弃：
+仅有 score 的条目绝不会开启代码复查，Review Score 仍独立于这个废弃文件而必跑。
+
 ## 看它做了什么 —— 可观测性
 
 Loop cycle evidence 和角色视图会显示结对池（谁能结对、其厂商、被声明的能力，
@@ -47,9 +51,9 @@ Loop cycle evidence 和角色视图会显示结对池（谁能结对、其厂商
 
   enabled: true · stages: [code]
 
-    ✓ claude  vendor=anthropic · [code]
-    ✓ codex   vendor=openai · [code]
-    · pi      vendor=pi · [code] · excluded: no heterogeneous partner
+    ✓ claude  model=claude-opus-5 vendor=anthropic · [code]
+    ✓ codex   model=gpt-5.3-codex vendor=openai · [code]
+    · pi      model=deepseek-v4-pro vendor=deepseek · [code]
 
   pairings to date: 7 (codex×4, kimi×3) · total cost $0.94 · 11 findings
 ```
@@ -64,6 +68,75 @@ reviewer 运行，且与干活 agent **不同厂商**的——然后在其中轮
 可复现）。有战绩的搭档会被温和偏好（ε-greedy，ε≈0.2），但始终保留探索，任何一对都
 不会垄断。若没有合格的异构搭档，这个"没有"本身也会被记录（`pair:none-available`）——
 绝不静默跳过。
+
+## 什么才算"换了一个 agent" —— 看模型,不看名字
+
+隔离距离算在**解析出的模型**上,厂商从模型反查,绝不从 agent 条目名猜 ——
+因为按名字判断在两个方向上都错:
+
+- **两个条目,一个模型。** 如果 `agents.yaml` 把两个 rig 钉在同一个模型上,
+  它们**不是**异构对。本仓的 `pi` 与 `reasonix` 都解析到 `deepseek-v4-pro`,
+  把它们配成一对,就是同一个模型评审自己家写的代码,却报告"已独立评审"。
+- **一个条目,多个厂商。** `cursor` 能跑 `claude-opus-5-thinking-high`(anthropic)
+  也能跑 `gpt-5.3-codex`(openai),默认还是 `auto`。把它算作"一个厂商"是虚构。
+
+四档距离,从强到弱:
+
+| 距离 | 含义 |
+|---|---|
+| `vendor` | 评审者的模型来自**另一个已知厂商** |
+| `model` | 至少是另一个模型(可能同厂) |
+| `session` | 同一个模型,但必须是新起的会话 |
+| `off` | 不要求(必须显式写出来) |
+
+**认不出厂商的绝不能满足 `vendor` 档。** 它会降到能证明的最强一档并记下原因。
+"我们分辨不出来"永远不会被报成"它们不一样"。新增 agent 或模型时必须在同一次改动里
+补上模型前缀,否则涉及它的每次比较都会静默降一档。
+
+**选型读配置,不读观测。** 评审者会跑哪个模型在 spawn 之前就已知(它的 rig,
+否则它注册的默认模型)。有几个 agent 的用量解析器是刻意留空的,
+如果选型依赖观测到的模型,这些 agent 就永远达不到 model/vendor 档。
+评审者自己的输出声称跑了什么,在事后**对账**并在不符时告警 —— 绝不回头改判定。
+
+## Effort —— 一张表管两个轴
+
+评审强度与隔离强度都是关于 rig 的事实,所以一张表同时表达:
+表里出现哪些关卡就是评审强度,每个关卡的值就是要求的距离。
+
+```yaml
+# .roll/agents.yaml
+effort:
+  code:  vendor      # 代码评审:要求换厂商
+  score: vendor      # 评分:要求换厂商
+```
+
+预设展开成同一张表:`standard`(两关都 `vendor`,**缺省**)、
+`light`(`code: vendor`、`score: off`)、`off`(两关都关)。
+逐关声明会覆盖它所基于的预设。
+
+两条刻意的拒绝:
+
+- **缺省绝不是 `off`。** 缺失 section、未知预设、非法值,全都回落 `standard`
+  **并报错** —— 要关掉评审必须亲手写出来。
+- **只有 `code` 与 `score` 可配。** `design`、`test`、`cycle` 在 stage 枚举里存在
+  但**没有生产路径**;配置它们是一个明确的报错,而不是一个"开了却永远不跑"的设置。
+
+## 看这个取舍 —— `roll effort`
+
+```bash
+roll effort           # 按 (关卡 × 实际达成的距离):样本、命中、成本
+roll effort --json
+```
+
+只读。两件它刻意拒绝做的事:
+
+- **样本少于 10 的格子不给命中率**,并在输出里点名。三五个样本算出的比率看着像趋势
+  但不是;而 0 样本渲染成 "0%" 就是"没人反馈问题所以没有问题"那个谬误。
+- **可观测与不可观测的成本绝不混入同一个平均。** 成本 `0` 曾同时表示"免费"和
+  "解析不出用量" —— 现在是两列,因为用量读不出来的评审者并不是白干的。
+
+在"实际达成距离"这个字段存在之前记录的裁定,会被单独计入 `untieredSamples`,
+而不是被塞进一个从未测量过的距离里。
 
 ## 安全 —— 结对绝不阻塞 cycle
 
@@ -80,9 +153,10 @@ reviewer 运行，且与干活 agent **不同厂商**的——然后在其中轮
 
 ## 阶段
 
-`code` 和 `score` 是默认——异构搭档复检交付的改动，另一位给完成的 cycle 打分。
-`design`、`test`、`cycle` 把同一套机制扩到其它检查点；想要更早或更广的第二双
-眼睛时在 `stages` 里开启。
+运行中的代码复查阶段只有 `code`：配置了 `story.evaluate` 时，由异构搭档复检
+交付的改动。Review Score 是完成 cycle 后必跑的独立检查，不再作为 pairing stage 配置。
+`roll agent migrate` 只会把启用的旧 `code` 复查池迁入 `.roll/agents.yaml`；旧的
+`score`、`design`、`test`、`cycle` 条目已废弃，因为它们没有 scoped 代码复查对应项。
 
 ## Review Score —— 同行打分，绝不让作者给自己打分
 

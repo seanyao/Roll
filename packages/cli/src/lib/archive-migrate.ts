@@ -1,4 +1,7 @@
 /**
+ * @responsibility Plans the `roll archive migrate` layout migration without mutating the filesystem.
+ */
+/**
  * US-META-002a — `roll archive migrate` planner (pure-ish: reads FS, mutates nothing).
  *
  * Migrates the legacy run-store (`.roll/verification/<ID>/`) into the card-folder

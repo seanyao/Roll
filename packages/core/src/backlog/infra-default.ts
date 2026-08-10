@@ -1,4 +1,5 @@
 /**
+ * @responsibility Provides the default Node filesystem implementation of the backlog FileStore port.
  * Default Node filesystem implementation of the {@link FileStore} port.
  *
  * The backlog store logic (store.ts) is pure: it never touches the filesystem

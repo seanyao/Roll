@@ -1,4 +1,5 @@
 /**
+ * @responsibility Verifies a release only when npm holds the published version.
  * FIX-1480 — npm is the single publish/install truth source.
  *
  * A `v*` tag push creates a DRAFT GitHub Release (release.yml); the version is

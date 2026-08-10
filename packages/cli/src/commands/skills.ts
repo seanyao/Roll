@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `skills` subcommand, porting the skills catalog audit, sync, and generate surface.
+ */
+/**
  * `roll skills` — TS port of bin/roll cmd_skills (1655-1693) plus the
  * _skills_catalog_generate / _skill_frontmatter_field / _skills_catalog_path
  * helpers (1567-1653). Subcommands: audit, sync, generate | gen, check, help.

@@ -1,15 +1,13 @@
 {
   "name": "@bipo-ape/roll",
-  "version": "4.730.1",
+  "version": "4.807.1",
   "description": "Roll — Roll out features with AI agents",
   "packageManager": "pnpm@11.1.3",
   "scripts": {
     "test": "bash scripts/test-ts.sh",
     "lint:story-ids": "node scripts/lint-story-ids.mjs",
     "lint:role-taxonomy": "node scripts/audit-role-taxonomy.mjs",
-    "lint:workspace-context": "pnpm -r build && node scripts/audit-workspace-context.mjs",
-    "generate:workspace-context-cases": "node scripts/generate-workspace-context-validation-cases.mjs",
-    "test:e2e": "pnpm -r build && PYTHONPATH=\"$(python3 -m site --user-site)${PYTHONPATH:+:$PYTHONPATH}\" pnpm --filter @roll/cli exec vitest run test/critical-flows.e2e.test.ts test/workspace-multirepo.critical.e2e.test.ts test/workspace-migrate-apply.critical.e2e.test.ts test/workspace-worktree-lifecycle.e2e.test.ts && pnpm --filter @roll/cli exec vitest run test/run-cycle.integration.test.ts -t \"US-WS-017b capacity exhaustion\"",
+    "test:e2e": "pnpm -r build && pnpm --filter @roll/cli exec vitest run test/critical-flows.e2e.test.ts",
     "test:browser-live": "pnpm -r build && ROLL_BROWSER_LIVE=1 pnpm --filter @roll/cli exec vitest run --config vitest.live.config.ts",
     "test:controlled-capture-live": "pnpm -r build && ROLL_BROWSER_LIVE=1 pnpm --filter @roll/infra exec vitest run --config vitest.live.config.ts",
     "test:cov": "pnpm -r exec vitest run --coverage.enabled --coverage.provider=v8 --coverage.include='src/**' --coverage.reporter=text-summary --coverage.reporter=text",
@@ -24,10 +22,10 @@
     "skills",
     "agent-first"
   ],
-  "homepage": "https://github.com/seanyao/roll",
+  "homepage": "https://github.com/BIPOSVC/ape-roll",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/seanyao/roll.git"
+    "url": "git+https://github.com/BIPOSVC/ape-roll.git"
   },
   "bin": {
     "roll": "dist/roll.mjs"

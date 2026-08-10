@@ -1,0 +1,124 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-DELTA-019 — rig readiness operator documentation > freezes the localized help and aligned active operator copy 1`] = `
+{
+  "docs": {
+    "en": "### Local exact-model rig readiness
+
+\`roll delta rigs\` is a human-facing, machine-local diagnostic for the exact
+models referenced by local Delta presets. With no flag it only renders the
+pointer-selected cached observation. It does not spawn a process, contact a
+service, write configuration or a snapshot, append a project event, or change a
+workspace, lease, dispatch, role resolution, or delivery fact.
+
+Run \`roll delta rigs --refresh\` only when the owner wants a new bounded local
+observation. It derives the same configured candidates, probes each exact
+\`{adapter, cliModelId}\`, and publishes a snapshot only after every candidate has
+an observation. For example, a Codex mapping uses the exact selector
+\`codex exec --model <cliModelId> ...\`, never the default model. A missing
+executable is **blocked** with an installation action. An adapter without a
+verified safe exact-model noninteractive surface is **blocked** and is not run.
+
+The view groups results as **ready**, **blocked**, or **unknown**. A compatible
+old snapshot is unknown/stale; a fingerprint mismatch is unknown/incompatible;
+a timeout, malformed fixed-token output, or unclassified failure is unknown.
+Fix the shown condition and refresh. Do not treat a current ready observation as
+proof of a later long-running invocation, delivery, host-session freshness, or
+final role assignment. The normal resolution still applies pins, exclusions,
+tags, cost caps, and role diversity.
+
+One invocation is one language: \`ROLL_LANG\` is a one-process override, then
+the persisted \`roll config lang\` preference, then \`LC_ALL\`, \`LANG\`, and English.
+For a Chinese operator, \`ROLL_LANG=zh roll delta rigs --refresh\` gives the same
+local diagnostic entirely in Simplified Chinese.
+",
+    "readme": "#### Local exact-model rig readiness
+
+Before asking a host to resolve a Delta role, inspect its machine-local
+diagnostic with \`roll delta rigs\`. This ordinary read only renders the most
+recent complete local observation: it does not start a model, write a snapshot,
+or change a workspace, lease, dispatch, resolution, or event. Use
+\`roll delta rigs --refresh\` only when you want bounded probes of every exact
+configured \`{adapter, cliModelId}\` and publication of one complete new local
+snapshot.
+
+For example, a configured Codex candidate is probed with its exact local model
+mapping (equivalent to \`codex exec --model <cliModelId> ...\`), not Codex's
+default model. A missing executable is shown as **blocked** with an installation
+action; an adapter without a verified safe exact-model noninteractive selector
+is also **blocked** and is not executed. **Unknown** includes stale or
+incompatible cache, timeout, unverified token output, and unclassified failure;
+refresh after fixing the actionable condition.
+
+Output follows one language per process: \`ROLL_LANG\` is the one-process
+override, then \`roll config lang\` is the persisted preference, then \`LC_ALL\`,
+\`LANG\`, and English. A \`ready\` observation means only that this exact model
+returned the fixed minimal token at that observation time. It never proves a
+future long task, delivery, host-session freshness, or final role assignment;
+pins, exclusions, tags, cost caps, and role diversity still make the real
+allocation decision.
+
+### Feature delivery view
+
+To see how a feature or a single card actually delivered, run
+\`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]\`.
+It is one read-only view: one card has one final delivery conclusion, every
+attempt stays visible under that card, timing/TCR/rework numbers show their
+sample size, and missing history stays incomplete (\`?\` / \`n/a\`) rather than a
+zero or a success. It cannot route an agent, retry work, change the backlog,
+merge a PR, or attest a card. See the
+[delivery metrics dictionary](guide/en/delivery-metrics.md) for the worked
+example and the exact source facts.
+",
+    "readmeZh": "### Delta rig 本机就绪诊断
+
+请宿主担当 Delta 角色之前，先用 \`roll delta rigs\` 查看它的本机诊断。不带标志的普通读取
+只渲染最近一次完整的本机观测：不会启动模型、写快照，也不会改动工作区、租约、派工、
+角色解析或事件。只有当你想对每个精确配置的 \`{adapter, cliModelId}\` 做有界探测并发布一份
+完整的新本机快照时，才使用 \`roll delta rigs --refresh\`。
+
+例如，已配置的 Codex 候选按其精确的本地模型映射探测（等价于
+\`codex exec --model <cliModelId> ...\`），绝不使用默认模型。找不到可执行文件会显示为
+**不可用**并提示安装；没有已验证安全的指定模型非交互选择方式的适配器同样显示为
+**不可用**，且不会执行。**未知**包括过期或不兼容的缓存、超时、令牌输出未验证以及
+未分类失败；修好界面显示的问题后再刷新。就绪文件保存在本机 \`$ROLL_HOME\` 下
+（\`delta-team/rig-adapters.yaml\` 与 \`delta-team/rig-readiness/…\`），只是诊断证据：
+它们不是 Delta 生命周期存储，prepare、角色解析、角色准入、租约与交付对账都不会读取。
+
+输出一次调用只使用一种语言：\`ROLL_LANG\` 是单进程覆盖，然后是持久化的
+\`roll config lang\` 偏好，再是 \`LC_ALL\`、\`LANG\` 和英文；中文操作者可用
+\`ROLL_LANG=zh roll delta rigs --refresh\` 获得完整的简体中文本机诊断。**通过**
+只表示这个指定模型在记录的观测时间返回了固定的最小令牌。它绝不证明后续长任务、
+交付、宿主会话新鲜度或最终角色分配；真正做决定的是 pin、排除规则、标签、
+成本上限和角色多样性。
+",
+    "zh": "### 本机指定模型就绪状态
+
+\`roll delta rigs\` 是面向人的、本机诊断命令，用于查看本机 Delta preset 中引用的指定模型。
+不带标志时，它只渲染由指针选中的缓存观测：不会启动进程、联系服务、写配置或快照、追加项目
+事件，也不会修改工作区、租约、派工、角色解析或交付事实。
+
+只有在 owner 需要新的有界本机观测时，才运行 \`roll delta rigs --refresh\`。它派生相同的已配置
+候选，探测每个精确的 \`{adapter, cliModelId}\`，并且只在每个候选都有观测后发布完整快照。例如，
+Codex 映射使用精确选择器 \`codex exec --model <cliModelId> ...\`，绝不使用默认模型。找不到
+可执行文件会显示为**不可用**并提示安装；没有已验证安全的指定模型非交互方式的适配器也会显示为
+**不可用**，且不会执行。
+
+视图把结果分为**通过**、**不可用**和**待确认**。兼容但过期的快照是待确认/过期；指纹不匹配
+是待确认/不兼容；超时、固定令牌输出未验证或未分类失败也都是待确认。修复界面显示的问题后再刷新。
+当前的通过观测绝不证明后续长任务、交付、宿主会话新鲜度或最终角色分配；正常解析仍会应用 pin、
+排除规则、标签、成本上限和角色多样性。
+
+一次调用只使用一种语言：\`ROLL_LANG\` 是单进程覆盖，其后是持久化的 \`roll config lang\` 偏好，
+再后是 \`LC_ALL\`、\`LANG\` 和英文。中文操作者可用
+\`ROLL_LANG=zh roll delta rigs --refresh\` 获得完整的简体中文本机诊断。
+",
+  },
+  "help": {
+    "en": "  roll delta rigs [--refresh]
+    Read the local exact-model readiness snapshot; --refresh runs bounded local probes and publishes only a complete snapshot.",
+    "zh": "  roll delta rigs [--refresh]
+    读取本机指定模型就绪快照；--refresh 执行有界的本地探测，且只发布完整快照。",
+  },
+}
+`;

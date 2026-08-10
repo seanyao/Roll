@@ -1,10 +1,13 @@
+/**
+ * @responsibility Manages the node ports file for cross-process coordination.
+ */
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   BacklogStore,
+  claimStoryLease,
   EventBus,
   classifyComplexity,
   configuredModelForAgent,
@@ -12,29 +15,26 @@ import {
   nodeDeliveryStore,
   nodeExecPort,
   normalizeAgentConfig,
+  heteroAvailableByModel,
   parseBacklog,
+  peerModelFor,
   queryStoryDelivery,
   resolveRoute,
   resolveRouteExcluding,
-  type CycleContext,
   type FreshnessPort,
   type ObservedCommit,
   type RouteDeps,
   type StoryDeliveryTruth,
   type Tier,
 } from "@roll/core";
-import {
-  absent,
-  present,
-  type CycleRepositoryExecutionContext,
-  type RepositoryExecutionContext,
-} from "@roll/spec";
+import { absent, present } from "@roll/spec";
 import {
   acquireLock,
   branchCleanlyRebasesOntoMain,
   branchMergedIntoMain,
   captureFromMarker,
   fetchRemoteBranch,
+  git,
   ghRepoSlug,
   landLocalDelivery,
   lsRemote,
@@ -51,16 +51,15 @@ import {
   worktreeAddInSubmodule,
   worktreeFetchOrigin,
   worktreeRemove,
+  managedWorktreeRelease,
+  managedWorktreeAbsent,
+  inspectManagedWorktree,
   worktreeRemoveInSubmodule,
   worktreeResetHard,
   worktreeSubmoduleInit,
   writeHeartbeat,
   push as gitPush,
-  applyIssueInit,
-  IssueInitializationError,
-  readWorkspace,
-  resolveRequirementSourcesForStoryOnDisk,
-  resolveWorkspaceBacklogStoryContract,
+  managedRepositoryIdentity,
 } from "@roll/infra";
 import { cardArchiveDir } from "../lib/archive.js";
 import { attestCommand } from "../commands/attest.js";
@@ -70,182 +69,15 @@ import { probeAgentReachable } from "./agent-liveness.js";
 import { readPendingPublish } from "./pending-publish.js";
 import { resolveScopedStoryExecute } from "./scoped-route.js";
 import { readSelfHeal } from "./selfheal-budget.js";
-import type {
-  BoundRepositoryPorts,
-  Ports,
-  ProcessClock,
-  RepositoryPortAdapters,
-  RepositoryPorts,
-  RunnerPaths,
-} from "./ports.js";
-import {
-  appendIssueExecutionEvent,
-  appendRepositoryExecutionEvent,
-  resolveRepositoryExecutionContext,
-} from "./repository-context.js";
-import { defaultRepositoryAdapters, productionRepositoryAdapters, repositoryHeadSha } from "./repository-adapters.js";
+import type { Ports, ProcessClock, RunnerPaths } from "./ports.js";
 import {
   bootstrapWorktreeSkills,
   commitRollMetadataRepo,
   readPrebuildDistEnabled,
 } from "./worktree-bootstrap.js";
 import { rescueLeakedMain } from "./sandbox-boundary.js";
-import { createNodeAgentCapacityPort } from "./capacity-port.js";
-import { createNodeContextStageHost } from "./context-stage-host.js";
 
 const execFileAsync = promisify(execFile);
-
-async function commitsAheadAt(worktreeCwd: string, baseRef = "origin/main"): Promise<number> {
-  const r = await execFileAsync("git", ["rev-list", "--count", `${baseRef}..HEAD`], {
-    cwd: worktreeCwd,
-    encoding: "utf8",
-  }).catch(() => ({ stdout: "0" }));
-  const n = Number((r.stdout ?? "0").trim());
-  return Number.isFinite(n) ? n : 0;
-}
-
-async function tcrCountAt(worktreeCwd: string, baseRef = "origin/main"): Promise<number | undefined> {
-  const r = await execFileAsync("git", ["log", "--oneline", `${baseRef}..HEAD`], {
-    cwd: worktreeCwd,
-    encoding: "utf8",
-  }).catch(() => undefined);
-  if (r === undefined) return undefined;
-  return (r.stdout ?? "").split("\n").filter((line) => line.includes(" tcr:")).length;
-}
-
-async function recentCommitsAt(worktreeCwd: string, baseRef = "origin/main"): Promise<ObservedCommit[]> {
-  const r = await execFileAsync(
-    "git",
-    ["log", "--reverse", "--format=%H%x09%ct%x09%s", `${baseRef}..HEAD`],
-    { cwd: worktreeCwd, encoding: "utf8" },
-  ).catch(() => ({ stdout: "" }));
-  const out: ObservedCommit[] = [];
-  for (const line of (r.stdout ?? "").split("\n")) {
-    if (line.trim() === "") continue;
-    const [hash, ct, ...rest] = line.split("\t");
-    if (hash === undefined || hash === "") continue;
-    const tsSec = Number((ct ?? "0").trim());
-    out.push({
-      hash,
-      message: rest.join("\t"),
-      tsSec: Number.isFinite(tsSec) ? tsSec : 0,
-    });
-  }
-  return out;
-}
-
-export function createRepositoryPorts(
-  ctx: CycleContext,
-  adapters?: RepositoryPortAdapters,
-): BoundRepositoryPorts {
-  const execution = ctx.repositoryExecution;
-  if (execution === undefined) throw new Error("missing_repository_context");
-  const entries = Object.entries(execution.repositories);
-  const aliases = new Set<string>();
-  for (const [key, repository] of entries) {
-    if (key !== repository.repoId || aliases.has(repository.alias)) {
-      throw new Error("invalid_repository_map: keys must match unique repoId/alias identities");
-    }
-    aliases.add(repository.alias);
-  }
-  if (entries.length === 0) throw new Error("invalid_repository_map: at least one repository is required");
-  const defaults = defaultRepositoryAdapters();
-  const selectedAdapters = adapters ?? productionRepositoryAdapters(ctx);
-  const context = (repoId: string): RepositoryExecutionContext => {
-    const repository = execution.repositories[repoId];
-    if (repository === undefined) throw new Error(`unknown_repository: ${repoId}`);
-    return repository;
-  };
-  const writable = (repoId: string, operation: "publish" | "verify"): RepositoryExecutionContext => {
-    const repository = context(repoId);
-    if (repository.access === "read") {
-      throw new Error(`read_only_repository: ${repoId} cannot ${operation}`);
-    }
-    return repository;
-  };
-  return {
-    context,
-    git: {
-      commitsAhead: async (repoId) => selectedAdapters.git.commitsAhead(context(repoId)),
-      tcrCount: async (repoId) => selectedAdapters.git.tcrCount(context(repoId)),
-      recentCommits: async (repoId) => selectedAdapters.git.recentCommits(context(repoId)),
-      dirty: async (repoId) => selectedAdapters.git.dirty(context(repoId)),
-      headSha: async (repoId) => (selectedAdapters.git.headSha ?? defaults.git.headSha ?? repositoryHeadSha)(context(repoId)),
-      push: async (repoId, branch) => selectedAdapters.git.push(writable(repoId, "publish"), branch),
-    },
-    verification: {
-      runRepository: async (repoId, command, env = {}) =>
-        (selectedAdapters.verification ?? defaults.verification)?.runRepository(writable(repoId, "verify"), command, env)
-          ?? Promise.reject(new Error("missing_repository_verification_adapter")),
-      runIntegration: async (cwdRepoId, command, env = {}) =>
-        (selectedAdapters.verification ?? defaults.verification)?.runIntegration(execution, cwdRepoId, command, env)
-          ?? Promise.reject(new Error("missing_repository_verification_adapter")),
-    },
-    provider: {
-      repoSlug: async (repoId) => selectedAdapters.provider.repoSlug(context(repoId)),
-      prState: async (repoId, branch) => selectedAdapters.provider.prState(context(repoId), branch),
-      prMergeInfo: async (repoId, branch) => selectedAdapters.provider.prMergeInfo(context(repoId), branch),
-    },
-    events: {
-      append: (repoId, payload) => appendRepositoryExecutionEvent(ctx, repoId, payload),
-      appendIssue: (payload) => appendIssueExecutionEvent(ctx, payload),
-    },
-  };
-}
-
-function createWorkspaceRepositoryPorts(
-  workspaceRoot: string,
-  adapters?: RepositoryPortAdapters,
-): RepositoryPorts {
-  return {
-    async prepare(request) {
-      const issueRoot = join(workspaceRoot, "issues", request.storyId);
-      const journalPath = join(issueRoot, "issue-init.pending.json");
-      const repairJournal = (): string | null => existsSync(journalPath)
-        ? relative(workspaceRoot, journalPath)
-        : null;
-      try {
-        // A previously materialized Issue is the resumable source of truth. Do
-        // not refetch remotes or require the original backlog contract merely
-        // to resume its already validated manifest and worktrees. Any drift in
-        // those durable facts is still a typed setup failure so the caller can
-        // release the Story lease instead of leaking it through a thrown error.
-        const existing = existsSync(issueRoot)
-          ? await resolveRepositoryExecutionContext(workspaceRoot, request.storyId)
-          : undefined;
-        if (existing !== undefined) {
-          return { kind: "prepared", outcome: "reused" };
-        }
-        const workspace = readWorkspace(workspaceRoot);
-        const contract = resolveWorkspaceBacklogStoryContract(workspaceRoot, request.storyId);
-        if (!contract.ok) {
-          return {
-            kind: "failed",
-            code: contract.code === "symlink_escape" ? "symlink_escape" : "rejected",
-            repairJournal: null,
-          };
-        }
-        const result = await applyIssueInit({
-          workspaceId: workspace.workspaceId,
-          rollHome: process.env["ROLL_HOME"] ?? resolve(homedir(), ".roll"),
-          workspaceRoot,
-          issueRoot,
-          contract: contract.value,
-          bindings: workspace.repositories,
-          requirementManifests: resolveRequirementSourcesForStoryOnDisk(workspaceRoot, request.storyId),
-        });
-        return { kind: "prepared", outcome: result.outcome };
-      } catch (error) {
-        if (error instanceof IssueInitializationError) {
-          return { kind: "failed", code: error.code, repairJournal: repairJournal() };
-        }
-        return { kind: "failed", code: "unexpected", repairJournal: repairJournal() };
-      }
-    },
-    resolve: (storyId) => resolveRepositoryExecutionContext(workspaceRoot, storyId),
-    bind: (ctx) => createRepositoryPorts(ctx, adapters),
-  };
-}
 
 /**
  * FIX-1249 — config-rig model backstop for POOL-PICKED agents. A `select` role
@@ -265,11 +97,36 @@ export function configuredModelBackstop(repoCwd: string, agent: string): string 
   }
 }
 
+/**
+ * US-PAIR-011 — the model a peer reviewer/scorer will actually be pinned to:
+ * the rig-declared model from agents.yaml, else the agent's registered default.
+ * Composed here so the review and score call sites share ONE resolution path.
+ */
+export function configuredPeerModel(repoCwd: string, agent: string): string {
+  return peerModelFor(agent, configuredModelBackstop(repoCwd, agent));
+}
+
+/**
+ * US-PAIR-015 — is a genuinely heterogeneous reviewer reachable for `builder`?
+ *
+ * Model-aware: several agent entries that all resolve to ONE model are NOT
+ * heterogeneous availability. FIX-312 turns this boolean into a hard block, so
+ * over-counting here silently converted a same-model self-review into
+ * "independently reviewed".
+ */
+export function peerHeteroAvailability(
+  repoCwd: string,
+  installed: readonly string[],
+  builder: string,
+  allowed?: Set<string> | readonly string[],
+): boolean {
+  return heteroAvailableByModel(installed, builder, (agent) => configuredPeerModel(repoCwd, agent), allowed);
+}
+
 function scopedStoryExecuteRoute(
   repoCwd: string,
-  workspaceRoot?: string,
 ): { agent: string; model: string; excluded?: readonly string[]; rotationBlocked?: { previous: string } } | null {
-  const scoped = resolveScopedStoryExecute(repoCwd, workspaceRoot === undefined ? {} : { workspaceRoot });
+  const scoped = resolveScopedStoryExecute(repoCwd);
   if (scoped === null) return null;
   const { resolution, previousBuilder } = scoped;
   // FIX-1267 — the no-consecutive-repeat rotation excludes the previous builder.
@@ -302,6 +159,136 @@ function scopedStoryExecuteRoute(
   return null;
 }
 
+// ── US-CYCLE-013 F2 — the real executable latest-main check ─────────────────
+
+/** The freshness probe test-command time budget (ms). Mirrors the attest lane's
+ *  long command allowance; a bounded probe can never hang the resumed tail. */
+export const FRESHNESS_TEST_TIMEOUT_MS = 900_000;
+
+/**
+ * US-CYCLE-013 §5 — run ONE recorded deliverable command in the temporary
+ * verification worktree via `sh -lc "<cmd>"`, bounded by `timeoutMs`. A
+ * non-zero exit is a failing test (`test_failed`); a timeout kill is `timeout`.
+ * The command is allowlist-filtered by the caller (deliverableCmdsForStory) —
+ * never raw agent-controlled input.
+ */
+async function runFreshnessTestCmd(cmd: string, cwd: string, timeoutMs: number): Promise<"ok" | "test_failed" | "timeout"> {
+  try {
+    await execFileAsync("sh", ["-lc", cmd], { cwd, timeout: timeoutMs, encoding: "utf8" });
+    return "ok";
+  } catch (err) {
+    const e = err as { killed?: boolean; code?: number | null; signal?: string | null };
+    // execFile kills the child on timeout: `killed: true` (code/signal null).
+    if (e.killed === true || (e.code === null && e.signal !== undefined)) return "timeout";
+    return "test_failed";
+  }
+}
+
+export interface FreshnessProbeResult {
+  verdict: "continue" | "conflict" | "test_failed" | "unknown" | "timeout";
+  evidenceRefs: string[];
+}
+
+/**
+ * US-CYCLE-013 §5 — the REAL probe in a TEMPORARY verification worktree:
+ *   1. refuse when `worktreePath` already exists (recovery_required, fail closed
+ *      → `unknown`);
+ *   2. `git worktree add --detach <worktreePath> <head>` — the temp verify tree
+ *      is created from the recorded `builderHead` (never W-A, never main);
+ *   3. `git merge-base --is-ancestor <base> <onto>` — non-zero ⇒ main was
+ *      rewritten ⇒ verdict `conflict` (fail closed);
+ *   4. `git -C <worktreePath> rebase --onto <onto> <base> <head>` — non-zero ⇒
+ *      `conflict` (never auto-resolve; no second attempt);
+ *   5. each `testCmd` entry runs under `sh -lc` bounded by
+ *      `timeoutMs ?? FRESHNESS_TEST_TIMEOUT_MS`; non-zero ⇒ `test_failed`,
+ *      timeout ⇒ `timeout`;
+ *   6. success ⇒ `continue` with `evidenceRefs = [<rebased head sha>]`;
+ *   7. `finally`: always `git worktree remove --force <worktreePath>` +
+ *      `worktree prune --expire now` (the pinned candidate, when any, lives in
+ *      the durable pin ref, never in the temp tree). Any plumbing failure
+ *      (missing refs, add failure) ⇒ `unknown`.
+ */
+export async function verifyRebaseTemp(
+  repoCwd: string,
+  base: string,
+  head: string,
+  onto: string,
+  worktreePath: string,
+  testCmd: readonly string[] = [],
+  timeoutMs?: number,
+): Promise<FreshnessProbeResult> {
+  const timeout = timeoutMs ?? FRESHNESS_TEST_TIMEOUT_MS;
+  // 1. Never reuse / clobber an existing checkout — fail closed.
+  if (existsSync(worktreePath)) {
+    return { verdict: "unknown", evidenceRefs: [] };
+  }
+  // Resolve the refs up front: a missing ref is a plumbing failure (unknown),
+  // NOT a main-rewrite conflict.
+  for (const ref of [base, head, onto]) {
+    const resolved = await git(["rev-parse", "--verify", `${ref}^{commit}`], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (resolved.code !== 0 || resolved.stdout.trim() === "") {
+      return { verdict: "unknown", evidenceRefs: [] };
+    }
+  }
+  try {
+    // 2. The temp verify tree is created from the RECORDED builderHead.
+    const add = await git(["worktree", "add", "--detach", worktreePath, head], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (add.code !== 0) {
+      return { verdict: "unknown", evidenceRefs: [] };
+    }
+    // 3. main-rewrite check (fail closed on non-ancestor).
+    const ancestor = await git(["merge-base", "--is-ancestor", base, onto], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (ancestor.code !== 0) {
+      return { verdict: "conflict", evidenceRefs: [] };
+    }
+    // 4. Rebase base..head onto the new main tip — never auto-resolve.
+    // The temporary rebase creates commits; do not depend on a host git identity.
+    const rebase = await git(["-c", "user.name=roll", "-c", "user.email=roll@local", "rebase", "--onto", onto, base, head], worktreePath).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (rebase.code !== 0) {
+      return { verdict: "conflict", evidenceRefs: [] };
+    }
+    // 5. Run the recorded deliverable commands (allowlist-filtered upstream).
+    for (const cmd of testCmd) {
+      const outcome = await runFreshnessTestCmd(cmd, worktreePath, timeout);
+      if (outcome === "timeout") return { verdict: "timeout", evidenceRefs: [] };
+      if (outcome === "test_failed") return { verdict: "test_failed", evidenceRefs: [] };
+    }
+    // 6. Success: evidence is the TRUE rebased head.
+    const headResult = await git(["rev-parse", "HEAD"], worktreePath).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (headResult.code !== 0 || headResult.stdout.trim() === "") {
+      return { verdict: "unknown", evidenceRefs: [] };
+    }
+    return { verdict: "continue", evidenceRefs: [headResult.stdout.trim()] };
+  } finally {
+    // 7. The verify tree is temporary — always removed + pruned.
+    await git(["worktree", "remove", "--force", worktreePath], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    await git(["worktree", "prune", "--expire", "now"], repoCwd).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+  }
+}
+
+/** US-CYCLE-013 §5 — create a durable, IMMUTABLE pin ref
+ *  `refs/roll/rebase-candidates/<cycle>/<attempt>` at the rebased head.
+ *  `git update-ref <ref> <sha> ""` — the empty oldvalue means the ref MUST NOT
+ *  already exist (the pin is immutable by construction). Non-zero ⇒ `{ code }`. */
+export async function createPinRef(repoCwd: string, ref: string, sha: string): Promise<{ code: number }> {
+  try {
+    await execFileAsync("git", ["update-ref", ref, sha, ""], { cwd: repoCwd, encoding: "utf8" });
+    return { code: 0 };
+  } catch (err) {
+    return { code: (err as { code?: number }).code ?? 1 };
+  }
+}
+
+/** US-CYCLE-013 §5 — check a candidate pin out (detached) in an owned workspace. */
+export async function checkoutPin(worktreeCwd: string, ref: string): Promise<{ code: number }> {
+  try {
+    await execFileAsync("git", ["checkout", "--detach", ref], { cwd: worktreeCwd, encoding: "utf8" });
+    return { code: 0 };
+  } catch (err) {
+    return { code: (err as { code?: number }).code ?? 1 };
+  }
+}
+
 /**
  * Build the real Node-backed {@link Ports} bundle. The agent spawn defaults to
  * {@link realAgentSpawn} (claude argv); tests override `agentSpawn` (+ the github
@@ -312,29 +299,12 @@ export function nodePorts(opts: {
   paths: RunnerPaths;
   skillBody: string;
   routeDeps: RouteDeps;
-  backlogPath?: string;
   agentSpawn?: AgentSpawn;
   clock?: ProcessClock;
-  repositoryAdapters?: RepositoryPortAdapters;
-  capacityRoot?: string;
 }): Ports {
   const bus = new EventBus();
   const clock = opts.clock ?? systemClock;
   const spawn = opts.agentSpawn ?? realAgentSpawn;
-  const repositories = existsSync(join(opts.repoCwd, "workspace.yaml"))
-    ? createWorkspaceRepositoryPorts(opts.repoCwd, opts.repositoryAdapters)
-    : undefined;
-  const contextStage = repositories === undefined ? undefined : createNodeContextStageHost(opts.repoCwd);
-  const backlogPath = opts.backlogPath ?? (
-    repositories === undefined
-      ? join(opts.repoCwd, ".roll", "backlog.md")
-      : join(opts.repoCwd, "backlog", "index.md")
-  );
-  const capacity = createNodeAgentCapacityPort({
-    paths: opts.paths,
-    clock,
-    ...(opts.capacityRoot === undefined ? {} : { capacityRoot: opts.capacityRoot }),
-  });
 
   // FIX-906: the unified delivery-truth predicate. The structured projection
   // (`ensureDeliveriesFresh`, FIX-904/905) rebuilds deliveries.jsonl from BOTH
@@ -386,33 +356,33 @@ export function nodePorts(opts: {
     return deliveryTruthCache;
   };
   const mergedDelivery = (storyId: string): boolean => {
-    if (repositories !== undefined) return false;
     return deliveryTruth().get(storyId)?.delivered === true;
-  };
-  const pendingMergeDelivery = (storyId: string): { prNumber?: number } | undefined => {
-    if (repositories !== undefined) return undefined;
-    const truth = deliveryTruth().get(storyId);
-    if (truth === undefined) return undefined;
-    if (truth.lifecycleState !== "pending_merge" && truth.lifecycleState !== "ci_red") return undefined;
-    return truth.prNumber === undefined ? {} : { prNumber: truth.prNumber };
   };
 
   return {
     repoCwd: opts.repoCwd,
     paths: opts.paths,
     skillBody: opts.skillBody,
-    ...(repositories === undefined ? {} : { repositories }),
-    ...(contextStage === undefined ? {} : { contextStage }),
     clock,
     agentSpawn: spawn,
-    capacity,
+    reserveStory: (storyId, entry) => {
+      const result = claimStoryLease(join(dirname(opts.paths.eventsPath), "leases"), storyId, entry);
+      return result.status === "claimed"
+        ? { claimed: true }
+        : { claimed: false, existingSource: result.existingSource };
+    },
     // FIX-906: unified delivery-truth predicate (structured projection over
     // runs + git merges on origin/main — recognizes external/manual merges).
     mergedDelivery,
     // FIX-1018: skip stories that already have locally-committed-but-unpublished
     // work from a prior cycle. The executor reads the runtime file at pick time.
     pendingPublish: (storyId) => readPendingPublish(dirname(opts.paths.eventsPath)).has(storyId),
-    pendingMergeDelivery,
+    pendingMergeDelivery: (storyId) => {
+      const truth = deliveryTruth().get(storyId);
+      if (truth === undefined) return undefined;
+      if (truth.lifecycleState !== "pending_merge" && truth.lifecycleState !== "ci_red") return undefined;
+      return truth.prNumber === undefined ? {} : { prNumber: truth.prNumber };
+    },
     // FIX-363: the real connectivity probe reuses the same spawn the reviews use.
     agentReachable: (agent) => probeAgentReachable(agent, spawn, { cwd: opts.repoCwd }),
     git: {
@@ -422,6 +392,20 @@ export function nodePorts(opts: {
       },
       async worktreeAdd(repoCwd, path, branch, base) {
         return worktreeAdd(repoCwd, path, branch, base);
+      },
+      async managedWorktreeFacts(repoCwd, base) {
+        const resolved = await git(["rev-parse", "--verify", `${base}^{commit}`], repoCwd);
+        if (resolved.code !== 0 || resolved.stdout.trim() === "") return undefined;
+        return { baseSha: resolved.stdout.trim(), repositoryId: (await managedRepositoryIdentity(repoCwd)).slug };
+      },
+      async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId, options) {
+        return managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId, options);
+      },
+      async managedWorktreeInspect(repoCwd, path) {
+        return inspectManagedWorktree(repoCwd, path);
+      },
+      async managedWorktreeAbsent(repoCwd, path) {
+        return managedWorktreeAbsent(repoCwd, path);
       },
       async worktreeAddInSubmodule(superprojectCwd, submoduleName, cycleWorktreePath, base) {
         const r = await worktreeAddInSubmodule(superprojectCwd, submoduleName, cycleWorktreePath, base);
@@ -444,7 +428,12 @@ export function nodePorts(opts: {
         // E8: count ahead of the caller's integration branch (defaults to the
         // historical origin/main). A submodule cycle has no origin/main, so the
         // observer callers pass resolveIntegrationBranch(execRepoCwd) instead.
-        return commitsAheadAt(worktreeCwd, baseRef);
+        const r = await execFileAsync("git", ["rev-list", "--count", `${baseRef}..HEAD`], {
+          cwd: worktreeCwd,
+          encoding: "utf8",
+        }).catch(() => ({ stdout: "0" }));
+        const n = Number((r.stdout ?? "0").trim());
+        return Number.isFinite(n) ? n : 0;
       },
       async worktreeStatusSignature(worktreeCwd) {
         // FIX-1477: raw porcelain output IS the fingerprint (string compare in
@@ -476,14 +465,38 @@ export function nodePorts(opts: {
         // FIX-1244: a git failure (missing/stale ref, gone worktree) means the
         // count is UNKNOWN — return undefined so callers never misread it as a
         // real zero (the zero-TCR self-heal gate consumes this).
-        return tcrCountAt(worktreeCwd, baseRef);
+        const r = await execFileAsync("git", ["log", "--oneline", `${baseRef}..HEAD`], {
+          cwd: worktreeCwd,
+          encoding: "utf8",
+        }).catch(() => undefined);
+        if (r === undefined) return undefined;
+        return (r.stdout ?? "")
+          .split("\n")
+          .filter((l) => l.includes(" tcr:")).length;
       },
       async recentCommits(worktreeCwd, baseRef = "origin/main") {
         // The runner's OWN git observation — oldest-first so observeCommits()
         // appends events in chronological order. %ct = committer epoch seconds.
         // E8: baseRef defaults to origin/main; a submodule cycle passes the
         // submodule's integration branch so the observer sees the real commits.
-        return recentCommitsAt(worktreeCwd, baseRef);
+        const r = await execFileAsync(
+          "git",
+          ["log", "--reverse", "--format=%H%x09%ct%x09%s", `${baseRef}..HEAD`],
+          { cwd: worktreeCwd, encoding: "utf8" },
+        ).catch(() => ({ stdout: "" }));
+        const out: ObservedCommit[] = [];
+        for (const line of (r.stdout ?? "").split("\n")) {
+          if (line.trim() === "") continue;
+          const [hash, ct, ...rest] = line.split("\t");
+          if (hash === undefined || hash === "") continue;
+          const tsSec = Number((ct ?? "0").trim());
+          out.push({
+            hash,
+            message: rest.join("\t"),
+            tsSec: Number.isFinite(tsSec) ? tsSec : 0,
+          });
+        }
+        return out;
       },
       // RESUME-PRIOR-WORK probes (un-merged audit-branch reuse).
       async fetchRemoteBranch(repoCwd, branch) {
@@ -512,6 +525,18 @@ export function nodePorts(opts: {
         } catch {
           return undefined;
         }
+      },
+      // US-CYCLE-013 F2 — the REAL executable latest-main check (see the
+      // module-level implementations above; the GitPort interface carries no
+      // timeoutMs, so the default 900s budget applies on this seam).
+      async verifyRebaseTemp(repoCwd, base, head, onto, worktreePath, testCmd) {
+        return verifyRebaseTemp(repoCwd, base, head, onto, worktreePath, testCmd);
+      },
+      async createPinRef(repoCwd, ref, sha) {
+        return createPinRef(repoCwd, ref, sha);
+      },
+      async checkoutPin(worktreeCwd, ref) {
+        return checkoutPin(worktreeCwd, ref);
       },
     },
     github: {
@@ -572,26 +597,34 @@ export function nodePorts(opts: {
       },
     },
     backlog: {
-      read(_projectCwd) {
-        if (!existsSync(backlogPath)) return [];
-        return parseBacklog(readFileSync(backlogPath, "utf8"));
+      read(projectCwd) {
+        const p = join(projectCwd, ".roll", "backlog.md");
+        if (!existsSync(p)) return [];
+        return parseBacklog(readFileSync(p, "utf8"));
       },
-      markStatus(_projectCwd, id, status) {
+      // FIX-198: the production binding was MISSING entirely (the optional
+      // chain made every In-Progress claim a silent no-op). ID-anchored mark
+      // under optimistic concurrency; best-effort — a conflict/IO failure must
+      // never kill the cycle, the reconcile pass is the safety net.
+      markStatus(projectCwd, id, status) {
         try {
-          if (!existsSync(backlogPath)) return;
+          const p = join(projectCwd, ".roll", "backlog.md");
+          if (!existsSync(p)) return;
           const store = new BacklogStore();
-          const snap = store.readBacklog(backlogPath);
+          const snap = store.readBacklog(p);
           // FIX-1475: EXACT id match. Every runner caller passes a concrete story
           // id (setup In Progress, terminal Done, resume, reconcile), so prefix
           // matching would wrongly flip `<id>-` descendant rows (completing
           // FIX-1475 must not mark FIX-1475-followup). The CLI `roll backlog`
           // pattern commands still use BacklogStore.mark directly.
-          store.markExact(backlogPath, snap.hash, id, status);
+          store.markExact(p, snap.hash, id, status);
         } catch {
           /* best-effort: reconcile owns the fallback */
         }
       },
     },
+    // FIX-306: the runner commits + pushes the `.roll` metadata repo. See the
+    // {@link MetadataPort} doc for WHY this is the runner's job, not the agent's.
     metadata: {
       async commit(projectCwd, message) {
         return commitRollMetadataRepo(projectCwd, message);
@@ -600,16 +633,31 @@ export function nodePorts(opts: {
     route: opts.routeDeps
       ? {
           resolve(storyId, estMin) {
-            const scoped = scopedStoryExecuteRoute(opts.repoCwd, repositories === undefined ? undefined : opts.repoCwd);
+            const scoped = scopedStoryExecuteRoute(opts.repoCwd);
+            // FIX-1267: the scoped route already carries the rotation exclusion
+            // (excluded / rotationBlocked); return it verbatim so the handler can
+            // enforce the no-consecutive-repeat constraint.
             if (scoped !== null) return scoped;
             const tier: Tier = classifyComplexity(estMin);
             const routeDeps = opts.routeDeps;
+            // Compatibility fallback for legacy tier slots. FIX-930: a story
+            // re-picked after a zero-TCR self-heal swap carries a tried-agent
+            // set; route the NEXT untried agent (resolveRouteExcluding) so the
+            // swap actually changes who builds. Empty set => plain resolveRoute.
+            // The store lives at the MAIN runtime dir (repoCwd is the main
+            // project; .roll is symlink-resolved either way).
             const rt = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim() || join(opts.repoCwd, ".roll", "loop");
             const tried = storyId !== "" ? readSelfHeal(rt, storyId).triedAgents : [];
             const dec =
               tried.length > 0
                 ? (resolveRouteExcluding(tier, routeDeps, tried) ?? resolveRoute(tier, routeDeps))
                 : resolveRoute(tier, routeDeps);
+            // Thread the routed slot's native --model through to the spawn; absent => ""
+            // (the orchestrator's `ctx.model !== ""` guard then omits --model and
+            // the agent uses its own default). FIX-1249: when the slot supplied no
+            // model (nudge/firstInstalled hop, or an agent-only rig), backfill from
+            // config rigs so the agent still runs its CONFIGURED model rather than a
+            // source-baked default.
             const routedModel = dec.model ?? "";
             return {
               agent: dec.agent,
@@ -620,10 +668,7 @@ export function nodePorts(opts: {
       : { resolve: () => ({ agent: "claude", model: "" }) },
     evidence: {
       openFrame(projectCwd, storyId, runId) {
-        const runDir = existsSync(join(projectCwd, "workspace.yaml"))
-          ? join(projectCwd, "issues", storyId, "evidence", runId)
-          : join(cardArchiveDir(projectCwd, storyId), runId);
-        return openEvidenceFrame({ runDir }).runDir;
+        return openEvidenceFrame({ runDir: join(cardArchiveDir(projectCwd, storyId), runId) }).runDir;
       },
     },
     capture: {

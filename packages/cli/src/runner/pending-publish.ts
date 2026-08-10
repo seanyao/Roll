@@ -1,4 +1,7 @@
 /**
+ * @responsibility Tracks pending-publish deliveries.
+ */
+/**
  * FIX-1018: pending-publish tracking.
  *
  * When a cycle exits with an unpublished terminal (`local` in v2 status,

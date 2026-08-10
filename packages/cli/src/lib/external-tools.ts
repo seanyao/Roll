@@ -1,3 +1,6 @@
+/**
+ * @responsibility Checks external tool availability and versions for command preflight.
+ */
 import { execFileSync, spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";

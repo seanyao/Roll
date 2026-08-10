@@ -1,4 +1,7 @@
 /**
+ * @responsibility Exposes a closed diagnostic action facade for chrome-devtools-mcp.
+ */
+/**
  * US-BROW-017 — closed diagnostic action facade for chrome-devtools-mcp.
  *
  * Callers select a BrowserAction, never an MCP tool. The facade resolves that

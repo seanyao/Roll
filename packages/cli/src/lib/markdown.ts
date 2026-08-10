@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders a minimal markdown to HTML.
+ */
+/**
  * Minimal markdown → HTML renderer.
  *
  * A tiny, dependency-free renderer (headings / paragraphs / unordered lists +

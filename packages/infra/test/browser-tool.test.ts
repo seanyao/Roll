@@ -14,7 +14,6 @@ import {
   type BrowserScreenshotOutput,
   type BrowserToolId,
 } from "../src/index.js";
-import { TOOL_TEST_REPO_ID, toolWorkspaceContext } from "./tool-workspace-context.js";
 
 const policy = (sandbox: ToolPolicy["sandbox"] = {}): ToolPolicy => ({
   enabled: true,
@@ -30,13 +29,7 @@ function invocation<I>(toolId: BrowserToolId, input: I, sandbox: ToolPolicy["san
     caller: { cycleId: "cycle-1", storyId: "US-TOOL-005", agent: "codex" },
     policy: policy(sandbox),
     ts: 100,
-    context: toolWorkspaceContext("US-TOOL-005"),
-    repoId: TOOL_TEST_REPO_ID,
   };
-}
-
-function workspaceArtifact(name: string, authority: "toolDumps" | "evidence" = "toolDumps"): string {
-  return join(toolWorkspaceContext("US-TOOL-005").authorities[authority], name);
 }
 
 type Call = { command: string; args: readonly string[]; opts?: ExecOpts };
@@ -86,7 +79,6 @@ describe("US-TOOL-005 BrowserTool", () => {
   });
 
   it("takes a headless screenshot and writes non-empty output", async () => {
-    const screenshotPath = workspaceArtifact("out.png");
     const deps = fakeDeps((command, args) => {
       if (command === "npx" && args.includes("screenshot")) {
         return { exitCode: 0, stdout: JSON.stringify({ finalUrl: "https://example.com/app", statusCode: 200, png: "PNGDATA" }), stderr: "", timedOut: false };
@@ -96,16 +88,16 @@ describe("US-TOOL-005 BrowserTool", () => {
     const result = await new BrowserTool("browser.screenshot").execute(
       invocation(
         "browser.screenshot",
-        { url: "https://example.com/app", screenshotPath, viewport: { width: 800, height: 600 }, waitFor: "#app" },
+        { url: "https://example.com/app", screenshotPath: "/tmp/out.png", viewport: { width: 800, height: 600 }, waitFor: "#app" },
         { headlessOnly: true },
       ),
       deps,
     );
 
-    expect(result).toMatchObject({ ok: true, output: { screenshotPath, finalUrl: "https://example.com/app", statusCode: 200 } });
-    expect(deps.files.get(screenshotPath)).toBe("PNGDATA");
+    expect(result).toMatchObject({ ok: true, output: { screenshotPath: "/tmp/out.png", finalUrl: "https://example.com/app", statusCode: 200 } });
+    expect(deps.files.get("/tmp/out.png")).toBe("PNGDATA");
     expect(deps.calls[0]).toMatchObject({ command: "npx" });
-    if (result.ok) expect((result.output as BrowserScreenshotOutput).screenshotPath).toBe(screenshotPath);
+    if (result.ok) expect((result.output as BrowserScreenshotOutput).screenshotPath).toBe("/tmp/out.png");
   });
 
   it("captures console logs through the headless lane", async () => {
@@ -177,7 +169,6 @@ describe("US-TOOL-005 BrowserTool", () => {
   });
 
   it("uses the macOS GUI screenshot lane when Aqua is available and headlessOnly is false", async () => {
-    const screenshotPath = workspaceArtifact("gui.png");
     const originalCi = process.env.CI;
     delete process.env.CI;
     const deps = fakeDeps((command) => {
@@ -188,20 +179,20 @@ describe("US-TOOL-005 BrowserTool", () => {
     });
 
     const result = await new BrowserTool("browser.screenshot").execute(
-      invocation("browser.screenshot", { url: "https://example.com/app", screenshotPath }, { headlessOnly: false }),
+      invocation("browser.screenshot", { url: "https://example.com/app", screenshotPath: "/tmp/gui.png" }, { headlessOnly: false }),
       deps,
     );
 
     expect(result.ok).toBe(true);
     expect(deps.calls.map((call) => call.command)).toEqual(["launchctl", "osascript", "screencapture"]);
-    expect(deps.files.get(screenshotPath)).toBe("PNGDATA");
+    expect(deps.files.get("/tmp/gui.png")).toBe("PNGDATA");
     if (originalCi === undefined) delete process.env.CI;
     else process.env.CI = originalCi;
   });
 
   it("physical.screenshot writes a Roll Capture request and never falls back to browser lanes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "roll-physical-tool-"));
-    const screenshotPath = workspaceArtifact("physical.png", "evidence");
+    const screenshotPath = join(dir, "physical.png");
     let now = 0;
     let responseWritten = false;
     const provider = new RollCaptureProvider({
@@ -257,7 +248,6 @@ describe("US-TOOL-005 BrowserTool", () => {
   });
 
   it("uses the headless lane when Aqua is unavailable and honestly skips if headless is also unavailable", async () => {
-    const screenshotPath = workspaceArtifact("gui-unavailable.png");
     const originalCi = process.env.CI;
     delete process.env.CI;
     const deps = fakeDeps((command) => {
@@ -266,7 +256,7 @@ describe("US-TOOL-005 BrowserTool", () => {
       return { exitCode: 1, stdout: "", stderr: "unexpected", timedOut: false };
     });
     const result = await new BrowserTool("browser.screenshot").execute(
-      invocation("browser.screenshot", { url: "https://example.com/app", screenshotPath }, { headlessOnly: false }),
+      invocation("browser.screenshot", { url: "https://example.com/app", screenshotPath: "/tmp/gui.png" }, { headlessOnly: false }),
       deps,
     );
 

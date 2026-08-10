@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `pulse` subcommand, rendering today's delivery pulse one-screen.
+ */
+/**
  * US-DEMO-001 — `roll pulse`: today's delivery pulse CLI one-screen.
  *
  * Reads the ONE TruthSnapshot (truth.json, same source as the web Now tab)

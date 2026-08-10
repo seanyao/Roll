@@ -1,4 +1,7 @@
 /**
+ * @responsibility Recovers durable cycle-to-story and cycle-to-agent attribution from the events stream.
+ */
+/**
  * FIX-1060 — durable cycle→story/agent attribution recovery from events.ndjson.
  *
  * When a cycle is aborted externally (signal teardown, exception fallback) the

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Watches git-state liveness of a subagent run in its own worktree.
  * US-CYCLE-001 — shared run-watchdog: git-state liveness for ANY subagent run,
  * observed on the run's OWN working directory (its worktree), not the main
  * checkout. FIX-1477 put "git state = progress" into the loop runner's
@@ -109,6 +110,8 @@ export function watchRun(opts: WatchRunOptions): RunWatchHandle {
   let lastStateSec = startSec;
   let lastCommitCount = -1;
   let lastSignature: string | undefined;
+  let commitBaselineSeeded = false;
+  let signatureBaselineSeeded = stateSignature === undefined;
   let firedReason: RunKillReason | null = null;
   let running = false;
 
@@ -126,7 +129,16 @@ export function watchRun(opts: WatchRunOptions): RunWatchHandle {
       // The probe is handed `cwd` (the run's worktree) — it cannot observe elsewhere.
       try {
         const n = await commitCount(cwd);
-        if (n > lastCommitCount) {
+        // The asynchronous startup baseline can still be pending when the
+        // first interval tick runs. That first observed count establishes the
+        // baseline; it is not evidence of NEW work. Treating -1 → n as
+        // progress reset the idle clock after a builder had already gone
+        // silent, allowing the spawn to exhaust retries as `failed` instead
+        // of taking the watchdog's `blocked` terminal.
+        if (!commitBaselineSeeded) {
+          lastCommitCount = n;
+          commitBaselineSeeded = true;
+        } else if (n > lastCommitCount) {
           const now = clock();
           // A new commit past the seeded baseline is a genuine renewal (the
           // baseline seed sets lastCommitCount >= 0, so this fires only on real
@@ -144,7 +156,12 @@ export function watchRun(opts: WatchRunOptions): RunWatchHandle {
       if (stateSignature !== undefined) {
         try {
           const sig = await stateSignature(cwd);
-          if (lastSignature !== undefined && sig !== lastSignature) {
+          // As with commitCount, a timer tick may beat the async startup
+          // baseline. Its first signature is only a baseline, never progress.
+          if (!signatureBaselineSeeded) {
+            lastSignature = sig;
+            signatureBaselineSeeded = true;
+          } else if (sig !== lastSignature) {
             const now = clock();
             if (onRenew !== undefined) onRenew({ signal: "dirty", idleSec: now - lastStateSec });
             lastProgressSec = now;
@@ -182,16 +199,26 @@ export function watchRun(opts: WatchRunOptions): RunWatchHandle {
       running = false;
     }
   };
-  // Seed the baselines once up front so the first real change counts.
+  // Seed the probes immediately, but let a timer tick win the race when this
+  // best-effort I/O is slow. Neither side may reset the liveness clocks while
+  // establishing the baseline; they stay anchored at the run's start.
   void (async () => {
     try {
-      lastCommitCount = await commitCount(cwd);
+      const n = await commitCount(cwd);
+      if (!commitBaselineSeeded) {
+        lastCommitCount = n;
+        commitBaselineSeeded = true;
+      }
     } catch {
       /* baseline best-effort */
     }
     if (stateSignature !== undefined) {
       try {
-        lastSignature = await stateSignature(cwd);
+        const sig = await stateSignature(cwd);
+        if (!signatureBaselineSeeded) {
+          lastSignature = sig;
+          signatureBaselineSeeded = true;
+        }
       } catch {
         /* baseline best-effort */
       }

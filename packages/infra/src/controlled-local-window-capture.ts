@@ -1,4 +1,7 @@
 /**
+ * @responsibility Captures a visible local window without touching the owner's Chrome profile.
+ */
+/**
  * FIX-005 — physical evidence for a local synthetic page must have a visible
  * target window, while never touching the owner's Chrome profile or tabs.
  */

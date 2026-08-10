@@ -1,4 +1,7 @@
 /**
+ * @responsibility Assesses capture-policy readiness with actionable reasons.
+ */
+/**
  * US-EVID-032 — capture-policy readiness (AC4).
  *
  * ONE shared collector that surfaces, with actionable reasons:
@@ -25,8 +28,6 @@ import { negotiateCaptureProtocol, parseCaptureProtocolAdvertisement, ROLL_CAPTU
 export interface CapturePolicyReadinessDeps {
   /** Project root whose `.roll/policy.yaml` records the capture policy. */
   projectRoot?: string;
-  /** Explicit policy authority for canonical Workspaces. */
-  policyPath?: string;
   /** Roll Capture host root holding `capabilities.json`. */
   captureRoot?: string;
   env?: NodeJS.ProcessEnv;
@@ -129,12 +130,11 @@ export function collectCapturePolicyReadiness(deps: CapturePolicyReadinessDeps =
   };
 
   // ── Effective recorded policy. ──
-  const policyPath = deps.policyPath ?? join(projectRoot, ".roll", "policy.yaml");
-  const policyYaml = readFileText(policyPath) ?? "";
+  const policyYaml = readFileText(join(projectRoot, ".roll", "policy.yaml")) ?? "";
   const recordedMode = readCaptureMode(policyYaml);
   const policy: EffectiveCapturePolicy =
     recordedMode !== null
-      ? { mode: recordedMode, source: "recorded", reason: `capture mode "${recordedMode}" recorded in ${policyPath}` }
+      ? { mode: recordedMode, source: "recorded", reason: `capture mode "${recordedMode}" recorded in .roll/policy.yaml` }
       : {
           mode: null,
           source: "unset",
@@ -214,4 +214,5 @@ export function renderCapturePolicyReadinessDoctorSection(
   }
   return lines;
 }
+
 

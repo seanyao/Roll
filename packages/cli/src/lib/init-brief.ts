@@ -1,3 +1,6 @@
+/**
+ * @responsibility Builds the init briefing artifacts from the diagnosed project facts.
+ */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type InitFacts, type InitProjectKind } from "./init-diagnosis.js";

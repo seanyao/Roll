@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the async merge write-back for the `roll loop` reconcile path.
+ */
+/**
  * US-CYCLE-009 — the async merge write-back adapter.
  *
  * When a PR was opened and auto-merge attached (the runner returned immediately —
@@ -35,6 +38,7 @@ import { branchExists, branchPatchId, mainPatchIdsSinceBranch, offlineMergeEvide
 import { collectGitDossierFacts, type GitDossierFacts } from "../lib/story-dossier.js";
 import { nodeExecPort } from "@roll/core";
 import { markDoneGuarded } from "../runner/done-guard.js";
+import { hostDeltaDeliveryBinding } from "../lib/delta-delivery-binding.js";
 
 // ── AC2: git-plane merge verification ─────────────────────────────────────────
 
@@ -393,6 +397,7 @@ export async function settleDeliveredCycle(
   if (confirmation.merged && shouldAppendDeliveredCredit(deps.events, cyc.cycleId)) {
     // Terminal marker — projects the cycle to `delivered` (removes it from the
     // awaiting_merge filter). Only reached once the git plane confirmed.
+    const binding = hostDeltaDeliveryBinding(deps.events as readonly Record<string, unknown>[], cyc.storyId, cyc.cycleId);
     deps.appendEvent(deps.eventsPath, {
       type: "delivery:reconciled",
       cycleId: cyc.cycleId,
@@ -401,6 +406,7 @@ export async function settleDeliveredCycle(
       mergedBy: cyc.result.via,
       mergeCommit: cyc.result.mergeCommit ?? "unknown",
       signal: cyc.result.signal,
+      ...(binding === undefined ? {} : binding),
       ts: deps.now,
     });
     // US-DELIV-005: cancel same-card siblings ONLY on a git-plane-confirmed merge.

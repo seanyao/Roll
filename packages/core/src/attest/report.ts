@@ -1,4 +1,5 @@
 /**
+ * @responsibility Renders acceptance evidence and delivery truth into standalone reports.
  * US-ATTEST-005 — Acceptance Review Page renderer: ONE self-contained HTML file
  * (all CSS inline, no external assets; screenshots referenced RELATIVELY as
  * `./screenshots/*.png`), offline-openable and print-to-PDF friendly.
@@ -13,7 +14,8 @@
  *   🟧 claimed   statement only (commit/PR text), no artifact
  *   🟥 missing   nothing found at all
  *
- * RED LINE (enforced HERE, not trusted from the caller): an AC item with ZERO
+ * RED LINE (RL-EVID-003: registered redline in policy/rules.yaml — enforced
+ * HERE, not trusted from the caller): an AC item with ZERO
  * evidence refs cannot claim pass/readonly/partial — it is FORCED down to
  * `claimed` and surfaces in the "Discrepancies" appendix. The reporter is the
  * last line of defense against "嘴上 Done"(FIX-198 的台词层/动作层教训).

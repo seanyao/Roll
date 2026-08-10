@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll supervisor` subcommand, the project-level observe-and-advise supervisor.
+ */
+/**
  * US-V4-008 — `roll supervisor`: the project-level Supervisor, v0 (observe +
  * advise). It reads STRUCTURED facts via deterministic selectors — backlog, merge
  * truth (pr:merge events), open PRs, route config, repeated failures, release
@@ -12,7 +15,7 @@
  *   roll supervisor advise     # decisions
  *   roll supervisor next       # "what should Roll do next?"
  *   roll supervisor why        # "why is the project stuck?"
- *   roll supervisor live       # read-only Designer/Builder/Evaluator board
+ *   roll supervisor live       # read-only role board plus shared DeliveryRun truth
  *   roll supervisor --json     # machine-readable
  */
 import {
@@ -21,6 +24,7 @@ import {
   adviseProject,
   buildSupervisorRunbookState,
   buildCycleRoleSummary,
+  buildSupervisorDeliveryRunBoard,
   buildSupervisorLiveBoard,
   classifyEvidenceRepair,
   cycleIdFromBranch,
@@ -34,6 +38,7 @@ import {
   parseBacklog,
   parseRollScoreArtifact,
   projectCollabStream,
+  projectSupervisorMetrics,
   queryStoryDelivery,
   renderReport,
   repairedPrNumbers,
@@ -45,7 +50,7 @@ import {
   type FreshnessPort,
 } from "@roll/core";
 import type { CastRoleName, CollabStreamView, CycleRoleSummary, EventSource, RollEvent, RollGoal, SupervisorInput } from "@roll/spec";
-import { parseGoalYaml } from "@roll/spec";
+import { parseEventLine, parseGoalYaml, resolveLang } from "@roll/spec";
 import { reduceStatusCheckRollup, type StatusCheckRollupEntry } from "@roll/infra";
 import { detectNoProgressStall, type NoProgressStall } from "../lib/goal-recovery.js";
 import { execFileSync } from "node:child_process";
@@ -60,26 +65,114 @@ import { readPendingPublish } from "../runner/pending-publish.js";
 import { cardArchiveDir, reportFileName, reviewFileName } from "../lib/archive.js";
 import { readScopedAgentLayer, renderScopedExecuteRoute, resolveScopedCastRole, scopedExecuteRouteTrace } from "../runner/scoped-route.js";
 import { renderCollabStream } from "../lib/collab-render.js";
+import { auditWorktrees } from "./worktree-audit.js";
+import { parseDeliveryArgs, readFeatureDelivery, renderFeatureDelivery } from "../lib/feature-delivery-supervisor.js";
 
 const EXEC_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const SUPERVISOR_LIVE_WATCH_DEFAULT_INTERVAL_MS = 2_000;
 const SUPERVISOR_LIVE_WATCH_MIN_INTERVAL_MS = 250;
+const SUPERVISOR_DELIVERY_STALE_AFTER_MS = 5 * 60 * 1000;
 
 export const SUPERVISOR_USAGE = [
-  "Usage: roll supervisor [status|observe|advise|next|why|live|journal|health|route|repair-evidence] [--json]",
+  "Usage: roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]",
   "  status           observe + advise summary (alias for no subcommand)",
   "  observe          structured project facts (backlog, truth coverage, PRs, release readiness)",
   "  advise           Supervisor decisions (advisory; persistent changes need owner confirmation)",
   "  next             what should Roll do next?",
   "  why              why is the project stuck?",
-  "  live             read-only Supervisor live board with Designer/Builder/Evaluator panes",
+  "  live             read-only Supervisor live board with Designer/Builder/Evaluator panes and shared DeliveryRun truth",
   "  live --watch     redraw the role board in-place until Ctrl-C; use --interval <sec>",
   "  live --collab    follow the multi-cycle collaboration stream; add --once for a snapshot",
+  "  metrics          read-only queue, dependency, delivery, and reconciliation lag projection; never routes work, changes priority, or merges",
+  "  delivery         read-only unified feature delivery view — one card, one final conclusion; every attempt visible; never routes, retries, changes backlog, merges, or attests",
   "  journal          structured supervisor narrative stream: list/record decisions, verifications, rescues",
   "  health           agent toolchain health: auth/network/setup/worktree classification and routing",
   "  route            Role route trace: --role builder|designer|evaluator|peer_reviewer [--story <id>]",
   "  repair-evidence  repair missing acceptance evidence for a green PR and restore merge-ready status",
 ].join("\n");
+
+export function supervisorUsage(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh
+    ? [
+      "用法：roll supervisor [status|observe|advise|next|why|live|metrics|delivery|journal|health|route|repair-evidence] [--json]",
+      "  status           observe + advise 摘要（无子命令的别名）",
+      "  observe          项目结构化事实（backlog、真相覆盖、PR、发布就绪度）",
+      "  advise           Supervisor 建议（持久化更改需 owner 确认）",
+      "  next / why       下一步与阻塞原因",
+      "  live             只读实时面板：Designer/Builder/Evaluator 和共同 DeliveryRun 真相",
+      "  live --watch     原地重绘面板，Ctrl-C 退出；可用 --interval <sec>",
+      "  live --collab    跟随多周期协作流；加 --once 读取快照",
+      "  metrics          只读投影：排队、依赖、交付与对账耗时；绝不路由工作、改变优先级或合并",
+      "  delivery         只读统一功能交付视图——一张卡一个最终结论；每次尝试可见；绝不路由、重试、改 backlog、合并或 attest",
+      "  journal          Supervisor 叙事流：列出/记录决策、验证、救援",
+      "  health           agent 工具链健康：auth/network/setup/worktree 分类与路由",
+      "  route            角色路由追踪：--role builder|designer|evaluator|peer_reviewer [--story <id>]",
+      "  repair-evidence  修复绿色 PR 缺失的验收证据并恢复 merge-ready 状态",
+    ].join("\n")
+    : SUPERVISOR_USAGE;
+}
+
+/** US-DELTA-021 — locale-exclusive help for `roll supervisor delivery` (frozen copy). */
+export const DELIVERY_USAGE_EN = [
+  "Usage: roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]",
+  "",
+  "  Read-only unified feature delivery view. One card has one final delivery",
+  "  conclusion; every attempt stays visible under that card, and loop cycles and",
+  "  Delta delegations are interleaved by time in a single view — there is no",
+  "  loop view and no Delta view to pick between.",
+  "",
+  "  - Final state: not_started | active | blocked | handoff_ready | delivered | attested | unknown",
+  "    A delivered/attested card is the only final \"done\" conclusion; handoff_ready",
+  "    is a handoff, not a delivery.",
+  "  - Attempts: each admitted loop cycle or Delta delegation remains listed, so a",
+  "    card repaired after an earlier failed attempt shows both attempts.",
+  "  - Samples: timing (elapsed, build, merge tail), TCR green/red, first-pass and",
+  "    rework numbers always show their sample size; a missing or contradictory",
+  "    boundary renders n/a, never a zero or a success.",
+  "  - Incomplete history stays incomplete: ? / n/a / an Incomplete: line in the",
+  "    terminal, null plus codes in --json. A visible 0 means a known zero.",
+  "",
+  "  Safety boundary: this command reads facts only. It cannot route an agent,",
+  "  retry work, change the backlog, merge a PR, or attest a card.",
+  "",
+  "  <id>        a card id (card wins) or a registered feature id (its cards)",
+  "  --from      inclusive lower bound on observed event time (RFC 3339/ISO instant)",
+  "  --to        inclusive upper bound on observed event time",
+  "  --json      exact projection schema (version 2) with sources and diagnostics",
+].join("\n");
+
+/** US-DELTA-021 — locale-exclusive ZH help for `roll supervisor delivery` (frozen copy). */
+export const DELIVERY_USAGE_ZH = [
+  "用法：roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]",
+  "",
+  "  只读统一功能交付视图。一张卡只有一个最终交付结论；每次尝试都保留在该卡下，",
+  "  loop cycle 与 Delta 委派按时间交错显示在同一个视图里——不存在需要二选一的",
+  "  loop 视图或 Delta 视图。",
+  "",
+  "  - 最终状态：not_started | active | blocked | handoff_ready | delivered | attested | unknown",
+  "    只有 delivered/attested 才是最终\"完成\"结论；handoff_ready 是交接，不是交付。",
+  "  - 尝试：每条已准入的 loop cycle 或 Delta 委派都会列出，因此一张卡在早期尝试",
+  "    失败后修复，会同时显示两次尝试。",
+  "  - 样本量：耗时（elapsed、build、merge tail）、TCR 绿/红、首轮与返工数字总是",
+  "    显示样本量；边界缺失或矛盾时渲染 n/a，绝不渲染成零或成功。",
+  "  - 缺失的历史保持不完整：终端里是 ? / n/a / Incomplete: 行，--json 里是 null",
+  "    加 codes。可见的 0 表示已知为零。",
+  "",
+  "  安全边界：本命令只读事实。它不能路由 agent、重试工作、改变 backlog、合并 PR，",
+  "  也不能 attest 卡片。",
+  "",
+  "  <id>        卡片 id（卡片优先）或已注册的 feature id（其全部卡片）",
+  "  --from      事件记录时间的含下界（RFC 3339/ISO 瞬时）",
+  "  --to        事件记录时间的含上界",
+  "  --json      输出精确投影 schema（版本 2），含来源与诊断",
+].join("\n");
+
+/** US-DELTA-021 — locale-resolved `roll supervisor delivery` help; never touches the filesystem. */
+export function deliveryHelp(): string {
+  const zh = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] }) === "zh";
+  return zh ? DELIVERY_USAGE_ZH : DELIVERY_USAGE_EN;
+}
 
 function depsOf(desc: string): string[] {
   const m = /depends-on:\s*([A-Za-z0-9_,-]+)/i.exec(desc);
@@ -745,6 +838,98 @@ function readSupervisorEvents(projectPath: string): RollEvent[] {
   return [];
 }
 
+function readSupervisorMetricEvents(projectPath: string): { events: RollEvent[]; diagnostics: string[] } {
+  const eventsPath = join(projectPath, ".roll", "loop", "events.ndjson");
+  if (!existsSync(eventsPath)) return { events: [], diagnostics: ["event ledger unavailable: .roll/loop/events.ndjson"] };
+  try {
+    const events: RollEvent[] = [];
+    const diagnostics: string[] = [];
+    for (const [index, raw] of readFileSync(eventsPath, "utf8").split("\n").entries()) {
+      if (raw.trim() === "") continue;
+      const event = parseEventLine(raw);
+      if (event === null) diagnostics.push(`invalid event ledger line ${eventsPath}:${index + 1} (metrics incomplete)`);
+      else events.push(event);
+    }
+    return { events, diagnostics };
+  } catch {
+    return { events: [], diagnostics: [`cannot read event ledger ${eventsPath}`] };
+  }
+}
+
+function formatSupervisorMetricMs(value: number | null): string {
+  if (value === null) return "?";
+  return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(2)}s`;
+}
+
+function formatSupervisorIncompleteFact(value: string, zh: boolean): string {
+  if (!zh) return value;
+  const translations: ReadonlyArray<readonly [string, string]> = [
+    ["queue wait unavailable", "排队等待不可用"], ["first-action latency unavailable", "首个动作延迟不可用"],
+    ["dispatch-to-merge lead unavailable", "派发至合并耗时不可用"], ["PR/CI tail unavailable", "PR/CI 尾段不可用"],
+    ["reconciliation lag unavailable", "对账滞后不可用"], ["dependency wait unavailable", "依赖等待不可用"],
+    ["dependency wait incomplete", "依赖等待不完整"], ["recorded main merge evidence unavailable", "已记录的 main 合并证据不可用"],
+    ["backlog status unavailable", "backlog 状态不可用"], ["attestation state unavailable", "attest 状态不可用"],
+    ["handoff_ready observed: not a main merge, attestation verdict, or Delivered claim", "已观察到 handoff_ready：它不是 main 合并、attest 裁定或已交付声明"],
+    ["missing ranked-ready or dispatch observation", "缺少已排序就绪或派发观察"], ["missing dispatch or first-action observation", "缺少派发或首个动作观察"],
+    ["missing dispatch or recorded main merge evidence", "缺少派发或已记录的 main 合并证据"], ["missing PR-open and CI-or-main observation", "缺少 PR 打开及 CI 或 main 观察"],
+    ["missing main merge or reconciliation observation", "缺少 main 合并或对账观察"], ["missing dependency-block observation timestamp", "缺少依赖阻塞观察时间戳"],
+    ["blocked-by-not-Done has no later dispatch observation", "未完成依赖阻塞后没有后续派发观察"], ["dependencies are Done but dispatch boundary is unavailable", "依赖已完成但派发边界不可用"],
+    ["backlog card unavailable: dependency state unknown", "backlog 卡片不可用：依赖状态未知"], ["timestamp inversion", "时间戳倒置"],
+  ];
+  return translations.reduce((text, [from, to]) => text.replace(from, to), value);
+}
+
+export function renderSupervisorMetrics(report: ReturnType<typeof projectSupervisorMetrics>, language = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] })): string {
+  const zh = language === "zh";
+  const window = report.observationWindow.fromTs === null
+    ? (zh ? "无已记录事件" : "no observed events")
+    : `${report.observationWindow.fromTs}..${report.observationWindow.toTs}`;
+  const a = report.aggregates;
+  const line = (label: string, value: { readonly sampleSize: number; readonly totalMs: number | null; readonly p50Ms: number | null; readonly p95Ms: number | null }): string =>
+    `${label}: ${formatSupervisorMetricMs(value.totalMs)}; ${zh ? "样本" : "sample"} ${value.sampleSize}, P50 ${formatSupervisorMetricMs(value.p50Ms)}, P95 ${formatSupervisorMetricMs(value.p95Ms)}`;
+  const lines = zh
+    ? [
+      `窗口：${window}（按事件记录时间）`,
+      `样本：${report.sampleSize} 张卡；真相核对 ${report.truthConsistency.checked}（一致 ${report.truthConsistency.consistent}，不一致 ${report.truthConsistency.inconsistent}，不完整 ${report.truthConsistency.incomplete}）`,
+      line("排队等待", a.queueWait), line("依赖等待", a.dependencyWait), line("首个动作延迟", a.firstActionLatency),
+      line("派发至合并", a.dispatchToMergeLead), line("PR/CI 尾段", a.prCiTail), line("对账滞后", a.reconciliationLag),
+      `依赖状态：未完成阻塞 ${report.dependencyStates.blocked_by_not_done}，已满足未派发 ${report.dependencyStates.not_yet_dispatched}，未知 ${report.dependencyStates.unknown}`,
+      `百分位算法：nearest-rank；数据${report.incomplete ? `不完整（${report.diagnostics.length} 条来源提示；逐卡列出缺失事实）` : "完整"}`,
+      "注意：handoff_ready 不是已交付、main 合并或 attest 裁定。",
+    ]
+    : [
+      `window: ${window} (observed event time)`,
+      `sample: ${report.sampleSize} cards; truth checked ${report.truthConsistency.checked} (${report.truthConsistency.consistent} consistent, ${report.truthConsistency.inconsistent} inconsistent, ${report.truthConsistency.incomplete} incomplete)`,
+      line("queue wait", a.queueWait), line("dependency wait", a.dependencyWait), line("first-action latency", a.firstActionLatency),
+      line("dispatch-to-merge lead", a.dispatchToMergeLead), line("PR/CI tail", a.prCiTail), line("reconciliation lag", a.reconciliationLag),
+      `dependency states: blocked-by-not-Done ${report.dependencyStates.blocked_by_not_done}, satisfied-not-dispatched ${report.dependencyStates.not_yet_dispatched}, unknown ${report.dependencyStates.unknown}`,
+      `percentiles: nearest-rank; data ${report.incomplete ? `incomplete (${report.diagnostics.length} source diagnostics; every missing fact is listed per card)` : "complete"}`,
+      "Note: handoff_ready is not Delivered, a main merge, or an attest verdict.",
+    ];
+  const incomplete = report.cards.flatMap((card) => card.incompleteFacts.length === 0
+    ? []
+    : [`  ${zh ? "缺失事实" : "incomplete facts"} [${card.storyId}]: ${card.incompleteFacts.map((fact) => formatSupervisorIncompleteFact(fact, zh)).join("; ")}`]);
+  const sourceDiagnostics = report.diagnostics.map((diagnostic) => `  ${zh ? "来源提示" : "source diagnostic"}: ${formatSupervisorIncompleteFact(diagnostic, zh)}`);
+  return `${[zh ? "Supervisor 指标（只读）" : "Supervisor metrics (read-only)", "", ...lines.map((value) => `  ${value}`), ...sourceDiagnostics, ...incomplete].join("\n")}\n`;
+}
+
+function supervisorMetricsCommand(args: readonly string[], projectPath: string): number {
+  const invalid = args.find((arg) => arg !== "metrics" && arg !== "--json" && arg !== "--no-color");
+  if (invalid !== undefined) {
+    process.stderr.write("Usage: roll supervisor metrics [--json]\n");
+    return 1;
+  }
+  const backlogPath = join(projectPath, ".roll", "backlog.md");
+  const backlog = existsSync(backlogPath)
+    ? parseBacklog(readFileSync(backlogPath, "utf8")).map((card) => ({ id: card.id, status: card.status, dependsOn: depsOf(card.desc) }))
+    : [];
+  const input = readSupervisorMetricEvents(projectPath);
+  const report = projectSupervisorMetrics({ events: input.events, backlog, sourceDiagnostics: input.diagnostics });
+  if (args.includes("--json")) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  else process.stdout.write(renderSupervisorMetrics(report));
+  return 0;
+}
+
 function cycleEventId(ev: RollEvent): string | undefined {
   return "cycleId" in ev && typeof (ev as { cycleId?: unknown }).cycleId === "string"
     ? (ev as { cycleId: string }).cycleId
@@ -922,26 +1107,156 @@ function fmtHealth(issues: ReturnType<typeof gatherAgentToolchainIssues>): strin
   return ["", "  Agent toolchain health", "", ...rows, ""].join("\n") + "\n";
 }
 
+function supervisorDeliveryRunBoard(projectPath: string, events: readonly RollEvent[]) {
+  const audit = auditWorktrees({ repoRoot: projectPath, home: homedir() });
+  return buildSupervisorDeliveryRunBoard(events, {
+    now: Date.now(),
+    staleAfterMs: SUPERVISOR_DELIVERY_STALE_AFTER_MS,
+    inspections: audit.records.map((record) => ({
+      ...(record.runId === undefined ? {} : { runId: record.runId }),
+      owner: record.owner,
+      ...(record.storyId === undefined ? {} : { storyId: record.storyId }),
+      relativeLocator: record.memberLocator ?? record.path,
+      // `safe_to_release` is the worktree-audit adapter's existing all-member
+      // proof: registered identity, inactive, expected head, and clean. Do not
+      // widen its public JSON schema just to shuttle duplicated inspection data.
+      registration: record.releaseVerdict === "safe_to_release" ? "registered" : record.repositoryIdentity === "foreign" ? "foreign" : record.registration ?? "unknown",
+      activity: record.releaseVerdict === "safe_to_release" ? "inactive" : record.active ? "active" : "inactive",
+      head: record.releaseVerdict === "safe_to_release" ? "expected" : "unknown",
+      cleanliness: record.releaseVerdict === "safe_to_release" ? "clean" : record.dirtyTracked === "unknown" || record.dirtyUntracked === "unknown" ? "unknown" : "dirty",
+    })),
+  });
+}
+
+function fmtDeliveryRunBoard(board: ReturnType<typeof buildSupervisorDeliveryRunBoard>, lang: "en" | "zh"): string[] {
+  const title = lang === "zh" ? "交付运行（共同 DeliveryRun 投影）" : "Delivery runs (shared DeliveryRun projection)";
+  if (board.rows.length === 0) return ["", `    ${title}: ${lang === "zh" ? "暂无运行记录" : "no runs recorded"}`];
+  const labels = lang === "zh"
+    ? { members: "成员", reservation: "预留", delta: "增量", merge: "合并", evidence: "证据", recover: "恢复" }
+    : { members: "members", reservation: "reservation", delta: "delta", merge: "merge", evidence: "evidence", recover: "recover" };
+  const reason = (value: string): string => {
+    if (lang !== "zh") return value;
+    const zh: Record<string, string> = {
+      "owner delivery required; handoff is not a merge or attest verdict": "等待负责人交付；交接不是合并或验收裁定",
+      "managed workspace reserved; awaiting first activity": "已保留受管工作区；等待首次活动",
+      "managed workspace activity is stale; inspect registration before recovery": "受管工作区活动已过期；恢复前请检查注册状态",
+      "legacy protocol only; managed workspace facts are unavailable": "仅有旧协议记录；受管工作区事实不可用",
+      "managed workspace facts are unavailable": "受管工作区事实不可用",
+      "delivery merge truth is not confirmed": "交付合并事实尚未确认",
+      "acceptance evidence truth is not confirmed": "验收证据事实尚未确认",
+      "managed workspace is safe to release after owner confirmation": "受管工作区已满足安全释放条件，等待负责人确认",
+      "release requested; await the managed release result": "已请求释放；等待受管释放结果",
+      "delta protocol blocked; inspect its recorded block reason": "Delta 协议已阻塞；请检查记录的阻塞原因",
+      "external workspace is unmanaged; inspect manually": "外部工作区未受管；请手动检查",
+      "manual workspace is outside DeliveryRun protocol; inspect manually": "手动工作区不在 DeliveryRun 协议内；请手动检查",
+    };
+    return zh[value] ?? "详见 JSON 中的原始事件说明";
+  };
+  const value = (raw: string | null): string => {
+    if (lang !== "zh" || raw === null) return raw ?? "?";
+    const zh: Record<string, string> = {
+      cycle: "周期", host_delta: "主机增量", external: "外部", active: "进行中", legacy: "旧协议",
+      delivered_safe_to_release: "可安全释放", recovery_required: "需要恢复", handoff_ready: "已交接",
+      unknown: "未知", active_unstarted: "已预留未开始", legacy_cycle: "旧周期", release_requested: "已请求释放",
+      stale: "已过期", merged: "已合并", accepted: "已验收", handoff_only: "仅交接",
+      delivery_team: "交付团队", "delta-team": "增量团队",
+    };
+    return zh[raw] ?? "未本地化状态";
+  };
+  const lines = ["", `    ${title}`];
+  for (const row of board.rows) {
+    const members = row.workspaceMembers.length === 0 ? "?" : row.workspaceMembers.join(",");
+    lines.push(
+      `    ${row.runId} · ${value(row.kind)} · ${lang === "zh" && row.storyId === "unknown" ? "未知" : row.storyId} · ${value(row.lifecycle)}`,
+      `      ${labels.members}=${members} · ${labels.reservation}=${value(row.reservationState)} · ${labels.delta}=${value(row.deltaStatus)} · ${labels.merge}=${value(row.merge)} · ${labels.evidence}=${value(row.evidence)}`,
+      `      ${labels.recover}: ${reason(row.recoveryReason)}`,
+    );
+  }
+  return lines;
+}
+
+function fmtLiveZhValue(raw: string): string {
+  const zh: Record<string, string> = {
+    observing: "观察中", standard: "标准", verified: "已验证", designed: "已设计",
+    active: "进行中", done: "已完成", failed: "失败", not_available: "不可用",
+    pending: "待处理", working: "执行中", waiting: "等待中", not_required: "无需", ready: "就绪", blocked: "受阻",
+    designer: "设计者", builder: "构建者", evaluator: "评估者",
+    "standard: no execution profile event yet": "标准：尚无执行配置事件",
+    "profile does not require design": "当前配置无需设计",
+    "profile does not require independent evaluation": "当前配置无需独立评估",
+    "design contract handed to builder": "设计契约已交给构建者",
+    "cycle failed before builder handoff": "周期在交给构建者前失败",
+    "building design contract": "正在编写设计契约",
+    "cycle ended before builder completed": "周期在构建者完成前结束",
+    "builder result available": "构建结果已就绪",
+    "builder result handed to evaluator/publish": "构建结果已交给评估或发布",
+    "executing story": "正在执行任务卡",
+    "waiting for designer handoff": "正在等待设计者交接",
+    "waiting to execute": "等待执行",
+    "evaluator returned blocking findings": "评估者返回了阻塞性发现",
+    "independent evaluation evidence available": "独立评估证据已就绪",
+    "cycle failed before evaluation completed": "周期在评估完成前失败",
+    "waiting for evaluator verdict": "正在等待评估结论",
+    "waiting for builder result": "正在等待构建结果",
+  };
+  if (zh[raw] !== undefined) return zh[raw]!;
+  const blockedBy = /^(.*?) blocked by (.*?)$/.exec(raw);
+  if (blockedBy !== null) {
+    const role = zh[blockedBy[1]!] ?? "相关环节";
+    const cause = zh[blockedBy[2]!] ?? "未知原因";
+    return `${role}因${cause}而受阻`;
+  }
+  return "详见 JSON 中的原始事件说明";
+}
+
+function fmtLiveZhSummary(board: ReturnType<typeof buildSupervisorLiveBoard>): string {
+  const failures = board.supervisor.failureDistribution;
+  const active = board.rows.filter((row) => row.status === "active" || row.status === "not_available").length;
+  return `关注中的运行 ${active} 条，已渲染 ${board.rows.length} 条；失败：环境=${failures.env}、框架=${failures.harness}、任务卡=${failures.card}、未知=${failures.unknown}`;
+}
+
 function fmtLive(projectPath: string, title = "Supervisor Live — read-only role board", subtitle?: string): string {
-  const board = buildSupervisorLiveBoard(readSupervisorEvents(projectPath));
-  const lines = ["", `  ${title}`];
-  if (subtitle !== undefined) lines.push(`  ${subtitle}`);
-  lines.push("", `    supervisor: ${board.supervisor.state} · ${board.supervisor.summary}`, "");
+  const events = readSupervisorEvents(projectPath);
+  const board = buildSupervisorLiveBoard(events);
+  const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+  const deliveryRuns = supervisorDeliveryRunBoard(projectPath, events);
+  const liveTitle = lang !== "zh" ? title
+    : title === "Supervisor Live — read-only role board" ? "监督实时面板 — 只读角色面板"
+      : title === "Supervisor Live — watch" ? "监督实时面板 — 监看"
+        : title;
+  const liveSubtitle = lang === "zh" && subtitle !== undefined
+    ? subtitle.replace(/^refresh every (.+) · Ctrl-C exits$/, "每 $1 刷新一次 · 使用 Ctrl-C 退出")
+    : subtitle;
+  const lines = ["", `  ${liveTitle}`];
+  if (liveSubtitle !== undefined) lines.push(`  ${liveSubtitle}`);
+  lines.push("", lang === "zh" ? `    监督状态：${fmtLiveZhValue(board.supervisor.state)} · ${fmtLiveZhSummary(board)}` : `    supervisor: ${board.supervisor.state} · ${board.supervisor.summary}`, "");
   if (board.rows.length === 0) {
-    lines.push("    no cycle rows yet", "");
+    lines.push(lang === "zh" ? "    暂无周期运行记录" : "    no cycle rows yet", ...fmtDeliveryRunBoard(deliveryRuns, lang), "");
     return lines.join("\n") + "\n";
   }
   for (const row of board.rows) {
-    lines.push(
-      `    ${row.cycleId} · ${row.storyId} · ${row.profile} · ${row.status} · ${agentModel(row.agent, row.model)}`,
-      `      updated ${shortTs(row.updatedAt)} · ${row.profileReason}`,
-    );
+    if (lang === "zh") {
+      lines.push(
+        `    ${row.cycleId} · ${row.storyId} · ${fmtLiveZhValue(row.profile)} · ${fmtLiveZhValue(row.status)} · ${agentModel(row.agent, row.model)}`,
+        `      更新时间 ${shortTs(row.updatedAt)} · ${fmtLiveZhValue(row.profileReason)}`,
+      );
+    } else {
+      lines.push(
+        `    ${row.cycleId} · ${row.storyId} · ${row.profile} · ${row.status} · ${agentModel(row.agent, row.model)}`,
+        `      updated ${shortTs(row.updatedAt)} · ${row.profileReason}`,
+      );
+    }
     for (const role of row.roles) {
       const agent = role.agent === null ? "-" : role.agent;
-      lines.push(`      ${role.role.padEnd(9)} ${role.state.padEnd(13)} agent=${agent} · ${role.reason}`);
+      lines.push(lang === "zh"
+        ? `      ${fmtLiveZhValue(role.role)} ${fmtLiveZhValue(role.state)} · 代理=${agent} · ${fmtLiveZhValue(role.reason)}`
+        : `      ${role.role.padEnd(9)} ${role.state.padEnd(13)} agent=${agent} · ${role.reason}`);
     }
-    lines.push(`      handoff ${row.handoffs.map((h) => `${h.from}->${h.to}:${h.state}`).join(" · ")}`, "");
+    lines.push(lang === "zh"
+      ? `      交接 ${row.handoffs.map((h) => `${fmtLiveZhValue(h.from)}→${fmtLiveZhValue(h.to)}：${fmtLiveZhValue(h.state)}`).join(" · ")}`
+      : `      handoff ${row.handoffs.map((h) => `${h.from}->${h.to}:${h.state}`).join(" · ")}`, "");
   }
+  lines.push(...fmtDeliveryRunBoard(deliveryRuns, lang), "");
   return lines.join("\n") + "\n";
 }
 
@@ -1032,11 +1347,33 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   let sub = args.find((a) => !a.startsWith("-"));
   // `status` is an alias for the default observe + advise summary.
   if (sub === "status") sub = undefined;
-  if (sub !== undefined && !["observe", "advise", "next", "why", "live", "journal", "health", "route", "repair-evidence"].includes(sub)) {
-    process.stderr.write(SUPERVISOR_USAGE + "\n");
+  if (sub !== undefined && !["observe", "advise", "next", "why", "live", "metrics", "delivery", "journal", "health", "route", "repair-evidence"].includes(sub)) {
+    process.stderr.write(supervisorUsage() + "\n");
     return 1;
   }
   const projectPath = process.cwd();
+  if (sub === "delivery") {
+    // US-DELTA-021 — a cry for help never parses a subject or touches the
+    // filesystem: print the locale-resolved unified delivery view help first.
+    if (args.includes("--help") || args.includes("-h")) {
+      process.stdout.write(deliveryHelp() + "\n");
+      return 0;
+    }
+    const parsed = parseDeliveryArgs(args);
+    if ("error" in parsed) {
+      process.stderr.write(`delivery: ${parsed.error}\n`);
+      return 1;
+    }
+    const result = readFeatureDelivery(projectPath, parsed);
+    if (!result.ok) {
+      if (json) process.stdout.write(JSON.stringify({ error: result.code }, null, 2) + "\n");
+      else process.stderr.write(`delivery: ${result.message}\n`);
+      return 1;
+    }
+    process.stdout.write(json ? JSON.stringify(result.view, null, 2) + "\n" : renderFeatureDelivery(result.view));
+    return 0;
+  }
+  if (sub === "metrics") return supervisorMetricsCommand(args, projectPath);
   if (sub === "journal") {
     return supervisorJournalCommand(args, projectPath);
   }
@@ -1362,7 +1699,7 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
   if (sub === "live") {
     const unknownFlag = unknownSupervisorLiveFlag(args);
     if (unknownFlag !== undefined) {
-      process.stderr.write(`roll supervisor live: unknown flag for roll supervisor live: ${unknownFlag}\n${SUPERVISOR_USAGE}\n`);
+      process.stderr.write(`roll supervisor live: unknown flag for roll supervisor live: ${unknownFlag}\n${supervisorUsage()}\n`);
       return 1;
     }
     if (watch && json) {
@@ -1395,8 +1732,9 @@ export function supervisorCommand(args: string[]): number | Promise<number> {
         }
         return followSupervisorLiveBoard(projectPath, parsed.intervalMs);
       }
-      const board = buildSupervisorLiveBoard(readSupervisorEvents(projectPath));
-      if (json) process.stdout.write(JSON.stringify(board, null, 2) + "\n");
+      const events = readSupervisorEvents(projectPath);
+      const board = buildSupervisorLiveBoard(events);
+      if (json) process.stdout.write(JSON.stringify({ ...board, deliveryRuns: supervisorDeliveryRunBoard(projectPath, events) }, null, 2) + "\n");
       else process.stdout.write(fmtLive(projectPath));
     }
     return 0;

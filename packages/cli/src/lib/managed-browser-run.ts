@@ -1,4 +1,7 @@
 /**
+ * @responsibility Orchestrates managed-lane browser runs with operator-observable results.
+ */
+/**
  * US-BROW-004c / US-BROW-018 — Managed-lane CLI orchestration + operator-observable result.
  *
  * Two modes:

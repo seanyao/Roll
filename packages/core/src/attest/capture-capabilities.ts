@@ -1,4 +1,5 @@
 /**
+ * @responsibility Probes and atomically records honest capture-source capabilities.
  * US-PHYSICAL-012 — honest capabilities.json writer + capability probe.
  *
  * The capture-policy gateway reads `<captureRoot>/capabilities.json` to decide

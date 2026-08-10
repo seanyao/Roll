@@ -1,4 +1,7 @@
 /**
+ * @responsibility Parses the evaluation contract block from story specs.
+ */
+/**
  * US-SKILL-030 — Evaluation contract block parser.
  *
  * Parses the `**Evaluation contract:**` block from story spec.md text, yielding

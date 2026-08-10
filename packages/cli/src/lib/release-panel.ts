@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the release tab gate head and seven-dimension consistency panel.
+ */
+/**
  * US-DOSSIER-015 / FIX-391 — the release tab's gate head + seven-dimension consistency
  * panel view model. The opaque "gate audit" line becomes a readable table:
  * each dimension carries its f/w/? and drift-card handles; the rows sum

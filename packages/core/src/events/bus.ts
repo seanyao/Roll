@@ -1,4 +1,5 @@
 /**
+ * @responsibility Appends terminal and delivery facts atomically to the immutable event stream.
  * EventBus (write side) — TS port of the v2 loop's event-append + runs.jsonl
  * upsert primitives. The published language (BC7, I8): every loop appends
  * RollEvents to events.ndjson; all state rebuilds from this stream, no cache.
@@ -35,7 +36,7 @@
  * inside the events the caller builds, and all I/O flows through the injected
  * {@link EventStore} so the append + dedupe semantics are unit-testable.
  */
-import { type RollEvent, parseEventLine } from "@roll/spec";
+import { type RollEvent, eventTsMs, parseEventLine } from "@roll/spec";
 import { type EventStore, nodeEventStore } from "./infra-default.js";
 
 /** Rotation threshold — 10 MiB, mirroring `_loop_event_rotate` (>10485760). */
@@ -53,11 +54,18 @@ export function serializeEvent(event: RollEvent): string {
   return `${JSON.stringify(normalizeEventTs(event))}\n`;
 }
 
-function epochMs(ts: number): number {
-  return ts >= 1_000_000_000_000 ? ts : ts * 1000;
-}
+// FIX-1490: one definition of the ms contract, shared with the read side
+// (`parseEventLine`). The private copy that used to live here is gone — two
+// copies is how the two sides drifted in the first place.
+const epochMs = eventTsMs;
 
-function normalizeEventTs(event: RollEvent): RollEvent {
+/**
+ * Normalize an event's timestamps onto the epoch-ms contract. Exported (FIX-1490)
+ * so writers that cannot go through {@link EventBus} still share ONE
+ * implementation instead of hand-rolling `appendFileSync` with a raw seconds
+ * clock — which is exactly how 5,483 historical events ended up in seconds.
+ */
+export function normalizeEventTs(event: RollEvent): RollEvent {
   if (event.type === "cycle:terminal") {
     return {
       ...event,
@@ -139,6 +147,23 @@ export class EventBus {
     const line = serializeEvent(event);
     this.store.ensureFile(eventsPath);
     this.store.appendLine(eventsPath, line);
+    return line;
+  }
+
+  /**
+   * US-CYCLE-013 — append one {@link RollEvent} with an explicit fsync before
+   * returning. Used ONLY for scheduler decision appends (admission, promotion,
+   * queueing): the durable append is the linearization point, so a crash must
+   * not lose it (all other event writes keep the plain atomic
+   * {@link appendEvent}). Fails loud when the injected store cannot fsync.
+   */
+  appendEventSynced(eventsPath: string, event: RollEvent): string {
+    const line = serializeEvent(event);
+    this.store.ensureFile(eventsPath);
+    if (this.store.appendLineSynced === undefined) {
+      throw new Error("EventBus.appendEventSynced: store does not support synced append");
+    }
+    this.store.appendLineSynced(eventsPath, line);
     return line;
   }
 

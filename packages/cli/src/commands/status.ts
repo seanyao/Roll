@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll status` subcommand, rendering the one-screen sync health dashboard.
+ */
+/**
  * `roll status` — TS port of lib/roll-status.py (US-CLI-001).
  *
  * One-screen sync health: global conventions, AI clients table (with setup
@@ -127,7 +130,7 @@ export function parseAiEntries(): AiEntry[] {
   if (!existsSync(cfg)) return [];
   const entries: AiEntry[] = [];
   for (const line of readFileSync(cfg, "utf8").split("\n")) {
-    const m = /^ai_[a-z]+:\s*(.+)/.exec(line);
+    const m = /^ai_[a-z_]+:\s*(.+)/.exec(line);
     if (m === null) continue;
     const val = (m[1] ?? "").trim().replaceAll("~", homedir());
     const parts = val.split("|");

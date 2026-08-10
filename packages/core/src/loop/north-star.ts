@@ -1,3 +1,6 @@
+/**
+ * @responsibility Tracks daily north-star metrics against targets.
+ */
 export type Trend = "up" | "down" | "flat";
 export type TargetOp = ">=" | "<" | "=";
 

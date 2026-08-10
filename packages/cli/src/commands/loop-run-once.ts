@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop run-once` subcommand, the TS-first single-cycle runner.
+ */
+/**
  * `roll loop run-once` — TS-first single-cycle runner (US-LOOP runner adapter,
  * prerequisite for US-LOOP-006 v2-vs-v3 parallel verification).
  *
@@ -12,13 +15,13 @@
  * The handler stays thin: it resolves the project identity + runtime paths and
  * delegates the entire walk to the runner adapter (packages/cli/src/runner).
  */
-import { EventBus, assessBacklog, branchCanaryVerdict, buildWorkspaceExecutionContext, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, deriveWorkspaceExecutionAuthorities, firstInstalledAgent, isEphemeralBranch, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
-import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason, type WorkspaceMatchEvidence } from "@roll/spec";
-import { isOwnerHeld, loadExplicitWorkspaceDiscovery, loadWorkspaceDiscovery, readLockOwner, releaseLock } from "@roll/infra";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { EventBus, assessBacklog, cycleEndEvent, DEFAULT_BRANCH_CANARY_MAX, firstInstalledAgent, mapV2Status, markStatusExact, normalizeAgentScopeConfig, parseBacklog, parsePolicy, projectCycleHandoff, readRouteSlot, releaseStoryLease, shouldResize, type AgentSlot, type BacklogItem, type CycleContext, type RouteDeps, type RouteSlot } from "@roll/core";
+import { STATUS_MARKER, absent, buildTerminalEvent, deriveOrphanVerdict, present, type BacklogReason } from "@roll/spec";
+import { isOwnerHeld, projectIdentity, readLockOwner, releaseLock } from "@roll/infra";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce } from "../runner/index.js";
+import { type AgentSpawn, type RunnerPaths, buildRunRow, dryRunPlan, handoffEnabled, killLiveAgents, nodePorts, realAgentSpawn, runCycleOnce, runTailOnce } from "../runner/index.js";
 import { clearCardFailure, recordCardFailure } from "../runner/skip-cards.js";
 import { addPendingPublish, removePendingPublish } from "../runner/pending-publish.js";
 import { autoRecoverEnabled, clearSelfHeal, selfHealBudget } from "../runner/selfheal-budget.js";
@@ -33,14 +36,13 @@ import { releaseMainCheckoutWriteProtection, repairCoreWorktreeContamination } f
 import { applyCorrectionCircuitBreaker } from "../runner/correction-circuit.js";
 import { classifyCycleFailure, playbookForFailure, readCycleEvents, recordRootCauseFailure, type FailureAttribution } from "../runner/failure-attribution.js";
 import { readSkillBody as readSkillBodyGeneric } from "../runner/skill-body.js";
-import { auditWorkspaceWorktrees } from "./workspace-worktree-lifecycle.js";
 import { currentLang, realAgentEnv } from "./agent-list.js";
 import { cardArchiveDir, reportFileName, reviewFileName } from "../lib/archive.js";
 import { readLatestResizeSignal } from "../lib/review-score.js";
 import { loopReviewResizeCommand } from "./loop-review-resize.js";
 import { isGuidedRunOnce, parseAllowedCardsEnv, scopeBacklogForAllowedCards } from "../lib/goal-progress.js";
 import { auditWorktrees } from "./worktree-audit.js";
-import { formatCanaryTripReport } from "./worktree-cleanup.js";
+import { formatCanaryTripReport, managedWorkspaceMeasures } from "./worktree-cleanup.js";
 import { writeLatestLoopDigest } from "../lib/morning-report.js";
 import { backfillMergedRuns } from "../lib/runs-backfill.js";
 import { runReconcileTick } from "./loop-reconcile.js";
@@ -49,17 +51,9 @@ import { requireNetwork, tcpConnect } from "../lib/require-network.js";
 import { gcCommand } from "./gc.js";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
-import { emitBacklogTargetError, resolveBacklogCommandTarget, stripBacklogScopeArgs, type ResolvedBacklogTarget } from "./backlog-target.js";
-import { canonicalWorkspaceSelectorIndex, containsCanonicalWorkspaceSelector, workspaceSelectorArgs } from "../lib/workspace-selector.js";
-import { resolveLang, t, v3Catalog, type WorkspaceExecutionContextV1 } from "@roll/spec";
-import { resolveStoryLeasePath } from "../runner/story-lease-path.js";
-import {
-  resolveRequirementMatchedWorkspace,
-  restorePersistedWorkspaceCycleContext,
-  restorePersistedWorkspaceCycleRepositorySelector,
-  validateRequirementMatchedWorkspace,
-} from "../runner/scoped-route.js";
-import { workspaceRollHome } from "./workspace-target.js";
+import { resolveLang, t, v3Catalog, type RollEvent } from "@roll/spec";
+import { handoffUpgradeMessage, handoffUpgradeRequired } from "./loop-runner-readout.js";
+import { deliverableCmdsForStory } from "../runner/attest-gate.js";
 import { resolveCurrent } from "./lang.js";
 
 export const PUBLISHED_DELIVERY_MESSAGE =
@@ -90,7 +84,7 @@ export function announceReport(
   const label = currentLang() === "zh" ? "验收 Review Page" : "Acceptance Review Page";
   process.stdout.write(`${label}: ${report}\n`);
   const muted =
-    existsSync(join(runtimeDir(projectPath), `mute-${slug}`)) ||
+    existsSync(join(projectPath, ".roll", "loop", `mute-${slug}`)) ||
     existsSync(
       join(process.env["ROLL_SHARED_ROOT"] || join(process.env["HOME"] ?? "", ".shared", "roll"), "loop", `mute-${slug}`),
     );
@@ -119,7 +113,6 @@ export interface SignalTeardownDeps {
   now?: () => number;
   repoCwd?: string;
   runtimeDir?: string;
-  releaseCapacity?: (cycleId: string) => import("@roll/spec").AgentCapacityOwnershipResult;
 }
 
 const SIGNUM: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 };
@@ -139,7 +132,7 @@ const SIGNUM: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 };
  * after a clean terminal (lock already released) must not double-write.
  */
 export function cycleSignalTeardown(
-  paths: Pick<RunnerPaths, "eventsPath" | "runsPath" | "lockPath" | "storyLeasePath">,
+  paths: Pick<RunnerPaths, "eventsPath" | "runsPath" | "lockPath">,
   cycleId: string,
   branch: string,
   sig: NodeJS.Signals,
@@ -156,15 +149,6 @@ export function cycleSignalTeardown(
     /* no agent in flight */
   }
 
-  try {
-    const released = deps.releaseCapacity?.(cycleId);
-    if (released?.kind === "ownership_lost") {
-      process.stderr.write(`loop run-once: capacity ownership lost during ${sig}: ${released.reason}\n`);
-    }
-  } catch {
-    /* terminal/lock cleanup still proceeds */
-  }
-
   let owned = false;
   try {
     owned = existsSync(paths.lockPath) && readLockOwner(paths.lockPath)?.pid === pid;
@@ -176,23 +160,12 @@ export function cycleSignalTeardown(
     // FIX-1060: recover story/agent from events the cycle already wrote before
     // the signal, so an aborted cycle is never anonymous.
     const attr = readCycleAttributionFromEvents(paths.eventsPath, cycleId);
-    const restored = restorePersistedWorkspaceCycleContext(deps.runtimeDir ?? dirname(paths.eventsPath), cycleId);
-    const restoredRepository = restored.ok
-      ? restorePersistedWorkspaceCycleRepositorySelector(
-          deps.runtimeDir ?? dirname(paths.eventsPath),
-          cycleId,
-          restored.context,
-        )
-      : undefined;
     const ctx: CycleContext = {
       cycleId,
       branch,
       loop: "ci" as never,
-      storyId: restored.ok ? restored.context.issue?.storyId : attr.storyId,
+      storyId: attr.storyId,
       agent: attr.agent,
-      workspaceContextScope: "issue_required",
-      ...(restored.ok ? { workspaceExecution: restored.context } : {}),
-      ...(restoredRepository?.ok ? { repositorySelector: restoredRepository.repoId } : {}),
     };
     const tctx = { cycleId, branch, agent: ctx.agent ?? "", model: ctx.model ?? "" };
     const terminalSec = now();
@@ -257,10 +230,7 @@ export function cycleSignalTeardown(
     const terminalStoryId = ctx.storyId ?? "";
     if (terminalStoryId !== "") {
       try {
-        releaseStoryLease(resolveStoryLeasePath(paths), terminalStoryId, {
-          source: "cycle",
-          pid: deps.pid ?? process.pid,
-        });
+        releaseStoryLease(join(dirname(paths.eventsPath), "leases"), terminalStoryId, { source: "cycle", pid: process.pid });
       } catch {
         /* lease cleanup must never block signal teardown */
       }
@@ -297,7 +267,6 @@ export function installCycleSignalTeardown(
   branch: string,
   repoCwd?: string,
   runtimeDirPath?: string,
-  releaseCapacity?: (cycleId: string) => import("@roll/spec").AgentCapacityOwnershipResult,
 ): () => void {
   const sigs: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
   const handlers = new Map<NodeJS.Signals, () => void>();
@@ -305,7 +274,6 @@ export function installCycleSignalTeardown(
     const h = (): void => cycleSignalTeardown(paths, cycleId, branch, sig, {
       ...(repoCwd !== undefined ? { repoCwd } : {}),
       ...(runtimeDirPath !== undefined ? { runtimeDir: runtimeDirPath } : {}),
-      ...(releaseCapacity !== undefined ? { releaseCapacity } : {}),
     });
     handlers.set(sig, h);
     process.on(sig, h);
@@ -330,12 +298,11 @@ function runtimeDir(projectPath: string): string {
   return env !== "" ? env : join(projectPath, ".roll", "loop");
 }
 
-function resolvedBacklogFile(projectPath: string): string {
-  const env = (process.env["ROLL_WORKSPACE_BACKLOG_PATH"] ?? "").trim();
-  return env !== "" ? env : join(projectPath, ".roll", "backlog.md");
-}
-
 // ── FIX-216b: consecutive-failure auto-PAUSE ──────────────────────────────────
+// RL-FAIL-007: registered redline in policy/rules.yaml — reaching the failure
+// threshold MUST pause the loop (PAUSE marker + ALERT + policy:safety_pause
+// event), never silently self-heal. incrementConsecutiveFails below is the
+// enforcement point.
 
 const PAUSE_THRESHOLD = 3;
 const GO_LOCK_STALE_SEC = 21_600;
@@ -351,23 +318,22 @@ const CARD_SKIP_THRESHOLD = 3;
  * FIX-363: a card was just skip-listed (failed K times). Write an ACTIONABLE
  * alert so the owner knows WHICH card was parked and that the loop kept going —
  * instead of the loop silently auto-pausing on it. The card stays Todo; an owner
- * fixes it (or clears the active runtime's `skip-cards.json`) to re-arm it.
+ * fixes it (or clears `.roll/loop/skip-cards.json`) to re-arm it.
  */
-export function writeCardSkipAlert(
+function writeCardSkipAlert(
   alertsPath: string,
   eventsPath: string,
   cycleId: string,
   storyId: string,
   count: number,
 ): void {
-  const skipCardsPath = join(dirname(eventsPath), "skip-cards.json");
   const msg =
     `# ALERT — poison-pill card parked (loop kept running)\n\n` +
     `**Cycle**: ${cycleId}\n` +
     `**Card**: ${storyId}\n` +
     `**Reason**: failed ${count}× — skip-listed so the loop keeps delivering OTHER cards instead of pausing.\n` +
     `**Action**: investigate ${storyId} (it likely needs a smaller split, a spec fix, or manual delivery). ` +
-    `Once addressed, remove it from \`${skipCardsPath}\` (or just fix the card) to re-arm it.\n`;
+    `Once addressed, remove it from \`.roll/loop/skip-cards.json\` (or just fix the card) to re-arm it.\n`;
   try {
     appendFileSync(alertsPath, `${msg}\n`, "utf8");
   } catch {
@@ -418,7 +384,7 @@ function incrementConsecutiveFails(
   const threshold = readFailurePauseThreshold(projectPath);
   if (count < threshold) return;
 
-  const pauseMarker = join(runtimeDir(projectPath), `PAUSE-${slug}`);
+  const pauseMarker = join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
   if (existsSync(pauseMarker)) return;
   const alertMsg =
     `# ALERT — loop auto-paused after ${count} consecutive failures\n\n` +
@@ -463,7 +429,7 @@ function writeRootCausePause(
   count: number,
   snapshotPath: string | undefined,
 ): void {
-  const pauseMarker = join(runtimeDir(projectPath), `PAUSE-${slug}`);
+  const pauseMarker = join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
   if (existsSync(pauseMarker)) return;
   const playbook = playbookForFailure(attribution.failureClass, attribution.rootCauseKey);
   const alertMsg =
@@ -756,7 +722,7 @@ function writeReviewerBlockedAlert(
     /* best-effort */
   }
   if (block.cause === "auth") {
-    const pauseMarker = join(runtimeDir(projectPath), `PAUSE-${slug}`);
+    const pauseMarker = join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
     if (!existsSync(pauseMarker)) {
       try {
         writeFileSync(pauseMarker, msg, "utf8");
@@ -818,78 +784,200 @@ export function buildLoopRouteDeps(projectPath: string): RouteDeps {
 
 /** `roll loop run-once --help` usage. Bilingual on separate lines (EN then ZH). */
 export const RUN_ONCE_USAGE =
-  "Usage: roll loop run-once [--workspace <id|path>] [--repository <repoId|alias>] [--dry-run] [--race]\n" +
+  "Usage: roll loop run-once [--dry-run] [--race] [--resume <cycleId>]\n" +
   "  Run ONE loop cycle now: pick a Todo card, build it through TCR, run the\n" +
   "  gates (attest + peer), and publish a PR. Exits when the cycle terminates.\n" +
-  "  --workspace Bind the cycle runtime, backlog, locks, and events to one Workspace.\n" +
-  "              A scoped Story requirement may resolve the matching Workspace from any cwd.\n" +
-  "  --repository Select one repository by stable repoId or unique alias.\n" +
   "  --dry-run   Print the command plan only — no git / gh / agent side effects.\n" +
   "  --race      Opt in to same-card parallel racing (default: one-card-one-lease).\n" +
   "              The first merge atomically supersedes the remaining siblings.\n" +
+  "  --resume <cycleId>\n" +
+  "              US-CYCLE-013: resume the RETAINED tail of a handed-off cycle\n" +
+  "              (evaluation/test → publish → cleanup) in its recorded workspace.\n" +
+  "              With ROLL_CYCLE_HANDOFF_V1=1 a run with no --resume auto-resumes\n" +
+  "              the single live handoff when one exists.\n" +
   "立即跑一个 loop 周期:选一张 Todo 卡,经 TCR 建造,过闸(验收+同行评审),发 PR。\n" +
-  "  --workspace 将周期 runtime、backlog、锁和事件绑定到一个 Workspace。\n" +
-  "              带 Story 范围时可从任意 cwd 精确匹配 Workspace。\n" +
-  "  --repository 通过稳定 repoId 或唯一 alias 选择一个仓库。\n" +
   "  --dry-run   只打印命令计划——不动 git / gh / agent。\n" +
-  "  --race      显式开同卡并行竞速(默认一卡一租约);首个 merge 原子取消其余 sibling。";
+  "  --race      显式开同卡并行竞速(默认一卡一租约);首个 merge 原子取消其余 sibling。\n" +
+  "  --resume <cycleId>\n" +
+  "              US-CYCLE-013:在记录的保留工作目录中恢复已交接卡的 tail\n" +
+  "              (评审/测试 → 发布 → 清理)。设置 ROLL_CYCLE_HANDOFF_V1=1 且存在\n" +
+  "              唯一存活 handoff 时,不带 --resume 的 run-once 会自动恢复它。";
 
-export interface LoopRunOnceDeps {
-  readonly requireNetwork?: typeof requireNetwork;
-  readonly checkRepoPushable?: typeof checkRepoPushable;
-  readonly readSkillBody?: typeof readSkillBody;
-  readonly buildRouteDeps?: typeof buildLoopRouteDeps;
-  readonly agentSpawn?: AgentSpawn;
-  readonly warnIfBinaryStale?: typeof warnIfBinaryStale;
-  readonly branchCanaryTrips?: typeof branchCanaryTrips;
-  readonly workspaceBranchCanaryTrips?: typeof workspaceBranchCanaryTrips;
-  readonly runReconcileTick?: typeof runReconcileTick;
-  readonly backfillMergedRuns?: typeof backfillMergedRuns;
+// ── US-CYCLE-013 — retained-tail resume helpers ──────────────────────────────
+
+/** Parse `--resume <cycleId>` (or the go-driver's ROLL_LOOP_GO_RESUME env). */
+function resumeCycleFromArgs(args: string[]): string | undefined {
+  const envResume = (process.env["ROLL_LOOP_GO_RESUME"] ?? "").trim();
+  if (envResume !== "") return envResume;
+  const idx = args.indexOf("--resume");
+  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  const value = args[idx + 1]?.trim() ?? "";
+  return value === "" ? undefined : value;
 }
 
-function repositorySelectorArg(args: readonly string[]):
-  | { readonly ok: true; readonly selector?: string }
-  | { readonly ok: false } {
-  const indices = args.flatMap((arg, index) => arg === "--repository" ? [index] : []);
-  if (indices.length > 1) return { ok: false };
-  const index = indices[0];
-  if (index === undefined) return { ok: true };
-  const selector = args[index + 1];
-  return selector === undefined || selector.startsWith("-")
-    ? { ok: false }
-    : { ok: true, selector };
+/**
+ * The ONE live handoff cycle to auto-resume (flag on): a cycle whose handoff
+ * projection is `waiting_for_evaluation_or_test` or
+ * `builder_validated_waiting_for_tail` (tail free ⇒ the scheduler promotes).
+ * `undefined` when zero or multiple live handoffs exist — a single live
+ * handoff is the only unambiguous auto-resume target.
+ */
+export function singleLiveHandoffCycleId(eventsPath: string): string | undefined {
+  const events = new EventBus().readEvents(eventsPath);
+  const cycleIds = [...new Set(
+    events
+      .filter((ev): ev is RollEvent & { type: "cycle:admitted" } => ev.type === "cycle:admitted")
+      .map((ev) => ("identity" in ev ? ev.identity?.cycleId : "") as string)
+      .filter((id) => id !== ""),
+  )];
+  const live: string[] = [];
+  for (const cid of cycleIds) {
+    const view = projectCycleHandoff(events, cid);
+    if (view !== undefined && (view.state === "waiting_for_evaluation_or_test" || view.state === "builder_validated_waiting_for_tail")) {
+      live.push(cid);
+    }
+  }
+  return live.length === 1 ? live[0] : undefined;
 }
 
-function canonicalWorkspaceRepositorySelector(
-  context: WorkspaceExecutionContextV1 | undefined,
-  selector: string | undefined,
-): { readonly ok: true; readonly repoId?: string; readonly alias?: string } | { readonly ok: false; readonly code: string } {
-  if (context === undefined) {
-    return selector === undefined
-      ? { ok: true }
-      : { ok: false, code: "missing_execution_context" };
+/**
+ * Run the retained tail of one handed-off cycle to its terminal, in the cycle's
+ * RECORDED workspace (never inferred from a directory name). Prints the
+ * bilingual resume entry, then drives runTailOnce with the executable
+ * latest-main check wired when the flag is on.
+ */
+async function runResumedTail(
+  projectPath: string,
+  rt: string,
+  alertsPath: string,
+  resumeCycleId: string,
+  skillBody: string,
+  routeDeps: RouteDeps,
+): Promise<number> {
+  const eventsPath = join(rt, "events.ndjson");
+  const view = projectCycleHandoff(new EventBus().readEvents(eventsPath), resumeCycleId);
+  if (view?.identity === undefined) {
+    process.stderr.write(`loop run-once: --resume ${resumeCycleId} — no live handoff record; refusing\n`);
+    return 1;
   }
-  const requested = (selector ?? "").trim();
-  if (requested === "") {
-    const only = context.bindings.length === 1 ? context.bindings[0] : undefined;
-    return only === undefined
-      ? { ok: true }
-      : { ok: true, repoId: only.repoId, alias: only.alias };
+  const identity = view.identity;
+  const resumePaths: RunnerPaths = {
+    eventsPath,
+    runsPath: join(rt, "runs.jsonl"),
+    alertsPath,
+    lockPath: join(rt, "inner.lock"),
+    heartbeatPath: join(rt, "heartbeat"),
+    // The recorded workspace identity names `cycle-<cycleId>` — the only path
+    // construction allowed (the resume is event-driven, never directory-driven).
+    worktreePath: join(rt, "worktrees", `cycle-${resumeCycleId}`),
+  };
+  const ports = nodePorts({ repoCwd: projectPath, paths: resumePaths, skillBody, routeDeps });
+  const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+  const workspaceKey = identity.workspace.members[0]?.workspaceKey ?? "";
+  process.stdout.write(`loop run-once: ${t(v3Catalog, lang, "handoff.resume.entry", resumeCycleId, workspaceKey)}\n`);
+  const result = await runTailOnce({
+    ports,
+    ctx: { cycleId: resumeCycleId, branch: identity.branch, loop: "ci" as never },
+    identity,
+    checkFreshness: makeFreshnessCheck(ports, eventsPath, rt),
+  });
+  if (!result.ran && result.refused !== undefined) {
+    process.stdout.write(`loop run-once: resume ${resumeCycleId} refused (${result.refused}); no serial duplicate started\n`);
+    return 1;
   }
-  const byId = context.bindings.find((binding) => binding.repoId === requested);
-  if (byId !== undefined) return { ok: true, repoId: byId.repoId, alias: byId.alias };
-  const byAlias = context.bindings.filter((binding) => binding.alias === requested);
-  if (byAlias.length > 1) return { ok: false, code: "ambiguous_repository_selector" };
-  const selected = byAlias[0];
-  return selected === undefined
-    ? { ok: false, code: "unknown_repository_selector" }
-    : { ok: true, repoId: selected.repoId, alias: selected.alias };
+  if (result.recoveryRecorded === true) {
+    process.stdout.write(`loop run-once: resume ${resumeCycleId} → serial_recovery (leases retained); explicit recovery required\n`);
+    return 0;
+  }
+  process.stdout.write(`loop run-once: resume ${resumeCycleId} → ${result.terminal ?? "unknown"}\n`);
+  return 0;
+}
+
+/**
+ * US-CYCLE-013 §5 — the executable latest-main check for a resumed tail: fires
+ * ONLY on a durable predecessor `delivery:merge_confirmed`/`delivery:reconciled`
+ * whose merge SHA is known (an open PR or awaiting_merge never counts). Probes
+ * in a temporary verification worktree from the recorded builderHead; `continue`
+ * pins a rebased candidate, the failure verdicts cancel the tail — either way
+ * the tail routes to serial_recovery with leases retained.
+ *
+ * US-CYCLE-013 F2 — the probe is REAL: the card's recorded `deliverable_cmd`
+ * (allowlist-filtered via {@link deliverableCmdsForStory}, the SAME security
+ * policy as the attest lane — arbitrary agent-controlled shell never runs) is
+ * executed in the temporary verification worktree, and a `continue` verdict
+ * creates the durable, immutable pin
+ * `refs/roll/rebase-candidates/<cycleId>/<attempt>` at the TRUE rebased head
+ * (pin failure ⇒ `unknown`, fail closed — no pin, no continuation).
+ */
+export function makeFreshnessCheck(ports: ReturnType<typeof nodePorts>, eventsPath: string, rt: string): (identity: import("@roll/spec").HandoffIdentity) => Promise<import("../runner/run-cycle.js").FreshnessCheckResult | undefined> {
+  return async (identity) => {
+    const events = new EventBus().readEvents(eventsPath);
+    let admittedTs = -1;
+    for (const ev of events) {
+      if (ev.type === "cycle:admitted" && "identity" in ev && ev.identity?.cycleId === identity.cycleId && ev.ts > admittedTs) {
+        admittedTs = ev.ts;
+      }
+    }
+    let predecessor: { mergeSha: string } | undefined;
+    for (const ev of events) {
+      if (
+        (ev.type === "delivery:merge_confirmed" || ev.type === "delivery:reconciled") &&
+        ev.cycleId !== identity.cycleId &&
+        typeof ev.mergeCommit === "string" &&
+        ev.mergeCommit !== "" &&
+        ev.ts > admittedTs
+      ) {
+        predecessor = { mergeSha: ev.mergeCommit };
+      }
+    }
+    if (predecessor === undefined) return undefined;
+    const base = {
+      predecessorMergeSha: predecessor.mergeSha,
+      recordedBaseSha: identity.baseSha,
+      builderHead: identity.builderHead,
+      evidenceRefs: [] as string[],
+    };
+    if (ports.git.verifyRebaseTemp === undefined || ports.git.createPinRef === undefined) {
+      // No probe port ⇒ the merge fact cannot be verified ⇒ unknown (fail closed).
+      return { ...base, verdict: "unknown" as const };
+    }
+    // F2 — the card's recorded deliverable_cmd, AFTER the roll read-only
+    // allowlist (rejected commands are never executed; [] when none declared).
+    const recordedCmds = deliverableCmdsForStory(join(rt, "worktrees", `cycle-${identity.cycleId}`), identity.storyId);
+    const verifyWorktree = join(rt, `verify-${identity.cycleId}-${Date.now()}`);
+    try {
+      const probe = await ports.git.verifyRebaseTemp(
+        ports.repoCwd,
+        identity.baseSha,
+        identity.builderHead,
+        predecessor.mergeSha,
+        verifyWorktree,
+        recordedCmds,
+      );
+      if (probe.verdict === "continue") {
+        const rebasedHead = probe.evidenceRefs[0];
+        if (rebasedHead === undefined || rebasedHead === "") {
+          return { ...base, verdict: "unknown" as const };
+        }
+        // F2 — the durable, immutable pin: a `continue` without a pin is no
+        // continuation at all (fail closed).
+        const pin = await ports.git.createPinRef(ports.repoCwd, `refs/roll/rebase-candidates/${identity.cycleId}/${identity.attempt}`, rebasedHead);
+        if (pin.code !== 0) {
+          return { ...base, verdict: "unknown" as const };
+        }
+        return { ...base, verdict: "continue", evidenceRefs: probe.evidenceRefs, candidateHead: rebasedHead };
+      }
+      return { ...base, verdict: probe.verdict, evidenceRefs: probe.evidenceRefs };
+    } catch {
+      return { ...base, verdict: "unknown" as const };
+    }
+  };
 }
 
 /**
  * The `loop run-once` entry. Returns a process exit code (0 ok).
  */
-export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps = {}): Promise<number> {
+export async function loopRunOnceCommand(args: string[]): Promise<number> {
   // FIX-351: `--help`/`-h` must PRINT usage and exit — never start a cycle. This
   // guard runs BEFORE any side effect (project identity, lock, network probe,
   // agent spawn), so a help flag can never burn a cycle.
@@ -898,82 +986,28 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     return 0;
   }
   const dryRun = args.includes("--dry-run");
-  const repositorySelector = repositorySelectorArg(args);
-  if (!repositorySelector.ok) {
-    process.stderr.write("loop run-once: invalid_repository_selector\n");
-    return 1;
-  }
   // US-DELIV-005: `--race` is the explicit opt-in for same-card parallel
   // racing. It is carried to the pick_story handler via env (the default —
   // one-card-one-lease — needs no signal).
   if (args.includes("--race")) process.env["ROLL_LOOP_RACE"] = "1";
-  const allowedCards = parseAllowedCardsEnv();
+  // US-CYCLE-013: explicit `--resume <cycleId>` (or the go-driver's
+  // ROLL_LOOP_GO_RESUME) resumes a retained tail instead of starting a build.
+  const resumeCycleId = resumeCycleFromArgs(args);
 
-  // Resolve the required mutation Workspace before consulting any project/runtime
-  // compatibility environment. Ambient runner paths are locations, not authority.
-  let workspaceTarget: ResolvedBacklogTarget | undefined;
-  let workspaceResolutionEvidence: readonly WorkspaceMatchEvidence[] = [];
-  let requirementDiscovery: ReturnType<typeof loadWorkspaceDiscovery> | undefined;
-  let requirementFailureCode: string | undefined;
-  let workspaceResolutionSource: "explicit" | "environment" | "cwd_manifest" | "requirement_discovery" =
-    containsCanonicalWorkspaceSelector(args) ? "explicit" : (process.env["ROLL_WORKSPACE"] ?? "").trim() !== ""
-      ? "environment"
-      : "cwd_manifest";
-  {
-    const scoped = stripBacklogScopeArgs(args);
-    if (!scoped.ok) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
-    const selectorArgs: string[] = [];
-    const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
-    if (workspaceIndex >= 0) selectorArgs.push(...workspaceSelectorArgs(args[workspaceIndex + 1] ?? ""));
-    let decision = resolveBacklogCommandTarget(selectorArgs, "mutation");
-    if (!decision.ok && decision.code === "target_missing" && allowedCards !== undefined && allowedCards.size > 0) {
-      const discovery = loadWorkspaceDiscovery({ rollHome: workspaceRollHome() });
-      requirementDiscovery = discovery;
-      const requirementDecision = resolveRequirementMatchedWorkspace({
-        storyIds: [...allowedCards],
-        workspaces: discovery.workspaces,
-        diagnostics: discovery.diagnostics,
-        cwd: process.cwd(),
-        operation: "mutation",
-      });
-      if (requirementDecision.ok) {
-        decision = resolveBacklogCommandTarget(
-          workspaceSelectorArgs(requirementDecision.target.workspaceId),
-          "mutation",
-        );
-        workspaceResolutionSource = "requirement_discovery";
-        workspaceResolutionEvidence = requirementDecision.target.evidence;
-      } else {
-        requirementFailureCode = requirementDecision.code;
-      }
-    }
-    if (!decision.ok) {
-      if (requirementFailureCode !== undefined) {
-        process.stderr.write(`loop run-once: ${requirementFailureCode}\n`);
-        return 1;
-      }
-      return emitBacklogTargetError(decision);
-    } else {
-      if ("aggregate" in decision) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
-      workspaceTarget = decision;
-    }
-  }
-  let coreWorktreeHeal: ReturnType<typeof checkCoreWorktreeContamination>;
-  let id: { path: string; slug: string };
-  let workspaceBinding: { workspaceId: string; runtimeRoot: string; backlogPath: string } | undefined;
-  if (workspaceTarget === undefined) {
-    process.stderr.write("loop run-once: missing_execution_context\n");
-    return 1;
-  } else {
-    workspaceBinding = {
-      workspaceId: workspaceTarget.workspaceId,
-      runtimeRoot: workspaceTarget.runtimeRoot,
-      backlogPath: workspaceTarget.backlogPath,
-    };
-    coreWorktreeHeal = checkCoreWorktreeContamination(workspaceTarget.workspaceRoot);
-    id = { path: workspaceTarget.workspaceRoot, slug: workspaceTarget.workspaceId };
-  }
-  const cycleId = makeCycleId();
+  // FIX-1209: preflight — detect and heal core.worktree contamination BEFORE
+  // resolving project identity. The harness systematically writes core.worktree
+  // into the shared main checkout's git config every cycle (FIX-914 family),
+  // causing `rev-parse --show-toplevel` to return a cycle worktree path — making
+  // projectIdentity() resolve to the wrong checkout. Detect and unset before
+  // any identity-dependent code runs. Also stores the healing detail so an ALERT
+  // can be written once `alertsPath` is available.
+  const identityRoot = (process.env["ROLL_MAIN_PROJECT"] ?? "").trim() || process.cwd();
+  const coreWorktreeHeal = checkCoreWorktreeContamination(identityRoot);
+
+  const id = await projectIdentity(identityRoot);
+  // US-CYCLE-013: a resume reuses the handed-off cycle's id (its retained
+  // workspace + lease); a fresh build mints a new cycle id.
+  const cycleId = resumeCycleId ?? makeCycleId();
 
   // A leftover `com.roll.loop.*` plist for this project is debris worth clearing.
   //
@@ -1029,64 +1063,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   }
 
   const branch = `loop/cycle-${cycleId}`;
-  let workspaceExecution;
-  if (workspaceTarget !== undefined) {
-    const discovery = requirementDiscovery ?? loadExplicitWorkspaceDiscovery({
-        rollHome: workspaceRollHome(),
-        workspaceId: workspaceTarget.workspaceId,
-      });
-    const facts = discovery.workspaces.find(
-      (entry) => entry.candidate.workspaceId === workspaceTarget?.workspaceId,
-    );
-    if (facts === undefined) {
-      process.stderr.write("loop run-once: missing_execution_context\n");
-      return 1;
-    }
-    if (allowedCards !== undefined && allowedCards.size > 0) {
-      const allDiscovery = requirementDiscovery ?? loadWorkspaceDiscovery({ rollHome: workspaceRollHome() });
-      const validation = validateRequirementMatchedWorkspace({
-        target: facts,
-        workspaces: allDiscovery.workspaces,
-        storyIds: [...allowedCards],
-        operation: "mutation",
-      });
-      if (!validation.ok) {
-        process.stderr.write(`loop run-once: ${validation.code}\n`);
-        return 1;
-      }
-      workspaceResolutionEvidence = validation.evidence;
-    }
-    const built = buildWorkspaceExecutionContext({
-      facts: {
-        candidate: facts.candidate,
-        manifest: facts.manifest,
-        authorities: deriveWorkspaceExecutionAuthorities(facts.candidate.canonicalRoot),
-      },
-      source: workspaceResolutionSource,
-      evidence: workspaceResolutionEvidence,
-    });
-    if (!built.ok) {
-      process.stderr.write(`loop run-once: ${built.error.code}\n`);
-      return 1;
-    }
-    workspaceExecution = built.context;
-  }
-  const selectedRepository = canonicalWorkspaceRepositorySelector(
-    workspaceExecution,
-    repositorySelector.selector,
-  );
-  if (!selectedRepository.ok) {
-    process.stderr.write(`loop run-once: ${selectedRepository.code}\n`);
-    return 1;
-  }
-  const ctx: CycleContext = {
-    cycleId,
-    branch,
-    loop: "ci" as never,
-    workspaceContextScope: "issue_required",
-    ...(workspaceExecution === undefined ? {} : { workspaceExecution }),
-    ...(selectedRepository.repoId === undefined ? {} : { repositorySelector: selectedRepository.repoId }),
-  };
+  const ctx = { cycleId, branch, loop: "ci" as never };
 
   if (dryRun) {
     const plan = dryRunPlan(ctx);
@@ -1096,12 +1073,6 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
         `# project: ${id.slug}`,
         `# cycle:   ${cycleId}`,
         `# branch:  ${branch}`,
-        `# workspace: ${ctx.workspaceExecution?.workspace.workspaceId ?? "legacy"}`,
-        `# story:   ${allowedCards === undefined ? "scheduler-pick" : [...allowedCards].join(",")}`,
-        `# context-source: ${ctx.workspaceExecution?.resolution.source ?? "legacy"}`,
-        ...(selectedRepository.repoId === undefined
-          ? []
-          : [`# repository: ${selectedRepository.repoId} (${selectedRepository.alias ?? "unknown"})`]),
         "#",
         "# command plan (orchestrator → executor):",
         ...plan.map((l) => `  ${l}`),
@@ -1111,12 +1082,6 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
       ].join("\n"),
     );
     return 0;
-  }
-
-  if (workspaceBinding !== undefined) {
-    process.env["ROLL_WORKSPACE"] = workspaceBinding.workspaceId;
-    process.env["ROLL_PROJECT_RUNTIME_DIR"] = workspaceBinding.runtimeRoot;
-    process.env["ROLL_WORKSPACE_BACKLOG_PATH"] = workspaceBinding.backlogPath;
   }
 
   const rt = runtimeDir(id.path);
@@ -1149,12 +1114,19 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     alertsPath,
     lockPath: join(rt, "inner.lock"),
     heartbeatPath: join(rt, "heartbeat"),
-    ...(workspaceBinding === undefined
-      ? {}
-      : { storyLeasePath: join(rt, "locks", "leases") }),
     worktreePath: join(rt, "worktrees", `cycle-${cycleId}`),
   };
 
+  // US-CYCLE-013 — old-reader gate: with the v1 handoff flag OFF (the serial
+  // runner), a project whose events carry cycle-handoff/v1 facts must be
+  // refused (`upgrade_required`) — never run/recovered as a serial duplicate.
+  if (!handoffEnabled() && handoffUpgradeRequired(id.path).required) {
+    const lang = resolveLang({ rollLang: process.env["ROLL_LANG"], lcAll: process.env["LC_ALL"], lang: process.env["LANG"] });
+    process.stderr.write(`loop run-once: ${handoffUpgradeMessage(lang)}\n`);
+    return 1;
+  }
+
+  const allowedCards = parseAllowedCardsEnv();
   if (allowedCards === undefined) {
     const goLockOwner = readLockOwner(join(rt, "go.lock"));
     if (isOwnerHeld(goLockOwner, Math.floor(Date.now() / 1000), GO_LOCK_STALE_SEC)) {
@@ -1212,7 +1184,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
       lang: process.env["LANG"],
     });
     const guardLines: string[] = [];
-    const net = await (deps.requireNetwork ?? requireNetwork)(`loop run-once (cycle ${cycleId})`, id.path, {
+    const net = await requireNetwork(`loop run-once (cycle ${cycleId})`, id.path, {
       lang,
       emit: (line) => {
         guardLines.push(line);
@@ -1237,32 +1209,30 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   // FIX-1019 / FIX-1020: before burning agent tokens, verify the project has a
   // pushable GitHub remote. Missing remote / unreachable repo → fast failure
   // with an actionable ALERT instead of N failed cycles.
-  if (workspaceBinding === undefined) {
-    const repoCheck = (deps.checkRepoPushable ?? checkRepoPushable)(id.path);
-    if (!repoCheck.ok) {
-      writeRepoAlert(alertsPath, paths.eventsPath, cycleId, repoCheck);
-      const lang = resolveLang({
-        rollLang: process.env["ROLL_LANG"],
-        lcAll: process.env["LC_ALL"],
-        lang: process.env["LANG"],
-      });
-      const key =
-        repoCheck.reason === "not_git"
-          ? "loop.not_a_git_repo"
-          : repoCheck.reason === "no_remote"
-            ? "loop.no_remote"
-            : "loop.repo_unreachable";
-      process.stderr.write(
-        `loop run-once: ${t(v3Catalog, lang, key)}\n` +
-          `loop run-once: ${repoCheck.detail !== "" ? `(${repoCheck.detail})` : ""}\n`,
-      );
-      return 1;
-    }
+  const repoCheck = checkRepoPushable(id.path);
+  if (!repoCheck.ok) {
+    writeRepoAlert(alertsPath, paths.eventsPath, cycleId, repoCheck);
+    const lang = resolveLang({
+      rollLang: process.env["ROLL_LANG"],
+      lcAll: process.env["LC_ALL"],
+      lang: process.env["LANG"],
+    });
+    const key =
+      repoCheck.reason === "not_git"
+        ? "loop.not_a_git_repo"
+        : repoCheck.reason === "no_remote"
+          ? "loop.no_remote"
+          : "loop.repo_unreachable";
+    process.stderr.write(
+      `loop run-once: ${t(v3Catalog, lang, key)}\n` +
+        `loop run-once: ${repoCheck.detail !== "" ? `(${repoCheck.detail})` : ""}\n`,
+    );
+    return 1;
   }
 
   // FIX-204A: an empty workflow document = a blind agent burning tokens for
   // nothing — halt loudly BEFORE any lock/worktree/agent side effect.
-  const skillBody = (deps.readSkillBody ?? readSkillBody)(id.path);
+  const skillBody = readSkillBody(id.path);
   if (skillBody === null) {
     const msg =
       `[${new Date().toISOString()}] ALERT loop run-once: roll-loop SKILL.md not found ` +
@@ -1283,15 +1253,15 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
 
   // Build scoped route dependencies. Legacy local/pairing configuration is not
   // consulted by the execution path.
-  const routeDeps: RouteDeps = (deps.buildRouteDeps ?? buildLoopRouteDeps)(id.path);
+  const routeDeps: RouteDeps = buildLoopRouteDeps(id.path);
 
   // FIX-220: a run marked ROLL_LOOP_FORCE=1 is one an owner is watching in a
   // terminal — strip --verbose and --output-format stream-json so they see
   // readable text instead of a JSON flood. (US-LOOP-117: this used to be set for
   // you by `roll loop now`; that verb is gone, so the owner exports it.)
   const isInteractive = (process.env["ROLL_LOOP_FORCE"] ?? "").trim() !== "";
-  let interactiveAgentSpawn = deps.agentSpawn;
-  if (interactiveAgentSpawn === undefined && isInteractive) {
+  let interactiveAgentSpawn: AgentSpawn | undefined;
+  if (isInteractive) {
     interactiveAgentSpawn = (agent, opts) => realAgentSpawn(agent, { ...opts, interactive: true });
     interactiveAgentSpawn.supportedPurposes = realAgentSpawn.supportedPurposes;
   }
@@ -1301,9 +1271,20 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     paths,
     skillBody,
     routeDeps,
-    ...(workspaceBinding === undefined ? {} : { backlogPath: workspaceBinding.backlogPath }),
     ...(interactiveAgentSpawn !== undefined ? { agentSpawn: interactiveAgentSpawn } : {}),
   });
+
+  // US-CYCLE-013 — retained-tail resume. Explicit `--resume <cycleId>`, or an
+  // AUTO-resume when the flag is on and exactly one live handoff exists (the
+  // go-driver's next tick then processes the promoted tail). The resume is
+  // driven by the event-backed projection, NEVER inferred from a directory
+  // name; the RunnerPaths reuse the cycle's recorded workspace.
+  const autoResumeCycleId = handoffEnabled() ? singleLiveHandoffCycleId(paths.eventsPath) : undefined;
+  const resumeTarget = resumeCycleId ?? autoResumeCycleId;
+  if (resumeTarget !== undefined) {
+    return runResumedTail(id.path, rt, alertsPath, resumeTarget, skillBody, routeDeps);
+  }
+
   const ports =
     allowedCards === undefined
       ? basePorts
@@ -1328,7 +1309,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   // at most one network call per machine per day, fully best-effort, NEVER blocks
   // the cycle. A miss (offline / curl absent) is a silent no-op.
   try {
-    await (deps.warnIfBinaryStale ?? warnIfBinaryStale)(rollHome(), rollVersion(), (msg) => {
+    await warnIfBinaryStale(rollHome(), rollVersion(), (msg) => {
       try {
         appendFileSync(alertsPath, `${msg}\n`, "utf8");
       } catch {
@@ -1342,42 +1323,25 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   // US-LOOP-096: branch-leak canary circuit breaker — if ephemeral branches /
   // worktrees have piled up (cleanup contract broke), refuse to start a new
   // cycle (it would only add more), write a PAUSE + ALERT, and skip this tick.
-  const canaryTripped = workspaceBinding === undefined
-    ? (deps.branchCanaryTrips ?? branchCanaryTrips)(id.path, id.slug, rt, alertsPath)
-    : (deps.workspaceBranchCanaryTrips ?? workspaceBranchCanaryTrips)({
-        workspaceId: workspaceBinding.workspaceId,
-        workspaceRoot: id.path,
-        runtimeRoot: rt,
-        alertsPath,
-      });
-  if (canaryTripped) {
+  if (branchCanaryTrips(id.path, id.slug, rt, alertsPath)) {
     process.stdout.write("loop run-once: branch-leak canary tripped — loop paused (see ALERT); skipped\n");
     return 0;
   }
 
   // US-DELIV-009: pre-pick reconcile tick — merge any CI-green awaiting_merge
   // PRs before starting new work. Idempotent, crash-safe, silent.
-  if (workspaceBinding === undefined) {
-    try {
-      await (deps.runReconcileTick ?? runReconcileTick)(id.path, { silent: true });
-    } catch {
-      /* reconcile tick must never block the cycle */
-    }
+  try {
+    await runReconcileTick(id.path, { silent: true });
+  } catch {
+    /* reconcile tick must never block the cycle */
   }
 
   // FIX-204D: between here and the walk's own finally, signals get a clean
   // teardown instead of a half-state corpse.
-  const disposeSignals = installCycleSignalTeardown(
-    paths,
-    cycleId,
-    branch,
-    id.path,
-    rt,
-    (ownedCycleId) => ports.capacity.releaseCurrent(ownedCycleId),
-  );
+  const disposeSignals = installCycleSignalTeardown(paths, cycleId, branch, id.path, rt);
   let result;
   try {
-    result = await runCycleOnce({ ports, ctx });
+    result = await runCycleOnce({ ports, ctx, handoff: handoffEnabled() });
   } finally {
     disposeSignals();
   }
@@ -1387,15 +1351,33 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     );
     return 0;
   }
-  process.stdout.write(`loop run-once: cycle ${cycleId} → ${result.terminal ?? "unknown"}\n`);
-
-  if (result.terminal === "waiting_capacity") {
+  // US-CYCLE-013 F1 — durable admission refused (build slot occupied by another
+  // holder under the scheduler mutex, or admission_unknown): the Builder never
+  // spawned and no parallel build started. Returns 1 (mirrors the resume
+  // refusal) — a direct concurrent `roll loop run-once` cannot bypass the
+  // scheduler.
+  if (result.admissionBlocked !== undefined) {
     process.stdout.write(
-      "loop run-once: machine agent capacity is busy — Story returned to Todo for a later tick\n" +
-        "loop run-once: 机器 agent 容量正忙——Story 已回到 Todo，等待后续 tick\n",
+      `loop run-once: admission refused (${result.admissionBlocked}) — no parallel build started\n`,
+    );
+    return 1;
+  }
+  // US-CYCLE-013: a durable handoff is a NON-terminal stop — the build is
+  // complete but the tail (evaluation/test/publish) runs later in the retained
+  // workspace. `roll loop status` shows `builder complete — tail capacity full`.
+  if (result.handedOff === true) {
+    process.stdout.write(
+      `loop run-once: cycle ${cycleId} → handed off (builder_ready); tail retained; evaluation/test/publish resume later in the recorded workspace\n`,
     );
     return 0;
   }
+  if (result.recoveryRecorded === true) {
+    process.stdout.write(
+      `loop run-once: cycle ${cycleId} → serial_recovery (leases retained); explicit recovery required; no automatic deletion\n`,
+    );
+    return 0;
+  }
+  process.stdout.write(`loop run-once: cycle ${cycleId} → ${result.terminal ?? "unknown"}\n`);
 
   // US-AGENT-041: reviewer-triggered re-split. If THIS cycle's independent
   // reviewer flagged the SCOPE as too large (a resize signal on a low score),
@@ -1569,7 +1551,7 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
     const failedAgent = (result.state?.ctx?.agent ?? "").trim();
     const zeroTcr = isZeroTcrStall(result.terminal, tcr);
     if (sid !== "" && failedAgent !== "" && zeroTcr) {
-      const backlogFile = resolvedBacklogFile(id.path);
+      const backlogFile = join(id.path, ".roll", "backlog.md");
       const bus = new EventBus();
       // FIX-932 kill-switch: only attempt the agent SWAP when auto-recovery is on.
       // ROLL_LOOP_NO_AUTO_RECOVER=1 skips switch + split entirely → the zero-TCR
@@ -1686,27 +1668,25 @@ export async function loopRunOnceCommand(args: string[], deps: LoopRunOnceDeps =
   // US-DELIV-009: post-publish reconcile tick — after the cycle terminal,
   // reconcile all awaiting_merge cycles. A CI-green PR gets merge_now→merged
   // →delivered on the next tick. Idempotent, crash-safe, silent.
-  if (workspaceBinding === undefined) {
-    try {
-      await (deps.runReconcileTick ?? runReconcileTick)(id.path, { silent: true });
-    } catch {
-      /* reconcile tick must never block the cycle terminal */
-    }
+  try {
+    await runReconcileTick(id.path, { silent: true });
+  } catch {
+    /* reconcile tick must never block the cycle terminal */
+  }
 
-    // FIX-243: merge-evidence backfill — claim-shaped rows (built/published/
-    // failed) whose cycle branch's PR really MERGED flip to merged/delivered.
-    // Best-effort + bounded (≤20 gh probes); never blocks the cycle terminal.
-    try {
-      const credited = await (deps.backfillMergedRuns ?? backfillMergedRuns)(id.path, paths.runsPath);
-      for (const c of credited) {
-        process.stdout.write(
-          `loop run-once: backfill credited cycle ${c.cycleId} → merged (${c.mergeCommit})\n` +
-            `loop run-once: 回填记账 cycle ${c.cycleId} → 已合并 (${c.mergeCommit})\n`,
-        );
-      }
-    } catch {
-      /* backfill must never mask the cycle terminal result */
+  // FIX-243: merge-evidence backfill — claim-shaped rows (built/published/
+  // failed) whose cycle branch's PR really MERGED flip to merged/delivered.
+  // Best-effort + bounded (≤20 gh probes); never blocks the cycle terminal.
+  try {
+    const credited = await backfillMergedRuns(id.path, paths.runsPath);
+    for (const c of credited) {
+      process.stdout.write(
+        `loop run-once: backfill credited cycle ${c.cycleId} → merged (${c.mergeCommit})\n` +
+          `loop run-once: 回填记账 cycle ${c.cycleId} → 已合并 (${c.mergeCommit})\n`,
+      );
     }
+  } catch {
+    /* backfill must never mask the cycle terminal result */
   }
 
   const breaker = applyCorrectionCircuitBreaker(id.path, id.slug, paths.eventsPath, alertsPath);
@@ -1834,7 +1814,7 @@ export async function egressBlocked(
 
 /** True iff a PAUSE marker exists for this project/slug. */
 function isLoopPaused(projectPath: string, slug: string): boolean {
-  return existsSync(join(runtimeDir(projectPath), `PAUSE-${slug}`));
+  return existsSync(join(projectPath, ".roll", "loop", `PAUSE-${slug}`));
 }
 
 /**
@@ -1846,32 +1826,19 @@ function isLoopPaused(projectPath: string, slug: string): boolean {
  * after US-LOOP-094/095 is 0-1 worktrees + 0 ephemeral branches.
  */
 function branchCanaryTrips(projectPath: string, slug: string, rt: string, alertsPath: string): boolean {
-  let ephemeralBranchCount = 0;
-  try {
-    const out = execFileSync("git", ["-C", projectPath, "branch", "--format=%(refname:short)"], { encoding: "utf8" });
-    ephemeralBranchCount = out.split("\n").map((s) => s.trim()).filter((b) => b !== "" && isEphemeralBranch(b)).length;
-  } catch {
-    /* best-effort — a git hiccup must not block the cycle */
-  }
-  let worktreeCount = 0;
-  try {
-    // Count only cycle worktree DIRECTORIES — not stray lock/log/tmp files a
-    // readdir would otherwise inflate the count with (→ false canary trip).
-    worktreeCount = readdirSync(join(rt, "worktrees"), { withFileTypes: true })
-      .filter((e) => e.isDirectory()).length;
-  } catch {
-    /* no worktrees dir yet → 0 */
-  }
   const parsed = parseInt(process.env["ROLL_BRANCH_CANARY_MAX"] ?? "", 10);
   const threshold = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BRANCH_CANARY_MAX;
-  const verdict = branchCanaryVerdict({
-    ephemeralBranchCount,
-    worktreeCount,
-    threshold,
-    alreadyPaused: isLoopPaused(projectPath, slug),
-  });
-  if (verdict.shouldPause) {
-    const pauseMarker = join(runtimeDir(projectPath), `PAUSE-${slug}`);
+  let audit: ReturnType<typeof auditWorktrees> | undefined;
+  try {
+    audit = auditWorktrees({ repoRoot: projectPath, home: process.env["HOME"] ?? "" });
+  } catch {
+    // Inspection is a safety precondition.  Never reinterpret an inspection
+    // failure as an empty directory or a zero-count canary.
+  }
+  const leakSafetyTotal = audit === undefined ? Number.POSITIVE_INFINITY : managedWorkspaceMeasures(audit).leakSafetyTotal;
+  const shouldPause = audit === undefined || audit.inspectionUnavailable === true || leakSafetyTotal > threshold;
+  if (shouldPause) {
+    const pauseMarker = join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
     // FIX-1273 AC1: enumerate the EXACT counted branches + loop worktrees with
     // their fresh audit disposition so the pause is auditable and points at the
     // safe recovery route — not a bare number. The audit runs ONLY on trip (rare)
@@ -1879,17 +1846,15 @@ function branchCanaryTrips(projectPath: string, slug: string, rt: string, alerts
     let msg: string;
     let event: ReturnType<typeof formatCanaryTripReport>["event"] | null = null;
     try {
-      const audit = auditWorktrees({ repoRoot: projectPath, home: process.env["HOME"] ?? "" });
+      if (audit === undefined) throw new Error("worktree inspection unavailable");
       const report = formatCanaryTripReport(audit, threshold, Date.now());
       msg = report.alert;
       event = report.event;
     } catch {
-      // Fall back to the light count if the audit itself hiccups — the pause must
-      // still be written; only the enumeration degrades.
       msg =
-        `# ALERT — loop auto-paused: branch/worktree leak canary tripped (US-LOOP-096 / FIX-1273)\n\n` +
-        `**Leak count**: ${verdict.total} (ephemeral branches ${ephemeralBranchCount} + worktrees ${worktreeCount}) > threshold ${threshold}\n` +
-        `**Safe recovery**: \`roll worktree cleanup --dry-run\` → \`--apply\` → \`roll loop resume\`\n`;
+        `# ALERT — loop auto-paused: managed workspace inspection unavailable (US-LOOP-123)\n\n` +
+        `**Safety state**: unknown; no zero-count fallback is permitted.\n` +
+        `**Recovery**: inspect \`roll worktree audit\` and resolve the registration/truth fault before \`roll loop resume\`.\n`;
     }
     try {
       mkdirSync(dirname(pauseMarker), { recursive: true });
@@ -1910,90 +1875,7 @@ function branchCanaryTrips(projectPath: string, slug: string, rt: string, alerts
       }
     }
   }
-  return verdict.tripped;
-}
-
-export interface WorkspaceBranchCanaryInput {
-  readonly workspaceId: string;
-  readonly workspaceRoot: string;
-  readonly runtimeRoot: string;
-  readonly alertsPath: string;
-}
-
-function writeWorkspaceCanaryPause(input: WorkspaceBranchCanaryInput, message: string): void {
-  const pauseMarker = join(input.runtimeRoot, `PAUSE-${input.workspaceId}`);
-  try {
-    mkdirSync(input.runtimeRoot, { recursive: true });
-    writeFileSync(pauseMarker, message, "utf8");
-  } catch {
-    /* stdout still makes the failure observable */
-  }
-  try {
-    appendFileSync(input.alertsPath, `${message}\n`, "utf8");
-  } catch {
-    /* stdout still makes the failure observable */
-  }
-}
-
-export function workspaceBranchCanaryTrips(
-  input: WorkspaceBranchCanaryInput,
-  auditWorkspace: typeof auditWorkspaceWorktrees = auditWorkspaceWorktrees,
-): boolean {
-  const pauseMarker = join(input.runtimeRoot, `PAUSE-${input.workspaceId}`);
-  const alreadyPaused = existsSync(pauseMarker);
-  const parsed = Number.parseInt(process.env["ROLL_BRANCH_CANARY_MAX"] ?? "", 10);
-  const threshold = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BRANCH_CANARY_MAX;
-  let audit: ReturnType<typeof auditWorkspaceWorktrees>;
-  try {
-    audit = auditWorkspace({
-      selectedWorkspaceId: input.workspaceId,
-      selectedWorkspaceRoot: input.workspaceRoot,
-      rollHome: rollHome(),
-    });
-  } catch (error) {
-    if (!alreadyPaused) {
-      const detail = error instanceof Error ? error.message : String(error);
-      writeWorkspaceCanaryPause(
-        input,
-        `# ALERT — Workspace loop auto-paused: worktree audit failed\n\n` +
-          `**Workspace**: ${input.workspaceId}\n` +
-          `**Failure**: ${detail}\n` +
-          `**Safe recovery**: \`roll worktree audit --workspace ${input.workspaceId}\` → ` +
-          `\`roll worktree cleanup --workspace ${input.workspaceId} --dry-run\` → ` +
-          `\`--apply\` → \`roll loop resume --workspace ${input.workspaceId}\`\n`,
-      );
-    }
-    return true;
-  }
-  const verdict = branchCanaryVerdict({
-    ephemeralBranchCount: audit.summary.ephemeralBranches,
-    worktreeCount: audit.summary.worktrees,
-    threshold,
-    alreadyPaused,
-  });
-  if (verdict.shouldPause) {
-    const branches = audit.ephemeralBranches.length === 0
-      ? "  - none"
-      : audit.ephemeralBranches.map((branch) => `  - ${branch.repoId}:${branch.branch}`).join("\n");
-    const worktrees = audit.records.length === 0
-      ? "  - none"
-      : audit.records.map((record) =>
-          `  - ${record.workspaceId ?? "unknown"}/${record.storyId ?? "unknown"}/` +
-          `${record.repositoryAlias ?? record.repoId ?? "unknown"}: ${record.path} [${record.disposition}]`,
-        ).join("\n");
-    writeWorkspaceCanaryPause(
-      input,
-      `# ALERT — Workspace loop auto-paused: branch/worktree leak canary tripped\n\n` +
-        `**Workspace**: ${input.workspaceId}\n` +
-        `**Leak count**: ${verdict.total} (ephemeral branches ${audit.summary.ephemeralBranches} + ` +
-        `worktrees ${audit.summary.worktrees}) > threshold ${threshold}\n\n` +
-        `**Counted branches**\n${branches}\n\n` +
-        `**Counted worktrees**\n${worktrees}\n\n` +
-        `**Safe recovery**: \`roll worktree cleanup --workspace ${input.workspaceId} --dry-run\` → ` +
-        `\`--apply\` → \`roll loop resume --workspace ${input.workspaceId}\`\n`,
-    );
-  }
-  return verdict.tripped;
+  return shouldPause;
 }
 
 export interface RepoPushableResult {

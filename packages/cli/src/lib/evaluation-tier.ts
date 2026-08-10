@@ -1,4 +1,7 @@
 /**
+ * @responsibility Resolves the evaluation risk-tier from a card's lint-validated risk_tier.
+ */
+/**
  * US-CYCLE-008 — evaluation risk-tier resolution.
  *
  * A card's `risk_tier` (declared in its design-contract/spec frontmatter, added

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Guards repository visibility for image evidence.
+ */
+/**
  * US-PHYSICAL-008 — repository visibility guard for image evidence.
  *
  * Before any screenshot/image evidence is committed into a git repo, roll checks

@@ -1,5 +1,5 @@
 /**
- * US-DELIV-004 — attest/ac-map push 前硬闸 (evidenceGateBeforePush, fail-loud).
+ * US-DELIV-004 / RL-DELIV-010 — attest/ac-map push 前硬闸 (evidenceGateBeforePush, fail-loud).
  *
  * Design .roll/features/delivery-reconciler/delivery-reconciler-design.md
  * §3.2/§4/§8: BEFORE the cycle branch is pushed, the runner checks that the

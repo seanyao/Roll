@@ -157,8 +157,6 @@ describe("US-GOAL-002 — roll loop go", () => {
     const r = await capture(() => loopGoCommand(["--help"], completeGoalDeps(p)));
     expect(r.code).toBe(0);
     expect(r.out).toContain("Usage: roll loop go");
-    expect(r.out).toContain("--workspace <id|path>");
-    expect(r.out).toContain("one Workspace runtime and backlog");
     expect(r.out).toContain("--for <duration>");
     expect(r.out).toContain("--max-cycles <n>");
     // The cost/usage CONTROL flags are gone — the loop stops on NO PROGRESS.
@@ -975,7 +973,7 @@ describe("US-GOAL-004 — no-progress suppression", () => {
 
   it("FIX-1239: refuses autonomous work when the repo-local roll package is newer than the running runner", async () => {
     const p = project();
-    writeFileSync(join(p, "package.json"), JSON.stringify({ name: "@seanyao/roll", version: "99.0.0" }) + "\n");
+    writeFileSync(join(p, "package.json"), JSON.stringify({ name: "@bipo-ape/roll", version: "99.0.0" }) + "\n");
     let calls = 0;
     const deps: LoopGoDeps = {
       identity: () => Promise.resolve({ path: p, slug: "proj-abc123" }),
@@ -1152,45 +1150,6 @@ updatedAt: 2026-06-11T12:00:00Z
 // (reset), appends a no-delivery row (increment → STOP at K), or appends no row
 // at all (the no-cycle-terminal backstop breaks). GOAL_NO_PROGRESS_STOP === 3.
 describe("US-GOAL-005 — dead-loop breaker is airtight (no spin-hole)", () => {
-  it("US-WS-017b: capacity waiting stops this session without progress penalties or pausing the goal", async () => {
-    const p = project();
-    writeBacklog(p, [
-      "| [US-CAPACITY](.roll/features/goal-mode/US-CAPACITY/spec.md) | waits for agent capacity | 📋 Todo |",
-    ]);
-    let calls = 0;
-    const deps: LoopGoDeps = {
-      identity: () => Promise.resolve({ path: p, slug: "proj-abc123" }),
-      pid: () => 12345,
-      nowSec: () => 1_780_008_000 + calls,
-      nowIso: () => `2026-06-11T12:45:${String(calls).padStart(2, "0")}Z`,
-      hasTmux: () => false,
-      startTmux: () => false,
-      runOnce: async ({ projectPath }) => {
-        calls += 1;
-        writeFileSync(
-          join(projectPath, ".roll", "loop", "runs.jsonl"),
-          `${JSON.stringify({ story_id: "US-CAPACITY", cycle_id: `capacity-${calls}`, status: "waiting_capacity", outcome: "waiting_capacity", tcr_count: 0 })}\n`,
-          { flag: "a" },
-        );
-        return 0;
-      },
-    };
-
-    const result = await capture(() => loopGoCommand(["--worker", "--cards", "US-CAPACITY", "--max-cycles", "4"], deps));
-
-    expect(result.code).toBe(0);
-    expect(calls).toBe(1);
-    const goal = parseGoalYaml(readFileSync(join(p, ".roll", "loop", "goal.yaml"), "utf8"));
-    expect(goal.status).toBe("active");
-    expect(goal.progress).toBeUndefined();
-    expect(readEvents(p)).toContainEqual(expect.objectContaining({
-      type: "goal:session_end",
-      reason: "waiting_capacity",
-      status: "active",
-    }));
-    expect(readEvents(p).some((event) => event.type === "goal:gate_tripped" && event.reason === "no_progress_breaker")).toBe(false);
-  });
-
   it("FIX-1268b: screen-locked wait cycles do not advance the no-progress breaker", async () => {
     const p = project();
     writeBacklog(p, [
@@ -2801,5 +2760,295 @@ describe("FIX-1472 (supervisor review) — buildRunOnceChildEnv sets guided EXPL
       {},
     );
     expect(env[GOAL_GUIDED_ENV]).toBe("1");
+  });
+});
+
+// ── US-CYCLE-013 — scheduler mutex + FIFO admission (matrix #4/#5/#6/#9/#10) ─
+import { EventBus, projectCycleHandoff, projectHandoffCapacity } from "@roll/core";
+import type { HandoffIdentity, ManagedWorkspaceSet, RollEvent } from "@roll/spec";
+import { handoffSchedulerDecision, latestHandedOffCycleId, nextHandoffQueueSequence, runHandedOffSince, type HandoffSchedulerInput } from "../src/commands/loop-go.js";
+
+function handoffWorkspace(cycleId: string, storyId: string): ManagedWorkspaceSet {
+  return {
+    schema: 1,
+    runId: cycleId,
+    storyId,
+    kind: "cycle",
+    topology: "solo",
+    members: [{
+      repositoryId: "repo-id",
+      workspaceKey: `cycle-${cycleId}`,
+      relativeLocator: `cycle-${cycleId}`,
+      checkoutRef: { kind: "detached", head: "base-sha" },
+      publishRef: `refs/heads/loop/cycle-${cycleId}`,
+    }],
+  };
+}
+
+function handoffIdentity(cycleId: string, storyId: string, fence = "fence"): HandoffIdentity {
+  return {
+    schema: "cycle-handoff/v1",
+    cycleId,
+    storyId,
+    workspace: handoffWorkspace(cycleId, storyId),
+    branch: `loop/cycle-${cycleId}`,
+    builderHead: "head-sha",
+    baseSha: "base-sha",
+    builderEvidenceRefs: [],
+    builderValidationRef: `builder-validation:${cycleId}:1`,
+    profile: "standard",
+    attempt: 1,
+    fence,
+  };
+}
+
+function handoffProjectDir(tag: string): { eventsPath: string; lockPath: string } {
+  const rt = mkdtempSync(join(tmpdir(), `roll-loopgo-handoff-${tag}-`));
+  dirs.push(rt);
+  return { eventsPath: join(rt, "events.ndjson"), lockPath: join(rt, "handoff.lock") };
+}
+
+function writeHandoffEvents(eventsPath: string, events: RollEvent[]): void {
+  const bus = new EventBus();
+  for (const ev of events) bus.appendEvent(eventsPath, ev);
+}
+
+function baseInput(p: { eventsPath: string; lockPath: string }, nowSec = 1_780_000_000): HandoffSchedulerInput {
+  return { eventsPath: p.eventsPath, lockPath: p.lockPath, nowSec };
+}
+
+describe("US-CYCLE-013 — handoffSchedulerDecision (project-wide mutex + FIFO)", () => {
+  it("promotes the oldest ready holder when the tail is free (before any new admission)", () => {
+    const p = handoffProjectDir("promote");
+    const A = handoffIdentity("cA", "US-A");
+    writeHandoffEvents(p.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+    ]);
+    const decision = handoffSchedulerDecision(baseInput(p));
+    expect(decision.decision).toBe("promoted");
+    if (decision.decision === "promoted") expect(decision.cycleId).toBe("cA");
+    const view = projectCycleHandoff(new EventBus().readEvents(p.eventsPath), "cA");
+    expect(view?.state).toBe("waiting_for_evaluation_or_test");
+  });
+
+  it("with a build-slot holder (ready) while A owns the tail, the next card is durably queued — matrix #4/#10", () => {
+    const p = handoffProjectDir("queue");
+    const A = handoffIdentity("cA", "US-A");
+    const B = handoffIdentity("cB", "US-B");
+    writeHandoffEvents(p.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence", identity: A, previousReadyKey: "ready:US-A:1:fence", next: "evaluate_or_test", ts: 4 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 5 },
+      { type: "worktree:allocated", workspace: handoffWorkspace("cB", "US-B"), ts: 6 },
+      { type: "cycle:admitted", eventId: "e5", idempotencyKey: "admit:cB:1", identity: B, queueSequence: 2, ts: 7 },
+      { type: "cycle:builder_ready", eventId: "e6", idempotencyKey: "ready:US-B:1:fence", identity: B, reason: "tail_capacity_full", ts: 8 },
+    ]);
+    const decision = handoffSchedulerDecision({
+      ...baseInput(p),
+      nextStory: { storyId: "US-C", requestedByCycleId: "cC" },
+    });
+    expect(decision.decision).toBe("queued");
+    if (decision.decision === "queued") {
+      expect(decision.storyId).toBe("US-C");
+      expect(decision.reason).toBe("build_slot_full");
+      expect(decision.queueSequence).toBe(3);
+    }
+    // The queued entry is visible in the capacity graph.
+    const cap = projectHandoffCapacity(new EventBus().readEvents(p.eventsPath));
+    expect(cap.tailCycleId).toBe("cA");
+    expect(cap.readyHolderCycleId).toBe("cB");
+    expect(cap.queue.map((q) => q.storyId)).toEqual(["US-C"]);
+    // The ready holder still owns the ONE build slot — C cannot start.
+    expect(cap.buildHolderCycleId).toBe("cB");
+  });
+
+  it("capacity free → admit the next card (the run-once child performs the durable admitted append)", () => {
+    const p = handoffProjectDir("admit");
+    const decision = handoffSchedulerDecision({ ...baseInput(p), nextStory: { storyId: "US-B", requestedByCycleId: "cB" } });
+    expect(decision.decision).toBe("admit");
+  });
+
+  it("the mutex serializes: a held handoff.lock yields admission_unknown (fail closed, no decision event)", () => {
+    const p = handoffProjectDir("mutex");
+    // Hold the mutex from "another process" — a directory lock the helper
+    // cannot take over while its (fake) owner is live.
+    mkdirSync(p.lockPath, { recursive: true });
+    writeFileSync(join(p.lockPath, "meta.json"), JSON.stringify({ pid: process.pid, hostname: "", startedAt: Math.floor(Date.now() / 1000), cycleId: "other" }), "utf8");
+    const decision = handoffSchedulerDecision({ ...baseInput(p), nextStory: { storyId: "US-B", requestedByCycleId: "cB" } });
+    expect(decision.decision).toBe("admission_unknown");
+    // No decision event was written (the append is the linearization point).
+    const events = new EventBus().readEvents(p.eventsPath);
+    expect(events.length).toBe(0);
+  });
+
+  it("A frees the tail before B completes → B is promoted on the next scheduler tick (matrix #5/#6)", () => {
+    const p = handoffProjectDir("free");
+    const A = handoffIdentity("cA", "US-A");
+    const B = handoffIdentity("cB", "US-B");
+    writeHandoffEvents(p.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence", identity: A, previousReadyKey: "ready:US-A:1:fence", next: "evaluate_or_test", ts: 4 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 5 },
+      { type: "cycle:tail_completed", eventId: "e5", idempotencyKey: "tail_completed:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 6 },
+      { type: "cycle:cleanup_completed", eventId: "e6", idempotencyKey: "cleanup_completed:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", releasedWorkspace: true, ts: 7 },
+      { type: "worktree:allocated", workspace: handoffWorkspace("cB", "US-B"), ts: 8 },
+      { type: "cycle:admitted", eventId: "e7", idempotencyKey: "admit:cB:1", identity: B, queueSequence: 2, ts: 9 },
+      { type: "cycle:builder_ready", eventId: "e8", idempotencyKey: "ready:US-B:1:fence", identity: B, reason: "tail_capacity_full", ts: 10 },
+    ]);
+    // Before the tick: B is ready, A is terminal — the tail is FREE.
+    const capBefore = projectHandoffCapacity(new EventBus().readEvents(p.eventsPath));
+    expect(capBefore.readyHolderCycleId).toBe("cB");
+    expect(capBefore.tailCycleId).toBeUndefined();
+    const decision = handoffSchedulerDecision(baseInput(p));
+    expect(decision.decision).toBe("promoted");
+    if (decision.decision === "promoted") expect(decision.cycleId).toBe("cB");
+    const capAfter = projectHandoffCapacity(new EventBus().readEvents(p.eventsPath));
+    expect(capAfter.tailCycleId).toBe("cB");
+    expect(capAfter.buildHolderCycleId).toBeUndefined();
+  });
+
+  it("queue sequence is monotonic across queued + admitted facts", () => {
+    const p = handoffProjectDir("seq");
+    const A = handoffIdentity("cA", "US-A");
+    writeHandoffEvents(p.eventsPath, [
+      { type: "cycle:queued", eventId: "e1", idempotencyKey: "queue:US-X:1", storyId: "US-X", requestedByCycleId: "cx", queueSequence: 1, reason: "build_slot_full", ts: 1 },
+      { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 2 },
+      { type: "cycle:admitted", eventId: "e2", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 3, ts: 3 },
+    ]);
+    expect(nextHandoffQueueSequence(p.eventsPath)).toBe(4);
+  });
+
+  it("runHandedOffSince/latestHandedOffCycleId read the durable handoff (build, not terminal)", () => {
+    const p = handoffProjectDir("handed");
+    const A = handoffIdentity("cA", "US-A");
+    writeHandoffEvents(p.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+    ]);
+    expect(runHandedOffSince(p.eventsPath, "cA")).toBe(true);
+    expect(latestHandedOffCycleId(p.eventsPath)).toBe("cA");
+    // After the tail reaches a terminal, it is no longer a live handoff.
+    writeHandoffEvents(p.eventsPath, [
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence", identity: A, previousReadyKey: "ready:US-A:1:fence", next: "evaluate_or_test", ts: 4 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 5 },
+      { type: "cycle:tail_completed", eventId: "e5", idempotencyKey: "tail_completed:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 6 },
+      { type: "cycle:cleanup_completed", eventId: "e6", idempotencyKey: "cleanup_completed:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", releasedWorkspace: true, ts: 7 },
+    ]);
+    expect(runHandedOffSince(p.eventsPath, "cA")).toBe(false);
+    expect(latestHandedOffCycleId(p.eventsPath)).toBeUndefined();
+  });
+
+  // US-CYCLE-013 F1 — idempotent queued append (matrix #2): two consecutive
+  // scheduler ticks with the same blocked next card append EXACTLY ONE
+  // `cycle:queued`; the second tick returns the SAME queueSequence (FIFO
+  // position stable — a fresh monotonic sequence would push the card to the
+  // back of the FIFO on every tick).
+  it("F1: a card already live in the queue is NOT re-appended (same FIFO sequence on the next tick)", () => {
+    const p = handoffProjectDir("queue-idempotent");
+    const A = handoffIdentity("cA", "US-A");
+    const B = handoffIdentity("cB", "US-B");
+    writeHandoffEvents(p.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence", identity: A, previousReadyKey: "ready:US-A:1:fence", next: "evaluate_or_test", ts: 4 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 5 },
+      { type: "worktree:allocated", workspace: handoffWorkspace("cB", "US-B"), ts: 6 },
+      { type: "cycle:admitted", eventId: "e5", idempotencyKey: "admit:cB:1", identity: B, queueSequence: 2, ts: 7 },
+      { type: "cycle:builder_ready", eventId: "e6", idempotencyKey: "ready:US-B:1:fence", identity: B, reason: "tail_capacity_full", ts: 8 },
+    ]);
+    const input = { ...baseInput(p, 1_780_000_100), nextStory: { storyId: "US-C", requestedByCycleId: "cC" } };
+    const first = handoffSchedulerDecision(input);
+    expect(first.decision).toBe("queued");
+    if (first.decision === "queued") expect(first.queueSequence).toBe(3);
+    // Second tick, same blocked card — must NOT append a second cycle:queued.
+    const second = handoffSchedulerDecision({ ...input, nowSec: 1_780_000_200 });
+    expect(second.decision).toBe("queued");
+    if (second.decision === "queued") {
+      expect(second.queueSequence).toBe(3); // FIFO position stable
+      expect(second.storyId).toBe("US-C");
+    }
+    const events = new EventBus().readEvents(p.eventsPath);
+    const queued = events.filter((ev) => ev.type === "cycle:queued");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ storyId: "US-C", queueSequence: 3 });
+    // The capacity graph still shows exactly one queue row for US-C.
+    const cap = projectHandoffCapacity(events);
+    expect(cap.queue.map((q) => q.storyId)).toEqual(["US-C"]);
+  });
+
+  // US-CYCLE-013 F1 — the go worker NEVER hands a `queued` card to run-once
+  // (matrix #1): runOnceCalls === 0, the queue line is printed, a cycle:queued
+  // event exists, no cycle:admitted for the blocked card, and the loop
+  // continues (no no-cycle-terminal pause — the queued card is progress being
+  // waited on). The worker exits on the next tick's PAUSE marker.
+  it("F1: a queued verdict makes the go worker skip the build (runOnce not called)", async () => {
+    const p = project();
+    const savedFlag = process.env["ROLL_CYCLE_HANDOFF_V1"];
+    process.env["ROLL_CYCLE_HANDOFF_V1"] = "1";
+    try {
+      writeBacklog(p, [
+        "| [US-B](.roll/features/loop-engine/US-B/spec.md) | queued card | 📋 Todo |",
+      ]);
+      // A owns the live tail; the READY holder occupies the one build slot, so
+      // the scheduler queues US-B on every tick until a slot frees (the ready
+      // holder can NOT be promoted while A's tail is live).
+      const A = handoffIdentity("cA", "US-A");
+      const READY = handoffIdentity("cREADY", "US-READY");
+      writeHandoffEvents(join(p, ".roll", "loop", "events.ndjson"), [
+        { type: "worktree:allocated", workspace: handoffWorkspace("cA", "US-A"), ts: 1 },
+        { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+        { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+        { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence", identity: A, previousReadyKey: "ready:US-A:1:fence", next: "evaluate_or_test", ts: 4 },
+        { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence", cycleId: "cA", attempt: 1, fence: "fence", ts: 5 },
+        { type: "worktree:allocated", workspace: handoffWorkspace("cREADY", "US-READY"), ts: 6 },
+        { type: "cycle:admitted", eventId: "e5", idempotencyKey: "admit:cREADY:1", identity: READY, queueSequence: 2, ts: 7 },
+        { type: "cycle:builder_ready", eventId: "e6", idempotencyKey: "ready:US-READY:1:fence", identity: READY, reason: "tail_capacity_full", ts: 8 },
+      ]);
+      let runOnceCalls = 0;
+      let sleepCalls = 0;
+      const deps: LoopGoDeps = {
+        identity: () => Promise.resolve({ path: p, slug: "proj-abc123" }),
+        pid: () => 12345,
+        nowSec: () => 1_780_000_300,
+        nowIso: () => "2026-06-11T11:00:00Z",
+        hasTmux: () => false,
+        startTmux: () => false,
+        runOnce: async () => {
+          runOnceCalls += 1;
+          return 0;
+        },
+        sleep: async () => {
+          sleepCalls += 1;
+          // Free the worker on the next tick: the queued card is being waited
+          // on, so the only way out of the wait-loop is a PAUSE marker.
+          writeFileSync(join(p, ".roll", "loop", "PAUSE-proj-abc123"), "paused\n");
+        },
+      };
+
+      const r = await capture(() => loopGoCommand(["--worker"], deps));
+
+      expect(r.code).toBe(0);
+      // The queued card was NEVER handed to the runner.
+      expect(runOnceCalls).toBe(0);
+      expect(sleepCalls).toBeGreaterThanOrEqual(1); // waited for a free slot
+      // The queue line is printed with the FIFO sequence + reason.
+      expect(r.out).toContain("handoff queue seq=3 US-B — build_slot_full; awaiting a free slot");
+      // A durable cycle:queued exists; NO admission/build was started for US-B.
+      const events = readEvents(p);
+      expect(events.some((e) => e.type === "cycle:queued" && e.storyId === "US-B")).toBe(true);
+      expect(events.some((e) => e.type === "cycle:admitted" && "identity" in e && e.identity?.storyId === "US-B")).toBe(false);
+      expect(events.some((e) => e.type === "cycle:start")).toBe(false);
+    } finally {
+      if (savedFlag === undefined) delete process.env["ROLL_CYCLE_HANDOFF_V1"];
+      else process.env["ROLL_CYCLE_HANDOFF_V1"] = savedFlag;
+    }
   });
 });

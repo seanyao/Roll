@@ -1,4 +1,5 @@
 /**
+ * @responsibility Observes cross-story coordinator facts for supervisor decisions.
  * US-V4-008 — Supervisor v0: OBSERVE.
  *
  * Supervisor is the project-level coordinator for work not owned by one

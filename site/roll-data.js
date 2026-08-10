@@ -18,7 +18,6 @@ window.RollData = (function () {
     "roll agent",
     "roll backlog",
     "roll config",
-    "roll delivery",
     "roll design",
     "roll doctor",
     "roll help",
@@ -31,7 +30,6 @@ window.RollData = (function () {
     "roll setup",
     "roll status",
     "roll test",
-    "roll workspace",
     "roll update",
   ];
 
@@ -65,7 +63,7 @@ window.RollData = (function () {
       ctas: [
         { label: "How roll-build works", href: "diagrams/roll-build-skill.html", primary: true, external: true },
         { label: "Read the guide", href: "#guides", primary: false },
-        { label: "View on GitHub", href: "https://github.com/seanyao/roll", primary: false, external: true },
+        { label: "View on GitHub", href: "https://github.com/BIPOSVC/ape-roll", primary: false, external: true },
       ],
       meta: ["MIT licensed", "Node 22+", "Works with Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix when available"],
     },
@@ -232,8 +230,7 @@ window.RollData = (function () {
       tiles: [
         { name: "Overview",         path: "guide/en/overview.md",          desc: "Quick start, Supervisor execution model, onboarding samples, feature list." },
         { name: "Methodology",      path: "guide/en/methodology.md",       desc: "Markdown-as-code, INVEST stories, two-tier .roll/backlog.md index." },
-        { name: "Loop",             path: "guide/en/loop.md",              desc: "Session-driven execution, subcommands, tmux visibility, PR inbox." },
-        { name: "Workspace Doctor", path: "guide/en/workspace-doctor.md",  desc: "Read-only Workspace drift diagnosis and bounded typed repairs." },
+        { name: "Loop",             path: "guide/en/loop.md",              desc: "Scheduling, subcommands, tmux visibility, PR inbox." },
         { name: "Dream",            path: "guide/en/dream.md",             desc: "On-demand code health scan and REFACTOR generation." },
         { name: "Peer",             path: "guide/en/peer.md",              desc: "Cross-agent review protocol — AGREE / REFINE / OBJECT / ESCALATE." },
         { name: "Skills",           path: "guide/en/skills.md",            desc: "Skill catalog and the decision tree for picking the right one." },
@@ -274,7 +271,7 @@ window.RollData = (function () {
       ctas: [
         { label: "roll-build 详解", href: "diagrams/roll-build-skill.html", primary: true, external: true },
         { label: "查看文档", href: "#guides", primary: false },
-        { label: "GitHub",  href: "https://github.com/seanyao/roll", primary: false, external: true },
+        { label: "GitHub",  href: "https://github.com/BIPOSVC/ape-roll", primary: false, external: true },
       ],
       meta: ["MIT 协议", "Node 22+", "支持 Claude · Antigravity · Codex · Cursor · Kimi · Pi · Reasonix（可用时）"],
     },
@@ -442,8 +439,7 @@ window.RollData = (function () {
       tiles: [
         { name: "概述",        path: "guide/zh/overview.md",          desc: "快速开始、Supervisor 执行模型、接入样例、功能列表。" },
         { name: "方法论",       path: "guide/zh/methodology.md",       desc: "Markdown 即代码、INVEST 故事、.roll/backlog.md 两层索引。" },
-        { name: "Loop",       path: "guide/zh/loop.md",              desc: "会话驱动执行、子命令、tmux 可见性、PR 收件箱。" },
-        { name: "Workspace Doctor", path: "guide/zh/workspace-doctor.md", desc: "只读 Workspace 漂移诊断与有界类型化修复。" },
+        { name: "Loop",       path: "guide/zh/loop.md",              desc: "调度、子命令、tmux 可见性、PR 收件箱。" },
         { name: "Dream",      path: "guide/zh/dream.md",             desc: "按需代码健康巡检与 REFACTOR 生成。" },
         { name: "Peer",       path: "guide/zh/peer.md",              desc: "跨 Agent 评审协议 — AGREE / REFINE / OBJECT / ESCALATE。" },
         { name: "技能",        path: "guide/zh/skills.md",            desc: "技能目录与选用决策树。" },

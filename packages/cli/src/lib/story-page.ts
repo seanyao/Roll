@@ -1,4 +1,7 @@
 /**
+ * @responsibility Generates shared story-card pages.
+ */
+/**
  * Shared story-card page generator (US-META-005/006/007).
  *
  * One source of truth for the per-story `spec.md` + `index.html` skeleton and
@@ -40,13 +43,6 @@ export interface StoryCardMeta {
   estMin?: number;
   /** US-CYCLE-005 — risk tier (low|high; drives US-CYCLE-008 evaluation depth). */
   riskTier?: "low" | "high";
-  /** Optional execution-ready Workspace repository contract. */
-  repositories?: readonly {
-    readonly alias: string;
-    readonly access: "read" | "write";
-    readonly requiredDelivery?: boolean;
-    readonly baseRef?: string;
-  }[];
 }
 
 /** Lifecycle phases every story page carries, addressed by stable key. */
@@ -69,16 +65,6 @@ export function renderSpecMd(meta: StoryCardMeta): string {
     (meta.estMin !== undefined ? `est_min: ${meta.estMin}\n` : "") +
     (meta.riskTier !== undefined ? `risk_tier: ${meta.riskTier}\n` : "") +
     `created: ${meta.created}\n` +
-    (meta.repositories === undefined
-      ? ""
-      : `repositories:\n${meta.repositories.map((repository) =>
-        `  - alias: ${repository.alias}\n` +
-        `    access: ${repository.access}\n` +
-        (repository.baseRef === undefined ? "" : `    base_ref: ${repository.baseRef}\n`) +
-        (repository.requiredDelivery === undefined
-          ? ""
-          : `    required_delivery: ${repository.requiredDelivery}\n`)
-      ).join("")}`) +
     `---\n\n` +
     `# ${meta.id}${meta.title !== undefined ? ` — ${meta.title}` : ""}\n` +
     (meta.note !== undefined ? `\n> ${meta.note}\n` : "") +

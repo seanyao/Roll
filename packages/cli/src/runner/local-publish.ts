@@ -1,11 +1,14 @@
 /**
+ * @responsibility Publishes deliveries locally through the shared push-time evidence gate.
+ */
+/**
  * E3 — local-only delivery (`publish_mode: local`) + the shared push-time
  * evidence gate.
  *
  * Split out of terminal-handlers.ts (REFACTOR-060 module-size guard) so the
  * local-delivery ladder has its own testable home. Two exports:
  *
- *   - {@link evaluateEvidenceGate}: the US-DELIV-004 push-time evidence gate,
+ *   - {@link evaluateEvidenceGate}: the US-DELIV-004 / RL-DELIV-010 push-time evidence gate,
  *     shared by BOTH the remote publish path (terminal-handlers `publish_pr`)
  *     and the local landing path here. Extracting it is what lets local mode run
  *     the SAME gate with the SAME fail-loud semantics — the E3 constraint that
@@ -34,9 +37,10 @@ import { resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { acMapCandidates, storySpecPath, verificationReportFresh } from "./attest-gate.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 import { eventTs } from "./runner-time.js";
+import { hostDeltaDeliveryBinding } from "../lib/delta-delivery-binding.js";
 
 /**
- * US-DELIV-004 — the push-time evidence gate, shared by the REMOTE publish path
+ * US-DELIV-004 / RL-DELIV-010 — the push-time evidence gate, shared by the REMOTE publish path
  * and the E3 LOCAL landing path. Verifies the acceptance evidence (attest report
  * + ac-map) was produced BEFORE the work leaves the cycle; appends the
  * `delivery:evidence_gate` event (earned/blocked) and, on a block, the fail-loud
@@ -46,6 +50,17 @@ import { eventTs } from "./runner-time.js";
 function defaultReadProofBody(worktreePath: string): string | undefined {
   try {
     return readFileSync(join(worktreePath, ".roll", "last-test-pass"), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function localHostDeltaBinding(eventsPath: string, storyId: string, runId: string): { delegationId: string; runId: string } | undefined {
+  try {
+    const events = readFileSync(eventsPath, "utf8").split("\n").flatMap((line) => {
+      try { return line === "" ? [] : [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
+    });
+    return hostDeltaDeliveryBinding(events, storyId, runId);
   } catch {
     return undefined;
   }
@@ -225,6 +240,7 @@ export async function executeLocalPublish(
   // fact and there is no PR here.
   if (ctx.storyId !== undefined && ctx.cycleId !== undefined) {
     try {
+      const binding = localHostDeltaBinding(ports.paths.eventsPath, ctx.storyId, ctx.cycleId);
       ports.events.appendEvent(ports.paths.eventsPath, {
         type: "delivery:reconciled",
         cycleId: ctx.cycleId,
@@ -233,6 +249,7 @@ export async function executeLocalPublish(
         mergedBy: "runner",
         mergeCommit: landing.sha,
         signal: "patch_id",
+        ...(binding === undefined ? {} : binding),
         ts: eventTs(ports),
       });
     } catch {

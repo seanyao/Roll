@@ -1,9 +1,11 @@
+/**
+ * @responsibility Declares and runs the network tool adapter.
+ */
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { RequestOptions } from "node:http";
 import type { ToolDeclaration, ToolDeps, ToolInvocation, ToolMeta, ToolResult } from "@roll/spec";
 import { networkInputSchema, networkOutputSchema } from "./schema-contracts.js";
-import { resolveToolExecutionContext, toolCorrelation } from "./workspace-context.js";
 
 export interface NetworkInput {
   url: string;
@@ -51,44 +53,39 @@ export class NetworkTool {
 
   async execute(invocation: ToolInvocation<NetworkInput>, deps: ToolDeps): Promise<ToolResult<NetworkOutput>> {
     const startedAt = deps.now();
-    const scoped = resolveToolExecutionContext(invocation, "issue_required");
-    if (!scoped.ok) {
-      return failure(invocation, startedAt, deps.now(), scoped.error.code, scoped.error.message, false);
-    }
-    const effectiveInvocation = { ...invocation, context: scoped.context };
-    const url = parseUrl(effectiveInvocation.input.url);
-    if (url === undefined) return failure(effectiveInvocation, startedAt, deps.now(), "invalid_input", "invalid URL", false);
+    const url = parseUrl(invocation.input.url);
+    if (url === undefined) return failure(invocation, startedAt, deps.now(), "invalid_input", "invalid URL", false);
 
-    if (effectiveInvocation.policy.sandbox?.network === "blocked") {
-      return failure(effectiveInvocation, startedAt, deps.now(), "policy_denied", "network is blocked by policy", false);
+    if (invocation.policy.sandbox?.network === "blocked") {
+      return failure(invocation, startedAt, deps.now(), "policy_denied", "network is blocked by policy", false);
     }
-    if (!originAllowed(url, effectiveInvocation.policy.sandbox?.allowedOrigins)) {
-      return failure(effectiveInvocation, startedAt, deps.now(), "policy_denied", `origin is outside allowedOrigins: ${url.origin}`, false);
+    if (!originAllowed(url, invocation.policy.sandbox?.allowedOrigins)) {
+      return failure(invocation, startedAt, deps.now(), "policy_denied", `origin is outside allowedOrigins: ${url.origin}`, false);
     }
 
-    const timeoutMs = effectiveInvocation.input.timeoutMs ?? effectiveInvocation.policy.timeoutMs ?? this.declaration.defaults?.timeoutMs ?? 30_000;
-    const attempts = Math.max(1, effectiveInvocation.policy.retry?.attempts ?? this.declaration.defaults?.retry?.attempts ?? 1);
-    const backoffMs = effectiveInvocation.policy.retry?.backoffMs ?? this.declaration.defaults?.retry?.backoffMs ?? 0;
+    const timeoutMs = invocation.input.timeoutMs ?? invocation.policy.timeoutMs ?? this.declaration.defaults?.timeoutMs ?? 30_000;
+    const attempts = Math.max(1, invocation.policy.retry?.attempts ?? this.declaration.defaults?.retry?.attempts ?? 1);
+    const backoffMs = invocation.policy.retry?.backoffMs ?? this.declaration.defaults?.retry?.backoffMs ?? 0;
     let lastFailure: ToolResult<never> | undefined;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       const attemptStartedAt = deps.now();
       try {
-        const output = await requestWithRedirects(url, effectiveInvocation.input, deps, timeoutMs, 0, attemptStartedAt);
+        const output = await requestWithRedirects(url, invocation.input, deps, timeoutMs, 0, attemptStartedAt);
         return {
           ok: true,
           output,
-          meta: meta(effectiveInvocation, startedAt, deps.now(), attempt),
+          meta: meta(invocation, startedAt, deps.now(), attempt),
         };
       } catch (cause) {
         const endedAt = deps.now();
         const timeout = isTimeout(cause);
-        lastFailure = failure(effectiveInvocation, startedAt, endedAt, timeout ? "timeout" : "adapter_error", timeout ? "network request timed out" : "network request failed", true, cause, attempt);
+        lastFailure = failure(invocation, startedAt, endedAt, timeout ? "timeout" : "adapter_error", timeout ? "network request timed out" : "network request failed", true, cause, attempt);
         if (attempt < attempts) await delay(backoffMs);
       }
     }
 
-    return lastFailure ?? failure(effectiveInvocation, startedAt, deps.now(), "adapter_error", "network request failed", true);
+    return lastFailure ?? failure(invocation, startedAt, deps.now(), "adapter_error", "network request failed", true);
   }
 }
 
@@ -218,7 +215,7 @@ function failure(
   invocation: ToolInvocation<NetworkInput>,
   startedAt: number,
   endedAt: number,
-  code: "adapter_error" | "invalid_input" | "policy_denied" | "timeout" | "missing_execution_context" | "invalid_execution_context",
+  code: "adapter_error" | "invalid_input" | "policy_denied" | "timeout",
   message: string,
   retryable: boolean,
   detail?: unknown,
@@ -237,7 +234,6 @@ function failure(
 }
 
 function meta(invocation: ToolInvocation<NetworkInput>, startedAt: number, endedAt: number, attempt?: number): ToolMeta {
-  const correlation = toolCorrelation(invocation);
   return {
     invocationId: invocation.invocationId,
     toolId: invocation.toolId,
@@ -246,6 +242,5 @@ function meta(invocation: ToolInvocation<NetworkInput>, startedAt: number, ended
     endedAt,
     durationMs: Math.max(0, endedAt - startedAt),
     attempt,
-    ...(correlation === undefined ? {} : { correlation }),
   };
 }

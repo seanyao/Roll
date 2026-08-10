@@ -1,4 +1,7 @@
 /**
+ * @responsibility Adapts managed Chrome and DevTools sessions.
+ */
+/**
  * US-BROW-004b — Managed Chrome/DevTools adapter.
  *
  * Runs approved typed actions in an isolated temporary Chrome profile, observes
@@ -211,7 +214,7 @@ export function defaultManagedChromeAdapterDeps(diagnosticsDir: string): Managed
   return {
     launcher: new SystemChromeLauncher(),
     mcpDiagnosticSessionFactory: new McpDiagnosticSessionFactory({
-      emit: defaultMcpEventEmitter(diagnosticsDir),
+      emit: defaultMcpEventEmitter(),
     }),
     fs: nodeAdapterFs(),
     now: () => new Date().toISOString(),
@@ -221,9 +224,9 @@ export function defaultManagedChromeAdapterDeps(diagnosticsDir: string): Managed
   };
 }
 
-function defaultMcpEventEmitter(diagnosticsDir: string): (event: import("./mcp-session.js").McpBrowserSessionEvent) => void {
+function defaultMcpEventEmitter(): (event: import("./mcp-session.js").McpBrowserSessionEvent) => void {
   const ledger = new BrowserOperationLedger();
-  const path = join(diagnosticsDir, "events.ndjson");
+  const path = join(process.cwd(), ".roll", "browser-operations", "events.ndjson");
   return (event) => ledger.recordBrowserEvent(path, event);
 }
 

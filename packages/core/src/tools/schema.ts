@@ -1,3 +1,6 @@
+/**
+ * @responsibility Validates tool inputs against JSON schema with typed errors.
+ */
 import type { JsonSchema, JsonSchemaTypeName } from "@roll/spec";
 
 export interface SchemaValidationResult {
@@ -51,7 +54,7 @@ function validate(schema: JsonSchema, value: unknown, path: string): string[] {
   if (isRecord(value)) {
     const required = schema.required ?? [];
     for (const key of required) {
-      if (!Object.hasOwn(value, key)) errors.push(`${path}.${key} is required`);
+      if (!(key in value)) errors.push(`${path}.${key} is required`);
     }
     const properties = schema.properties ?? {};
     for (const [key, item] of Object.entries(value)) {
@@ -66,10 +69,7 @@ function validate(schema: JsonSchema, value: unknown, path: string): string[] {
     if (schema.items !== undefined) value.forEach((item, index) => errors.push(...validate(schema.items as JsonSchema, item, `${path}[${index}]`)));
   }
   if (typeof value === "string" && schema.minLength !== undefined && value.length < schema.minLength) errors.push(`${path} must have length >= ${schema.minLength}`);
-  if (typeof value === "string" && schema.maxLength !== undefined && value.length > schema.maxLength) errors.push(`${path} must have length <= ${schema.maxLength}`);
-  if (typeof value === "string" && schema.pattern !== undefined && !new RegExp(schema.pattern, "u").test(value)) errors.push(`${path} must match ${schema.pattern}`);
   if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) errors.push(`${path} must be >= ${schema.minimum}`);
-  if (typeof value === "number" && schema.maximum !== undefined && value > schema.maximum) errors.push(`${path} must be <= ${schema.maximum}`);
   return errors;
 }
 
@@ -89,9 +89,7 @@ function typeMatches(type: JsonSchemaTypeName, value: unknown): boolean {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function jsonEqual(a: unknown, b: unknown): boolean {

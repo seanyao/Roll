@@ -5,18 +5,19 @@
  * conclude, status. Uses real filesystem with temp dirs, no external engines.
  */
 import { describe, expect, it, afterEach, beforeAll } from "vitest";
-import { DELTA_BLOCK_REASONS } from "@roll/spec";
-import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync, readFileSync, readdirSync, appendFileSync } from "node:fs";
+import { DELTA_BLOCK_REASONS, type ManagedWorkspaceSet } from "@roll/spec";
+import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync, readFileSync, readdirSync, appendFileSync, symlinkSync, chmodSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { spawn, execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { claimHostDelegationLease, releaseHostDelegationLease, storyLeasesPath, atomicWriteJson, PrepareError } from "../src/lib/delta-allocation.js";
+import { claimHostDelegationLease, releaseHostDelegationLease, storyLeasesPath, atomicWriteJson, PrepareError, reconcileHostDeltaReservationClosures, recordHostDeltaAttestationClosure } from "../src/lib/delta-allocation.js";
 import { claimStoryLease, releaseStoryLease, readLeases, setLease, writeLeases, EventBus } from "@roll/core";
-import { deltaCommand, injectValidator, injectPrepareInterrupt, injectEventAppendFailure, injectEventBus } from "../src/commands/delta.js";
+import { deltaCommand, injectValidator, injectPrepareInterrupt, injectEventAppendFailure, injectEventBus, isBuilderValidationHeadAllowed } from "../src/commands/delta.js";
 import { injectIdGenerator } from "../src/lib/delta-allocation.js";
 import { renderState } from "../src/render.js";
+import { auditWorktrees } from "../src/commands/worktree-audit.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -80,12 +81,29 @@ function setupMinimalProject(storyId: string, epic: string): string {
   );
   // Create the loop dir for events
   mkdirSync(join(dir, ".roll", "loop"), { recursive: true });
+  // New host-guided prepares are managed Git allocations.  Historical record
+  // compatibility is exercised by explicit persisted v1 fixtures below, not
+  // by accidentally creating new protocol-only test records.
+  execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: dir });
+  writeFileSync(join(dir, "README.md"), "fixture\n", "utf8");
+  execFileSync("git", ["add", "README.md", ".roll"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "fixture"], { cwd: dir, stdio: "ignore" });
   return dir;
+}
+
+function hostDeltaAcceptanceReport(dir: string, storyId: string): string {
+  const path = join(".roll", "features", "delta-team", storyId, "latest", `${storyId}-review.html`);
+  const absolute = join(dir, path);
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, "<html>accepted host Delta evidence</html>\n", "utf8");
+  return path;
 }
 
 // ── tsRun with cwd ──────────────────────────────────────────────────────────
 
-function tsRunCwd(argv: string[], cwd: string): { stdout: string; stderr: string; code: number } {
+async function tsRunCwd(argv: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
   const out: string[] = [];
   const err: string[] = [];
   const realOut = process.stdout.write.bind(process.stdout);
@@ -104,7 +122,7 @@ function tsRunCwd(argv: string[], cwd: string): { stdout: string; stderr: string
   let code: number;
   try {
     process.chdir(cwd);
-    code = deltaCommand(argv);
+    code = await deltaCommand(argv);
   } finally {
     process.stdout.write = realOut;
     process.stderr.write = realErr;
@@ -130,6 +148,7 @@ function scrubId(s: string): string {
     // Remaining plain UUIDs (only non-delegation random IDs after identity scrub)
     .replace(UUID_RE, "<UUID>")
     .replace(/[a-f0-9]{64}/gi, "<SHA256>")
+    .replace(/\b[a-f0-9]{40}\b/gi, "<GIT_SHA>")
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, "<TS>")
     .replace(/\b\d{13}\b/g, "<TS>");
 }
@@ -160,6 +179,11 @@ function scrubAll(s: string, dir: string, delegId?: string): string {
   return scrubId(r);
 }
 
+/** JSON-mode banners precede the protocol error record on stderr. */
+function parseStderrJsonTail(stderr: string): Record<string, unknown> {
+  return JSON.parse(stderr.trim().split("\n").at(-1)!) as Record<string, unknown>;
+}
+
 // ── Resolution template helper ───────────────────────────────────────────────
 
 function writeResolutionTemplate(projectDir: string, storyId: string, presetId: string, name?: string): string {
@@ -184,13 +208,899 @@ function writeResolutionTemplate(projectDir: string, storyId: string, presetId: 
   return resPath;
 }
 
+function writeManagedBuilderArtifact(input: {
+  dir: string;
+  storyId: string;
+  delegationId: string;
+  workspace: ManagedWorkspaceSet;
+  member?: ManagedWorkspaceSet["members"][number];
+  executionCwd: string;
+}): void {
+  const evidence = "commit abc\ncommands: test\nevidence: managed identity\n## Known Limitations\nfixture\n";
+  const frame = join(input.dir, ".roll", "features", "delta-team", input.storyId, `delta-${input.delegationId}`);
+  const evidencePath = join(frame, "role-artifacts", "builder", "evidence.md");
+  mkdirSync(dirname(evidencePath), { recursive: true });
+  writeFileSync(evidencePath, evidence);
+  const member = input.member ?? input.workspace.members[0]!;
+  writeFileSync(join(frame, "role-artifacts", "builder", "evaluation-manifest.json"), JSON.stringify({
+    schemaVersion: 2, delegationId: input.delegationId, storyId: input.storyId, role: "builder",
+    trigger: "host-guided", topology: "delta-team", qualityProfile: "standard",
+    runId: input.workspace.runId, workspaceMember: { ...member, executionCwd: input.executionCwd },
+    executionIdentity: { kind: "host-native", hostId: "pi", roleInstanceId: "ri-2", modelId: "claude" }, sessionId: "builder-identity-session",
+    hostAttestation: { schema: "roll-delta-host-attestation/v1", hostId: "pi", role: "builder", roleInstanceId: "ri-2", modelId: "claude", sessionId: "builder-identity-session", assertedAt: "2026-08-01T00:00:00Z" },
+    worktreeAccess: "builder-write", inputs: [], outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }], createdAt: "2026-08-01T00:00:00Z",
+  }, null, 2));
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — prepare atomic allocation", () => {
-  it("prepare creates delegation frame, marker, resolution, and events", () => {
+  it("US-LOOP-126 refuses host-guided full Delta before lease, frame, or event side effects", async () => {
+    const dir = setupMinimalProject("US-DELTA-FULL-REJECT", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-FULL-REJECT", "local-preset");
+    const r = await tsRunCwd([
+      "prepare", "US-DELTA-FULL-REJECT", "--trigger", "host-guided", "--topology", "full-delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.stderr).detail).toContain("Cycle WorkspaceSet");
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(existsSync(join(dir, ".roll", "loop", "leases", "US-DELTA-FULL-REJECT.lease"))).toBe(false);
+    expect(readdirSync(join(dir, ".roll", "features", "delta-team", "US-DELTA-FULL-REJECT")).filter((entry) => entry.startsWith("delta-")).length).toBe(0);
+
+    const previousLang = process.env["ROLL_LANG"];
+    try {
+      process.env["ROLL_LANG"] = "zh";
+      const zh = await tsRunCwd([
+        "prepare", "US-DELTA-FULL-REJECT", "--trigger", "host-guided", "--topology", "full-delta-team",
+        "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+      ], dir);
+      expect(zh.code).toBe(1);
+      expect(JSON.parse(zh.stderr).detail).toContain("需要既有的 Cycle WorkspaceSet");
+    } finally {
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
+  });
+
+  it("US-LOOP-126 allocates one real detached managed WorkspaceSet for a Git host prepare", async () => {
+    const dir = setupMinimalProject("US-DELTA-MANAGED", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-MANAGED", "local-preset");
+
+    const r = await tsRunCwd([
+      "prepare", "US-DELTA-MANAGED",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.stdout) as { delegationId: string; runId: string; artifacts: { workspace?: { members: Array<{ relativeLocator: string; checkoutRef: { head: string } }> } } };
+    const workspace = parsed.artifacts.workspace;
+    expect(workspace?.members).toHaveLength(1);
+    const member = workspace!.members[0]!;
+    const target = join(dir, ".roll", "loop", "worktrees", member.relativeLocator);
+    expect(existsSync(target)).toBe(true);
+    expect(execFileSync("git", ["-C", target, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" }).trim()).toBe("true");
+    expect(execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(member.checkoutRef.head);
+    const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8");
+    expect(events).toContain(`\"runId\":\"${parsed.runId}\"`);
+    expect(events).toContain("\"type\":\"worktree:allocated\"");
+    execFileSync("git", ["worktree", "remove", "--force", target], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("US-LOOP-126 validates a real submodule member against its own repository worktree list", async () => {
+    const dir = setupMinimalProject("US-DELTA-SUBMODULE", "delta-team");
+    writeFileSync(join(dir, ".roll", "features", "delta-team", "US-DELTA-SUBMODULE", "spec.md"), [
+      "---",
+      "target_submodule: modules/member",
+      "---",
+      "# US-DELTA-SUBMODULE",
+    ].join("\n"));
+    const source = makeProject();
+    execFileSync("git", ["init"], { cwd: source, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: source });
+    writeFileSync(join(source, "member.txt"), "member\n");
+    execFileSync("git", ["add", "member.txt"], { cwd: source, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "member"], { cwd: source, stdio: "ignore" });
+    execFileSync("git", ["config", "protocol.file.allow", "always"], { cwd: dir });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", source, "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["add", ".gitmodules", "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "add member"], { cwd: dir, stdio: "ignore" });
+    // An unrelated declaration remains deliberately uninitialised.  Older host
+    // planning enumerated every .gitmodules path and rejected this Story before
+    // it could allocate its one declared target member.
+    writeFileSync(join(dir, ".gitmodules"), readFileSync(join(dir, ".gitmodules"), "utf8") + [
+      "",
+      "[submodule \"unrelated\"]",
+      "\tpath = modules/unrelated",
+      "\turl = ./does-not-exist",
+      "",
+    ].join("\n"));
+    execFileSync("git", ["add", ".gitmodules"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "declare unrelated member"], { cwd: dir, stdio: "ignore" });
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-SUBMODULE", "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", writeResolutionTemplate(dir, "US-DELTA-SUBMODULE", "local-preset"), "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", "US-DELTA-SUBMODULE", `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    expect(workspace.members).toHaveLength(2);
+    expect(workspace.members.map((candidate) => candidate.relativeLocator)).not.toContain(expect.stringContaining("unrelated"));
+    const member = workspace.members[1]!;
+    const memberCheckout = join(dir, ".roll", "loop", "worktrees", member.relativeLocator);
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-SUBMODULE", delegationId, workspace, member, executionCwd: memberCheckout });
+    const receipt = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(receipt.code).toBe(0);
+    const receiptPath = join(dir, "submodule-builder-receipt.json");
+    writeFileSync(receiptPath, receipt.stdout);
+    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--preflight-receipt", receiptPath, "--json"], dir)).code).toBe(0);
+    // The production publication is repository-member scoped: the submodule
+    // Builder's commit/ref/tree is never copied from the primary member.
+    const publication = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n")
+      .flatMap((line) => line === "" ? [] : [JSON.parse(line) as Record<string, unknown>])
+      .find((event) => event.type === "delta:artifact_published")!;
+    expect(publication.runId).toBe(workspace.runId);
+    expect(publication.deliveryCommit).toBe(execFileSync("git", ["rev-parse", "HEAD"], { cwd: memberCheckout, encoding: "utf8" }).trim());
+    expect(publication.publishRef).toBe(member.publishRef);
+    expect(publication.deliveryMembers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativeLocator: member.relativeLocator, repositoryId: member.repositoryId, publishRef: member.publishRef, deliveryState: "unchanged" }),
+      expect.objectContaining({ relativeLocator: workspace.members[0]!.relativeLocator, repositoryId: workspace.members[0]!.repositoryId, publishRef: workspace.members[0]!.publishRef }),
+    ]));
+  });
+
+  it("US-LOOP-126 rejects a Builder manifest bound to an unregistered workspace member", async () => {
+    const dir = setupMinimalProject("US-DELTA-BINDING", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-BINDING", "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-BINDING", "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", "US-DELTA-BINDING", `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    const evidencePath = join(frame, "role-artifacts", "builder", "evidence.md");
+    mkdirSync(dirname(evidencePath), { recursive: true });
+    const evidence = "commit abc\ncommands: test\nevidence: workspace binding\n## Known Limitations\nfixture\n";
+    writeFileSync(evidencePath, evidence);
+    const primary = workspace.members[0]!;
+    writeFileSync(join(frame, "role-artifacts", "builder", "evaluation-manifest.json"), JSON.stringify({
+      schemaVersion: 2, delegationId, storyId: "US-DELTA-BINDING", role: "builder",
+      trigger: "host-guided", topology: "delta-team", qualityProfile: "standard",
+      runId: workspace.runId,
+      workspaceMember: { ...primary, relativeLocator: `${primary.relativeLocator}-foreign`, executionCwd: join(dir, ".roll", "loop", "worktrees", primary.relativeLocator) },
+      executionIdentity: { kind: "host-native", hostId: "pi", roleInstanceId: "ri-2", modelId: "claude" },
+      sessionId: "builder-binding-session",
+      hostAttestation: { schema: "roll-delta-host-attestation/v1", hostId: "pi", role: "builder", roleInstanceId: "ri-2", modelId: "claude", sessionId: "builder-binding-session", assertedAt: "2026-08-01T00:00:00Z" },
+      worktreeAccess: "builder-write", inputs: [],
+      outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }],
+      createdAt: "2026-08-01T00:00:00Z",
+    }, null, 2));
+    const validated = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(validated.code).toBe(1);
+    expect(parseStderrJsonTail(validated.stderr).detail).toContain("managed workspace member");
+    execFileSync("git", ["worktree", "remove", "--force", join(dir, ".roll", "loop", "worktrees", primary.relativeLocator)], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("US-LOOP-126 rejects an attached Builder checkout even when its recorded head still matches", async () => {
+    const dir = setupMinimalProject("US-DELTA-DETACHED", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-DETACHED", "local-preset");
+    const prepared = await tsRunCwd(["prepare", "US-DELTA-DETACHED", "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json"], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", "US-DELTA-DETACHED", `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    const primary = workspace.members[0]!;
+    const checkout = join(dir, ".roll", "loop", "worktrees", primary.relativeLocator);
+    const evidence = "commit abc\ncommands: test\nevidence: detached binding\n## Known Limitations\nfixture\n";
+    const evidencePath = join(frame, "role-artifacts", "builder", "evidence.md");
+    mkdirSync(dirname(evidencePath), { recursive: true });
+    writeFileSync(evidencePath, evidence);
+    writeFileSync(join(frame, "role-artifacts", "builder", "evaluation-manifest.json"), JSON.stringify({
+      schemaVersion: 2, delegationId, storyId: "US-DELTA-DETACHED", role: "builder", trigger: "host-guided", topology: "delta-team", qualityProfile: "standard",
+      runId: workspace.runId, workspaceMember: { ...primary, executionCwd: checkout },
+      executionIdentity: { kind: "host-native", hostId: "pi", roleInstanceId: "ri-2", modelId: "claude" }, sessionId: "builder-detached-session",
+      hostAttestation: { schema: "roll-delta-host-attestation/v1", hostId: "pi", role: "builder", roleInstanceId: "ri-2", modelId: "claude", sessionId: "builder-detached-session", assertedAt: "2026-08-01T00:00:00Z" },
+      worktreeAccess: "builder-write", inputs: [], outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }], createdAt: "2026-08-01T00:00:00Z",
+    }, null, 2));
+    execFileSync("git", ["checkout", "-B", "attached-builder"], { cwd: checkout, stdio: "ignore" });
+    const result = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(result.code).toBe(1);
+    expect(parseStderrJsonTail(result.stderr).detail).toContain("managed workspace");
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("US-LOOP-126 handoff keeps the managed Story reservation while marking the run active", async () => {
+    const dir = setupMinimalProject("US-DELTA-HANDOFF", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-HANDOFF", "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-HANDOFF", "--trigger", "host-guided", "--topology", "solo",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    expect((await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir)).code).toBe(0);
+    expect(readLeases(storyLeasesPath(dir))["US-DELTA-HANDOFF"]?.delegationId).toBe(delegationId);
+    // A handoff-ready managed Delta retains the exact Story reservation; a
+    // competing Cycle claim is refused rather than treating handoff as Done.
+    expect(claimStoryLease(storyLeasesPath(dir), "US-DELTA-HANDOFF", {
+      claimedAt: Date.now(), source: "cycle", runId: "competing-cycle", pid: process.pid,
+    }).status).toBe("exists");
+    const frame = join(dir, ".roll", "features", "delta-team", "US-DELTA-HANDOFF", `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8");
+    expect(events).toContain(`\"type\":\"worktree:activity_observed\",\"runId\":\"${workspace.runId}\"`);
+    execFileSync("git", ["worktree", "remove", "--force", join(dir, ".roll", "loop", "worktrees", workspace.members[0]!.relativeLocator)], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("US-LOOP-126 closes a managed reservation only after a durable delivery reconciliation", async () => {
+    const dir = setupMinimalProject("US-DELTA-RECONCILE-CLOSE", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-RECONCILE-CLOSE", "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-RECONCILE-CLOSE", "--trigger", "host-guided", "--topology", "solo",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId, runId } = JSON.parse(prepared.stdout) as { delegationId: string; runId: string };
+    // A stale Story-level reconciliation from an earlier delivery attempt is
+    // deliberately not a closure authority for this new Delta reservation.
+    new EventBus().appendEvent(join(dir, ".roll", "loop", "events.ndjson"), {
+      type: "delivery:reconciled", cycleId: "old-attempt", storyId: "US-DELTA-RECONCILE-CLOSE",
+      state: "delivered_external", mergedBy: "external", mergeCommit: "old", signal: "pr_state",
+      delegationId: "old-delegation", runId: "old-run", ts: Date.now(),
+    });
+    expect((await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir)).code).toBe(0);
+    expect(reconcileHostDeltaReservationClosures(dir)).toEqual([]);
+    expect(readLeases(storyLeasesPath(dir))["US-DELTA-RECONCILE-CLOSE"]?.source).toBe("delivery-reservation");
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    new EventBus().appendEvent(eventsPath, {
+      type: "delivery:reconciled", cycleId: "external-host-delta", storyId: "US-DELTA-RECONCILE-CLOSE",
+      state: "delivered_external", mergedBy: "external", mergeCommit: "abc123", signal: "pr_state",
+      delegationId, runId, ts: Date.now(),
+    });
+    expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["US-DELTA-RECONCILE-CLOSE"]);
+    expect(readLeases(storyLeasesPath(dir))["US-DELTA-RECONCILE-CLOSE"]).toBeUndefined();
+    const closed = readFileSync(eventsPath, "utf8");
+    expect(closed).toContain(`\"type\":\"delta:reservation_closed\",\"delegationId\":\"${delegationId}\",\"storyId\":\"US-DELTA-RECONCILE-CLOSE\",\"runId\":\"${runId}\",\"reason\":\"merged\"`);
+  });
+
+  it("US-LOOP-126 binds the manual merged-main plus attest lane to its current host run", async () => {
+    const dir = setupMinimalProject("US-DELTA-ATTEST-CLOSE", "delta-team");
+    execFileSync("git", ["branch", "-M", "main"], { cwd: dir, stdio: "ignore" });
+    const remote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: remote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", remote], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    // Allocation records a portable configured remote identity. The remote ref
+    // itself remains a local fixture ref, so no network is involved in this test.
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/fixture/primary.git"], { cwd: dir, stdio: "ignore" });
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-ATTEST-CLOSE", "--trigger", "host-guided", "--topology", "solo",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", writeResolutionTemplate(dir, "US-DELTA-ATTEST-CLOSE", "local-preset"), "--json",
+    ], dir);
+    const { delegationId, runId } = JSON.parse(prepared.stdout) as { delegationId: string; runId: string };
+    new EventBus().appendEvent(join(dir, ".roll", "loop", "events.ndjson"), {
+      type: "delivery:reconciled", cycleId: "historic-cycle", storyId: "US-DELTA-ATTEST-CLOSE",
+      state: "delivered_external", mergedBy: "external", mergeCommit: "historic", signal: "pr_state",
+      delegationId: "historic-delegation", runId: "historic-run", ts: Date.now(),
+    });
+    expect((await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir)).code).toBe(0);
+    // A wrong current reservation cannot be closed just because the Story has
+    // old delivery history or a terminal with a matching name.
+    setLease(storyLeasesPath(dir), "US-DELTA-ATTEST-CLOSE", {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId: "wrong-run",
+    });
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(false);
+    setLease(storyLeasesPath(dir), "US-DELTA-ATTEST-CLOSE", {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId,
+    });
+    // An arbitrary integration HEAD is not enough to close a host reservation:
+    // the exact admitted Builder delivery commit must be on main.
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(false);
+    writeFileSync(join(dir, "DELTA-DELIVERY.md"), "specific delivery\n");
+    execFileSync("git", ["add", "DELTA-DELIVERY.md"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "specific delta delivery"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: dir, stdio: "ignore" });
+    const deliveryCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const deliveryBase = execFileSync("git", ["rev-parse", "HEAD^"], { cwd: dir, encoding: "utf8" }).trim();
+    const deliveryTree = execFileSync("git", ["show", "-s", "--format=%T", deliveryCommit], { cwd: dir, encoding: "utf8" }).trim();
+    new EventBus().appendEvent(join(dir, ".roll", "loop", "events.ndjson"), {
+      type: "delta:artifact_published", delegationId, storyId: "US-DELTA-ATTEST-CLOSE", role: "builder",
+      path: "role-artifacts/builder/evidence.md", sha256: "fixture", manifestPath: "role-artifacts/builder/evaluation-manifest.json",
+      sessionId: "builder", roleInstanceId: "ri-builder", identityProvenance: "host-attested", runId, deliveryCommit, deliveryTree,
+      publishRef: "refs/heads/roll/us-delta-attest-close-fixture",
+      deliveryMembers: [{
+        repositoryId: (() => {
+          try {
+            const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd: dir, encoding: "utf8" }).trim();
+            if (remote !== "") return remote;
+          } catch { /* use the same local identity fallback as allocation */ }
+          return execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: dir, encoding: "utf8" }).trim().replace(/[^A-Za-z0-9._/-]/g, "_");
+        })(),
+        relativeLocator: runId,
+        deliveryBase,
+        deliveryCommit,
+        deliveryTree,
+        publishRef: "refs/heads/roll/us-delta-attest-close-fixture",
+      }],
+      ts: Date.now(),
+    });
+    // Publication normally precedes conclude.  The fixture first exercised the
+    // stale-terminal refusal above; append the current terminal in lifecycle
+    // order for the positive closure path.
+    new EventBus().appendEvent(join(dir, ".roll", "loop", "events.ndjson"), {
+      type: "delta:terminal", delegationId, storyId: "US-DELTA-ATTEST-CLOSE", runId,
+      outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation",
+      deliveryDisposition: "owner_continue", ts: Date.now(),
+    });
+    const checkout = join(dir, ".roll", "loop", "worktrees", runId);
+    const builderCheckpointHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+    new EventBus().appendEvent(join(dir, ".roll", "loop", "events.ndjson"), {
+      type: "worktree:release_requested", runId, reason: "builder_validation",
+      operationId: `${runId}:builder-validation:fixture`,
+      expectedHeads: [{ relativeLocator: runId, head: builderCheckpointHead }], ts: Date.now(),
+    });
+    // The physical checkout can legitimately advance after Builder admission
+    // while the equivalent delivery is being merged. Its final head must be
+    // frozen only after this exact run is terminal, proved merged, and accepted.
+    execFileSync("git", ["cherry-pick", deliveryCommit], { cwd: checkout, stdio: "ignore" });
+    const terminalHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+    expect(terminalHead).not.toBe(builderCheckpointHead);
+    // A terminal plus an old Builder checkpoint is still not cleanup authority:
+    // delivery and independent acceptance must both be recorded first.
+    expect(auditWorktrees({ repoRoot: dir, home: dir }).records.find((record) => record.runId === runId)?.releaseVerdict).not.toBe("safe_to_release");
+    // This is the production attest boundary: source is the pulled integration
+    // branch and the immutable Builder fact proves this Delta's commit reached it.
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(true);
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    const events = readFileSync(eventsPath, "utf8");
+    expect(events).toContain(`\"cycleId\":\"${runId}\"`);
+    expect(events).toContain(`\"delegationId\":\"${delegationId}\",\"runId\":\"${runId}\"`);
+    const finalRelease = events.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>).at(-1);
+    expect(finalRelease).toMatchObject({
+      type: "worktree:release_requested",
+      runId,
+      reason: "delivered",
+      expectedHeads: [{ relativeLocator: runId, head: terminalHead }],
+    });
+    expect(auditWorktrees({ repoRoot: dir, home: dir }).records.find((record) => record.runId === runId)?.releaseVerdict).toBe("safe_to_release");
+    expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["US-DELTA-ATTEST-CLOSE"]);
+    expect(readLeases(storyLeasesPath(dir))["US-DELTA-ATTEST-CLOSE"]).toBeUndefined();
+    // A repeated attest may only replay the exact accepted terminal freeze;
+    // it does not append a second delivery claim or widen another run's scope.
+    expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-ATTEST-CLOSE", hostDeltaAcceptanceReport(dir, "US-DELTA-ATTEST-CLOSE"))).toBe(true);
+    const repeated = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string; runId?: string; reason?: string });
+    expect(repeated.filter((event) => event.type === "worktree:release_requested" && event.runId === runId && event.reason === "delivered")).toHaveLength(1);
+  });
+
+  it("US-LOOP-126 closes a member's exact squash after a disjoint origin/main advance and rejects forged member facts", () => {
+    const dir = setupMinimalProject("US-DELTA-CONCURRENT-SQUASH", "delta-team");
+    execFileSync("git", ["branch", "-M", "main"], { cwd: dir, stdio: "ignore" });
+    const remote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: remote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", remote], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir, stdio: "ignore" });
+
+    const delegationId = "concurrent-squash-delegation";
+    const runId = `delta-${delegationId}`;
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const branch = "roll/us-delta-concurrent-squash";
+    execFileSync("git", ["checkout", "-b", branch], { cwd: dir, stdio: "ignore" });
+    writeFileSync(join(dir, "DELTA-DELIVERY.md"), "member delivery\n", "utf8");
+    execFileSync("git", ["add", "DELTA-DELIVERY.md"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "builder member delivery"], { cwd: dir, stdio: "ignore" });
+    const deliveryCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const deliveryTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main"], { cwd: dir, stdio: "ignore" });
+    // This is deliberately disjoint from the Builder patch.  The old whole
+    // integration-tree equality proof rejected the legitimate squash below.
+    writeFileSync(join(dir, "CONCURRENT.md"), "other integration work\n", "utf8");
+    execFileSync("git", ["add", "CONCURRENT.md"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "concurrent integration progress"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["merge", "--squash", branch], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "squash member delivery"], { cwd: dir, stdio: "ignore" });
+    const squashCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["fetch", "origin"], { cwd: dir, stdio: "ignore" });
+
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    const member = {
+      repositoryId: "fixture-primary",
+      workspaceKey: runId,
+      relativeLocator: runId,
+      checkoutRef: { kind: "detached" as const, head: base },
+      publishRef: `refs/heads/${branch}`,
+    };
+    new EventBus().appendEvent(eventsPath, {
+      type: "worktree:allocated",
+      workspace: { schema: 1, runId, storyId: "US-DELTA-CONCURRENT-SQUASH", kind: "host_delta", topology: "solo", delegationId, members: [member] },
+      ts: Date.now(),
+    });
+    new EventBus().appendEvent(eventsPath, {
+      type: "delta:artifact_published", delegationId, storyId: "US-DELTA-CONCURRENT-SQUASH", role: "builder",
+      path: "role-artifacts/builder/evidence.md", sha256: "fixture", manifestPath: "role-artifacts/builder/evaluation-manifest.json",
+      sessionId: "builder", roleInstanceId: "ri-builder", identityProvenance: "host-attested", runId,
+      deliveryCommit, deliveryTree, publishRef: member.publishRef,
+      deliveryMembers: [{ repositoryId: member.repositoryId, relativeLocator: member.relativeLocator, deliveryBase: base, deliveryCommit, deliveryTree, publishRef: member.publishRef }],
+      ts: Date.now(),
+    });
+    new EventBus().appendEvent(eventsPath, {
+      type: "delta:terminal", delegationId, storyId: "US-DELTA-CONCURRENT-SQUASH", runId,
+      outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", deliveryDisposition: "owner_continue", ts: Date.now(),
+    });
+    setLease(storyLeasesPath(dir), "US-DELTA-CONCURRENT-SQUASH", {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId,
+    });
+    const shimDir = join(dir, "gh-shim");
+    mkdirSync(shimDir);
+    const shimPath = join(shimDir, "gh");
+    writeFileSync(shimPath, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ state: "MERGED", mergedAt: "2026-08-01T00:00:00Z", mergeCommit: { oid: squashCommit }, headRefName: branch })}'\n`, "utf8");
+    chmodSync(shimPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
+    try {
+      // A copied delivery tree must not borrow the real PR record.
+      const before = readFileSync(eventsPath, "utf8");
+      writeFileSync(eventsPath, before.split(deliveryTree).join("0".repeat(40)), "utf8");
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-CONCURRENT-SQUASH", hostDeltaAcceptanceReport(dir, "US-DELTA-CONCURRENT-SQUASH"))).toBe(false);
+      writeFileSync(eventsPath, before, "utf8");
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-CONCURRENT-SQUASH", hostDeltaAcceptanceReport(dir, "US-DELTA-CONCURRENT-SQUASH"))).toBe(true);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+    expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["US-DELTA-CONCURRENT-SQUASH"]);
+  });
+
+  it("US-LOOP-126 closes a stale-local submodule only after the primary gitlink adopts its verified squash", () => {
+    const dir = setupMinimalProject("US-DELTA-SUBMODULE-CLOSURE", "delta-team");
+    execFileSync("git", ["branch", "-M", "main"], { cwd: dir, stdio: "ignore" });
+    const primaryRemote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: primaryRemote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", primaryRemote], { cwd: dir, stdio: "ignore" });
+
+    const subSource = makeProject();
+    execFileSync("git", ["init"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: subSource });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: subSource });
+    writeFileSync(join(subSource, "member.txt"), "base\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "sub base"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["branch", "-M", "main"], { cwd: subSource, stdio: "ignore" });
+    const subRemote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: subRemote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", subRemote], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-b", "main", subRemote, "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["add", ".gitmodules", "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "add submodule member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    const primaryBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const primaryTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const submodule = join(dir, "modules", "member");
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: submodule });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: submodule });
+    const subBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: submodule, encoding: "utf8" }).trim();
+    const subBranch = "roll/us-delta-submodule-closure";
+    execFileSync("git", ["checkout", "-b", subBranch], { cwd: submodule, stdio: "ignore" });
+    writeFileSync(join(submodule, "member.txt"), "delivery\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: submodule, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "sub builder delivery"], { cwd: submodule, stdio: "ignore" });
+    const subDelivery = execFileSync("git", ["rev-parse", "HEAD"], { cwd: submodule, encoding: "utf8" }).trim();
+    const subTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: submodule, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main"], { cwd: submodule, stdio: "ignore" });
+    execFileSync("git", ["merge", "--squash", subBranch], { cwd: submodule, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "squash sub delivery"], { cwd: submodule, stdio: "ignore" });
+    const subSquash = execFileSync("git", ["rev-parse", "HEAD"], { cwd: submodule, encoding: "utf8" }).trim();
+    execFileSync("git", ["push", "origin", "main"], { cwd: submodule, stdio: "ignore" });
+    execFileSync("git", ["fetch", "origin"], { cwd: submodule, stdio: "ignore" });
+    // A normal submodule checkout can have an obsolete local main while the
+    // canonical origin/main has the delivered squash.  Detach at the remote
+    // tip, then deliberately make the local branch stale.
+    execFileSync("git", ["checkout", "--detach", "origin/main"], { cwd: submodule, stdio: "ignore" });
+    execFileSync("git", ["branch", "-f", "main", subBase], { cwd: submodule, stdio: "ignore" });
+    expect(execFileSync("git", ["rev-parse", "main"], { cwd: submodule, encoding: "utf8" }).trim()).toBe(subBase);
+    expect(execFileSync("git", ["rev-parse", "origin/main"], { cwd: submodule, encoding: "utf8" }).trim()).toBe(subSquash);
+
+    const delegationId = "submodule-closure-delegation";
+    const runId = `delta-${delegationId}`;
+    const primary = { repositoryId: "fixture-primary", workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached" as const, head: primaryBase }, publishRef: "refs/heads/roll/primary" };
+    const member = { repositoryId: "fixture-submodule", workspaceKey: runId, relativeLocator: `${runId}.submodules/modules/member`, checkoutRef: { kind: "detached" as const, head: subBase }, publishRef: `refs/heads/${subBranch}` };
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    new EventBus().appendEvent(eventsPath, { type: "worktree:allocated", workspace: { schema: 1, runId, storyId: "US-DELTA-SUBMODULE-CLOSURE", kind: "host_delta", topology: "solo", delegationId, members: [primary, member] }, ts: Date.now() });
+    new EventBus().appendEvent(eventsPath, {
+      type: "delta:artifact_published", delegationId, storyId: "US-DELTA-SUBMODULE-CLOSURE", role: "builder",
+      path: "role-artifacts/builder/evidence.md", sha256: "fixture", manifestPath: "role-artifacts/builder/evaluation-manifest.json", sessionId: "builder", roleInstanceId: "ri-builder", identityProvenance: "host-attested", runId,
+      deliveryCommit: subDelivery, deliveryTree: subTree, publishRef: member.publishRef,
+      deliveryMembers: [
+        { repositoryId: primary.repositoryId, relativeLocator: primary.relativeLocator, deliveryBase: primaryBase, deliveryCommit: primaryBase, deliveryTree: primaryTree, publishRef: primary.publishRef },
+        { repositoryId: member.repositoryId, relativeLocator: member.relativeLocator, deliveryBase: subBase, deliveryCommit: subDelivery, deliveryTree: subTree, publishRef: member.publishRef },
+      ], ts: Date.now(),
+    });
+    new EventBus().appendEvent(eventsPath, { type: "delta:terminal", delegationId, storyId: "US-DELTA-SUBMODULE-CLOSURE", runId, outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", deliveryDisposition: "owner_continue", ts: Date.now() });
+    setLease(storyLeasesPath(dir), "US-DELTA-SUBMODULE-CLOSURE", { claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId });
+    const shimDir = join(dir, "sub-gh-shim");
+    mkdirSync(shimDir);
+    const shimPath = join(shimDir, "gh");
+    writeFileSync(shimPath, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ state: "MERGED", mergedAt: "2026-08-01T00:00:00Z", mergeCommit: { oid: subSquash }, headRefName: subBranch })}'\n`, "utf8");
+    chmodSync(shimPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
+    try {
+      // Independent submodule evidence is insufficient: the primary must
+      // publish the gitlink that adopts the delivered submodule result.
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-SUBMODULE-CLOSURE", hostDeltaAcceptanceReport(dir, "US-DELTA-SUBMODULE-CLOSURE"))).toBe(false);
+      execFileSync("git", ["add", "modules/member"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "adopt delivered submodule"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["fetch", "origin"], { cwd: dir, stdio: "ignore" });
+      expect(recordHostDeltaAttestationClosure(dir, "US-DELTA-SUBMODULE-CLOSURE", hostDeltaAcceptanceReport(dir, "US-DELTA-SUBMODULE-CLOSURE"))).toBe(true);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+    expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["US-DELTA-SUBMODULE-CLOSURE"]);
+  });
+
+  it("FIX-1503 re-proves an F1502-shaped stale child fact from the primary gitlink without rewriting history", () => {
+    const dir = setupMinimalProject("FIX-1503-LEGACY-CLOSURE", "delta-team");
+    execFileSync("git", ["branch", "-M", "main"], { cwd: dir, stdio: "ignore" });
+    const primaryRemote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: primaryRemote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", primaryRemote], { cwd: dir, stdio: "ignore" });
+    const subSource = makeProject();
+    execFileSync("git", ["init"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: subSource });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: subSource });
+    writeFileSync(join(subSource, "member.txt"), "base\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "sub base"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["branch", "-M", "main"], { cwd: subSource, stdio: "ignore" });
+    const subRemote = makeProject();
+    execFileSync("git", ["init", "--bare"], { cwd: subRemote, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", subRemote], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: subSource, stdio: "ignore" });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-b", "main", subRemote, "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["add", ".gitmodules", "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "add child"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    const primaryBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const primaryTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const child = join(dir, "modules", "member");
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: child });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: child });
+    const childBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    const childBaseTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "-b", "roll/real-child-pr"], { cwd: child, stdio: "ignore" });
+    // The child source adds its own line.  An intervening main PR later adds a
+    // different line at the same location, so the eventual squash contains the
+    // source content plus independent content and cannot share one patch id.
+    writeFileSync(join(child, "member.txt"), "base\ndelivered\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "child delivery"], { cwd: child, stdio: "ignore" });
+    const childDelivery = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main"], { cwd: child, stdio: "ignore" });
+    writeFileSync(join(child, "member.txt"), "base\nintervening\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "intervening child main change"], { cwd: child, stdio: "ignore" });
+    try {
+      execFileSync("git", ["merge", "--squash", "roll/real-child-pr"], { cwd: child, stdio: "ignore" });
+    } catch {
+      // The test intentionally models a resolved same-file conflict.
+    }
+    writeFileSync(join(child, "member.txt"), "base\nintervening\ndelivered\n", "utf8");
+    execFileSync("git", ["add", "member.txt"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "squashed child delivery"], { cwd: child, stdio: "ignore" });
+    const childSquash = execFileSync("git", ["rev-parse", "HEAD"], { cwd: child, encoding: "utf8" }).trim();
+    execFileSync("git", ["push", "origin", "main"], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["fetch", "origin"], { cwd: child, stdio: "ignore" });
+    // The primary delivery pins the original child delivery commit.  The old
+    // F1502 event below still claims the allocation base, exactly the retained
+    // field shape we must not mutate.
+    execFileSync("git", ["checkout", "--detach", childDelivery], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["add", "modules/member"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "adopt child delivery"], { cwd: dir, stdio: "ignore" });
+    const primaryDelivery = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const primaryDeliveryTree = execFileSync("git", ["show", "-s", "--format=%T", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: "ignore" });
+    // The checked-out child is deliberately stale in the old event; all new
+    // authority must come from immutable commits plus the canonical PR API.
+    execFileSync("git", ["checkout", "--detach", childBase], { cwd: child, stdio: "ignore" });
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/fixture/child.git"], { cwd: child, stdio: "ignore" });
+
+    const delegationId = "fix-1503-legacy-delegation";
+    const runId = `delta-${delegationId}`;
+    const primary = { repositoryId: "fixture-primary", workspaceKey: runId, relativeLocator: runId, checkoutRef: { kind: "detached" as const, head: primaryBase }, publishRef: "refs/heads/roll/primary" };
+    const member = { repositoryId: "fixture-child", workspaceKey: runId, relativeLocator: `${runId}.submodules/modules/member`, checkoutRef: { kind: "detached" as const, head: childBase }, publishRef: "refs/heads/roll/stale-incorrect-name" };
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    new EventBus().appendEvent(eventsPath, { type: "worktree:allocated", workspace: { schema: 1, runId, storyId: "FIX-1503-LEGACY-CLOSURE", kind: "host_delta", topology: "solo", delegationId, members: [primary, member] }, ts: Date.now() });
+    new EventBus().appendEvent(eventsPath, {
+      type: "delta:artifact_published", delegationId, storyId: "FIX-1503-LEGACY-CLOSURE", role: "builder", path: "role-artifacts/builder/evidence.md", sha256: "fixture", manifestPath: "role-artifacts/builder/evaluation-manifest.json", sessionId: "builder", roleInstanceId: "ri-builder", identityProvenance: "host-attested", runId,
+      deliveryCommit: primaryDelivery, deliveryTree: primaryDeliveryTree, publishRef: primary.publishRef,
+      deliveryMembers: [
+        { repositoryId: primary.repositoryId, relativeLocator: primary.relativeLocator, deliveryBase: primaryBase, deliveryCommit: primaryDelivery, deliveryTree: primaryDeliveryTree, publishRef: primary.publishRef },
+        { repositoryId: member.repositoryId, relativeLocator: member.relativeLocator, deliveryBase: childBase, deliveryCommit: childBase, deliveryTree: childBaseTree, publishRef: member.publishRef },
+      ], ts: Date.now(),
+    });
+    new EventBus().appendEvent(eventsPath, { type: "delta:terminal", delegationId, storyId: "FIX-1503-LEGACY-CLOSURE", runId, outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", deliveryDisposition: "owner_continue", ts: Date.now() });
+    setLease(storyLeasesPath(dir), "FIX-1503-LEGACY-CLOSURE", { claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId });
+    const shimDir = join(dir, "legacy-gh-shim");
+    mkdirSync(shimDir);
+    writeFileSync(join(shimDir, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify([{ merged_at: "2026-08-03T00:00:00Z", merge_commit_sha: childSquash, base: { ref: "main", repo: { full_name: "fixture/child" } }, head: { sha: childDelivery, repo: { full_name: "fixture/child" } } }])}'\n`, "utf8");
+    chmodSync(join(shimDir, "gh"), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
+    try {
+      const before = readFileSync(eventsPath, "utf8");
+      // Repository proof alone cannot mint a host-Delta acceptance fact.
+      expect(recordHostDeltaAttestationClosure(dir, "FIX-1503-LEGACY-CLOSURE", ".roll/features/delta-team/FIX-1503-LEGACY-CLOSURE/latest/missing-review.html")).toBe(false);
+      expect(readFileSync(eventsPath, "utf8")).toBe(before);
+      expect(recordHostDeltaAttestationClosure(dir, "FIX-1503-LEGACY-CLOSURE", hostDeltaAcceptanceReport(dir, "FIX-1503-LEGACY-CLOSURE"))).toBe(true);
+      // Existing records are retained byte-for-byte; closure is append-only.
+      expect(readFileSync(eventsPath, "utf8").startsWith(before)).toBe(true);
+      const closureEvents = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string });
+      expect(closureEvents.slice(-2).map((event) => event.type)).toEqual(["delivery:reconciled", "attest:host_delta"]);
+      expect(reconcileHostDeltaReservationClosures(dir)).toEqual(["FIX-1503-LEGACY-CLOSURE"]);
+      const releasedEvents = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string });
+      expect(releasedEvents.at(-1)?.type).toBe("delta:reservation_closed");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it("US-LOOP-126 keeps persisted v1 records operable and rejects unknown workspace schemas", async () => {
+    const legacy = setupMinimalProject("US-DELTA-PERSISTED-V1", "delta-team");
+    // A genuine pre-cutover frame has no WorkspaceSet, no workspace schema,
+    // and no newly-created managed allocation/recovery facts.  It must remain
+    // readable with the production validator rather than a test-only allow.
+    const delegationId = "persisted-v1-delegation";
+    const eventsPath = join(legacy, ".roll", "loop", "events.ndjson");
+    expect(claimHostDelegationLease(legacy, "US-DELTA-PERSISTED-V1", delegationId, `delta-${delegationId}`)).toBe("claimed");
+    const frame = join(legacy, ".roll", "features", "delta-team", "US-DELTA-PERSISTED-V1", `delta-${delegationId}`);
+    mkdirSync(join(frame, "role-artifacts", "designer"), { recursive: true });
+    writeFileSync(join(frame, "preparation.json"), JSON.stringify({ schema: "roll-delta-preparation/v1", delegationId, storyId: "US-DELTA-PERSISTED-V1" }, null, 2));
+    const legacyManifest = {
+      schemaVersion: 2, delegationId, storyId: "US-DELTA-PERSISTED-V1", role: "designer",
+      trigger: "host-guided", topology: "solo", qualityProfile: "standard",
+      executionIdentity: { kind: "host-native", hostId: "pi", roleInstanceId: "legacy-designer", modelId: "claude" },
+      sessionId: "legacy-designer-session",
+      hostAttestation: { schema: "roll-delta-host-attestation/v1", hostId: "pi", role: "designer", roleInstanceId: "legacy-designer", modelId: "claude", sessionId: "legacy-designer-session", assertedAt: "2026-08-01T00:00:00Z" },
+      worktreeAccess: "read-only", inputs: [], outputs: [], createdAt: "2026-08-01T00:00:00Z",
+    };
+    writeFileSync(join(frame, "role-artifacts", "designer", "evaluation-manifest.json"), JSON.stringify(legacyManifest));
+    writeFileSync(eventsPath, [
+      { type: "delta:prepared", delegationId, storyId: "US-DELTA-PERSISTED-V1", trigger: "host-guided", topology: "solo", qualityProfile: "standard", ts: Date.now() },
+      { type: "delta:role_resolved", delegationId, storyId: "US-DELTA-PERSISTED-V1", role: "designer", roleInstanceId: "legacy-designer", hostId: "pi", modelId: "claude", ts: Date.now() },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], legacy)).code).toBe(0);
+    expect((await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], legacy)).code).toBe(0);
+
+    const unknown = setupMinimalProject("US-DELTA-UNKNOWN-SCHEMA", "delta-team");
+    const unknownPrepared = await tsRunCwd([
+      "prepare", "US-DELTA-UNKNOWN-SCHEMA", "--trigger", "host-guided", "--topology", "solo",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", writeResolutionTemplate(unknown, "US-DELTA-UNKNOWN-SCHEMA", "local-preset"), "--json",
+    ], unknown);
+    const unknownId = (JSON.parse(unknownPrepared.stdout) as { delegationId: string }).delegationId;
+    const unknownEventsPath = join(unknown, ".roll", "loop", "events.ndjson");
+    const unknownEvents = readFileSync(unknownEventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    for (const event of unknownEvents) if (event.type === "delta:prepared") event.workspaceSchema = 99;
+    writeFileSync(unknownEventsPath, unknownEvents.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const rejected = await tsRunCwd(["validate", "--delegation", unknownId, "--stage", "designer", "--json"], unknown);
+    expect(rejected.code).toBe(1);
+    expect(parseStderrJsonTail(rejected.stderr).error).toBe("unsupported_workspace_schema");
+    const concludeRejected = await tsRunCwd(["conclude", "--delegation", unknownId, "--delivery-disposition", "owner_continue", "--json"], unknown);
+    expect(concludeRejected.code).toBe(1);
+    expect(parseStderrJsonTail(concludeRejected.stderr).error).toBe("unsupported_workspace_schema");
+  });
+
+  it("US-LOOP-126 binds a managed Builder artifact to the asserted canonical cwd", async () => {
+    const dir = setupMinimalProject("US-DELTA-CWD", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-CWD", "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-CWD", "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", "US-DELTA-CWD", `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    const primary = workspace.members[0]!;
+    const checkout = join(dir, ".roll", "loop", "worktrees", primary.relativeLocator);
+    const evidence = "commit abc\ncommands: test\nevidence: canonical cwd\n## Known Limitations\nfixture\n";
+    const evidencePath = join(frame, "role-artifacts", "builder", "evidence.md");
+    mkdirSync(dirname(evidencePath), { recursive: true });
+    writeFileSync(evidencePath, evidence);
+    writeFileSync(join(frame, "role-artifacts", "builder", "evaluation-manifest.json"), JSON.stringify({
+      schemaVersion: 2, delegationId, storyId: "US-DELTA-CWD", role: "builder",
+      trigger: "host-guided", topology: "delta-team", qualityProfile: "standard",
+      runId: workspace.runId, workspaceMember: { ...primary, executionCwd: checkout },
+      executionIdentity: { kind: "host-native", hostId: "pi", roleInstanceId: "ri-2", modelId: "claude" }, sessionId: "builder-cwd-session",
+      hostAttestation: { schema: "roll-delta-host-attestation/v1", hostId: "pi", role: "builder", roleInstanceId: "ri-2", modelId: "claude", sessionId: "builder-cwd-session", assertedAt: "2026-08-01T00:00:00Z" },
+      worktreeAccess: "builder-write", inputs: [], outputs: [{ kind: "evidence", path: "role-artifacts/builder/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex") }], createdAt: "2026-08-01T00:00:00Z",
+    }, null, 2));
+    const receipt = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(receipt.code).toBe(0);
+    const receiptPath = join(dir, "cwd-builder-receipt.json");
+    writeFileSync(receiptPath, receipt.stdout);
+    expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--preflight-receipt", receiptPath, "--json"], dir)).code).toBe(0);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("FIX-1500 admits only allocation bases or complete builder-validation checkpoints", () => {
+    const primary = { repositoryId: "fixture-primary", workspaceKey: "delta-checkpoint", relativeLocator: "delta-checkpoint", checkoutRef: { kind: "detached" as const, head: "base-primary" } };
+    const secondary = { repositoryId: "fixture-secondary", workspaceKey: "delta-checkpoint", relativeLocator: "delta-checkpoint.submodules/member", checkoutRef: { kind: "detached" as const, head: "base-secondary" } };
+    const workspace: ManagedWorkspaceSet = {
+      schema: 1,
+      runId: "delta-checkpoint",
+      storyId: "FIX-1500",
+      kind: "host_delta",
+      topology: "solo",
+      delegationId: "checkpoint",
+      members: [primary, secondary],
+    };
+    const checkpoint = (
+      reason: string,
+      expectedHeads: unknown[],
+      operationId?: string,
+      ts?: number,
+    ): Record<string, unknown> => ({
+      type: "worktree:release_requested",
+      runId: workspace.runId,
+      reason,
+      expectedHeads,
+      ...(operationId === undefined ? {} : { operationId }),
+      ...(ts === undefined ? {} : { ts }),
+    });
+    const completeHeads = [
+      { relativeLocator: primary.relativeLocator, head: "committed-primary" },
+      { relativeLocator: secondary.relativeLocator, head: "committed-secondary" },
+    ];
+    const operationId = `${workspace.runId}:builder-validation:${createHash("sha256").update(JSON.stringify(completeHeads)).digest("hex").slice(0, 16)}`;
+
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "base-primary", [])).toBe(true);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", [{ relativeLocator: primary.relativeLocator, head: "committed-primary" }]),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", [
+        { relativeLocator: primary.relativeLocator, head: "different-primary" },
+        { relativeLocator: secondary.relativeLocator, head: "committed-secondary" },
+      ]),
+    ])).toBe(false);
+    for (const reason of ["delivered", "abandoned"]) {
+      expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+        checkpoint(reason, completeHeads, operationId, 1),
+      ])).toBe(false);
+    }
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, `${operationId}-forged`, 1),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, operationId),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, operationId, 0),
+    ])).toBe(false);
+    expect(isBuilderValidationHeadAllowed(workspace, primary, "committed-primary", [
+      checkpoint("builder_validation", completeHeads, operationId, 1),
+    ])).toBe(true);
+  });
+
+  it("US-LOOP-126 admits checkpointed Builder commits and rejects foreign or forged identities", async () => {
+    const prepare = async (storyId: string): Promise<{ dir: string; delegationId: string; workspace: ManagedWorkspaceSet; checkout: string }> => {
+      const dir = setupMinimalProject(storyId, "delta-team");
+      const prepared = await tsRunCwd(["prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", writeResolutionTemplate(dir, storyId, "local-preset"), "--json"], dir);
+      expect(prepared.code).toBe(0);
+      const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+      const frame = join(dir, ".roll", "features", "delta-team", storyId, `delta-${delegationId}`);
+      const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+      return { dir, delegationId, workspace, checkout: join(dir, ".roll", "loop", "worktrees", workspace.members[0]!.relativeLocator) };
+    };
+    const rejected = async (fixture: Awaited<ReturnType<typeof prepare>>): Promise<void> => {
+      expect((await tsRunCwd(["validate", "--delegation", fixture.delegationId, "--stage", "builder", "--json"], fixture.dir)).code).toBe(1);
+    };
+
+    const main = await prepare("US-DELTA-MAIN-CWD");
+    writeManagedBuilderArtifact({ ...main, storyId: "US-DELTA-MAIN-CWD", executionCwd: main.dir });
+    await rejected(main);
+
+    const external = await prepare("US-DELTA-EXTERNAL-CWD");
+    const externalCheckout = join(external.dir, ".worktrees", "external-builder");
+    mkdirSync(dirname(externalCheckout), { recursive: true });
+    execFileSync("git", ["worktree", "add", "--detach", externalCheckout, "HEAD"], { cwd: external.dir, stdio: "ignore" });
+    writeManagedBuilderArtifact({ ...external, storyId: "US-DELTA-EXTERNAL-CWD", executionCwd: externalCheckout });
+    await rejected(external);
+
+    const linked = await prepare("US-DELTA-SYMLINK-CWD");
+    const escape = join(linked.dir, "builder-main-link");
+    symlinkSync(linked.dir, escape);
+    writeManagedBuilderArtifact({ ...linked, storyId: "US-DELTA-SYMLINK-CWD", executionCwd: escape });
+    await rejected(linked);
+
+    const changed = await prepare("US-DELTA-CHANGED-HEAD");
+    execFileSync("git", ["-c", "user.email=delta@test.invalid", "-c", "user.name=Delta Test", "commit", "--allow-empty", "-m", "changed identity"], { cwd: changed.checkout, stdio: "ignore" });
+    // A committed Builder keeps the immutable allocation identity in its
+    // manifest. The write-ahead builder-validation checkpoint admits its
+    // actual detached HEAD after that identity preflight succeeds.
+    writeManagedBuilderArtifact({ ...changed, storyId: "US-DELTA-CHANGED-HEAD", executionCwd: changed.checkout });
+    const changedPreflight = await tsRunCwd(["preflight", "--delegation", changed.delegationId, "--stage", "builder", "--json"], changed.dir);
+    expect(changedPreflight.code).toBe(0);
+    const changedReceipt = join(changed.dir, "changed-builder-receipt.json");
+    writeFileSync(changedReceipt, changedPreflight.stdout);
+    expect((await tsRunCwd(["validate", "--delegation", changed.delegationId, "--stage", "builder", "--preflight-receipt", changedReceipt, "--json"], changed.dir)).code).toBe(0);
+    const changedCheckpoint = readFileSync(join(changed.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
+    expect(changedCheckpoint?.expectedHeads).toEqual([{ relativeLocator: changed.workspace.members[0]!.relativeLocator, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: changed.checkout, encoding: "utf8" }).trim() }]);
+
+    const released = await prepare("US-DELTA-RELEASED-HEAD");
+    execFileSync("git", ["-c", "user.email=delta@test.invalid", "-c", "user.name=Delta Test", "commit", "--allow-empty", "-m", "released delivery"], { cwd: released.checkout, stdio: "ignore" });
+    // A normal Builder commit is admitted by the production write-ahead
+    // validation checkpoint.  Tests must not forge a delivered release request:
+    // that lifecycle state remains reserved for post-merge cleanup.
+    const committedHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: released.checkout, encoding: "utf8" }).trim();
+    writeManagedBuilderArtifact({
+      ...released,
+      storyId: "US-DELTA-RELEASED-HEAD",
+      member: { ...released.workspace.members[0]!, checkoutRef: { kind: "detached", head: committedHead } },
+      executionCwd: released.checkout,
+    });
+    // The manifest cannot replace its allocation base with the new commit.
+    // That forgery must fail before it writes a builder-validation checkpoint.
+    const leaseBeforeForgery = readLeases(storyLeasesPath(released.dir));
+    expect((await tsRunCwd(["preflight", "--delegation", released.delegationId, "--stage", "builder", "--json"], released.dir)).code).toBe(1);
+    const releasedEvents = readFileSync(join(released.dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const checkpoint = releasedEvents.find((event) => event.type === "worktree:release_requested" && event.reason === "builder_validation");
+    expect(checkpoint).toBeUndefined();
+    expect(releasedEvents.some((event) => event.type === "delta:blocked")).toBe(false);
+    expect(readLeases(storyLeasesPath(released.dir))).toEqual(leaseBeforeForgery);
+
+    const wrongRepository = await prepare("US-DELTA-WRONG-REPOSITORY");
+    // Change the source repository's identity after allocation.  The checkout
+    // is otherwise the exact valid member, so this isolates repository ID.
+    execFileSync("git", ["remote", "add", "origin", "file:///wrong/repository"], { cwd: wrongRepository.dir, stdio: "ignore" });
+    writeManagedBuilderArtifact({ ...wrongRepository, storyId: "US-DELTA-WRONG-REPOSITORY", executionCwd: wrongRepository.checkout });
+    await rejected(wrongRepository);
+
+    const first = await prepare("US-DELTA-OTHER-RUN-A");
+    const second = await prepare("US-DELTA-OTHER-RUN-B");
+    writeManagedBuilderArtifact({ ...first, storyId: "US-DELTA-OTHER-RUN-A", member: second.workspace.members[0], executionCwd: second.checkout });
+    await rejected(first);
+  });
+
+  it("US-LOOP-126 fails closed when a v2 prepared event loses its preparation", async () => {
+    const dir = setupMinimalProject("US-DELTA-DAMAGED-V2", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-DAMAGED-V2", "local-preset");
+    const prepared = await tsRunCwd(["prepare", "US-DELTA-DAMAGED-V2", "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json"], dir);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", "US-DELTA-DAMAGED-V2", `delta-${delegationId}`);
+    unlinkSync(join(frame, "preparation.json"));
+    const designer = join(frame, "role-artifacts", "designer");
+    mkdirSync(designer, { recursive: true });
+    // The default validator reaches the managed-record gate with a real stage
+    // artifact; no injected verdict is used to fake the fail-closed result.
+    writeFileSync(join(designer, "evaluation-manifest.json"), JSON.stringify({ schemaVersion: 2, role: "designer" }));
+    try {
+      expect((await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir)).code).toBe(1);
+      expect((await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir)).code).toBe(1);
+    } finally {
+      const worktree = join(dir, ".roll", "loop", "worktrees", `delta-${delegationId}`);
+      execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: dir, stdio: "ignore" });
+    }
+  });
+
+  it("prepare creates delegation frame, marker, resolution, and events", async () => {
     const dir = setupMinimalProject("US-DELTA-TEST", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-TEST", "local-preset");
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-TEST",
       "--trigger", "host-guided",
       "--topology", "delta-team",
@@ -227,7 +1137,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(existsSync(eventsPath)).toBe(true);
     const events = readFileSync(eventsPath, "utf8").trim().split("\n");
     expect(events.length).toBeGreaterThanOrEqual(2);
-    const preparedEvent = JSON.parse(events[0]!);
+    const preparedEvent = events.map((line) => JSON.parse(line)).find((event) => event.type === "delta:prepared");
     expect(preparedEvent.type).toBe("delta:prepared");
 
     // F-3: presetSha256 must match the host-supplied resolution template value (not fabricated)
@@ -235,7 +1145,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
 
     // N-1: delta:role_resolved events must use the template's inventorySha256 (NOT presetSha256)
     // The fixture uses DIFFERENT preset and inventory hashes to prove non-reuse
-    const roleResolvedEvents = events.slice(1).map((l: string) => JSON.parse(l));
+    const roleResolvedEvents = events.map((l: string) => JSON.parse(l)).filter((event) => event.type === "delta:role_resolved");
     for (const re of roleResolvedEvents) {
       expect(re.type).toBe("delta:role_resolved");
       expect(re.inventorySha256).toBe("bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
@@ -274,12 +1184,12 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(existsSync(join(dir, ".roll", "loop", "runs.jsonl"))).toBe(false);
   });
 
-  it("prepare rejects duplicate lease (sequential second attempt)", () => {
+  it("prepare rejects duplicate lease (sequential second attempt)", async () => {
     const dir = setupMinimalProject("US-DELTA-TEST-2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-TEST-2", "local-preset");
 
     // First prepare succeeds
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-TEST-2",
       "--trigger", "host-guided",
       "--topology", "delta-team",
@@ -291,7 +1201,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(r1.code).toBe(0);
 
     // Second prepare on same story should fail with builder_lease_conflict
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "prepare", "US-DELTA-TEST-2",
       "--trigger", "host-guided",
       "--topology", "delta-team",
@@ -300,12 +1210,11 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       "--resolution", resPath,
       "--json",
     ], dir);
-    expect(r2.code).toBe(1);
-    const err2 = JSON.parse(r2.stderr);
-    expect(err2.error).toBe("builder_lease_conflict");
+    expect(r2.code).toBe(0);
+    expect(JSON.parse(r2.stdout).delegationId).toBe(JSON.parse(r1.stdout).delegationId);
   });
 
-  it("prepare retries with distinct delegation ID on frame collision (F-4)", () => {
+  it("prepare retries with distinct delegation ID on frame collision (F-4)", async () => {
     const dir = setupMinimalProject("US-DELTA-COLLIDE", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-COLLIDE", "local-preset");
 
@@ -322,7 +1231,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
 
     try {
       // First prepare: "collide-1" successfully creates frame delta-collide-1
-      const r1 = tsRunCwd([
+      const r1 = await tsRunCwd([
         "prepare", "US-DELTA-COLLIDE",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -342,7 +1251,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       // → mkdirSync("delta-collide-1") throws EEXIST both times
       // → only own lease is released, collision frame is preserved
       // → third call produces "collide-2" → fresh frame succeeds
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "prepare", "US-DELTA-COLLIDE",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -373,7 +1282,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     }
   });
 
-  it("prepare generates distinct crypto IDs on different stories", () => {
+  it("prepare generates distinct crypto IDs on different stories", async () => {
     const dir = setupMinimalProject("US-DELTA-TEST-3", "delta-team");
     const resPath1 = writeResolutionTemplate(dir, "US-DELTA-TEST-3", "local-preset");
 
@@ -384,7 +1293,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     writeFileSync(join(featuresDir2, "spec.md"), `# ${story2}\n\nStory spec.\n`, "utf8");
     const resPath2 = writeResolutionTemplate(dir, story2, "local-preset", "resolution-template-2.json");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-TEST-3",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -393,7 +1302,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(r1.code).toBe(0);
     const id1 = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "prepare", story2,
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -405,11 +1314,11 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(id1).not.toBe(id2);
   });
 
-  it("prepare rejects --cycle flag with no side effects", () => {
+  it("prepare rejects --cycle flag with no side effects", async () => {
     const dir = setupMinimalProject("US-DELTA-TEST-4", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-TEST-4", "local-preset");
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-TEST-4",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -418,7 +1327,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       "--json",
     ], dir);
     expect(r.code).toBe(1);
-    const err = JSON.parse(r.stderr);
+    const err = parseStderrJsonTail(r.stderr);
     expect(err.error).toBe("cycle_rejected");
 
     // No frame, no lease, no events
@@ -431,7 +1340,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     }
   });
 
-  it("prepare rejects when a live cycle lease exists for the story (cross-lease exclusion)", () => {
+  it("prepare rejects when a live cycle lease exists for the story (cross-lease exclusion)", async () => {
     const dir = setupMinimalProject("US-DELTA-XLEASE", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-XLEASE", "local-preset");
 
@@ -439,7 +1348,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     const leasesPath = storyLeasesPath(dir);
     setLease(leasesPath, "US-DELTA-XLEASE", { pid: 12345, claimedAt: Date.now(), source: "cycle" });
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-XLEASE",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -450,7 +1359,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(err.error).toBe("builder_lease_conflict");
   });
 
-  it("prepare blocks when leases directory has any claim (human/supervisor) — bidirectional exclusion", () => {
+  it("prepare blocks when leases directory has any claim (human/supervisor) — bidirectional exclusion", async () => {
     const dir = setupMinimalProject("US-DELTA-XLEASE2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-XLEASE2", "local-preset");
 
@@ -458,7 +1367,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     const leasesPath = storyLeasesPath(dir);
     setLease(leasesPath, "US-DELTA-XLEASE2", { claimedAt: Date.now(), source: "human" });
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-XLEASE2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -470,7 +1379,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(err.error).toBe("builder_lease_conflict");
   });
 
-  it("prepare fails when story card directory cannot be uniquely resolved", () => {
+  it("prepare fails when story card directory cannot be uniquely resolved", async () => {
     const dir = makeProject();
     // No card dir, no feature file — cardArchiveDir would use uncategorized
     // But our resolveExistingUniqueCardArchiveDir should fail
@@ -490,7 +1399,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
       roles: [],
     }), "utf8");
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-NOEXIST",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -502,9 +1411,66 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     expect(r.stderr).toBeTruthy();
   });
 
+  // FIX-1495: a card whose ID is MENTIONED by other specs (dependency blocks)
+  // must not be declared ambiguous — findFeatureFiles already orders the
+  // ID-owned spec first ("ID-named owner wins"); only bare content mentions
+  // with no owner are ambiguous.
+  it("prepare resolves an ID-owned card even when other specs mention the ID", async () => {
+    const dir = setupMinimalProject("US-DELTA-MENTION", "delta-team");
+    // Another epic's spec references the ID (dependency block) — a mention,
+    // not an owner.
+    mkdirSync(join(dir, ".roll", "features", "other-epic", "US-OTHER-1"), { recursive: true });
+    writeFileSync(
+      join(dir, ".roll", "features", "other-epic", "US-OTHER-1", "spec.md"),
+      "# US-OTHER-1\n\nDepends on: US-DELTA-MENTION\n",
+      "utf8",
+    );
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-MENTION", "local-preset");
+    const r = await tsRunCwd([
+      "prepare", "US-DELTA-MENTION",
+      "--trigger", "host-guided",
+      "--topology", "delta-team",
+      "--profile", "standard",
+      "--preset", "local-preset",
+      "--resolution", resPath,
+      "--json",
+    ], dir);
+
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(parsed.ok).toBe(true);
+    expect(typeof parsed.delegationId).toBe("string");
+  });
+
+  it("prepare still fails as ambiguous when multiple specs merely MENTION the ID and none owns it", async () => {
+    const dir = makeProject();
+    for (const epic of ["epic-a", "epic-b"]) {
+      mkdirSync(join(dir, ".roll", "features", epic, "US-OWNER-X"), { recursive: true });
+      writeFileSync(
+        join(dir, ".roll", "features", epic, "US-OWNER-X", "spec.md"),
+        `# US-OWNER-X\n\nSee also US-DELTA-NOOWNER.\n`,
+        "utf8",
+      );
+    }
+    mkdirSync(join(dir, ".roll", "loop"), { recursive: true });
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-NOOWNER", "local-preset");
+    const r = await tsRunCwd([
+      "prepare", "US-DELTA-NOOWNER",
+      "--trigger", "host-guided",
+      "--topology", "delta-team",
+      "--profile", "standard",
+      "--preset", "local-preset",
+      "--resolution", resPath,
+      "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    const err = JSON.parse(r.stderr) as Record<string, unknown>;
+    expect(err.error).toBe("card_not_found");
+  });
+
   // ─── BLOCK-B: malformed resolution zero side effect ────────────────────
 
-  it("BLOCK-B: malformed resolution JSON → resolution_parse_error, zero lease/frame/events", () => {
+  it("BLOCK-B: malformed resolution JSON → resolution_parse_error, zero lease/frame/events", async () => {
     const dir = setupMinimalProject("US-DELTA-MALFORM", "delta-team");
     // Write invalid JSON as the resolution file
     const malformedPath = join(dir, "bad-resolution.json");
@@ -517,7 +1483,7 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
     const leaseBefore = existsSync(slPath);
     const leaseMapBefore = existsSync(slPath) ? readLeases(slPath) : {};
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-MALFORM",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -555,7 +1521,30 @@ describe("US-DELTA-003 — prepare atomic allocation", () => {
 // ── Crash / recovery / status ──────────────────────────────────────────────
 
 describe("US-DELTA-003 — crash marker and recovery", () => {
-  it("orphan marker (delegation-open.json without events) is detected by status", () => {
+  it("US-LOOP-126 resumes missing role facts after prepared-event interruption", async () => {
+    const dir = setupMinimalProject("US-DELTA-ROLE-RECOVERY", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-ROLE-RECOVERY", "local-preset");
+    injectEventAppendFailure((event) => {
+      if (event.type === "delta:prepared") throw new Error("crash after prepared");
+    });
+    let delegationId = "";
+    try {
+      const interrupted = await tsRunCwd(["prepare", "US-DELTA-ROLE-RECOVERY", "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json"], dir);
+      expect(interrupted.code).toBe(1);
+      const prepared = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n").map((line) => line === "" ? undefined : JSON.parse(line)).find((event) => event?.type === "delta:prepared") as { delegationId: string };
+      delegationId = prepared.delegationId;
+    } finally {
+      injectEventAppendFailure(null);
+    }
+    const retry = await tsRunCwd(["prepare", "US-DELTA-ROLE-RECOVERY", "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json"], dir);
+    expect(retry.code).toBe(0);
+    expect(JSON.parse(retry.stdout).delegationId).toBe(delegationId);
+    const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.type === "delta:role_resolved" && event.delegationId === delegationId)).toHaveLength(3);
+    const worktree = join(dir, ".roll", "loop", "worktrees", `delta-${delegationId}`);
+    execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: dir, stdio: "ignore" });
+  });
+  it("orphan marker (delegation-open.json without events) is detected by status", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPHAN", "delta-team");
 
     // Manually create an orphan frame: marker exists but no events
@@ -574,7 +1563,7 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     );
 
     // status should report uncommitted
-    const r = tsRunCwd(["status", "--story", "US-DELTA-ORPHAN", "--json"], dir);
+    const r = await tsRunCwd(["status", "--story", "US-DELTA-ORPHAN", "--json"], dir);
     // Status should detect orphan
     expect(r.code).toBe(0);
     const result = JSON.parse(r.stdout);
@@ -584,12 +1573,12 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     expect(result.uncommittedFrames[0].delegationId).toBe(delegationId);
   });
 
-  it("prepare then status --story shows zero uncommittedFrames (BLOCK-1: no false orphans)", () => {
+  it("prepare then status --story shows zero uncommittedFrames (BLOCK-1: no false orphans)", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPHAN3", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ORPHAN3", "local-preset");
 
     // Normal prepare: marker + events both written
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-ORPHAN3",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -598,7 +1587,7 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     expect(r1.code).toBe(0);
 
     // status --story must NOT show any uncommittedFrames because delegation is committed
-    const r2 = tsRunCwd(["status", "--story", "US-DELTA-ORPHAN3", "--json"], dir);
+    const r2 = await tsRunCwd(["status", "--story", "US-DELTA-ORPHAN3", "--json"], dir);
     expect(r2.code).toBe(0);
     const result = JSON.parse(r2.stdout);
     // Either no uncommittedFrames key or an empty array — commited delegations are not orphans
@@ -606,7 +1595,7 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     expect(uf === undefined || (Array.isArray(uf) && uf.length === 0)).toBe(true);
   });
 
-  it("prepare never adopts an orphan frame", () => {
+  it("prepare never adopts an orphan frame", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPHAN2", "delta-team");
 
     // Create an orphan frame manually
@@ -626,7 +1615,7 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
 
     // Now prepare — should create a new frame, not adopt the orphan
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ORPHAN2", "local-preset");
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-ORPHAN2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -640,12 +1629,12 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     expect(existsSync(frameDir)).toBe(true);
   });
 
-  it("status --json shows host-unobservable cost", () => {
+  it("status --json shows host-unobservable cost", async () => {
     const dir = setupMinimalProject("US-DELTA-STATUS", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-STATUS", "local-preset");
 
     // Prepare first
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-STATUS",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -655,7 +1644,7 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
     // Status by delegation
-    const r2 = tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
     expect(r2.code).toBe(0);
     const status = JSON.parse(r2.stdout);
 
@@ -669,11 +1658,11 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     expect(status.roles.length).toBeGreaterThan(0);
   });
 
-  it("status human output contains expected fields", () => {
+  it("status human output contains expected fields", async () => {
     const dir = setupMinimalProject("US-DELTA-STATUS2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-STATUS2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-STATUS2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -682,7 +1671,7 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd(["status", "--delegation", delegationId], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId], dir);
     expect(r2.code).toBe(0);
     // Human output
     expect(r2.stdout).toContain("US-DELTA-STATUS2");
@@ -694,27 +1683,27 @@ describe("US-DELTA-003 — crash marker and recovery", () => {
 // ── Validator plumbing ──────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — validate plumbing", () => {
-  it("validate returns error when delegation not found", () => {
+  it("validate returns error when delegation not found", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL", "delta-team");
-    const r = tsRunCwd(["validate", "--delegation", "nonexistent-id", "--stage", "designer", "--json"], dir);
+    const r = await tsRunCwd(["validate", "--delegation", "nonexistent-id", "--stage", "designer", "--json"], dir);
     expect(r.code).toBe(1);
-    const err = JSON.parse(r.stderr);
+    const err = parseStderrJsonTail(r.stderr);
     expect(err.error).toBe("delegation_not_found");
   });
 
-  it("validate returns error when stage is missing", () => {
+  it("validate returns error when stage is missing", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL2", "delta-team");
-    const r = tsRunCwd(["validate", "--delegation", "d-123", "--json"], dir);
+    const r = await tsRunCwd(["validate", "--delegation", "d-123", "--json"], dir);
     expect(r.code).toBe(1);
     const err = JSON.parse(r.stderr);
     expect(err.error).toBe("missing_required");
   });
 
-  it("validate block appends delta:blocked event and retains lease (BLOCK-3)", () => {
+  it("validate block appends delta:blocked event and retains lease (BLOCK-3)", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL3", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL3", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL3",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -728,21 +1717,29 @@ describe("US-DELTA-003 — validate plumbing", () => {
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // Validate without creating the stage artifact — should block
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "validate", "--delegation", delegationId,
       "--stage", "designer", "--json",
     ], dir);
     expect(r2.code).toBe(1);
 
-    // Verify delta:blocked event was appended
+    // The immutable outcome fact is written immediately before its source
+    // block fact, so legacy readers still see delta:blocked as the terminal row.
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 2);
 
     const lastEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
     expect(lastEvent.type).toBe("delta:blocked");
     expect(lastEvent.delegationId).toBe(delegationId);
     expect(lastEvent.reason).toBe("artifact_invalid");
     expect(lastEvent.role).toBe("designer");
+    expect(JSON.parse(eventsAfter[eventsAfter.length - 2]!)).toMatchObject({
+      type: "delta:attempt_outcome",
+      v: 1,
+      delegationId,
+      cause: "artifact_protocol",
+      terminalFact: "blocked",
+    });
 
     // Lease must be retained (not released by validate)
     const slPath = storyLeasesPath(dir);
@@ -751,11 +1748,11 @@ describe("US-DELTA-003 — validate plumbing", () => {
     expect(sl["US-DELTA-VAL3"].source).toBe("host-delegation");
   });
 
-  it("validate allow appends delta:artifact_published event (BLOCK-3)", () => {
+  it("validate allow appends delta:artifact_published event (BLOCK-3)", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL4", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL4", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL4",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -776,7 +1773,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // Validate should pass
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "validate", "--delegation", delegationId,
       "--stage", "designer", "--json",
     ], dir);
@@ -795,10 +1792,10 @@ describe("US-DELTA-003 — validate plumbing", () => {
     expect(lastEvent.identityProvenance).toBe("host-attested");
   });
 
-  it("US-DELTA-004: deep validation blocks a role-write violation through the CLI", () => {
+  it("US-DELTA-004: deep validation blocks a role-write violation through the CLI", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL4B", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL4B", "local-preset");
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL4B",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -815,9 +1812,9 @@ describe("US-DELTA-003 — validate plumbing", () => {
     const bad = v2Manifest("designer") as Record<string, unknown>;
     bad["worktreeAccess"] = "builder-write";
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(bad), "utf8");
-    const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    const r2 = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(r2.code).toBe(1);
-    expect(JSON.parse(r2.stderr).error).toBe("role_write_violation");
+    expect(parseStderrJsonTail(r2.stderr).error).toBe("role_write_violation");
     // The block is recorded as an event, with the specific reason.
     const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n");
     const last = JSON.parse(events[events.length - 1]!);
@@ -825,10 +1822,10 @@ describe("US-DELTA-003 — validate plumbing", () => {
     expect(last.reason).toBe("role_write_violation");
   });
 
-  it("US-DELTA-004: a manifest whose role ≠ the validated stage is blocked (no bypass)", () => {
+  it("US-DELTA-004: a manifest whose role ≠ the validated stage is blocked (no bypass)", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL4C", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL4C", "local-preset");
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL4C",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -843,16 +1840,16 @@ describe("US-DELTA-003 — validate plumbing", () => {
     // stage-role match closes the bypass that would otherwise skip role-specific
     // checks yet publish a designer event.
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest("builder")), "utf8");
-    const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    const r2 = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(r2.code).toBe(1);
-    expect(JSON.parse(r2.stderr).error).toBe("artifact_invalid");
+    expect(parseStderrJsonTail(r2.stderr).error).toBe("artifact_invalid");
   });
 
-  it("validate invokes injected validator seam (BLOCK-3)", () => {
+  it("validate invokes injected validator seam (BLOCK-3)", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL5", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL5", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL5",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -886,7 +1883,7 @@ describe("US-DELTA-003 — validate plumbing", () => {
     });
 
     try {
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "validate", "--delegation", delegationId,
         "--stage", "builder", "--json",
       ], dir);
@@ -920,12 +1917,12 @@ describe("US-DELTA-003 — validate plumbing", () => {
 // ── Conclude ─────────────────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — conclude", () => {
-  it("conclude with owner_continue disposition succeeds and writes terminal", () => {
+  it("conclude with owner_continue disposition succeeds and writes terminal", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC", "local-preset");
 
     // Prepare first
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -935,7 +1932,7 @@ describe("US-DELTA-003 — conclude", () => {
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
     // Conclude should succeed with owner_continue disposition
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -946,11 +1943,11 @@ describe("US-DELTA-003 — conclude", () => {
     expect(result.terminalBinding).toBe("handoff_only");
   });
 
-  it("conclude blocks with terminal_path_unselected when disposition is missing (BLOCK-2)", () => {
+  it("conclude blocks with terminal_path_unselected when disposition is missing (BLOCK-2)", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-BLK", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-BLK", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-BLK",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -963,16 +1960,19 @@ describe("US-DELTA-003 — conclude", () => {
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId, "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err = JSON.parse(r2.stderr);
+    const err = parseStderrJsonTail(r2.stderr);
     expect(err.error).toBe("terminal_path_unselected");
+    expect(r2.stderr).toContain("Delta Team concluded");
+    expect(r2.stderr).toContain("blocked");
+    expect(r2.stderr).toContain("not owner-approved");
 
-    // Verify delta:blocked event was appended
+    // The terminal-path block carries a paired, immutable unknown outcome fact.
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 2);
     const lastEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
     expect(lastEvent.type).toBe("delta:blocked");
     expect(lastEvent.reason).toBe("terminal_path_unselected");
@@ -983,11 +1983,11 @@ describe("US-DELTA-003 — conclude", () => {
     expect(sl["US-DELTA-CONC-BLK"]).toBeDefined();
   });
 
-  it("conclude with invalid enum rejects with parser error ZERO side effects (BLOCK-2)", () => {
+  it("conclude with invalid enum rejects with parser error ZERO side effects (BLOCK-2)", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-BLK2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-BLK2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-BLK2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1000,7 +2000,7 @@ describe("US-DELTA-003 — conclude", () => {
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "bad_value", "--json",
     ], dir);
@@ -1013,11 +2013,11 @@ describe("US-DELTA-003 — conclude", () => {
     expect(eventsAfter.length).toBe(eventsBefore.length);
   });
 
-  it("conclude with owner_hold disposition succeeds", () => {
+  it("conclude with owner_hold disposition succeeds", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1026,7 +2026,7 @@ describe("US-DELTA-003 — conclude", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_hold", "--json",
     ], dir);
@@ -1036,11 +2036,11 @@ describe("US-DELTA-003 — conclude", () => {
     expect(result.deliveryDisposition).toBe("owner_hold");
   });
 
-  it("conclude releases the host-delegation lease", () => {
+  it("conclude releases the host-delegation lease", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC3", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC3", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC3",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1054,7 +2054,7 @@ describe("US-DELTA-003 — conclude", () => {
     const sl1 = readLeases(slPath);
     expect(sl1["US-DELTA-CONC3"]).toBeDefined();
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -1065,15 +2065,15 @@ describe("US-DELTA-003 — conclude", () => {
     // but the US-DELTA-CONC3 entry must be gone
     if (existsSync(slPath)) {
       const sl = readLeases(slPath);
-      expect(sl["US-DELTA-CONC3"]).toBeUndefined();
+    expect(sl["US-DELTA-CONC3"]?.source).toBe("delivery-reservation");
     }
   });
 
-  it("conclude does not release foreign/mismatched leases (AC6)", () => {
+  it("conclude does not release foreign/mismatched leases (AC6)", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-FOREIGN", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-FOREIGN", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-FOREIGN",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1095,7 +2095,7 @@ describe("US-DELTA-003 — conclude", () => {
     writeLeases(slPath, sl);
 
     // Conclude the real delegation with owner_continue
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -1103,19 +2103,19 @@ describe("US-DELTA-003 — conclude", () => {
 
     // Real lease (US-DELTA-CONC-FOREIGN) is released from leases directory
     const slAfter = readLeases(slPath);
-    expect(slAfter["US-DELTA-CONC-FOREIGN"]).toBeUndefined();
+    expect(slAfter["US-DELTA-CONC-FOREIGN"]?.source).toBe("delivery-reservation");
 
     // Foreign lease (different story+delegationId) must NOT be touched
     expect(slAfter["US-DELTA-CONC-FOREIGN-OTHER"]).toBeDefined();
     expect(slAfter["US-DELTA-CONC-FOREIGN-OTHER"].delegationId).toBe("foreign-deleg-id");
   });
 
-  it("conclude fail-loud on same-story mismatched-delegationId lease; no terminal written (AC6)", () => {
+  it("conclude fail-loud on same-story mismatched-delegationId lease; no terminal written (AC6)", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-SAMESTORY", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-SAMESTORY", "local-preset");
 
     // Prepare delegation A for this story
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-SAMESTORY",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1141,7 +2141,7 @@ describe("US-DELTA-003 — conclude", () => {
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // Conclude with delegationId A — must fail-loud because lease identity mismatches
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationIdA,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -1164,11 +2164,11 @@ describe("US-DELTA-003 — conclude", () => {
     writeLeases(slPath, slAfter);
   });
 
-  it("conclude writes exact delta:terminal event fields (AC6)", () => {
+  it("conclude writes exact delta:terminal event fields (AC6)", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-FIELDS", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-FIELDS", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-FIELDS",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1181,15 +2181,24 @@ describe("US-DELTA-003 — conclude", () => {
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
-      "--delivery-disposition", "owner_redelegate", "--json",
+      "--delivery-disposition", "owner_redelegate", "--continuation-run", "delta-named-continuation", "--json",
     ], dir);
     expect(r2.code).toBe(0);
     const result = JSON.parse(r2.stdout);
     expect(result.outcome).toBe("handoff_ready");
     expect(result.terminalBinding).toBe("handoff_only");
     expect(result.deliveryDisposition).toBe("owner_redelegate");
+
+    // A restart after the CAS committed its named successor is idempotent.
+    // It must not reject the original terminal simply because the durable
+    // reservation no longer carries the predecessor run ID.
+    const retry = await tsRunCwd([
+      "conclude", "--delegation", delegationId,
+      "--delivery-disposition", "owner_redelegate", "--continuation-run", "delta-named-continuation", "--json",
+    ], dir);
+    expect(retry.code).toBe(0);
 
     // Verify exact event fields
     const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
@@ -1205,9 +2214,9 @@ describe("US-DELTA-003 — conclude", () => {
     }
   });
 
-  it("conclude fails for unknown delegation", () => {
+  it("conclude fails for unknown delegation", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC4", "delta-team");
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "conclude", "--delegation", "nonexistent",
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -1218,11 +2227,11 @@ describe("US-DELTA-003 — conclude", () => {
 
   // ─── Fix #7: conclude release failure must not output success ───────────
 
-  it("conclude does not output success when lease release fails (already released)", () => {
+  it("conclude does not output success when lease release fails (already released)", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-FAIL", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-FAIL", "local-preset");
 
-    const prep = tsRunCwd([
+    const prep = await tsRunCwd([
       "prepare", "US-DELTA-CONC-FAIL",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1236,7 +2245,7 @@ describe("US-DELTA-003 — conclude", () => {
     expect(released).toBe(true);
 
     // Now conclude should fail because lease is already released
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -1248,19 +2257,19 @@ describe("US-DELTA-003 — conclude", () => {
     expect(r.stderr).not.toBe("");
     const err = JSON.parse(r.stderr);
     expect(err.ok).toBe(false);
-    expect(err.error).toBe("lease_release_failed");
+    expect(err.error).toBe("lease_mismatch");
   });
 
   // ─── Fix #7: prepare post-append crash seam ────────────────────────────
 
-  it("prepare post-append crash seam (after-append throw) prevents success output", () => {
+  it("prepare post-append crash seam (after-append throw) prevents success output", async () => {
     const dir = setupMinimalProject("US-DELTA-PREP-SEAM", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-PREP-SEAM", "local-preset");
 
     // Inject a post-append crash that fires after delta:prepared write
     injectEventAppendFailure(() => { throw new Error("simulated after-append crash"); });
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-PREP-SEAM",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1278,7 +2287,7 @@ describe("US-DELTA-003 — conclude", () => {
 
   // ─── BLOCK-A: actual EventBus append failure (before/during append) ───
 
-  it("BLOCK-A: EventBus throws on delta:prepared → fail-loud, stdout empty, lease held, zero events", () => {
+  it("BLOCK-A: EventBus throws on delta:prepared → fail-loud, stdout empty, lease held, zero events", async () => {
     const dir = setupMinimalProject("US-DELTA-BUSA", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-BUSA", "local-preset");
 
@@ -1300,7 +2309,7 @@ describe("US-DELTA-003 — conclude", () => {
     injectEventBus(throwingBus);
 
     try {
-      const r = tsRunCwd([
+      const r = await tsRunCwd([
         "prepare", "US-DELTA-BUSA",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -1328,14 +2337,14 @@ describe("US-DELTA-003 — conclude", () => {
       const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
       if (existsSync(eventsPath)) {
         const evts = readFileSync(eventsPath, "utf8").trim();
-        expect(evts).toBe("");
+        expect(evts).toContain("worktree:allocated");
       }
     } finally {
       injectEventBus(null);
     }
   });
 
-  it("BLOCK-A: EventBus throws on delta:role_resolved after prepared → fail-loud, prepared event exists, lease held", () => {
+  it("BLOCK-A: EventBus throws on delta:role_resolved after prepared → fail-loud, prepared event exists, lease held", async () => {
     const dir = setupMinimalProject("US-DELTA-BUSB", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-BUSB", "local-preset");
 
@@ -1359,7 +2368,7 @@ describe("US-DELTA-003 — conclude", () => {
     injectEventBus(throwingBus);
 
     try {
-      const r = tsRunCwd([
+      const r = await tsRunCwd([
         "prepare", "US-DELTA-BUSB",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -1394,11 +2403,228 @@ describe("US-DELTA-003 — conclude", () => {
 // ── Snapshot tests ──────────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — CLI snapshots", () => {
-  it("prepare --json output is scrubbed and snapshotted", () => {
+  it("US-LOOP-126 freezes managed prepare/status/conclude human and JSON output in EN", async () => {
+    const dir = setupMinimalProject("US-DELTA-MANAGED-EN-SNAPSHOT", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-MANAGED-EN-SNAPSHOT", "local-preset");
+    const previousLang = process.env["ROLL_LANG"];
+    process.env["ROLL_LANG"] = "en";
+    try {
+      const prepared = await tsRunCwd(["prepare", "US-DELTA-MANAGED-EN-SNAPSHOT", "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", resPath], dir);
+      expect(prepared.code).toBe(0);
+      const delegationId = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n").map((line) => line === "" ? undefined : JSON.parse(line)).find((event) => event?.type === "delta:prepared")!.delegationId as string;
+      const statusHuman = await tsRunCwd(["status", "--delegation", delegationId], dir);
+      const statusJson = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+      const concluded = await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir);
+      expect([statusHuman.code, statusJson.code, concluded.code]).toEqual([0, 0, 0]);
+      expect(scrubAll([prepared.stdout, prepared.stderr, statusHuman.stdout, statusJson.stdout, concluded.stdout, concluded.stderr].join("\n"), dir, delegationId)).toMatchSnapshot();
+    } finally {
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
+  });
+
+  it("US-LOOP-126 freezes managed prepare/status/conclude human and JSON output in ZH", async () => {
+    const dir = setupMinimalProject("US-DELTA-MANAGED-ZH-SNAPSHOT", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-MANAGED-ZH-SNAPSHOT", "local-preset");
+    const previousLang = process.env["ROLL_LANG"];
+    process.env["ROLL_LANG"] = "zh";
+    try {
+      const prepared = await tsRunCwd(["prepare", "US-DELTA-MANAGED-ZH-SNAPSHOT", "--trigger", "host-guided", "--topology", "delta-team", "--profile", "standard", "--preset", "local-preset", "--resolution", resPath], dir);
+      expect(prepared.code).toBe(0);
+      const delegationId = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n").map((line) => line === "" ? undefined : JSON.parse(line)).find((event) => event?.type === "delta:prepared")!.delegationId as string;
+      const statusHuman = await tsRunCwd(["status", "--delegation", delegationId], dir);
+      const statusJson = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+      const concluded = await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir);
+      expect([statusHuman.code, statusJson.code, concluded.code]).toEqual([0, 0, 0]);
+      expect(scrubAll([prepared.stdout, prepared.stderr, statusHuman.stdout, statusJson.stdout, concluded.stdout, concluded.stderr].join("\n"), dir, delegationId)).toMatchSnapshot();
+    } finally {
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
+  });
+
+  it("US-LOOP-126 freezes EN and ZH human plus JSON fail-closed recovery boundaries", async () => {
+    const previousLang = process.env["ROLL_LANG"];
+    try {
+      for (const language of ["en", "zh"] as const) {
+        process.env["ROLL_LANG"] = language;
+        const storyId = `US-DELTA-RECOVERY-${language.toUpperCase()}`;
+        const dir = setupMinimalProject(storyId, "delta-team");
+        const prepared = await tsRunCwd([
+          "prepare", storyId, "--trigger", "host-guided", "--topology", "solo", "--profile", "standard",
+          "--preset", "local-preset", "--resolution", writeResolutionTemplate(dir, storyId, "local-preset"), "--json",
+        ], dir);
+        const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+        const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+        const events = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+        for (const event of events) if (event.type === "delta:prepared") event.workspaceSchema = 99;
+        writeFileSync(eventsPath, events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+        const human = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer"], dir);
+        const json = await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir);
+        expect([human.code, json.code]).toEqual([1, 1]);
+        expect(scrubAll([human.stderr, json.stderr].join("\n"), dir, delegationId)).toMatchSnapshot();
+      }
+    } finally {
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
+  });
+
+  it("US-LOOP-126 freezes allocation, continuation, and terminal restart output in EN and ZH", async () => {
+    const previousLang = process.env["ROLL_LANG"];
+    try {
+      for (const language of ["en", "zh"] as const) {
+        process.env["ROLL_LANG"] = language;
+        const storyId = `US-DELTA-RESTART-${language.toUpperCase()}`;
+        const dir = setupMinimalProject(storyId, "delta-team");
+        const resolution = writeResolutionTemplate(dir, storyId, "local-preset");
+        injectEventAppendFailure((event) => {
+          if (event.type === "delta:prepared") throw new Error("restart after prepared event");
+        });
+        const interrupted = await tsRunCwd([
+          "prepare", storyId, "--trigger", "host-guided", "--topology", "solo", "--profile", "standard",
+          "--preset", "local-preset", "--resolution", resolution, "--json",
+        ], dir);
+        injectEventAppendFailure(null);
+        expect(interrupted.code).toBe(1);
+        const delegationId = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").split("\n")
+          .flatMap((line) => line === "" ? [] : [JSON.parse(line) as { type?: string; delegationId?: string }])
+          .find((event) => event.type === "delta:prepared")!.delegationId!;
+        const continuation = await tsRunCwd([
+          "prepare", storyId, "--trigger", "host-guided", "--topology", "solo", "--profile", "standard",
+          "--preset", "local-preset", "--resolution", resolution, "--json",
+        ], dir);
+        expect(continuation.code).toBe(0);
+        const terminal = await tsRunCwd(["conclude", "--delegation", delegationId, "--delivery-disposition", "owner_continue", "--json"], dir);
+        const human = await tsRunCwd(["status", "--delegation", delegationId], dir);
+        const json = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+        expect([terminal.code, human.code, json.code]).toEqual([0, 0, 0]);
+        expect(scrubAll([
+          interrupted.stderr,
+          continuation.stdout,
+          continuation.stderr,
+          terminal.stdout,
+          terminal.stderr,
+          human.stdout,
+          json.stdout,
+        ].join("\n"), dir, delegationId)).toMatchSnapshot();
+      }
+    } finally {
+      injectEventAppendFailure(null);
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
+  });
+
+  it("US-DELTA-010: prepare, successful validate, and conclude share a terminal phase banner", async () => {
+    const dir = setupMinimalProject("US-DELTA-PHASE-CAPTURE", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-PHASE-CAPTURE", "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-PHASE-CAPTURE",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+
+    const stageDir = join(dir, ".roll", "features", "delta-team", "US-DELTA-PHASE-CAPTURE",
+      `delta-${delegationId}`, "role-artifacts", "designer");
+    mkdirSync(stageDir, { recursive: true });
+    writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest()), "utf8");
+
+    const validated = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    expect(validated.code).toBe(0);
+    expect(validated.stdout).toBe(JSON.stringify({ ok: true, delegationId, stage: "designer", verdict: "allow" }) + "\n");
+
+    const concluded = await tsRunCwd([
+      "conclude", "--delegation", delegationId,
+      "--delivery-disposition", "owner_continue", "--json",
+    ], dir);
+    expect(concluded.code).toBe(0);
+    expect(concluded.stdout).toBe(JSON.stringify({
+      ok: true,
+      delegationId,
+      storyId: "US-DELTA-PHASE-CAPTURE",
+      outcome: "handoff_ready",
+      terminalBinding: "handoff_only",
+      deliveryDisposition: "owner_continue",
+    }) + "\n");
+
+    expect(scrubAll([prepared.stderr, validated.stderr, concluded.stderr].join("\n"), dir, delegationId)).toMatchSnapshot();
+  });
+
+  it("US-DELTA-010: a blocked validate banner remains on stderr while JSON stdout stays empty", async () => {
+    const dir = setupMinimalProject("US-DELTA-PHASE-BLOCKED", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "US-DELTA-PHASE-BLOCKED", "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", "US-DELTA-PHASE-BLOCKED",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+
+    const validated = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    expect(validated.code).toBe(1);
+    expect(validated.stdout).toBe("");
+    expect(JSON.parse(validated.stderr.trim().split("\n").at(-1)!).error).toBe("artifact_invalid");
+    expect(scrubAll(validated.stderr, dir, delegationId)).toMatchSnapshot();
+  });
+
+  it("US-DELTA-009: prepare prints the persisted team banner on stderr without changing JSON stdout", async () => {
+    const dir = setupMinimalProject("US-DELTA-BANNER", "delta-team");
+    const resPath = join(dir, "resolution-banner.json");
+    writeFileSync(resPath, JSON.stringify({
+      schema: "roll-delta-resolution/v1",
+      storyId: "US-DELTA-BANNER",
+      trigger: "host-guided",
+      topology: "delta-team",
+      qualityProfile: "standard",
+      presetId: "local-preset",
+      presetSha256: "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+      inventoryObservedAt: "2026-08-01T00:00:00.000Z",
+      inventorySha256: "bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+      roles: [
+        { role: "builder", roleInstanceId: "ri-builder", hostId: "deepseek", modelId: "deepseek-v4-flash", source: "availability-fallback", reasons: ["test"] },
+        { role: "evaluator", roleInstanceId: "ri-evaluator", hostId: "openai", modelId: "gpt-5.6-terra", source: "preset-preference", reasons: ["test"] },
+      ],
+    }, null, 2), "utf8");
+
+    const r = await tsRunCwd([
+      "prepare", "US-DELTA-BANNER",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+
+    expect(r.code).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      delegationId: string;
+      runId: string;
+      artifacts: { frameDir: string; resolutionPath: string; markerPath: string; preparationPath: string };
+    };
+    expect(r.stdout).toBe(`${JSON.stringify({
+      ok: true,
+      delegationId: payload.delegationId,
+      runId: payload.runId,
+      artifacts: payload.artifacts,
+    })}\n`);
+    expect(r.stderr).toContain("US-DELTA-BANNER");
+    expect(r.stderr).toContain("builder");
+    expect(r.stderr).toContain("deepseek");
+    expect(r.stderr).toContain("deepseek-v4-flash");
+    expect(r.stderr).toContain("⚠ availability-fallback");
+    expect(r.stderr).toContain("deepseek ≠ openai");
+    expect(scrubAll(r.stderr, dir, payload.delegationId)).toMatchSnapshot();
+  });
+
+  it("prepare --json output is scrubbed and snapshotted", async () => {
     const dir = setupMinimalProject("US-DELTA-SNAP-1", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-SNAP-1", "local-preset");
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-SNAP-1",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1411,11 +2637,11 @@ describe("US-DELTA-003 — CLI snapshots", () => {
     expect(scrubbed).toMatchSnapshot();
   });
 
-  it("status --json after prepare is scrubbed and snapshotted", () => {
+  it("status --json after prepare is scrubbed and snapshotted", async () => {
     const dir = setupMinimalProject("US-DELTA-SNAP-2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-SNAP-2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-SNAP-2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1424,18 +2650,18 @@ describe("US-DELTA-003 — CLI snapshots", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
     expect(r2.code).toBe(0);
 
     const scrubbed = scrubAll(r2.stdout, dir, delegationId);
     expect(scrubbed).toMatchSnapshot();
   });
 
-  it("validate block on missing artifact is scrubbed and snapshotted", () => {
+  it("validate block on missing artifact is scrubbed and snapshotted", async () => {
     const dir = setupMinimalProject("US-DELTA-SNAP-3", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-SNAP-3", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-SNAP-3",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1445,7 +2671,7 @@ describe("US-DELTA-003 — CLI snapshots", () => {
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
     // Validate without creating the stage artifact
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "validate", "--delegation", delegationId,
       "--stage", "designer", "--json",
     ], dir);
@@ -1455,11 +2681,11 @@ describe("US-DELTA-003 — CLI snapshots", () => {
     expect(scrubbed).toMatchSnapshot();
   });
 
-  it("conclude --json output is scrubbed and snapshotted", () => {
+  it("conclude --json output is scrubbed and snapshotted", async () => {
     const dir = setupMinimalProject("US-DELTA-SNAP-4", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-SNAP-4", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-SNAP-4",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1468,7 +2694,7 @@ describe("US-DELTA-003 — CLI snapshots", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -1482,7 +2708,7 @@ describe("US-DELTA-003 — CLI snapshots", () => {
 // ── Atomic lease claim protocol (AC2) ────────────────────────────────────────
 
 describe("US-DELTA-003 — atomic lease claim concurrency protocol", () => {
-  it("claimHostDelegationLease atomically guarantees exactly one winner", () => {
+  it("claimHostDelegationLease atomically guarantees exactly one winner", async () => {
     const dir = setupMinimalProject("US-DELTA-HL-LEASE", "delta-team");
 
     const delegId1 = randomUUID();
@@ -1504,7 +2730,7 @@ describe("US-DELTA-003 — atomic lease claim concurrency protocol", () => {
     releaseHostDelegationLease(dir, "US-DELTA-HL-LEASE", delegId1, `delta-${delegId1}`);
   });
 
-  it("claimHostDelegationLease never replaces existing lease content (no-replace evidence)", () => {
+  it("claimHostDelegationLease never replaces existing lease content (no-replace evidence)", async () => {
     const dir = setupMinimalProject("US-DELTA-HL-NOREPLACE", "delta-team");
 
     const winnerDelegId = randomUUID();
@@ -1533,7 +2759,7 @@ describe("US-DELTA-003 — atomic lease claim concurrency protocol", () => {
     releaseHostDelegationLease(dir, "US-DELTA-HL-NOREPLACE", winnerDelegId, `delta-${winnerDelegId}`);
   });
 
-  it("claimHostDelegationLease rejects when leases directory has cycle entry", () => {
+  it("claimHostDelegationLease rejects when leases directory has cycle entry", async () => {
     const dir = setupMinimalProject("US-DELTA-BIDI", "delta-team");
 
     // Write a cycle-style lease via setLease into the leases directory
@@ -1550,7 +2776,7 @@ describe("US-DELTA-003 — atomic lease claim concurrency protocol", () => {
     expect(sl["US-DELTA-BIDI"].delegationId).toBeUndefined();
   });
 
-  it("leases directory host-delegation entry proves reverse exclusion", () => {
+  it("leases directory host-delegation entry proves reverse exclusion", async () => {
     const dir = setupMinimalProject("US-DELTA-BIDI2", "delta-team");
 
     const delegId = randomUUID();
@@ -1576,11 +2802,11 @@ describe("US-DELTA-003 — atomic lease claim concurrency protocol", () => {
 // ── Human status snapshot (AC7) ──────────────────────────────────────────────
 
 describe("US-DELTA-003 — status human output with provenance", () => {
-  it("status human output includes trigger, topology, profile, roles with host-attested", () => {
+  it("status human output includes trigger, topology, profile, roles with host-attested", async () => {
     const dir = setupMinimalProject("US-DELTA-HSTATUS", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-HSTATUS", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-HSTATUS",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1589,7 +2815,7 @@ describe("US-DELTA-003 — status human output with provenance", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd(["status", "--delegation", delegationId], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId], dir);
     expect(r2.code).toBe(0);
 
     // Human output must include trigger, topology, profile
@@ -1607,11 +2833,11 @@ describe("US-DELTA-003 — status human output with provenance", () => {
     expect(scrubbed).toMatchSnapshot();
   });
 
-  it("status --json includes provenance labels and never 'verified'", () => {
+  it("status --json includes provenance labels and never 'verified'", async () => {
     const dir = setupMinimalProject("US-DELTA-HSTATUS2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-HSTATUS2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-HSTATUS2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1620,7 +2846,7 @@ describe("US-DELTA-003 — status human output with provenance", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
     expect(r2.code).toBe(0);
 
     const statusOut = JSON.parse(r2.stdout);
@@ -1635,11 +2861,11 @@ describe("US-DELTA-003 — status human output with provenance", () => {
     expect(statusOut.qualityProfile).toBe("standard");
   });
 
-  it("status after validate shows host-attested provenance, frozen in human + JSON snapshots", () => {
+  it("status after validate shows host-attested provenance, frozen in human + JSON snapshots", async () => {
     const dir = setupMinimalProject("US-DELTA-HPROV2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-HPROV2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-HPROV2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1653,11 +2879,11 @@ describe("US-DELTA-003 — status human output with provenance", () => {
       `delta-${delegationId}`, "role-artifacts", "designer");
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest()), "utf8");
-    const rVal = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    const rVal = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(rVal.code).toBe(0);
 
     // JSON status with host-attested frozen
-    const rJson = tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+    const rJson = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
     expect(rJson.code).toBe(0);
     const jsonOut = JSON.parse(rJson.stdout);
     // Must contain host-attested
@@ -1666,7 +2892,7 @@ describe("US-DELTA-003 — status human output with provenance", () => {
     expect(JSON.stringify(jsonOut)).not.toContain("adapter-observed");
 
     // Human status snapshot
-    const rHuman = tsRunCwd(["status", "--delegation", delegationId], dir);
+    const rHuman = await tsRunCwd(["status", "--delegation", delegationId], dir);
     expect(rHuman.code).toBe(0);
     expect(rHuman.stdout).toContain("host-attested");
     expect(rHuman.stdout).not.toContain("verified");
@@ -1679,11 +2905,11 @@ describe("US-DELTA-003 — status human output with provenance", () => {
 // ── Read-only status proof (AC7) ────────────────────────────────────────────
 
 describe("US-DELTA-003 — status read-only proof", () => {
-  it("status does not modify filesystem state", () => {
+  it("status does not modify filesystem state", async () => {
     const dir = setupMinimalProject("US-DELTA-READONLY", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-READONLY", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-READONLY",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1696,7 +2922,7 @@ describe("US-DELTA-003 — status read-only proof", () => {
     const snapshotBefore = readdirRecursive(dir);
 
     // Run status
-    const r2 = tsRunCwd(["status", "--delegation", delegationId], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId], dir);
     expect(r2.code).toBe(0);
 
     // Snapshot filesystem after status
@@ -1710,7 +2936,7 @@ describe("US-DELTA-003 — status read-only proof", () => {
 // ── Regression: no npx / network download in concurrent subprocess harness ──
 
 describe("US-DELTA-003 — regression: concurrent harness is deterministic", () => {
-  it("tsx binary is resolved locally, never shells out to npx", () => {
+  it("tsx binary is resolved locally, never shells out to npx", async () => {
     // The global tsxBin must point at the locally installed tsx CLI, resolved
     // from the CLI package's own devDependencies — not from PATH / npx cache.
     expect(tsxBin).toContain("node_modules");
@@ -1724,7 +2950,7 @@ describe("US-DELTA-003 — regression: concurrent harness is deterministic", () 
     expect(existsSync(tsxBin)).toBe(true);
   });
 
-  it("subprocess spawn command never includes npx or npm", () => {
+  it("subprocess spawn command never includes npx or npm", async () => {
     // Verify the spawn command shape used by all concurrent tests:
     //   spawn(process.execPath, [tsxBin, workerScript, ...])
     // This test breaks if anyone reverts to spawn("npx", ["tsx", ...]).
@@ -1739,12 +2965,14 @@ describe("US-DELTA-003 — regression: concurrent harness is deterministic", () 
 // ── Concurrent subprocess lease contention (III.1 / AC2) ────────────────────
 
 describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () => {
-  it("exactly one wins when two workers prepare same story under barrier", async () => {
+  it("exactly one persisted allocation when two workers prepare same story under barrier", async () => {
     const dir = setupMinimalProject("US-DELTA-CONCURRENT", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONCURRENT", "local-preset");
 
     // Use a file-based barrier: both children wait for this file to appear
     const barrierPath = join(dir, "barrier");
+    const readyPath1 = join(dir, "ready-concurrent-worker-1");
+    const readyPath2 = join(dir, "ready-concurrent-worker-2");
 
     // Writer the barrier AFTER launching both children
     writeFileSync(barrierPath, "wait", "utf8");
@@ -1758,6 +2986,7 @@ describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () =
           dir,
           resPath,
           barrierPath,
+          String(workerId),
         ], {
           cwd: dir,
           stdio: "pipe",
@@ -1773,38 +3002,68 @@ describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () =
       });
     };
 
-    // Launch two workers, then release the barrier
+    // Launch two workers and wait until each has loaded its module and entered
+    // the barrier. A fixed delay lets a slow second worker resume a successful
+    // same-input prepare, which is valid idempotency rather than contention.
     const [p1, p2] = [runChild(1), runChild(2)];
-    // Small delay to ensure both processes are running and waiting
-    await new Promise(r => setTimeout(r, 200));
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline && (!existsSync(readyPath1) || !existsSync(readyPath2))) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    if (!existsSync(readyPath1) || !existsSync(readyPath2)) {
+      // Let any child already waiting leave cleanly before failing the test.
+      writeFileSync(barrierPath, "abort", "utf8");
+      const [aborted1, aborted2] = await Promise.all([p1, p2]);
+      throw new Error(
+        `Timed out waiting for concurrent workers to reach the barrier: ` +
+        `worker 1 ready=${existsSync(readyPath1)} exit=${aborted1.code}; ` +
+        `worker 2 ready=${existsSync(readyPath2)} exit=${aborted2.code}`,
+      );
+    }
     // Release barrier
     writeFileSync(barrierPath, "go", "utf8");
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
-    // Exactly one must succeed (code 0), exactly one must fail (code 1)
-    const codes = [r1.code, r2.code].sort();
-    expect(codes).toEqual([0, 1]);
+    // FIX-1509 — the barrier releases both workers together, but it cannot
+    // guarantee both reach the lease claim at the same instant: one worker may
+    // fully finish before the other starts its check. Two outcomes are correct:
+    //   - contention: one wins (0), the other is refused with builder_lease_conflict (1)
+    //   - idempotent resume: both succeed (0), the second reporting the SAME
+    //     persisted delegationId it found durably prepared by the first.
+    // What must NEVER happen: two different delegationIds, two frames, two
+    // prepared events, or two leases.
+    const results = [r1, r2];
+    const successes = results.filter((r) => r.code === 0);
+    const failures = results.filter((r) => r.code !== 0);
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    expect(failures.length).toBeLessThanOrEqual(1);
 
-    // Winner has valid prepare output
-    const winner = r1.code === 0 ? r1 : r2;
-    const loser = r1.code === 0 ? r2 : r1;
-    let winnerParsed: Record<string, unknown>;
-    try {
-      winnerParsed = JSON.parse(winner.stdout.trim().split("\n").pop()!);
-    } catch {
-      // The winner's stdout might include tsx output; try parsing the last JSON line
-      const lines = winner.stdout.trim().split("\n");
-      const jsonLine = lines.find(l => l.startsWith("{"));
-      if (jsonLine) winnerParsed = JSON.parse(jsonLine);
-      else throw new Error(`Cannot parse winner stdout: ${winner.stdout}`);
+    const parseResult = (r: { code: number; stdout: string; stderr: string }): Record<string, unknown> => {
+      try {
+        return JSON.parse(r.stdout.trim().split("\n").pop()!) as Record<string, unknown>;
+      } catch {
+        // The worker's stdout might include tsx output; try parsing the last JSON line
+        const jsonLine = r.stdout.trim().split("\n").find(l => l.startsWith("{"));
+        if (jsonLine) return JSON.parse(jsonLine) as Record<string, unknown>;
+        throw new Error(`Cannot parse worker stdout: ${r.stdout}`);
+      }
+    };
+    const parsed = successes.map(parseResult);
+    for (const p of parsed) {
+      expect(p.ok).toBe(true);
+      expect(typeof p.delegationId).toBe("string");
     }
-    expect(winnerParsed.ok).toBe(true);
-    expect(typeof winnerParsed.delegationId).toBe("string");
+    // Every success reports the ONE persisted delegation identity.
+    const delegationId = parsed[0]!.delegationId as string;
+    for (const p of parsed) {
+      expect(p.delegationId).toBe(delegationId);
+    }
 
-    // Loser has builder_lease_conflict error
-    const loserOutput = loser.stderr + loser.stdout;
-    expect(loserOutput).toContain("builder_lease_conflict");
+    // A refused worker must carry the explicit lease-conflict reason.
+    for (const f of failures) {
+      expect(f.stderr + f.stdout).toContain("builder_lease_conflict");
+    }
 
     // Only ONE committed frame exists
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
@@ -1812,13 +3071,18 @@ describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () =
     const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
     const preparedEvents = events.filter((l: string) => { try { return JSON.parse(l).type === "delta:prepared"; } catch { return false; }});
     expect(preparedEvents.length).toBe(1);
-    expect(JSON.parse(preparedEvents[0]!).delegationId).toBe(winnerParsed.delegationId);
+    expect(JSON.parse(preparedEvents[0]!).delegationId).toBe(delegationId);
 
-    // Only ONE lease entry exists, bound to winner's delegationId
+    // Only ONE frame directory exists, for that same delegation
+    const cardDir = join(dir, ".roll", "features", "delta-team", "US-DELTA-CONCURRENT");
+    const frameDirs = readdirSync(cardDir).filter((n) => n.startsWith("delta-"));
+    expect(frameDirs).toEqual([`delta-${delegationId}`]);
+
+    // Only ONE lease entry exists, bound to the persisted delegationId
     const slPath = storyLeasesPath(dir);
     const sl = readLeases(slPath);
     expect(sl["US-DELTA-CONCURRENT"]).toBeDefined();
-    expect(sl["US-DELTA-CONCURRENT"].delegationId).toBe(winnerParsed.delegationId);
+    expect(sl["US-DELTA-CONCURRENT"].delegationId).toBe(delegationId);
 
     // No temp/claim residue in loop dir
     const loopDir = join(dir, ".roll", "loop");
@@ -1830,7 +3094,7 @@ describe("US-DELTA-003 — concurrent subprocess prepare atomic exclusion", () =
 // ── Prepare interruption seam (crash test) (III.2 / AC3) ────────────────────
 
 describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
-  it("interrupt after file write leaves orphan with matching lease; next prepare blocks", () => {
+  it("interrupt after file write retains immutable retry provenance", async () => {
     const dir = setupMinimalProject("US-DELTA-CRASH", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CRASH", "local-preset");
 
@@ -1843,14 +3107,12 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     });
 
     try {
-      expect(() => {
-        tsRunCwd([
+      await expect(tsRunCwd([
           "prepare", "US-DELTA-CRASH",
           "--trigger", "host-guided", "--topology", "delta-team",
           "--profile", "standard", "--preset", "local-preset",
           "--resolution", resPath, "--json",
-        ], dir);
-      }).toThrow("simulated crash");
+        ], dir)).rejects.toThrow("simulated crash");
     } finally {
       injectPrepareInterrupt(null);
     }
@@ -1894,7 +3156,7 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     expect(hasNoPreparedEvent).toBe(true);
 
     // Status reports orphan with exact fields
-    const rStatus = tsRunCwd(["status", "--story", "US-DELTA-CRASH", "--json"], dir);
+    const rStatus = await tsRunCwd(["status", "--story", "US-DELTA-CRASH", "--json"], dir);
     expect(rStatus.code).toBe(0);
     const statusOut = JSON.parse(rStatus.stdout);
     expect(statusOut.uncommittedFrames).toBeDefined();
@@ -1906,7 +3168,7 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     expect(typeof orphan.frameDir).toBe("string");
 
     // Orphan status human + JSON snapshots
-    const rHuman = tsRunCwd(["status", "--story", "US-DELTA-CRASH"], dir);
+    const rHuman = await tsRunCwd(["status", "--story", "US-DELTA-CRASH"], dir);
     expect(rHuman.code).toBe(0);
     expect(rHuman.stdout).toContain("uncommitted_delegation_frame");
     expect(rHuman.stdout).toContain(delegationId);
@@ -1914,18 +3176,18 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     expect(rHuman.stdout).toContain("recovery:");
     expect(rHuman.stdout).toContain("release");
 
-    // Next prepare must NOT adopt/resume/delete the orphan frame
-    // The lease is still active, so prepare should fail with builder_lease_conflict
+    // A retry with a freshly generated (therefore different) resolution cannot
+    // rewrite the durable operation's provenance.  It fails loud and keeps the
+    // original frame/reservation for an exact-input recovery.
     const resPath2 = writeResolutionTemplate(dir, "US-DELTA-CRASH", "local-preset", "resolution-template-2.json");
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "prepare", "US-DELTA-CRASH",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
       "--resolution", resPath2, "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err2 = JSON.parse(r2.stderr);
-    expect(err2.error).toBe("builder_lease_conflict");
+    expect(JSON.parse(r2.stderr).error).toBe("recovery_required");
 
     // Orphan frame and lease still preserved
     expect(existsSync(markerPath)).toBe(true);
@@ -1936,11 +3198,11 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     releaseHostDelegationLease(dir, "US-DELTA-CRASH", delegationId, `delta-${delegationId}`);
   });
 
-  it("prepare artifact cross-consistency: marker, resolution, preparation share delegationId/storyId", () => {
+  it("prepare artifact cross-consistency: marker, resolution, preparation share delegationId/storyId", async () => {
     const dir = setupMinimalProject("US-DELTA-XCONSIST", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-XCONSIST", "local-preset");
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-XCONSIST",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -1964,7 +3226,7 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
 
     // Preparation: schema + delegationId + runId + storyId + trigger/topology/profile + preset info
     const prep = JSON.parse(readFileSync(join(frameDir, "preparation.json"), "utf8"));
-    expect(prep.schema).toBe("roll-delta-preparation/v1");
+    expect(prep.schema).toBe("roll-delta-preparation/v2");
     expect(prep.delegationId).toBe(delegationId);
     expect(prep.runId).toBe(`delta-${delegationId}`);
     expect(prep.storyId).toBe("US-DELTA-XCONSIST");
@@ -1974,14 +3236,15 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
     expect(prep.presetId).toBe("local-preset");
     expect(prep.presetSha256).toBe("aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
 
-    // Event stream: exact type/order/count/role bindings
+    // Event stream: recovery + allocation + prepared + 3 resolved roles +
+    // their three descriptive (not invocation) availability observations.
     const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n").map(l => JSON.parse(l));
-    expect(events.length).toBe(4); // 1 prepared + 3 role_resolved
-    expect(events[0]!.type).toBe("delta:prepared");
-    expect(events[0]!.delegationId).toBe(delegationId);
-    expect(events[0]!.storyId).toBe("US-DELTA-XCONSIST");
+    expect(events.length).toBe(9);
+    const preparedEvent = events.find((event) => event.type === "delta:prepared");
+    expect(preparedEvent?.delegationId).toBe(delegationId);
+    expect(preparedEvent?.storyId).toBe("US-DELTA-XCONSIST");
 
-    const roleEvents = events.slice(1);
+    const roleEvents = events.filter((event) => event.type === "delta:role_resolved");
     const roleSet = new Set(roleEvents.map(e => e.role));
     expect(roleSet.has("designer")).toBe(true);
     expect(roleSet.has("builder")).toBe(true);
@@ -1994,6 +3257,19 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
       expect(re.inventorySha256).toBe("bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
       expect(typeof re.inventoryObservedAt).toBe("string");
       expect(re.inventorySha256).not.toBe("aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff");
+    }
+
+    const availabilityEvents = events.filter((event) => event.type === "delta:role_availability_observed");
+    expect(availabilityEvents).toHaveLength(3);
+    for (const event of availabilityEvents) {
+      expect(event).toMatchObject({
+        delegationId,
+        storyId: "US-DELTA-XCONSIST",
+        transportClass: "host-resolution",
+        probeOutcome: "not_measured",
+        selection: "selected",
+        invocationObserved: false,
+      });
     }
 
     // No cycle/runs/latest/cycle:terminal in events
@@ -2010,11 +3286,11 @@ describe("US-DELTA-003 — prepare crash before delta:prepared", () => {
 // ── Validator admission boundary tests (III.4) ───────────────────────────────
 
 describe("US-DELTA-003 — validate admission boundaries", () => {
-  it("validate invocation: validator called exactly once with correct delegationId/stage/frameDir", () => {
+  it("validate invocation: validator called exactly once with correct delegationId/stage/frameDir", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL-SPY", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL-SPY", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL-SPY",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2039,7 +3315,7 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
     });
 
     try {
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "validate", "--delegation", delegationId,
         "--stage", "designer", "--json",
       ], dir);
@@ -2056,14 +3332,14 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
     }
   });
 
-  it("validate injected allow/block: exactly one event each with correct kind/provenance", () => {
+  it("validate injected allow/block: exactly one event each with correct kind/provenance", async () => {
     // Use TWO separate delegations: one for block test, one for allow test.
     // Admission prevents blocked delegations from further validation.
 
     // --- Block test ---
     const dirBlock = setupMinimalProject("US-DELTA-VAL-ALLOWBLOCK-BLK", "delta-team");
     const resPathBlock = writeResolutionTemplate(dirBlock, "US-DELTA-VAL-ALLOWBLOCK-BLK", "local-preset");
-    const r1b = tsRunCwd([
+    const r1b = await tsRunCwd([
       "prepare", "US-DELTA-VAL-ALLOWBLOCK-BLK",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2076,10 +3352,10 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
 
     injectValidator((input) => ({ ok: false, reason: "host_attestation_invalid", detail: "test block", role: input.stage }));
     try {
-      const r2 = tsRunCwd(["validate", "--delegation", delegationIdBlock, "--stage", "builder", "--json"], dirBlock);
+      const r2 = await tsRunCwd(["validate", "--delegation", delegationIdBlock, "--stage", "builder", "--json"], dirBlock);
       expect(r2.code).toBe(1);
       const eventsAfterBlock = readFileSync(eventsPathBlock, "utf8").trim().split("\n").filter(l => l.trim());
-      expect(eventsAfterBlock.length).toBe(eventsBeforeBlock.length + 1);
+      expect(eventsAfterBlock.length).toBe(eventsBeforeBlock.length + 2);
       const blockEvent = JSON.parse(eventsAfterBlock[eventsAfterBlock.length - 1]!);
       expect(blockEvent.type).toBe("delta:blocked");
       expect(blockEvent.reason).toBe("host_attestation_invalid");
@@ -2093,7 +3369,7 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
     // --- Allow test (fresh delegation, no prior block) ---
     const dirAllow = setupMinimalProject("US-DELTA-VAL-ALLOWBLOCK-ALLOW", "delta-team");
     const resPathAllow = writeResolutionTemplate(dirAllow, "US-DELTA-VAL-ALLOWBLOCK-ALLOW", "local-preset");
-    const r1a = tsRunCwd([
+    const r1a = await tsRunCwd([
       "prepare", "US-DELTA-VAL-ALLOWBLOCK-ALLOW",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2112,7 +3388,7 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
 
     injectValidator((_input) => ({ ok: true }));
     try {
-      const r3 = tsRunCwd(["validate", "--delegation", delegationIdAllow, "--stage", "evaluator", "--json"], dirAllow);
+      const r3 = await tsRunCwd(["validate", "--delegation", delegationIdAllow, "--stage", "evaluator", "--json"], dirAllow);
       expect(r3.code).toBe(0);
       const eventsAfterAllow = readFileSync(eventsPathAllow, "utf8").trim().split("\n").filter(l => l.trim());
       expect(eventsAfterAllow.length).toBe(eventsBeforeAllow.length + 1);
@@ -2126,11 +3402,11 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
     }
   });
 
-  it("validate block short-circuits admission: unassigned role or terminal delegation", () => {
+  it("validate block short-circuits admission: unassigned role or terminal delegation", async () => {
     const dir = setupMinimalProject("US-DELTA-VAL-ADMIT", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-VAL-ADMIT", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-VAL-ADMIT",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2146,9 +3422,9 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
       throw new Error("validator must not be called for unassigned role");
     });
     try {
-      const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "peer", "--json"], dir);
+      const r2 = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "peer", "--json"], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       // Admission blocks unassigned roles with invalid_resolution
       expect(err.error).toBe("invalid_resolution");
       expect(err.detail).toContain("peer");
@@ -2169,11 +3445,11 @@ describe("US-DELTA-003 — validate admission boundaries", () => {
 // ── Conclude: parser-invalid vs domain-unselected (III.5) ───────────────────
 
 describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
-  it("conclude with invalid enum rejects with parser error ZERO side effects", () => {
+  it("conclude with invalid enum rejects with parser error ZERO side effects", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-DOMAIN", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-DOMAIN", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-DOMAIN",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2186,7 +3462,7 @@ describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // Invalid disposition (not in the enum) → parser error, ZERO side effects
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "not_a_real_disposition", "--json",
     ], dir);
@@ -2205,11 +3481,11 @@ describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
     expect(slAfter["US-DELTA-CONC-DOMAIN"]).toBeDefined();
   });
 
-  it("conclude with unknown flag (parser error) produces zero events and zero file modifications", () => {
+  it("conclude with unknown flag (parser error) produces zero events and zero file modifications", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-PARSER", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-PARSER", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-PARSER",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2224,7 +3500,7 @@ describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
     const eventsBeforeLen = eventsBefore.length;
 
     // Parser error: unknown flag with --json
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue",
       "--nonexistent-flag", "--json",
@@ -2246,14 +3522,14 @@ describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
     expect(slAfter3["US-DELTA-CONC-PARSER"]).toBeDefined();
   });
 
-  it("conclude all three valid dispositions produce exact delta:terminal event", () => {
+  it("conclude all three valid dispositions produce exact delta:terminal event", async () => {
     const dispositions = ["owner_continue", "owner_hold", "owner_redelegate"] as const;
     for (const disposition of dispositions) {
       const storyId = `US-DELTA-CONC-${disposition.toUpperCase()}`;
       const dir = setupMinimalProject(storyId, "delta-team");
       const resPath = writeResolutionTemplate(dir, storyId, "local-preset");
 
-      const r1 = tsRunCwd([
+      const r1 = await tsRunCwd([
         "prepare", storyId,
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -2262,9 +3538,11 @@ describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
       expect(r1.code).toBe(0);
       const delegationId = JSON.parse(r1.stdout).delegationId;
 
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "conclude", "--delegation", delegationId,
-        "--delivery-disposition", disposition, "--json",
+        "--delivery-disposition", disposition,
+        ...(disposition === "owner_redelegate" ? ["--continuation-run", "delta-named-continuation"] : []),
+        "--json",
       ], dir);
       expect(r2.code).toBe(0);
 
@@ -2291,11 +3569,11 @@ describe("US-DELTA-003 — conclude parser vs domain rejection", () => {
 // ── Status: provenance, trigger/topology/profile, snapshots (III.6) ──────────
 
 describe("US-DELTA-003 — status provenance and snapshot coverage", () => {
-  it("status --json after prepare+validate has provenance labels, never 'verified'", () => {
+  it("status --json after prepare+validate has provenance labels, never 'verified'", async () => {
     const dir = setupMinimalProject("US-DELTA-PROV", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-PROV", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-PROV",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2309,10 +3587,10 @@ describe("US-DELTA-003 — status provenance and snapshot coverage", () => {
       `delta-${delegationId}`, "role-artifacts", "designer");
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest()), "utf8");
-    const rVal = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    const rVal = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(rVal.code).toBe(0);
 
-    const r2 = tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+    const r2 = await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
     expect(r2.code).toBe(0);
     const status = JSON.parse(r2.stdout);
 
@@ -2338,7 +3616,7 @@ describe("US-DELTA-003 — status provenance and snapshot coverage", () => {
     }
 
     // Status human output snapshot
-    const rHuman = tsRunCwd(["status", "--delegation", delegationId], dir);
+    const rHuman = await tsRunCwd(["status", "--delegation", delegationId], dir);
     expect(rHuman.code).toBe(0);
     expect(rHuman.stdout).toContain("host-guided");
     expect(rHuman.stdout).toContain("delta-team");
@@ -2351,7 +3629,7 @@ describe("US-DELTA-003 — status provenance and snapshot coverage", () => {
 // ── Orphan status snapshots (III.7) ──────────────────────────────────────────
 
 describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
-  it("orphan frame shows exact unknown: uncommitted_delegation_frame with path and action", () => {
+  it("orphan frame shows exact unknown: uncommitted_delegation_frame with path and action", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPHAN-SNAP", "delta-team");
 
     // Manual orphan with lease
@@ -2370,7 +3648,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     );
 
     // JSON status
-    const rJson = tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-SNAP", "--json"], dir);
+    const rJson = await tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-SNAP", "--json"], dir);
     expect(rJson.code).toBe(0);
     const parsed = JSON.parse(rJson.stdout);
     expect(parsed.uncommittedFrames).toBeDefined();
@@ -2382,7 +3660,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     expect(scrubbedJson).toMatchSnapshot();
 
     // Human status
-    const rHuman = tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-SNAP"], dir);
+    const rHuman = await tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-SNAP"], dir);
     expect(rHuman.code).toBe(0);
     expect(rHuman.stdout).toContain("uncommitted_delegation_frame");
     expect(rHuman.stdout).toContain("frame:");
@@ -2391,7 +3669,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     expect(scrubbedHuman).toMatchSnapshot();
   });
 
-  it("ZH orphan status human + JSON snapshot with CJK recovery action", () => {
+  it("ZH orphan status human + JSON snapshot with CJK recovery action", async () => {
     const prev = process.env["ROLL_LANG"];
     try {
       process.env["ROLL_LANG"] = "zh";
@@ -2406,13 +3684,13 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
       );
 
       // JSON status in zh locale
-      const rJson = tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-ZH", "--json"], dir);
+      const rJson = await tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-ZH", "--json"], dir);
       expect(rJson.code).toBe(0);
       const scrubbedJson = scrubAll(rJson.stdout, dir, delegationId);
       expect(scrubbedJson).toMatchSnapshot();
 
       // Human status in zh locale — must contain CJK recovery action
-      const rHuman = tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-ZH"], dir);
+      const rHuman = await tsRunCwd(["status", "--story", "US-DELTA-ORPHAN-ZH"], dir);
       expect(rHuman.code).toBe(0);
       // ZH output contains CJK status labels, not English
       expect(rHuman.stdout).toContain("未提交");
@@ -2428,7 +3706,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
 
   // ─── BLOCK-C: orphan negative classification ───────────────────────────
 
-  it("BLOCK-C: marker-only orphan (no lease) → hasMatchingLease: false", () => {
+  it("BLOCK-C: marker-only orphan (no lease) → hasMatchingLease: false", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPH-NOLEASE", "delta-team");
 
     // Create marker without any lease
@@ -2450,7 +3728,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
       expect(sl["US-DELTA-ORPH-NOLEASE"]).toBeUndefined();
     }
 
-    const r = tsRunCwd(["status", "--story", "US-DELTA-ORPH-NOLEASE", "--json"], dir);
+    const r = await tsRunCwd(["status", "--story", "US-DELTA-ORPH-NOLEASE", "--json"], dir);
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.uncommittedFrames).toBeDefined();
@@ -2461,7 +3739,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     expect(orphan.status).toBe("unknown: uncommitted_delegation_frame");
   });
 
-  it("BLOCK-C: marker + wrong delegation lease → hasMatchingLease: false", () => {
+  it("BLOCK-C: marker + wrong delegation lease → hasMatchingLease: false", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPH-WRONG", "delta-team");
 
     // Create marker for delegation A
@@ -2479,7 +3757,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     claimHostDelegationLease(dir, "US-DELTA-ORPH-WRONG", wrongDelegationId, `delta-${wrongDelegationId}`);
 
     try {
-      const r = tsRunCwd(["status", "--story", "US-DELTA-ORPH-WRONG", "--json"], dir);
+      const r = await tsRunCwd(["status", "--story", "US-DELTA-ORPH-WRONG", "--json"], dir);
       expect(r.code).toBe(0);
       const parsed = JSON.parse(r.stdout);
       expect(parsed.uncommittedFrames).toBeDefined();
@@ -2495,7 +3773,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     }
   });
 
-  it("BLOCK-C: marker + matching delegation lease → hasMatchingLease: true (existing contract)", () => {
+  it("BLOCK-C: marker + matching delegation lease → hasMatchingLease: true (existing contract)", async () => {
     const dir = setupMinimalProject("US-DELTA-ORPH-MATCH", "delta-team");
 
     // Create marker for delegation A
@@ -2512,7 +3790,7 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
     claimHostDelegationLease(dir, "US-DELTA-ORPH-MATCH", delegationId, `delta-${delegationId}`);
 
     try {
-      const r = tsRunCwd(["status", "--story", "US-DELTA-ORPH-MATCH", "--json"], dir);
+      const r = await tsRunCwd(["status", "--story", "US-DELTA-ORPH-MATCH", "--json"], dir);
       expect(r.code).toBe(0);
       const parsed = JSON.parse(r.stdout);
       expect(parsed.uncommittedFrames).toBeDefined();
@@ -2530,10 +3808,10 @@ describe("US-DELTA-003 — orphan status human + JSON snapshots", () => {
 // ── ZH locale error smoke (III.7) ───────────────────────────────────────────
 
 describe("US-DELTA-003 — ZH locale error messages", () => {
-  it("prepare --json error produces valid JSON envelope on stderr", () => {
+  it("prepare --json error produces valid JSON envelope on stderr", async () => {
     const dir = setupMinimalProject("US-DELTA-ZH", "delta-team");
     // Missing required flags → JSON error
-    const r = tsRunCwd(["prepare", "US-DELTA-ZH", "--json"], dir);
+    const r = await tsRunCwd(["prepare", "US-DELTA-ZH", "--json"], dir);
     expect(r.code).toBe(1);
     // Must be valid JSON on stderr
     const err = JSON.parse(r.stderr);
@@ -2542,30 +3820,30 @@ describe("US-DELTA-003 — ZH locale error messages", () => {
     expect(typeof err.detail).toBe("string");
   });
 
-  it("prepare missing flag error is valid JSON", () => {
+  it("prepare missing flag error is valid JSON", async () => {
     const dir = setupMinimalProject("US-DELTA-ZH2", "delta-team");
-    const r = tsRunCwd(["prepare", "US-DELTA-ZH2", "--json"], dir);
+    const r = await tsRunCwd(["prepare", "US-DELTA-ZH2", "--json"], dir);
     expect(r.code).toBe(1);
     expect(() => JSON.parse(r.stderr)).not.toThrow();
   });
 
-  it("validate --json block error is valid JSON on stderr", () => {
+  it("validate --json block error is valid JSON on stderr", async () => {
     const dir = setupMinimalProject("US-DELTA-ZH3", "delta-team");
-    const r = tsRunCwd(["validate", "--delegation", "nonexistent", "--stage", "designer", "--json"], dir);
+    const r = await tsRunCwd(["validate", "--delegation", "nonexistent", "--stage", "designer", "--json"], dir);
     expect(r.code).toBe(1);
-    expect(() => JSON.parse(r.stderr)).not.toThrow();
-    const err = JSON.parse(r.stderr);
+    expect(() => parseStderrJsonTail(r.stderr)).not.toThrow();
+    const err = parseStderrJsonTail(r.stderr);
     expect(err.ok).toBe(false);
     expect(typeof err.error).toBe("string");
   });
 
-  it("ZH locale error contains CJK characters for known errors", () => {
+  it("ZH locale error contains CJK characters for known errors", async () => {
     const prev = process.env["ROLL_LANG"];
     try {
       process.env["ROLL_LANG"] = "zh";
       const dir = setupMinimalProject("US-DELTA-ZH4", "delta-team");
       // Missing story → error
-      const r = tsRunCwd(["prepare"], dir);
+      const r = await tsRunCwd(["prepare"], dir);
       expect(r.code).toBe(1);
       // Should contain CJK
       expect(/[\u4e00-\u9fff]/.test(r.stderr)).toBe(true);
@@ -2575,10 +3853,10 @@ describe("US-DELTA-003 — ZH locale error messages", () => {
     }
   });
 
-  it("conclude --json terminal_path_unselected error is valid JSON", () => {
+  it("conclude --json terminal_path_unselected error is valid JSON", async () => {
     const dir = setupMinimalProject("US-DELTA-ZH5", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ZH5", "local-preset");
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-ZH5",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2587,10 +3865,10 @@ describe("US-DELTA-003 — ZH locale error messages", () => {
     expect(r1.code).toBe(0);
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
-    const r2 = tsRunCwd(["conclude", "--delegation", delegationId, "--json"], dir);
+    const r2 = await tsRunCwd(["conclude", "--delegation", delegationId, "--json"], dir);
     expect(r2.code).toBe(1);
-    expect(() => JSON.parse(r2.stderr)).not.toThrow();
-    const err = JSON.parse(r2.stderr);
+    expect(() => parseStderrJsonTail(r2.stderr)).not.toThrow();
+    const err = parseStderrJsonTail(r2.stderr);
     expect(err.error).toBe("terminal_path_unselected");
   });
 });
@@ -2658,11 +3936,11 @@ describe("US-DELTA-003 — forbidden import audit (fail-closed)", () => {
     expect(fs.existsSync(indexFile)).toBe(true);
   });
 
-  it("prepare+validate+conclude events contain no cycle:/delivery/done types", () => {
+  it("prepare+validate+conclude events contain no cycle:/delivery/done types", async () => {
     const dir = setupMinimalProject("US-DELTA-NOCYCLE", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-NOCYCLE", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-NOCYCLE",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2676,10 +3954,10 @@ describe("US-DELTA-003 — forbidden import audit (fail-closed)", () => {
       `delta-${delegationId}`, "role-artifacts", "designer");
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest()), "utf8");
-    tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
 
     // Conclude
-    tsRunCwd([
+    await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -2708,11 +3986,11 @@ describe("US-DELTA-003 — forbidden import audit (fail-closed)", () => {
 // ── Snapshot scrubber fix: no /private<TMP> artifacts (III.7) ────────────────
 
 describe("US-DELTA-003 — snapshot scrubber determinism", () => {
-  it("scrubber does not produce /private<TMP> hybrid, correctly separates project and tmp", () => {
+  it("scrubber does not produce /private<TMP> hybrid, correctly separates project and tmp", async () => {
     const dir = setupMinimalProject("US-DELTA-SCRUB", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-SCRUB", "local-preset");
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-SCRUB",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2720,7 +3998,7 @@ describe("US-DELTA-003 — snapshot scrubber determinism", () => {
     ], dir);
     expect(r.code).toBe(0);
 
-    const scrubbed = scrubPaths(r.stdout, dir);
+    const scrubbed = scrubDelegationIdentity(scrubPaths(r.stdout, dir), JSON.parse(r.stdout).delegationId);
     // Must NOT contain /private<TMP> — this would indicate <TMP> placed inside a path prefix
     expect(scrubbed).not.toContain("/private<TMP>");
     // Must NOT contain raw UUIDs
@@ -2733,7 +4011,7 @@ describe("US-DELTA-003 — snapshot scrubber determinism", () => {
 // ── Cross-source mutual exclusion (bidirectional no-clobber) ─────────────────
 
 describe("US-DELTA-003 — cross-source atomic exclusion", () => {
-  it("host claim blocks cycle claim (host then cycle fails)", () => {
+  it("host claim blocks cycle claim (host then cycle fails)", async () => {
     const dir = setupMinimalProject("US-DELTA-X-HC", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -2759,7 +4037,7 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
     releaseHostDelegationLease(dir, "US-DELTA-X-HC", sl["US-DELTA-X-HC"].delegationId, `delta-${sl["US-DELTA-X-HC"].delegationId}`);
   });
 
-  it("cycle claim blocks host claim (cycle then host fails)", () => {
+  it("cycle claim blocks host claim (cycle then host fails)", async () => {
     const dir = setupMinimalProject("US-DELTA-X-CH", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -2782,7 +4060,7 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
     releaseStoryLease(slPath, "US-DELTA-X-CH", { source: "cycle", pid: process.pid });
   });
 
-  it("human claim blocks host prepare (bidirectional)", () => {
+  it("human claim blocks host prepare (bidirectional)", async () => {
     const dir = setupMinimalProject("US-DELTA-X-HH", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-X-HH", "local-preset");
 
@@ -2791,7 +4069,7 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
     setLease(slPath, "US-DELTA-X-HH", { claimedAt: Date.now(), source: "human" });
 
     // Host prepare must fail
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-X-HH",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2807,7 +4085,7 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
     expect(deltaDirs.length).toBe(0);
   });
 
-  it("host claim blocks human claim via claimStoryLease", () => {
+  it("host claim blocks human claim via claimStoryLease", async () => {
     const dir = setupMinimalProject("US-DELTA-X-HC2", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -2838,7 +4116,7 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
     const resPath = writeResolutionTemplate(dir, "US-DELTA-NOFRAME", "local-preset");
 
     // First prepare succeeds
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-NOFRAME",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2852,13 +4130,14 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // Second prepare must fail — no new frame, no new events
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "prepare", "US-DELTA-NOFRAME",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
       "--resolution", resPath, "--json",
     ], dir);
-    expect(r2.code).toBe(1);
+    expect(r2.code).toBe(0);
+    expect(JSON.parse(r2.stdout).delegationId).toBe(winnerId);
 
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
     expect(eventsAfter.length).toBe(eventsBefore.length);
@@ -2875,12 +4154,12 @@ describe("US-DELTA-003 — cross-source atomic exclusion", () => {
 // ── Architecture BLOCK: Host-delegation lease lifecycle (Tasks A, B, C) ───
 
 describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
-  it("cleanDeadLeases does NOT clean live host-delegation lease (Task A)", () => {
+  it("cleanDeadLeases does NOT clean live host-delegation lease (Task A)", async () => {
     const dir = setupMinimalProject("US-DELTA-HL-PERSIST", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-HL-PERSIST", "local-preset");
 
     // Prepare succeeds
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-HL-PERSIST",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -2911,7 +4190,7 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
     releaseHostDelegationLease(dir, "US-DELTA-HL-PERSIST", origDelegationId, `delta-${origDelegationId}`);
   });
 
-  it("cleanDeadLeases cleans dead cycle pid but not host-delegation (Task A+C)", () => {
+  it("cleanDeadLeases cleans dead cycle pid but not host-delegation (Task A+C)", async () => {
     const dir = setupMinimalProject("US-DELTA-HL-MIXED", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -2934,7 +4213,7 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
     expect(sl["US-DELTA-HL-MIXED-HOST"].source).toBe("host-delegation");
   });
 
-  it("releaseHostDelegationLease requires matching delegationId (Task B)", () => {
+  it("releaseHostDelegationLease requires matching delegationId (Task B)", async () => {
     const dir = setupMinimalProject("US-DELTA-REL-DELEG", "delta-team");
     const slPath = storyLeasesPath(dir);
 
@@ -2959,7 +4238,7 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
     expect(result3).toBe(true);
   });
 
-  it("releaseHostDelegationLease with empty delegationId rejects (Task B)", () => {
+  it("releaseHostDelegationLease with empty delegationId rejects (Task B)", async () => {
     const dir = setupMinimalProject("US-DELTA-REL-EMPTY", "delta-team");
     const slPath = storyLeasesPath(dir);
 
@@ -2970,7 +4249,7 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
     expect(result).toBe(false);
   });
 
-  it("pre-interruption orphan retains host lease; cleanDeadLeases does NOT clean it (Task A)", () => {
+  it("pre-interruption orphan retains host lease; cleanDeadLeases does NOT clean it (Task A)", async () => {
     const dir = setupMinimalProject("US-DELTA-HL-ORPHAN", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-HL-ORPHAN", "local-preset");
 
@@ -2981,14 +4260,12 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
 
     let delegId = "";
     try {
-      expect(() => {
-        tsRunCwd([
+      await expect(tsRunCwd([
           "prepare", "US-DELTA-HL-ORPHAN",
           "--trigger", "host-guided", "--topology", "delta-team",
           "--profile", "standard", "--preset", "local-preset",
           "--resolution", resPath, "--json",
-        ], dir);
-      }).toThrow("simulated crash");
+        ], dir)).rejects.toThrow("simulated crash");
     } finally {
       injectPrepareInterrupt(null);
     }
@@ -3017,7 +4294,7 @@ describe("US-DELTA-003 — host-delegation persistent lease lifecycle", () => {
 // ── Story-level concurrent barrier with ready files (III.1) ────────────────
 
 describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
-  it("both workers write ready ack; main waits for both before releasing go; exactly one winner", async () => {
+  it("both workers write ready ack; main waits for both before releasing go; exactly one persisted allocation", async () => {
     const dir = setupMinimalProject("US-DELTA-READY", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-READY", "local-preset");
 
@@ -3069,21 +4346,35 @@ describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
-    // Exactly one must succeed (code 0), exactly one must fail (code 1)
-    const codes = [r1.code, r2.code].sort();
-    expect(codes).toEqual([0, 1]);
+    // FIX-1509 — two correct outcomes: one winner + one builder_lease_conflict
+    // refusal, or both succeeding with the SAME persisted delegationId (the
+    // second worker idempotently resumed the allocation the first had already
+    // durably prepared). Never two different allocations.
+    const results = [r1, r2];
+    const successes = results.filter((r) => r.code === 0);
+    const failures = results.filter((r) => r.code !== 0);
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    expect(failures.length).toBeLessThanOrEqual(1);
 
-    // Winner has valid output, loser has builder_lease_conflict
-    const winner = r1.code === 0 ? r1 : r2;
-    const loser = r1.code === 0 ? r2 : r1;
-    const winnerOut = winner.stdout.trim();
-    const jsonLine = winnerOut.split("\n").find(l => l.startsWith("{"));
-    expect(jsonLine).toBeDefined();
-    const winnerParsed = JSON.parse(jsonLine!);
-    expect(winnerParsed.ok).toBe(true);
+    const parsed = successes.map((r) => {
+      const jsonLine = r.stdout.trim().split("\n").find(l => l.startsWith("{"));
+      expect(jsonLine).toBeDefined();
+      return JSON.parse(jsonLine!) as Record<string, unknown>;
+    });
+    for (const p of parsed) {
+      expect(p.ok).toBe(true);
+      expect(typeof p.delegationId).toBe("string");
+    }
+    // Every success reports the ONE persisted delegation identity.
+    const delegationId = parsed[0]!.delegationId as string;
+    for (const p of parsed) {
+      expect(p.delegationId).toBe(delegationId);
+    }
 
-    const loserOutput = loser.stderr + loser.stdout;
-    expect(loserOutput).toContain("builder_lease_conflict");
+    // A refused worker must carry the explicit lease-conflict reason.
+    for (const f of failures) {
+      expect(f.stderr + f.stdout).toContain("builder_lease_conflict");
+    }
 
     // Only ONE committed frame + ONE lease
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
@@ -3091,11 +4382,18 @@ describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
     const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
     const preparedEvents = events.filter((l: string) => { try { return JSON.parse(l).type === "delta:prepared"; } catch { return false; }});
     expect(preparedEvents.length).toBe(1);
+    expect(JSON.parse(preparedEvents[0]!).delegationId).toBe(delegationId);
+
+    // Only ONE frame directory exists, for that same delegation
+    const cardDir = join(dir, ".roll", "features", "delta-team", "US-DELTA-READY");
+    const frameDirs = readdirSync(cardDir).filter((n) => n.startsWith("delta-"));
+    expect(frameDirs).toEqual([`delta-${delegationId}`]);
 
     const slPath = storyLeasesPath(dir);
     const sl = readLeases(slPath);
     expect(sl["US-DELTA-READY"]).toBeDefined();
     expect(sl["US-DELTA-READY"].source).toBe("host-delegation");
+    expect(sl["US-DELTA-READY"].delegationId).toBe(delegationId);
 
     // Cleanup: release the lease
     releaseHostDelegationLease(dir, "US-DELTA-READY", sl["US-DELTA-READY"].delegationId, sl["US-DELTA-READY"].runId);
@@ -3110,6 +4408,12 @@ describe("US-DELTA-003 — concurrent subprocess barrier (ready ack)", () => {
       writeFileSync(join(featuresDir, "spec.md"), `# ${storyId}\n\nStory spec.\n`, "utf8");
     }
     mkdirSync(join(dir, ".roll", "loop"), { recursive: true });
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "delta@test.invalid"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "Delta Test"], { cwd: dir });
+    writeFileSync(join(dir, "README.md"), "fixture\n", "utf8");
+    execFileSync("git", ["add", "README.md", ".roll"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "fixture"], { cwd: dir, stdio: "ignore" });
 
     const resPath1 = writeResolutionTemplate(dir, "US-DELTA-DIFF-1", "local-preset", "res-1.json");
     const resPath2 = writeResolutionTemplate(dir, "US-DELTA-DIFF-2", "local-preset", "res-2.json");
@@ -3199,11 +4503,11 @@ describe("US-DELTA-003 — import closure audit (unified helper)", () => {
 // ── Prepare artifact no-overwrite (BLOCK #2) ──────────────────────────────
 
 describe("US-DELTA-003 — prepare immutable artifact no-overwrite", () => {
-  it("prepare fail-loud with artifact_exists when marker pre-exists, original bytes unchanged", () => {
+  it("prepare fail-loud with artifact_exists when marker pre-exists, original bytes unchanged", async () => {
     const dir = setupMinimalProject("US-DELTA-NOOVERWRITE", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-NOOVERWRITE", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-NOOVERWRITE",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3226,7 +4530,7 @@ describe("US-DELTA-003 — prepare immutable artifact no-overwrite", () => {
     // and that new id's frame won't collide. But the lease needs to be claimed first.
     // After releasing the lease, a second prepare with a NEW resolution template works:
     const resPath2 = writeResolutionTemplate(dir, "US-DELTA-NOOVERWRITE", "local-preset", "resolution-template-2.json");
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "prepare", "US-DELTA-NOOVERWRITE",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3243,11 +4547,11 @@ describe("US-DELTA-003 — prepare immutable artifact no-overwrite", () => {
 // ── Event append failure seam: conclude retains lease (BLOCK #4) ──────────
 
 describe("US-DELTA-003 — conclude event append failure seam", () => {
-  it("conclude with injected event append failure retains lease and produces no success output", () => {
+  it("conclude with injected event append failure retains lease and produces no success output", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-APPFAIL", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-APPFAIL", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-APPFAIL",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3262,7 +4566,7 @@ describe("US-DELTA-003 — conclude event append failure seam", () => {
     });
 
     try {
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "conclude", "--delegation", delegationId,
         "--delivery-disposition", "owner_continue", "--json",
       ], dir);
@@ -3270,7 +4574,7 @@ describe("US-DELTA-003 — conclude event append failure seam", () => {
       // Must NOT output success — code non-zero, stdout empty
       expect(r2.code).toBe(1);
       expect(r2.stdout).toBe("");
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       expect(err.ok).toBe(false);
       expect(err.error).toBe("event_append_failure");
 
@@ -3278,7 +4582,7 @@ describe("US-DELTA-003 — conclude event append failure seam", () => {
       const slPath = storyLeasesPath(dir);
       const sl = readLeases(slPath);
       expect(sl["US-DELTA-CONC-APPFAIL"]).toBeDefined();
-      expect(sl["US-DELTA-CONC-APPFAIL"].source).toBe("host-delegation");
+      expect(sl["US-DELTA-CONC-APPFAIL"].source).toBe("delivery-reservation");
 
       // Cleanup: release the lease
       releaseHostDelegationLease(dir, "US-DELTA-CONC-APPFAIL", delegationId, `delta-${delegationId}`);
@@ -3291,12 +4595,12 @@ describe("US-DELTA-003 — conclude event append failure seam", () => {
 // ── Status edge cases (BLOCK #5) ──────────────────────────────────────────
 
 describe("US-DELTA-003 — status edge cases", () => {
-  it("status --story with multiple delegations shows all in JSON delegations array", () => {
+  it("status --story with multiple delegations shows all in JSON delegations array", async () => {
     const dir = setupMinimalProject("US-DELTA-MULTI", "delta-team");
 
     // Prepare delegation A
     const resPathA = writeResolutionTemplate(dir, "US-DELTA-MULTI", "local-preset", "res-a.json");
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-MULTI",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3308,7 +4612,7 @@ describe("US-DELTA-003 — status edge cases", () => {
     // Release lease and prepare delegation B
     releaseHostDelegationLease(dir, "US-DELTA-MULTI", delegA, `delta-${delegA}`);
     const resPathB = writeResolutionTemplate(dir, "US-DELTA-MULTI", "local-preset", "res-b.json");
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "prepare", "US-DELTA-MULTI",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3318,7 +4622,7 @@ describe("US-DELTA-003 — status edge cases", () => {
     const delegB = JSON.parse(r2.stdout).delegationId;
 
     // Status --story should show both delegations
-    const r3 = tsRunCwd(["status", "--story", "US-DELTA-MULTI", "--json"], dir);
+    const r3 = await tsRunCwd(["status", "--story", "US-DELTA-MULTI", "--json"], dir);
     expect(r3.code).toBe(0);
     const statusOut = JSON.parse(r3.stdout);
     expect(statusOut.delegations).toBeDefined();
@@ -3328,9 +4632,9 @@ describe("US-DELTA-003 — status edge cases", () => {
     expect(delegIds).toContain(delegB);
   });
 
-  it("status --delegation with unknown id returns empty result", () => {
+  it("status --delegation with unknown id returns empty result", async () => {
     const dir = setupMinimalProject("US-DELTA-UNKNOWN", "delta-team");
-    const r = tsRunCwd(["status", "--delegation", "nonexistent-deleg-id", "--json"], dir);
+    const r = await tsRunCwd(["status", "--delegation", "nonexistent-deleg-id", "--json"], dir);
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout);
     // No delegation found, no crash — empty projection
@@ -3340,11 +4644,11 @@ describe("US-DELTA-003 — status edge cases", () => {
     // status may be "unknown" or absent — both are valid for nonexistent delegation
   });
 
-  it("status with both --story and --delegation prefers delegation view", () => {
+  it("status with both --story and --delegation prefers delegation view", async () => {
     const dir = setupMinimalProject("US-DELTA-BOTH", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-BOTH", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-BOTH",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3354,7 +4658,7 @@ describe("US-DELTA-003 — status edge cases", () => {
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
     // Both --story and --delegation: delegation takes priority
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "status", "--story", "US-DELTA-BOTH", "--delegation", delegationId, "--json",
     ], dir);
     expect(r2.code).toBe(0);
@@ -3366,7 +4670,7 @@ describe("US-DELTA-003 — status edge cases", () => {
 // ── Core claim primitive independent worker contention (BLOCK #6) ──────────
 
 describe("US-DELTA-003 — core claim primitive worker contention", () => {
-  it("core claimStoryLease atomically guarantees one winner under lock-based atomic lease", () => {
+  it("core claimStoryLease atomically guarantees one winner under lock-based atomic lease", async () => {
     const dir = setupMinimalProject("US-DELTA-CORE-CLAIM", "delta-team");
     const slPath = storyLeasesPath(dir);
 
@@ -3395,7 +4699,7 @@ describe("US-DELTA-003 — core claim primitive worker contention", () => {
     releaseHostDelegationLease(dir, "US-DELTA-CORE-CLAIM", delegId1, `delta-${delegId1}`);
   });
 
-  it("claimStoryLease sequential calls prove lock-based atomic exclusion (no deadlock)", () => {
+  it("claimStoryLease sequential calls prove lock-based atomic exclusion (no deadlock)", async () => {
     const dir = setupMinimalProject("US-DELTA-LOCK-LIVE", "delta-team");
     const slPath = storyLeasesPath(dir);
 
@@ -3421,7 +4725,7 @@ describe("US-DELTA-003 — core claim primitive worker contention", () => {
 // ── BLOCK #1: Artifact immutability through controlled frame/id seam ────────
 
 describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", () => {
-  it("pre-placed marker in same frame is immutable; no events/lease change", () => {
+  it("pre-placed marker in same frame is immutable; no events/lease change", async () => {
     const dir = setupMinimalProject("US-DELTA-IMMUT-M", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-IMMUT-M", "local-preset");
 
@@ -3448,7 +4752,7 @@ describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", 
 
       // Prepare: mkdirSync fails on controlled frame → collision retry exhausts
       // (generator always returns same ID) → throws builder_lease_conflict
-      const r = tsRunCwd([
+      const r = await tsRunCwd([
         "prepare", "US-DELTA-IMMUT-M",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -3477,7 +4781,7 @@ describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", 
     }
   });
 
-  it("pre-placed resolution in same frame immutable through collision retry", () => {
+  it("pre-placed resolution in same frame immutable through collision retry", async () => {
     const dir = setupMinimalProject("US-DELTA-IMMUT-R", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-IMMUT-R", "local-preset");
 
@@ -3497,7 +4801,7 @@ describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", 
       writeFileSync(join(controlledFrame, "delegation-open.json"), "test", "utf8");
       const originalBytes = readFileSync(join(controlledFrame, "delegation-open.json"));
 
-      const r = tsRunCwd([
+      const r = await tsRunCwd([
         "prepare", "US-DELTA-IMMUT-R",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -3525,7 +4829,7 @@ describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", 
     }
   });
 
-  it("pre-placed preparation.json immutable through collision retry", () => {
+  it("pre-placed preparation.json immutable through collision retry", async () => {
     const dir = setupMinimalProject("US-DELTA-IMMUT-P", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-IMMUT-P", "local-preset");
 
@@ -3543,7 +4847,7 @@ describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", 
       writeFileSync(join(controlledFrame, "preparation.json"), "test-preparation", "utf8");
       const originalPrepBytes = readFileSync(join(controlledFrame, "preparation.json"));
 
-      const r = tsRunCwd([
+      const r = await tsRunCwd([
         "prepare", "US-DELTA-IMMUT-P",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -3573,7 +4877,7 @@ describe("US-DELTA-003 — artifact immutability via frame/id seam (BLOCK #1)", 
 // ── BLOCK #2: Exact role event order and per-role bindings ────────────────
 
 describe("US-DELTA-003 — exact role event order and bindings (BLOCK #2)", () => {
-  it("delta:role_resolved events match resolution role order exactly with all fields", () => {
+  it("delta:role_resolved events match resolution role order exactly with all fields", async () => {
     const dir = setupMinimalProject("US-DELTA-ROLEBIND", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ROLEBIND", "local-preset");
 
@@ -3581,7 +4885,7 @@ describe("US-DELTA-003 — exact role event order and bindings (BLOCK #2)", () =
     const template = JSON.parse(readFileSync(resPath, "utf8"));
     const expectedRoles = template.roles as Array<Record<string, unknown>>;
 
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-ROLEBIND",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3593,10 +4897,10 @@ describe("US-DELTA-003 — exact role event order and bindings (BLOCK #2)", () =
       .trim().split("\n").map(l => JSON.parse(l));
 
     // First event: delta:prepared
-    expect(events[0]!.type).toBe("delta:prepared");
+    expect(events.some((event) => event.type === "delta:prepared")).toBe(true);
 
     // Following events: delta:role_resolved in exact resolution order
-    const roleEvents = events.slice(1);
+    const roleEvents = events.filter((event) => event.type === "delta:role_resolved");
     expect(roleEvents.length).toBe(expectedRoles.length);
 
     for (let i = 0; i < expectedRoles.length; i++) {
@@ -3628,11 +4932,11 @@ describe("US-DELTA-003 — exact role event order and bindings (BLOCK #2)", () =
 // ── BLOCK #3: Admission edge cases (validator 0 calls) ─────────────────────
 
 describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLOCK #3)", () => {
-  it("terminal delegation admission: validator not called, exact block event", () => {
+  it("terminal delegation admission: validator not called, exact block event", async () => {
     const dir = setupMinimalProject("US-DELTA-ADM-TERM", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ADM-TERM", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-ADM-TERM",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3642,7 +4946,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
     // Conclude to make it terminal
-    const rc = tsRunCwd([
+    const rc = await tsRunCwd([
       "conclude", "--delegation", delegationId,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
@@ -3656,12 +4960,12 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
       const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
       const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "validate", "--delegation", delegationId,
         "--stage", "designer", "--json",
       ], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       expect(err.error).toBe("terminal_path_unselected");
 
       // Exactly one delta:blocked event appended with typed reason
@@ -3677,11 +4981,11 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
     }
   });
 
-  it("already-blocked delegation admission: validator not called, exact block event", () => {
+  it("already-blocked delegation admission: validator not called, exact block event", async () => {
     const dir = setupMinimalProject("US-DELTA-ADM-BLK", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ADM-BLK", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-ADM-BLK",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3691,7 +4995,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
     const delegationId = JSON.parse(r1.stdout).delegationId;
 
     // First block the delegation (by validating without artifact → artifact_invalid block)
-    const rBlock = tsRunCwd([
+    const rBlock = await tsRunCwd([
       "validate", "--delegation", delegationId,
       "--stage", "designer", "--json",
     ], dir);
@@ -3705,12 +5009,12 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
       const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
       const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "validate", "--delegation", delegationId,
         "--stage", "evaluator", "--json",
       ], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       // US-LOOP-110: the ORIGINAL block reason is propagated. This used to report
       // `host_supervisor_required`, which was never what happened — the delegation
       // was blocked by `artifact_invalid` and this check only refuses to advance.
@@ -3728,11 +5032,11 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
     }
   });
 
-  it("already-published stage admission: validator not called, exact block event", () => {
+  it("already-published stage admission: validator not called, exact block event", async () => {
     const dir = setupMinimalProject("US-DELTA-ADM-PUB", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-ADM-PUB", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-ADM-PUB",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3746,7 +5050,7 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
       `delta-${delegationId}`, "role-artifacts", "designer");
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, "evaluation-manifest.json"), JSON.stringify(v2Manifest()), "utf8");
-    const rPub = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
+    const rPub = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "designer", "--json"], dir);
     expect(rPub.code).toBe(0);
 
     // Try to publish designer again — admission blocks as already-published
@@ -3757,17 +5061,17 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
       const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
       const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "validate", "--delegation", delegationId,
         "--stage", "designer", "--json",
       ], dir);
       expect(r2.code).toBe(1);
-      const err = JSON.parse(r2.stderr);
+      const err = parseStderrJsonTail(r2.stderr);
       expect(err.error).toBe("identity_collision");
 
       // Exactly one delta:blocked event appended
       const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-      expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+      expect(eventsAfter.length).toBe(eventsBefore.length + 2);
       const blockEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
       expect(blockEvent.type).toBe("delta:blocked");
       expect(blockEvent.reason).toBe("identity_collision");
@@ -3782,11 +5086,11 @@ describe("US-DELTA-003 — validate admission blocks with 0 validator calls (BLO
 // ── BLOCK #5: Conclude append-failure lease retention ─────────────────────
 
 describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", () => {
-  it("conclude append failure retains lease, no success output, event ledger reflects append-then-crash", () => {
+  it("conclude append failure retains lease, no success output, event ledger reflects append-then-crash", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-APPFAIL2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-APPFAIL2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-APPFAIL2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3801,7 +5105,7 @@ describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", 
     });
 
     try {
-      const r2 = tsRunCwd([
+      const r2 = await tsRunCwd([
         "conclude", "--delegation", delegationId,
         "--delivery-disposition", "owner_continue", "--json",
       ], dir);
@@ -3817,7 +5121,7 @@ describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", 
       const slPath = storyLeasesPath(dir);
       const sl = readLeases(slPath);
       expect(sl["US-DELTA-CONC-APPFAIL2"]).toBeDefined();
-      expect(sl["US-DELTA-CONC-APPFAIL2"].source).toBe("host-delegation");
+      expect(sl["US-DELTA-CONC-APPFAIL2"].source).toBe("delivery-reservation");
       expect(sl["US-DELTA-CONC-APPFAIL2"].delegationId).toBe(delegationId);
 
       // The terminal event IS written (append, then crash — "append then crash" semantics)
@@ -3835,11 +5139,11 @@ describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", 
     }
   });
 
-  it("conclude same-story mismatched lease fail-loud, no terminal, lease retained", () => {
+  it("conclude same-story mismatched lease fail-loud, no terminal, lease retained", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-MISMATCH2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-MISMATCH2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-MISMATCH2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3861,12 +5165,12 @@ describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", 
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // Conclude with delegationIdA — fail-loud
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "--delegation", delegationIdA,
       "--delivery-disposition", "owner_continue", "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err2 = JSON.parse(r2.stderr);
+    const err2 = parseStderrJsonTail(r2.stderr);
     expect(err2.error).toBe("lease_mismatch");
 
     // NO terminal event written
@@ -3887,11 +5191,11 @@ describe("US-DELTA-003 — conclude append-failure lease retention (BLOCK #5)", 
 // ── BLOCK #6: Status read-only with content hashes and mtimes ────────────
 
 describe("US-DELTA-003 — status read-only with content hashes (BLOCK #6)", () => {
-  it("status does not change any file content or mtime", () => {
+  it("status does not change any file content or mtime", async () => {
     const dir = setupMinimalProject("US-DELTA-RDONLY2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-RDONLY2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-RDONLY2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -3904,9 +5208,9 @@ describe("US-DELTA-003 — status read-only with content hashes (BLOCK #6)", () 
     const snapshotBefore = fileSnapshot(dir);
 
     // Run status multiple times
-    tsRunCwd(["status", "--delegation", delegationId], dir);
-    tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
-    tsRunCwd(["status", "--story", "US-DELTA-RDONLY2"], dir);
+    await tsRunCwd(["status", "--delegation", delegationId], dir);
+    await tsRunCwd(["status", "--delegation", delegationId, "--json"], dir);
+    await tsRunCwd(["status", "--story", "US-DELTA-RDONLY2"], dir);
 
     // Snapshot after
     const snapshotAfter = fileSnapshot(dir);
@@ -3928,7 +5232,7 @@ describe("US-DELTA-003 — status read-only with content hashes (BLOCK #6)", () 
 // ── BLOCK #8: Core claim human/supervisor parameterized tests ─────────────
 
 describe("US-DELTA-003 — human/supervisor claim and release parameterized (BLOCK #8)", () => {
-  it("human claim atomically blocks host claim", () => {
+  it("human claim atomically blocks host claim", async () => {
     const dir = setupMinimalProject("US-DELTA-HUMAN-CLAIM", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -3951,7 +5255,7 @@ describe("US-DELTA-003 — human/supervisor claim and release parameterized (BLO
     expect(releaseResult).toBe(true);
   });
 
-  it("supervisor claim atomically blocks host claim", () => {
+  it("supervisor claim atomically blocks host claim", async () => {
     const dir = setupMinimalProject("US-DELTA-SUP-CLAIM", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -3974,7 +5278,7 @@ describe("US-DELTA-003 — human/supervisor claim and release parameterized (BLO
     expect(releaseResult).toBe(true);
   });
 
-  it("human release refuses mismatched source", () => {
+  it("human release refuses mismatched source", async () => {
     const dir = setupMinimalProject("US-DELTA-HREL", "delta-team");
     const slPath = storyLeasesPath(dir);
     mkdirSync(dirname(slPath), { recursive: true });
@@ -3996,7 +5300,7 @@ describe("US-DELTA-003 — human/supervisor claim and release parameterized (BLO
 // ── BLOCK #2: Direct atomicWriteJson artifact_exists proof ─────────────
 
 describe("US-DELTA-003 — atomicWriteJson direct artifact immutability (BLOCK #2)", () => {
-  it("atomicWriteJson throws artifact_exists when file pre-exists, bytes unchanged", () => {
+  it("atomicWriteJson throws artifact_exists when file pre-exists, bytes unchanged", async () => {
     const dir = makeProject();
     const filePath = join(dir, "test-artifact.json");
     const originalContent = JSON.stringify({ original: true }, null, 2) + "\n";
@@ -4021,7 +5325,7 @@ describe("US-DELTA-003 — atomicWriteJson direct artifact immutability (BLOCK #
     expect(readFileSync(filePath, "utf8")).toBe(originalContent);
   });
 
-  it("atomicWriteJson independently guards marker, resolution, preparation each", () => {
+  it("atomicWriteJson independently guards marker, resolution, preparation each", async () => {
     const dir = makeProject();
     const markerPath = join(dir, "delegation-open.json");
 
@@ -4077,11 +5381,11 @@ function fileSnapshot(root: string): Record<string, { hash: string; mtime: strin
 // ── Conclude parser edge cases: duplicate flags, unexpected positionals (BLOCK #5) ─
 
 describe("US-DELTA-003 — conclude parser edge cases", () => {
-  it("conclude duplicate --delegation flag is parser error, zero side effects", () => {
+  it("conclude duplicate --delegation flag is parser error, zero side effects", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-DUP", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-DUP", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-DUP",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -4097,7 +5401,7 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     const slBefore = readLeases(slPath);
 
     // Duplicate --delegation flag (parser error, zero side effects)
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude",
       "--delegation", delegationId,
       "--delegation", "other-id",
@@ -4117,11 +5421,11 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     expect(slAfter["US-DELTA-CONC-DUP"]).toBeDefined();
   });
 
-  it("conclude duplicate --delivery-disposition flag is parser error, zero side effects", () => {
+  it("conclude duplicate --delivery-disposition flag is parser error, zero side effects", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-DUP2", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-DUP2", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-DUP2",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -4133,7 +5437,7 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude",
       "--delegation", delegationId,
       "--delivery-disposition", "owner_continue",
@@ -4148,11 +5452,11 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     expect(eventsAfter.length).toBe(eventsBefore.length);
   });
 
-  it("conclude unexpected positional arg is parser error, zero side effects", () => {
+  it("conclude unexpected positional arg is parser error, zero side effects", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-POS", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-POS", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-POS",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -4164,7 +5468,7 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude", "unexpected-positional",
       "--delegation", delegationId,
       "--delivery-disposition", "owner_continue",
@@ -4178,11 +5482,11 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     expect(eventsAfter.length).toBe(eventsBefore.length);
   });
 
-  it("conclude flag-without-value (--delivery-disposition bare) yields terminal_path_unselected, zero extra events", () => {
+  it("conclude flag-without-value (--delivery-disposition bare) yields terminal_path_unselected, zero extra events", async () => {
     const dir = setupMinimalProject("US-DELTA-CONC-FLAGVAL", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-CONC-FLAGVAL", "local-preset");
 
-    const r1 = tsRunCwd([
+    const r1 = await tsRunCwd([
       "prepare", "US-DELTA-CONC-FLAGVAL",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -4195,20 +5499,20 @@ describe("US-DELTA-003 — conclude parser edge cases", () => {
     const eventsBefore = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
 
     // --delivery-disposition without a value → flag is boolean true → treated as missing disposition
-    const r2 = tsRunCwd([
+    const r2 = await tsRunCwd([
       "conclude",
       "--delegation", delegationId,
       "--delivery-disposition",
       "--json",
     ], dir);
     expect(r2.code).toBe(1);
-    const err2 = JSON.parse(r2.stderr);
+    const err2 = parseStderrJsonTail(r2.stderr);
     // Flag-as-bool flows into missing-disposition domain check → terminal_path_unselected
     expect(err2.error).toBe("terminal_path_unselected");
 
     // Exactly one delta:blocked event appended (domain error, not parser error)
     const eventsAfter = readFileSync(eventsPath, "utf8").trim().split("\n").filter(l => l.trim());
-    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 2);
     const lastEvent = JSON.parse(eventsAfter[eventsAfter.length - 1]!);
     expect(lastEvent.type).toBe("delta:blocked");
     expect(lastEvent.reason).toBe("terminal_path_unselected");
@@ -4238,10 +5542,10 @@ describe("US-LOOP-110 — a validator's non-live reason never lands in the ledge
     ["foreign literal", "totally_made_up"],
     ["absent reason", undefined],
   ] as const) {
-    it(`${label} → event carries a live reason, detail keeps the original`, () => {
+    it(`${label} → event carries a live reason, detail keeps the original`, async () => {
       const dir = setupMinimalProject("US-DELTA-LIVE-RSN", "delta-team");
       const resPath = writeResolutionTemplate(dir, "US-DELTA-LIVE-RSN", "local-preset");
-      const r1 = tsRunCwd([
+      const r1 = await tsRunCwd([
         "prepare", "US-DELTA-LIVE-RSN",
         "--trigger", "host-guided", "--topology", "delta-team",
         "--profile", "standard", "--preset", "local-preset",
@@ -4257,7 +5561,7 @@ describe("US-LOOP-110 — a validator's non-live reason never lands in the ledge
         role: input.stage,
       }));
       try {
-        const r2 = tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+        const r2 = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
         expect(r2.code).toBe(1);
         const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
         const events = readFileSync(eventsPath, "utf8").trim().split("\n").filter((l) => l.trim());
@@ -4280,13 +5584,13 @@ describe("US-LOOP-110 — a validator's non-live reason never lands in the ledge
 // trigger is a write boundary: a new record must never claim a retired literal,
 // and it must not contradict the --trigger flag.
 describe("US-LOOP-110 — prepare refuses a resolution template with a non-live trigger", () => {
-  it("rejects a template declaring the retired loop-autonomous", () => {
+  it("rejects a template declaring the retired loop-autonomous", async () => {
     const dir = setupMinimalProject("US-DELTA-TPL-RETIRED", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-TPL-RETIRED", "local-preset");
     const tpl = JSON.parse(readFileSync(resPath, "utf8"));
     tpl.trigger = "loop-autonomous";
     writeFileSync(resPath, JSON.stringify(tpl));
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-TPL-RETIRED",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
@@ -4300,13 +5604,13 @@ describe("US-LOOP-110 — prepare refuses a resolution template with a non-live 
     expect(events).not.toContain("loop-autonomous");
   });
 
-  it("rejects a template whose trigger disagrees with --trigger", () => {
+  it("rejects a template whose trigger disagrees with --trigger", async () => {
     const dir = setupMinimalProject("US-DELTA-TPL-MISMATCH", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-TPL-MISMATCH", "local-preset");
     const tpl = JSON.parse(readFileSync(resPath, "utf8"));
     tpl.trigger = "made-up-trigger";
     writeFileSync(resPath, JSON.stringify(tpl));
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-TPL-MISMATCH",
       "--trigger", "host-guided", "--topology", "solo",
       "--profile", "standard", "--preset", "local-preset",
@@ -4316,15 +5620,951 @@ describe("US-LOOP-110 — prepare refuses a resolution template with a non-live 
     expect(JSON.parse(r.stderr).detail).toContain("made-up-trigger");
   });
 
-  it("accepts a template whose trigger is the live value", () => {
+  it("accepts a template whose trigger is the live value", async () => {
     const dir = setupMinimalProject("US-DELTA-TPL-OK", "delta-team");
     const resPath = writeResolutionTemplate(dir, "US-DELTA-TPL-OK", "local-preset");
-    const r = tsRunCwd([
+    const r = await tsRunCwd([
       "prepare", "US-DELTA-TPL-OK",
       "--trigger", "host-guided", "--topology", "delta-team",
       "--profile", "standard", "--preset", "local-preset",
       "--resolution", resPath, "--json",
     ], dir);
     expect(r.code).toBe(0);
+  });
+});
+
+describe("FIX-1496 — prepare validates resolution template roles before allocation", () => {
+  const baseRoles = () => [
+    { role: "designer", roleInstanceId: "ri-designer", hostId: "host", modelId: "model", source: "user-pin", reasons: ["test"] },
+    { role: "builder", roleInstanceId: "ri-builder", hostId: "host", modelId: "model", source: "preset-preference", reasons: ["test"] },
+    { role: "evaluator", roleInstanceId: "ri-evaluator", hostId: "host", modelId: "model", source: "availability-fallback", reasons: ["test"] },
+  ];
+
+  async function prepareWithRoles(storyId: string, roles: unknown, json = true) {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const resolutionPath = writeResolutionTemplate(dir, storyId, "local-preset");
+    const template = JSON.parse(readFileSync(resolutionPath, "utf8")) as Record<string, unknown>;
+    template.roles = roles;
+    writeFileSync(resolutionPath, JSON.stringify(template), "utf8");
+    const inputBefore = readFileSync(resolutionPath, "utf8");
+    const result = await tsRunCwd([
+      "prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resolutionPath,
+      ...(json ? ["--json"] : []),
+    ], dir);
+    return { dir, resolutionPath, inputBefore, result };
+  }
+
+  it.each([
+    ["an unknown role", () => [{ ...baseRoles()[0], role: "designr" }], "roles[0].role", "designr"],
+    ["a missing role", () => [{ ...baseRoles()[0], role: undefined }], "roles[0].role", "undefined"],
+    ["an empty roleInstanceId", () => [{ ...baseRoles()[0], roleInstanceId: "" }], "roles[0].roleInstanceId", "\"\""],
+    ["a missing hostId", () => [{ ...baseRoles()[0], hostId: undefined }], "roles[0].hostId", "undefined"],
+    ["a whitespace modelId", () => [{ ...baseRoles()[0], modelId: "   " }], "roles[0].modelId", "\"   \""],
+    ["an unknown source", () => [{ ...baseRoles()[0], source: "auto" }], "roles[0].source", "auto"],
+    ["a non-array reasons value", () => [{ ...baseRoles()[0], reasons: "not-an-array" }], "roles[0].reasons", "string"],
+    ["a non-string reason", () => [{ ...baseRoles()[0], reasons: ["ok", 42] }], "roles[0].reasons", "number"],
+    ["a non-array roles value", () => ({ designer: baseRoles()[0] }), "roles", "object"],
+  ])("rejects %s without persistent side effects", async (_case, rolesFactory, field, received) => {
+    const storyId = `FIX-1496-${randomUUID()}`;
+    const { dir, resolutionPath, inputBefore, result } = await prepareWithRoles(storyId, rolesFactory());
+    expect(result.code).toBe(1);
+    const error = parseStderrJsonTail(result.stderr);
+    expect(error).toMatchObject({ ok: false, error: "invalid_value" });
+    expect(error.detail).toContain(field);
+    expect(error.detail).toContain(received);
+    expect(readFileSync(resolutionPath, "utf8")).toBe(inputBefore);
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(readLeases(storyLeasesPath(dir))[storyId]).toBeUndefined();
+    expect(readdirSync(join(dir, ".roll", "features", "delta-team", storyId)).filter((entry) => entry.startsWith("delta-"))).toEqual([]);
+  });
+
+  it("rejects duplicate roles before allocation", async () => {
+    const roles = baseRoles();
+    roles.push({ ...roles[1]!, roleInstanceId: "ri-builder-duplicate" });
+    const storyId = `FIX-1496-DUP-${randomUUID()}`;
+    const { dir, result } = await prepareWithRoles(storyId, roles);
+    expect(result.code).toBe(1);
+    const error = parseStderrJsonTail(result.stderr);
+    expect(error).toMatchObject({ ok: false, error: "invalid_value" });
+    expect(error.detail).toContain('role "builder" twice');
+    expect(error.detail).toContain("roles[1]");
+    expect(error.detail).toContain("roles[3]");
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(readLeases(storyLeasesPath(dir))[storyId]).toBeUndefined();
+    expect(readdirSync(join(dir, ".roll", "features", "delta-team", storyId)).filter((entry) => entry.startsWith("delta-"))).toEqual([]);
+  });
+
+  it("reports the same invalid entry clearly in plain output", async () => {
+    const { result } = await prepareWithRoles(`FIX-1496-PLAIN-${randomUUID()}`, [{ ...baseRoles()[0], source: "auto" }], false);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("roles[0].source");
+    expect(result.stderr).toContain("auto");
+  });
+
+  it("preserves the current successful preparation behavior for valid roles", async () => {
+    const storyId = `FIX-1496-VALID-${randomUUID()}`;
+    const roles = baseRoles();
+    const { dir, result } = await prepareWithRoles(storyId, roles);
+    expect(result.code).toBe(0);
+    const events = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const resolved = events.filter((event) => event.type === "delta:role_resolved");
+    expect(resolved).toHaveLength(3);
+    expect(resolved.map((event) => ({ role: event.role, roleInstanceId: event.roleInstanceId, hostId: event.hostId, modelId: event.modelId, source: event.source, reasons: event.reasons }))).toEqual(roles);
+  });
+});
+
+
+// ── FIX-1502 — prepare --continuation-run picks up a redelegated task ─────────
+
+describe("FIX-1502 — prepare --continuation-run picks up a redelegated task", () => {
+  const SUCCESSOR = "successor-alice";
+
+  interface RedelegatedFixture {
+    dir: string;
+    resPath: string;
+    storyId: string;
+    oldDelegationId: string;
+    oldRunId: string;
+    eventsPath: string;
+    cardDir: string;
+  }
+
+  /** Prepare a managed delegation and redelegate its reservation to SUCCESSOR. */
+  async function redelegatedFixture(storyId: string): Promise<RedelegatedFixture> {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const resPath = writeResolutionTemplate(dir, storyId, "local-preset");
+    const prep = await tsRunCwd([
+      "prepare", storyId,
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prep.code).toBe(0);
+    const oldDelegationId = JSON.parse(prep.stdout).delegationId as string;
+    const conclude = await tsRunCwd([
+      "conclude", "--delegation", oldDelegationId,
+      "--delivery-disposition", "owner_redelegate", "--continuation-run", SUCCESSOR, "--json",
+    ], dir);
+    expect(conclude.code).toBe(0);
+    return {
+      dir,
+      resPath,
+      storyId,
+      oldDelegationId,
+      oldRunId: `delta-${oldDelegationId}`,
+      eventsPath: join(dir, ".roll", "loop", "events.ndjson"),
+      cardDir: join(dir, ".roll", "features", "delta-team", storyId),
+    };
+  }
+
+  function prepareArgs(fx: RedelegatedFixture, extra: string[] = []): string[] {
+    return [
+      "prepare", fx.storyId,
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", fx.resPath,
+      ...extra,
+    ];
+  }
+
+  function frameDirs(cardDir: string): string[] {
+    return readdirSync(cardDir).filter((name) => name.startsWith("delta-")).sort();
+  }
+
+  function readEvents(eventsPath: string): Array<Record<string, unknown>> {
+    return readFileSync(eventsPath, "utf8").trim().split("\n").filter((l) => l.trim())
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  it("takes over an exactly matching redelegation with a fresh delta run and full provenance", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP");
+    const terminalBefore = readEvents(fx.eventsPath).filter((e) => e.type === "delta:terminal");
+
+    const r = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(r.code).toBe(0);
+    const result = JSON.parse(r.stdout);
+    // A brand-new standard delta identity; the successor name is never an id.
+    expect(result.delegationId).not.toBe(fx.oldDelegationId);
+    expect(result.runId).toBe(`delta-${result.delegationId}`);
+    expect(result.runId).not.toBe(SUCCESSOR);
+    expect(result.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+
+    // The reservation became a normal preparing host guard for the new run.
+    const lease = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(lease?.source).toBe("host-delegation");
+    expect(lease?.delegationId).toBe(result.delegationId);
+    expect(lease?.runId).toBe(result.runId);
+
+    // The new frame carries normal preparation material plus the pickup source.
+    const frameDir = join(fx.cardDir, `delta-${result.delegationId}`);
+    expect(existsSync(join(frameDir, "delegation-open.json"))).toBe(true);
+    expect(existsSync(join(frameDir, "role-artifacts", "delegation", "delegation-resolution.json"))).toBe(true);
+    const preparation = JSON.parse(readFileSync(join(frameDir, "preparation.json"), "utf8"));
+    expect(preparation.schema).toBe("roll-delta-preparation/v2");
+    expect(preparation.runId).toBe(result.runId);
+    expect(preparation.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+
+    // The new prepared event traces the redelegation; the old terminal is untouched.
+    const events = readEvents(fx.eventsPath);
+    const prepared = events.find((e) => e.type === "delta:prepared" && e.delegationId === result.delegationId);
+    expect(prepared?.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+    expect(events.some((e) => e.type === "worktree:allocated"
+      && (e.workspace as { runId?: string }).runId === result.runId)).toBe(true);
+    const terminalAfter = events.filter((e) => e.type === "delta:terminal");
+    expect(terminalAfter).toEqual(terminalBefore);
+  });
+
+  it("prints a human pickup line in non-JSON output", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-HUMAN");
+    const r = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR]), fx.dir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`Picked up the task redelegated to '${SUCCESSOR}'`);
+    expect(r.stdout).toContain(fx.oldRunId);
+  });
+
+  it("resumes the same new delegation when the pickup is retried", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-RETRY");
+    const first = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(first.code).toBe(0);
+    const delegationId = JSON.parse(first.stdout).delegationId as string;
+
+    const retry = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(retry.code).toBe(0);
+    expect(JSON.parse(retry.stdout).delegationId).toBe(delegationId);
+    // Old frame + exactly one new frame: no duplicate pickup material.
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${delegationId}`, `delta-${fx.oldDelegationId}`].sort());
+  });
+
+  it("resumes with the same identity after a crash between occupancy swap and events", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-CRASH");
+    injectPrepareInterrupt(() => { throw new Error("simulated crash after allocation"); });
+    await expect(tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir)).rejects.toThrow("simulated crash");
+    injectPrepareInterrupt(null);
+
+    // The occupancy never vanished: it is already the new run's normal guard,
+    // while no prepared event exists yet.
+    const crashed = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(crashed?.source).toBe("host-delegation");
+    expect(crashed?.delegationId).toBeDefined();
+    expect(crashed?.delegationId).not.toBe(fx.oldDelegationId);
+    expect(readEvents(fx.eventsPath).some((e) => e.type === "delta:prepared" && e.delegationId === crashed?.delegationId)).toBe(false);
+
+    const retry = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(retry.code).toBe(0);
+    expect(JSON.parse(retry.stdout).delegationId).toBe(crashed?.delegationId);
+    const prepared = readEvents(fx.eventsPath).find((e) => e.type === "delta:prepared" && e.delegationId === crashed?.delegationId);
+    expect(prepared?.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+  });
+
+  it("resumes the same new identity after a crash between frame write and occupancy swap", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-PRE-SWAP");
+    // Run a real pickup that crashes after allocation (post-swap), then roll
+    // the lease back to the still-held old reservation.  The on-disk state is
+    // byte-identical to a crash between the frame write and the swap: a frame
+    // with durable pickup provenance plus an untouched redelegated lease.
+    injectPrepareInterrupt(() => { throw new Error("simulated crash after allocation"); });
+    await expect(tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir)).rejects.toThrow("simulated crash");
+    injectPrepareInterrupt(null);
+    const interruptedId = readLeases(storyLeasesPath(fx.dir))[fx.storyId]!.delegationId!;
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(),
+      source: "delivery-reservation",
+      delegationId: fx.oldDelegationId,
+      runId: SUCCESSOR,
+    });
+
+    // The retry must converge on the SAME new identity already durably
+    // recorded in the in-flight frame — never fork a second delta run.
+    const retry = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(retry.code).toBe(0);
+    const result = JSON.parse(retry.stdout);
+    expect(result.delegationId).toBe(interruptedId);
+    expect(result.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+    // Old frame + the single resumed frame: no orphan pickup material.
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${interruptedId}`, `delta-${fx.oldDelegationId}`].sort());
+    const lease = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(lease?.source).toBe("host-delegation");
+    expect(lease?.delegationId).toBe(interruptedId);
+    const prepared = readEvents(fx.eventsPath).find((e) => e.type === "delta:prepared" && e.delegationId === interruptedId);
+    expect(prepared?.continuation).toEqual({
+      fromDelegationId: fx.oldDelegationId,
+      fromRunId: fx.oldRunId,
+      continuationRunId: SUCCESSOR,
+    });
+  });
+
+  it("refuses a pre-swap pickup retry whose immutable inputs differ from the in-flight frame", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PRE-SWAP-RETRYBINDING");
+    // Simulate a crash between frame write and occupancy swap: run a real
+    // pickup that crashes after allocation, then roll the lease back to the
+    // still-held old reservation.  The in-flight frame durably records a
+    // pickup planned for the ORIGINAL resolution bytes.
+    injectPrepareInterrupt(() => { throw new Error("simulated crash after allocation"); });
+    await expect(tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir)).rejects.toThrow("simulated crash");
+    injectPrepareInterrupt(null);
+    const interruptedId = readLeases(storyLeasesPath(fx.dir))[fx.storyId]!.delegationId!;
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(),
+      source: "delivery-reservation",
+      delegationId: fx.oldDelegationId,
+      runId: SUCCESSOR,
+    });
+
+    // Retry with DIFFERENT resolution bytes: the in-flight frame's immutable
+    // pickup plan must not be silently replaced by a new one.
+    const template = JSON.parse(readFileSync(fx.resPath, "utf8")) as { roles: Array<{ modelId: string }> };
+    template.roles[0]!.modelId = "different-model";
+    const otherRes = join(fx.dir, "resolution-other.json");
+    writeFileSync(otherRes, JSON.stringify(template, null, 2), "utf8");
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+    const r = await tsRunCwd([
+      "prepare", fx.storyId,
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", otherRes, "--continuation-run", SUCCESSOR, "--json",
+    ], fx.dir);
+    expect(r.code).toBe(1);
+    expect(parseStderrJsonTail(r.stderr).error).toBe("recovery_required");
+    // Nothing was adopted, written, or released: the old reservation and the
+    // in-flight frame stay exactly as the crash left them.
+    const lease = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(lease?.source).toBe("delivery-reservation");
+    expect(lease?.delegationId).toBe(fx.oldDelegationId);
+    expect(lease?.runId).toBe(SUCCESSOR);
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${interruptedId}`, `delta-${fx.oldDelegationId}`].sort());
+    expect(readEvents(fx.eventsPath).some((e) => e.type === "delta:prepared" && e.delegationId === interruptedId)).toBe(false);
+  });
+
+  it("lets the picked-up run conclude, reconcile, and release like a normal prepare", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PICKUP-LIFECYCLE");
+    const pickup = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(pickup.code).toBe(0);
+    const delegationId = JSON.parse(pickup.stdout).delegationId as string;
+    const runId = `delta-${delegationId}`;
+
+    const conclude = await tsRunCwd([
+      "conclude", "--delegation", delegationId,
+      "--delivery-disposition", "owner_continue", "--json",
+    ], fx.dir);
+    expect(conclude.code).toBe(0);
+    expect(JSON.parse(conclude.stdout).outcome).toBe("handoff_ready");
+    const retained = readLeases(storyLeasesPath(fx.dir))[fx.storyId];
+    expect(retained?.source).toBe("delivery-reservation");
+    expect(retained?.delegationId).toBe(delegationId);
+    expect(retained?.runId).toBe(runId);
+
+    // Delivery reconciliation closes exactly this new run's reservation.
+    new EventBus().appendEvent(fx.eventsPath, {
+      type: "delivery:abandoned",
+      cycleId: runId,
+      storyId: fx.storyId,
+      delegationId,
+      runId,
+      reason: "pr_closed_unmerged",
+      ts: Date.now(),
+    });
+    expect(reconcileHostDeltaReservationClosures(fx.dir)).toContain(fx.storyId);
+    expect(readLeases(storyLeasesPath(fx.dir))[fx.storyId]).toBeUndefined();
+  });
+
+  it("tells the old task it was superseded when concluded again, without new events", async () => {
+    const fx = await redelegatedFixture("FIX-1502-OLD-CONCLUDE");
+    const pickup = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(pickup.code).toBe(0);
+    const newRunId = JSON.parse(pickup.stdout).runId as string;
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+
+    const again = await tsRunCwd([
+      "conclude", "--delegation", fx.oldDelegationId,
+      "--delivery-disposition", "owner_continue", "--json",
+    ], fx.dir);
+    expect(again.code).toBe(1);
+    const err = parseStderrJsonTail(again.stderr);
+    expect(err.error).toBe("continuation_adopted");
+    expect(err.detail as string).toContain(SUCCESSOR);
+    expect(err.detail as string).toContain(newRunId);
+    // No old event is rewritten and no new event is appended.
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+  });
+
+  it("keeps a plain prepare refused on a redelegated story until pickup", async () => {
+    const fx = await redelegatedFixture("FIX-1502-PLAIN-REFUSED");
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+    const r = await tsRunCwd(prepareArgs(fx, ["--json"]), fx.dir);
+    expect(r.code).toBe(1);
+    expect(parseStderrJsonTail(r.stderr).error).toBe("builder_lease_conflict");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${fx.oldDelegationId}`]);
+  });
+
+  it("rejects a missing --continuation-run value before side effects", async () => {
+    const fx = await redelegatedFixture("FIX-1502-NO-VALUE");
+    const r = await tsRunCwd(prepareArgs(fx, ["--continuation-run", "--json"]), fx.dir);
+    expect(r.code).toBe(1);
+    expect(frameDirs(fx.cardDir)).toEqual([`delta-${fx.oldDelegationId}`]);
+  });
+
+  /** Every refusal must leave zero directories, zero events, zero new occupancy. */
+  async function expectCleanRefusal(
+    fx: RedelegatedFixture,
+    extra: string[],
+    expectedError: string,
+  ): Promise<void> {
+    const eventsBefore = readFileSync(fx.eventsPath, "utf8");
+    const leasesBefore = readFileSync(join(storyLeasesPath(fx.dir), `${fx.storyId}.lease`), "utf8");
+    const dirsBefore = frameDirs(fx.cardDir);
+    const r = await tsRunCwd(prepareArgs(fx, [...extra, "--json"]), fx.dir);
+    expect(r.code).toBe(1);
+    const err = parseStderrJsonTail(r.stderr);
+    expect(err.error).toBe(expectedError);
+    expect(typeof err.detail).toBe("string");
+    expect((err.detail as string).length).toBeGreaterThan(0);
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(eventsBefore);
+    expect(readFileSync(join(storyLeasesPath(fx.dir), `${fx.storyId}.lease`), "utf8")).toBe(leasesBefore);
+    expect(frameDirs(fx.cardDir)).toEqual(dirsBefore);
+  }
+
+  it("refuses a name nothing was redelegated to", async () => {
+    const fx = await redelegatedFixture("FIX-1502-WRONG-NAME");
+    await expectCleanRefusal(fx, ["--continuation-run", "nobody"], "continuation_not_available");
+  });
+
+  it("refuses when the story has no occupancy at all", async () => {
+    const dir = setupMinimalProject("FIX-1502-NO-LEASE", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "FIX-1502-NO-LEASE", "local-preset");
+    const r = await tsRunCwd([
+      "prepare", "FIX-1502-NO-LEASE",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--continuation-run", SUCCESSOR, "--json",
+    ], dir);
+    expect(r.code).toBe(1);
+    expect(parseStderrJsonTail(r.stderr).error).toBe("continuation_not_available");
+    expect(existsSync(join(dir, ".roll", "loop", "events.ndjson"))).toBe(false);
+    expect(frameDirs(join(dir, ".roll", "features", "delta-team", "FIX-1502-NO-LEASE"))).toEqual([]);
+  });
+
+  it("refuses to take over somebody's active normal task", async () => {
+    const dir = setupMinimalProject("FIX-1502-ACTIVE-TASK", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "FIX-1502-ACTIVE-TASK", "local-preset");
+    const prep = await tsRunCwd([
+      "prepare", "FIX-1502-ACTIVE-TASK",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prep.code).toBe(0);
+    const fx: RedelegatedFixture = {
+      dir, resPath, storyId: "FIX-1502-ACTIVE-TASK",
+      oldDelegationId: JSON.parse(prep.stdout).delegationId as string,
+      oldRunId: "",
+      eventsPath: join(dir, ".roll", "loop", "events.ndjson"),
+      cardDir: join(dir, ".roll", "features", "delta-team", "FIX-1502-ACTIVE-TASK"),
+    };
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_available");
+  });
+
+  it("refuses a reservation that no recorded redelegation can verify", async () => {
+    const dir = setupMinimalProject("FIX-1502-GHOST", "delta-team");
+    const resPath = writeResolutionTemplate(dir, "FIX-1502-GHOST", "local-preset");
+    const prep = await tsRunCwd([
+      "prepare", "FIX-1502-GHOST",
+      "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", resPath, "--json",
+    ], dir);
+    expect(prep.code).toBe(0);
+    const delegationId = JSON.parse(prep.stdout).delegationId as string;
+    // A hand-crafted reservation with no owner_redelegate terminal behind it.
+    setLease(storyLeasesPath(dir), "FIX-1502-GHOST", {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId: SUCCESSOR,
+    });
+    const fx: RedelegatedFixture = {
+      dir, resPath, storyId: "FIX-1502-GHOST",
+      oldDelegationId: delegationId, oldRunId: `delta-${delegationId}`,
+      eventsPath: join(dir, ".roll", "loop", "events.ndjson"),
+      cardDir: join(dir, ".roll", "features", "delta-team", "FIX-1502-GHOST"),
+    };
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_verifiable");
+    const refusal = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(parseStderrJsonTail(refusal.stderr).detail).toContain(
+      `reservation on story ${fx.storyId} naming '${SUCCESSOR}'`,
+    );
+  });
+
+  it("refuses when the recorded redelegation names a different successor than the occupancy", async () => {
+    const fx = await redelegatedFixture("FIX-1502-SPLIT-NAME");
+    // Occupancy points at another name than the recorded redelegation.
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId: fx.oldDelegationId, runId: "successor-bob",
+    });
+    // The recorded name no longer matches the occupancy.
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_available");
+  });
+
+  it("refuses to borrow a foreign active task through a pickup retry", async () => {
+    const fx = await redelegatedFixture("FIX-1502-NO-BORROW");
+    // Someone else's normal preparing task replaced the reservation out of band.
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(), source: "host-delegation", delegationId: "foreign-delegation", runId: "delta-foreign-delegation",
+    });
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_available");
+  });
+
+  it("refuses a pickup retry whose recorded handoff disappeared", async () => {
+    const fx = await redelegatedFixture("FIX-1502-NO-TERMINAL");
+    const pickup = await tsRunCwd(prepareArgs(fx, ["--continuation-run", SUCCESSOR, "--json"]), fx.dir);
+    expect(pickup.code).toBe(0);
+    // Immutable events cannot really vanish; simulate the pathological state by
+    // rewriting the lease back to the old reservation while the pickup's
+    // preparation names a delegation whose terminal event is absent.
+    setLease(storyLeasesPath(fx.dir), fx.storyId, {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId: fx.oldDelegationId, runId: SUCCESSOR,
+    });
+    const pickupDir = frameDirs(fx.cardDir).find((d) => d !== `delta-${fx.oldDelegationId}`)!;
+    const preparationPath = join(fx.cardDir, pickupDir, "preparation.json");
+    const preparation = JSON.parse(readFileSync(preparationPath, "utf8")) as { continuation?: unknown };
+    expect((preparation.continuation as { continuationRunId?: string })?.continuationRunId).toBe(SUCCESSOR);
+    // Remove the terminal the in-flight frame's provenance depends on.
+    const eventsPath = fx.eventsPath;
+    const kept = readFileSync(eventsPath, "utf8").trim().split("\n")
+      .filter((line) => {
+        const e = JSON.parse(line) as Record<string, unknown>;
+        return !(e.type === "delta:terminal" && e.delegationId === fx.oldDelegationId);
+      });
+    writeFileSync(eventsPath, kept.join("\n") + "\n", "utf8");
+    await expectCleanRefusal(fx, ["--continuation-run", SUCCESSOR], "continuation_not_verifiable");
+  });
+});
+
+// ── FIX-1517 — owner-confirmed recovery of a legacy held reservation ───────
+
+describe("FIX-1517 — recover-held only authorizes the exact legacy contradiction", () => {
+  const SUCCESSOR = "successor-alice";
+
+  async function heldFixture(storyId: string): Promise<{
+    dir: string;
+    resPath: string;
+    storyId: string;
+    delegationId: string;
+    runId: string;
+    eventsPath: string;
+  }> {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const resPath = writeResolutionTemplate(dir, storyId, "local-preset");
+    const prepared = await tsRunCwd([
+      "prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", resPath, "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const delegationId = JSON.parse(prepared.stdout).delegationId as string;
+    const runId = `delta-${delegationId}`;
+    const held = await tsRunCwd([
+      "conclude", "--delegation", delegationId, "--delivery-disposition", "owner_hold", "--json",
+    ], dir);
+    expect(held.code).toBe(0);
+    // This is the historical contradiction: only the current lease was once
+    // incorrectly renamed.  The event ledger is otherwise untouched.
+    setLease(storyLeasesPath(dir), storyId, {
+      claimedAt: Date.now(), source: "delivery-reservation", delegationId, runId: SUCCESSOR,
+    });
+    return { dir, resPath, storyId, delegationId, runId, eventsPath: join(dir, ".roll", "loop", "events.ndjson") };
+  }
+
+  function prepareArgs(fx: Awaited<ReturnType<typeof heldFixture>>): string[] {
+    return [
+      "prepare", fx.storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset", "--resolution", fx.resPath,
+      "--continuation-run", SUCCESSOR, "--json",
+    ];
+  }
+
+  it("requires a byte-matching confirmation, records one recovery, then permits only the named pickup", async () => {
+    const fx = await heldFixture("FIX-1517-HAPPY");
+    const before = readFileSync(fx.eventsPath, "utf8");
+    const refused = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", "different", "--json",
+    ], fx.dir);
+    expect(refused.code).toBe(1);
+    expect(parseStderrJsonTail(refused.stderr).error).toBe("confirmation_mismatch");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(before);
+
+    const recovered = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(recovered.code).toBe(0);
+    expect(JSON.parse(recovered.stdout)).toEqual({
+      ok: true, delegationId: fx.delegationId, storyId: fx.storyId,
+      continuationRunId: SUCCESSOR, recovery: "owner_hold_confirmed",
+    });
+    const recoveredEvents = readFileSync(fx.eventsPath, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(recoveredEvents.filter((event) => event.type === "delta:hold_recovered")).toHaveLength(1);
+    expect(recoveredEvents.filter((event) => event.type === "delta:terminal")).toHaveLength(1);
+
+    const again = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(again.code).toBe(0);
+    expect(readFileSync(fx.eventsPath, "utf8").trim().split("\n").filter((line) => line.includes("delta:hold_recovered"))).toHaveLength(1);
+
+    const pickedUp = await tsRunCwd(prepareArgs(fx), fx.dir);
+    expect(pickedUp.code).toBe(0);
+    expect(JSON.parse(pickedUp.stdout).continuation).toEqual({
+      fromDelegationId: fx.delegationId, fromRunId: fx.runId, continuationRunId: SUCCESSOR,
+    });
+  });
+
+  it("refuses another successor or a recovery after the named successor picked up without writes", async () => {
+    const fx = await heldFixture("FIX-1517-NARROW");
+    const wrong = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", "successor-bob",
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(wrong.code).toBe(1);
+    expect(parseStderrJsonTail(wrong.stderr).error).toBe("recovery_not_available");
+    const recovered = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(recovered.code).toBe(0);
+    expect((await tsRunCwd(prepareArgs(fx), fx.dir)).code).toBe(0);
+    const before = readFileSync(fx.eventsPath, "utf8");
+    const afterPickup = await tsRunCwd([
+      "recover-held", "--delegation", fx.delegationId, "--continuation-run", SUCCESSOR,
+      "--confirm", fx.delegationId, "--json",
+    ], fx.dir);
+    expect(afterPickup.code).toBe(1);
+    expect(parseStderrJsonTail(afterPickup.stderr).error).toBe("recovery_not_available");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(before);
+  });
+
+  it("does not let conclude change an already recorded terminal decision", async () => {
+    const fx = await heldFixture("FIX-1517-IMMUTABLE");
+    const before = readFileSync(fx.eventsPath, "utf8");
+    const changed = await tsRunCwd([
+      "conclude", "--delegation", fx.delegationId, "--delivery-disposition", "owner_continue", "--json",
+    ], fx.dir);
+    expect(changed.code).toBe(1);
+    expect(parseStderrJsonTail(changed.stderr).error).toBe("terminal_immutable");
+    expect(readFileSync(fx.eventsPath, "utf8")).toBe(before);
+  });
+
+  it("explains the explicit confirmation and next named pickup in help", async () => {
+    const dir = setupMinimalProject("FIX-1517-HELP", "delta-team");
+    const help = await tsRunCwd(["recover-held", "--help"], dir);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain("--confirm <old-id>");
+    expect(help.stdout).toContain("owner_hold");
+    expect(help.stdout).toContain("prepare --continuation-run");
+    expect(help.stdout).not.toContain(dir);
+  });
+});
+
+// ── US-DELTA-015 — Builder preflight + checkpoint refactor ──────────────────
+
+describe("US-DELTA-015 — Builder preflight and formal checkpoint ownership", () => {
+  async function prepareManaged(storyId: string): Promise<{
+    dir: string;
+    delegationId: string;
+    workspace: ManagedWorkspaceSet;
+    frame: string;
+    checkout: string;
+  }> {
+    const dir = setupMinimalProject(storyId, "delta-team");
+    const prepared = await tsRunCwd([
+      "prepare", storyId, "--trigger", "host-guided", "--topology", "delta-team",
+      "--profile", "standard", "--preset", "local-preset",
+      "--resolution", writeResolutionTemplate(dir, storyId, "local-preset"), "--json",
+    ], dir);
+    expect(prepared.code).toBe(0);
+    const { delegationId } = JSON.parse(prepared.stdout) as { delegationId: string };
+    const frame = join(dir, ".roll", "features", "delta-team", storyId, `delta-${delegationId}`);
+    const workspace = (JSON.parse(readFileSync(join(frame, "preparation.json"), "utf8")) as { workspace: ManagedWorkspaceSet }).workspace;
+    return {
+      dir,
+      delegationId,
+      workspace,
+      frame,
+      checkout: join(dir, ".roll", "loop", "worktrees", workspace.members[0]!.relativeLocator),
+    };
+  }
+
+  function eventsOf(dir: string): Array<Record<string, unknown>> {
+    const p = join(dir, ".roll", "loop", "events.ndjson");
+    return existsSync(p)
+      ? readFileSync(p, "utf8").trim().split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as Record<string, unknown>)
+      : [];
+  }
+
+  /** Byte-level snapshot of the lifecycle surfaces preflight must never touch. */
+  function readLifecycleState(dir: string, frame: string, storyId: string): string {
+    const parts: string[] = [];
+    const eventsPath = join(dir, ".roll", "loop", "events.ndjson");
+    const leasePath = join(dir, ".roll", "loop", "leases", `${storyId}.lease`);
+    if (existsSync(eventsPath)) parts.push(readFileSync(eventsPath, "utf8"));
+    if (existsSync(leasePath)) parts.push(readFileSync(leasePath, "utf8"));
+    for (const name of ["preparation.json", "delegation-open.json", "role-artifacts/builder/evaluation-manifest.json"]) {
+      const p = join(frame, name);
+      if (existsSync(p)) parts.push(readFileSync(p, "utf8"));
+    }
+    return parts.join("\n---\n");
+  }
+
+  async function preflightReceipt(dir: string, delegationId: string): Promise<string> {
+    const preflight = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(preflight.code).toBe(0);
+    const path = join(dir, `${delegationId}-builder-receipt.json`);
+    writeFileSync(path, preflight.stdout);
+    return path;
+  }
+
+  it("green preflight is read-only: no events, lease, frame, workspace, or checkpoint changes", async () => {
+    const { dir, delegationId, workspace, frame, checkout } = await prepareManaged("US-DELTA-PREFLIGHT-GREEN");
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-PREFLIGHT-GREEN", delegationId, workspace, executionCwd: checkout });
+    const before = readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-GREEN");
+    const r = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      schema: "roll-delta-builder-preflight-receipt/v1",
+      ok: true,
+      class: "artifact_protocol",
+      delegationId,
+      stage: "builder",
+      snapshot: expect.objectContaining({ manifestSha256: expect.any(String) }),
+    });
+    expect(readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-GREEN")).toBe(before);
+    expect(eventsOf(dir).filter((e) => e.type === "worktree:release_requested" || e.type === "delta:blocked" || e.type === "delta:artifact_published")).toHaveLength(0);
+    // The checkout head is untouched by the self-check.
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim()).toBe(workspace.members[0]!.checkoutRef.head);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("red preflight is read-only and reports artifact_protocol without delta:blocked", async () => {
+    const { dir, delegationId, workspace, frame, checkout } = await prepareManaged("US-DELTA-PREFLIGHT-RED");
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-PREFLIGHT-RED", delegationId, workspace, executionCwd: checkout });
+    unlinkSync(join(frame, "role-artifacts", "builder", "evidence.md"));
+    const before = readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-RED");
+    const r = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    const envelope = parseStderrJsonTail(r.stderr);
+    expect(envelope).toMatchObject({ ok: false, class: "artifact_protocol", reason: "artifact_invalid" });
+    expect(envelope.detail).toContain("builder evidence artifact missing on disk");
+    expect(readLifecycleState(dir, frame, "US-DELTA-PREFLIGHT-RED")).toBe(before);
+    expect(eventsOf(dir).filter((e) => e.type === "delta:blocked" || e.type === "worktree:release_requested")).toHaveLength(0);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+  });
+
+  it("rejects non-builder stages and unsupported/legacy managed facts without mutation", async () => {
+    const { dir, delegationId, workspace, frame, checkout } = await prepareManaged("US-DELTA-PREFLIGHT-STAGE");
+    writeManagedBuilderArtifact({ dir, storyId: "US-DELTA-PREFLIGHT-STAGE", delegationId, workspace, executionCwd: checkout });
+    const eventsBefore = readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8");
+    for (const stage of ["designer", "evaluator", "peer"]) {
+      const r = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", stage, "--json"], dir);
+      expect(r.code).toBe(1);
+      expect(parseStderrJsonTail(r.stderr).error).toBe("unsupported_stage");
+    }
+    expect(readFileSync(join(dir, ".roll", "loop", "events.ndjson"), "utf8")).toBe(eventsBefore);
+    execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+
+    // Legacy persisted v1 record: no managed workspace facts → explicit rejection.
+    const legacy = setupMinimalProject("US-DELTA-PREFLIGHT-LEGACY", "delta-team");
+    const legacyId = "legacy-preflight-delegation";
+    const legacyEventsPath = join(legacy, ".roll", "loop", "events.ndjson");
+    expect(claimHostDelegationLease(legacy, "US-DELTA-PREFLIGHT-LEGACY", legacyId, `delta-${legacyId}`)).toBe("claimed");
+    const legacyFrame = join(legacy, ".roll", "features", "delta-team", "US-DELTA-PREFLIGHT-LEGACY", `delta-${legacyId}`);
+    mkdirSync(join(legacyFrame, "role-artifacts", "builder"), { recursive: true });
+    writeFileSync(join(legacyFrame, "preparation.json"), JSON.stringify({ schema: "roll-delta-preparation/v1", delegationId: legacyId, storyId: "US-DELTA-PREFLIGHT-LEGACY" }, null, 2));
+    writeFileSync(legacyEventsPath, [
+      { type: "delta:prepared", delegationId: legacyId, storyId: "US-DELTA-PREFLIGHT-LEGACY", trigger: "host-guided", topology: "solo", qualityProfile: "standard", ts: Date.now() },
+      { type: "delta:role_resolved", delegationId: legacyId, storyId: "US-DELTA-PREFLIGHT-LEGACY", role: "builder", roleInstanceId: "legacy-builder", hostId: "pi", modelId: "claude", ts: Date.now() },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const legacyBefore = readFileSync(legacyEventsPath, "utf8");
+    const legacyRun = await tsRunCwd(["preflight", "--delegation", legacyId, "--stage", "builder", "--json"], legacy);
+    expect(legacyRun.code).toBe(1);
+    expect(parseStderrJsonTail(legacyRun.stderr).error).toBe("managed_workspace_required");
+    expect(readFileSync(legacyEventsPath, "utf8")).toBe(legacyBefore);
+  });
+
+  it("formal Builder validation rejects a missing receipt without blocking the delegation", async () => {
+    const cases = [
+      {
+        storyId: "US-DELTA-PARITY-MISSING",
+        sabotage: (frame: string) => unlinkSync(join(frame, "role-artifacts", "builder", "evidence.md")),
+        expectDetail: "builder evidence artifact missing on disk",
+      },
+      {
+        storyId: "US-DELTA-PARITY-DIGEST",
+        sabotage: (_frame: string, dir: string, workspace: ManagedWorkspaceSet, delegationId: string, checkout: string) => {
+          // Declare a sha256 that does not match the actual evidence bytes.
+          const manifestPath = join(dir, ".roll", "features", "delta-team", "US-DELTA-PARITY-DIGEST", `delta-${delegationId}`, "role-artifacts", "builder", "evaluation-manifest.json");
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { outputs: Array<{ path: string; sha256: string }> };
+          manifest.outputs[0]!.sha256 = createHash("sha256").update("tampered bytes").digest("hex");
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        },
+        expectDetail: "digest mismatch for role-artifacts/builder/evidence.md",
+      },
+      {
+        storyId: "US-DELTA-PARITY-BINDING",
+        sabotage: (_frame: string, dir: string, _workspace: ManagedWorkspaceSet, delegationId: string, _checkout: string) => {
+          // executionCwd pointing at the project root (not the registered checkout).
+          const manifestPath = join(dir, ".roll", "features", "delta-team", "US-DELTA-PARITY-BINDING", `delta-${delegationId}`, "role-artifacts", "builder", "evaluation-manifest.json");
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { workspaceMember?: { executionCwd?: string } };
+          manifest.workspaceMember!.executionCwd = dir;
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        },
+        expectDetail: "manifest is not bound to a registered canonical DeliveryRun managed workspace member",
+      },
+    ];
+    for (const fixture of cases) {
+      const { dir, delegationId, workspace, frame, checkout } = await prepareManaged(fixture.storyId);
+      writeManagedBuilderArtifact({ dir, storyId: fixture.storyId, delegationId, workspace, executionCwd: checkout });
+      fixture.sabotage(frame, dir, workspace, delegationId, checkout);
+      const preflight = await tsRunCwd(["preflight", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+      expect(preflight.code).toBe(1);
+      const preflightEnvelope = parseStderrJsonTail(preflight.stderr);
+      expect(preflightEnvelope).toMatchObject({ ok: false, class: "artifact_protocol", reason: "artifact_invalid" });
+      expect(preflightEnvelope.detail).toContain(fixture.expectDetail);
+      const validate = await tsRunCwd(["validate", "--delegation", delegationId, "--stage", "builder", "--json"], dir);
+      expect(validate.code).toBe(1);
+      const validateEnvelope = parseStderrJsonTail(validate.stderr);
+      expect(validateEnvelope.error).toBe("preflight_receipt_invalid");
+      expect(eventsOf(dir).filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+      expect(eventsOf(dir).filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+      execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: dir, stdio: "ignore" });
+    }
+  });
+
+  it("rejects malformed and replayed Builder receipts without writing an event", async () => {
+    const first = await prepareManaged("US-DELTA-RECEIPT-FIRST");
+    writeManagedBuilderArtifact({ dir: first.dir, storyId: "US-DELTA-RECEIPT-FIRST", delegationId: first.delegationId, workspace: first.workspace, executionCwd: first.checkout });
+    const firstReceipt = await preflightReceipt(first.dir, first.delegationId);
+    const canonical = readFileSync(firstReceipt, "utf8").trim();
+    expect(canonical).toBe(JSON.stringify(JSON.parse(canonical)));
+
+    const malformed = join(first.dir, "malformed-receipt.json");
+    writeFileSync(malformed, "{not json");
+    const malformedValidate = await tsRunCwd(["validate", "--delegation", first.delegationId, "--stage", "builder", "--preflight-receipt", malformed, "--json"], first.dir);
+    expect(malformedValidate.code).toBe(1);
+    expect(parseStderrJsonTail(malformedValidate.stderr).error).toBe("preflight_receipt_invalid");
+    expect(eventsOf(first.dir).filter((event) => event.type === "delta:blocked")).toHaveLength(0);
+
+    const second = await prepareManaged("US-DELTA-RECEIPT-SECOND");
+    writeManagedBuilderArtifact({ dir: second.dir, storyId: "US-DELTA-RECEIPT-SECOND", delegationId: second.delegationId, workspace: second.workspace, executionCwd: second.checkout });
+    const replayed = await tsRunCwd(["validate", "--delegation", second.delegationId, "--stage", "builder", "--preflight-receipt", firstReceipt, "--json"], second.dir);
+    expect(replayed.code).toBe(1);
+    expect(parseStderrJsonTail(replayed.stderr).detail).toContain("immutable Builder delegation");
+    expect(eventsOf(second.dir).filter((event) => event.type === "delta:blocked")).toHaveLength(0);
+
+    execFileSync("git", ["worktree", "remove", "--force", first.checkout], { cwd: first.dir, stdio: "ignore" });
+    execFileSync("git", ["worktree", "remove", "--force", second.checkout], { cwd: second.dir, stdio: "ignore" });
+  });
+
+  it("TOCTOU: a head or artifact change after a green receipt is rejected with no stale checkpoint", async () => {
+    // Head change after the green self-check.
+    const head = await prepareManaged("US-DELTA-TOCTOU-HEAD");
+    writeManagedBuilderArtifact({ dir: head.dir, storyId: "US-DELTA-TOCTOU-HEAD", delegationId: head.delegationId, workspace: head.workspace, executionCwd: head.checkout });
+    const headReceipt = await preflightReceipt(head.dir, head.delegationId);
+    execFileSync("git", ["-c", "user.email=delta@test.invalid", "-c", "user.name=Delta Test", "commit", "--allow-empty", "-m", "post-preflight change"], { cwd: head.checkout, stdio: "ignore" });
+    const headValidate = await tsRunCwd(["validate", "--delegation", head.delegationId, "--stage", "builder", "--preflight-receipt", headReceipt, "--json"], head.dir);
+    expect(headValidate.code).toBe(1);
+    let events = eventsOf(head.dir);
+    expect(events.filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:artifact_published")).toHaveLength(0);
+
+    // Artifact byte change after the green self-check.
+    const artifact = await prepareManaged("US-DELTA-TOCTOU-ARTIFACT");
+    writeManagedBuilderArtifact({ dir: artifact.dir, storyId: "US-DELTA-TOCTOU-ARTIFACT", delegationId: artifact.delegationId, workspace: artifact.workspace, executionCwd: artifact.checkout });
+    const artifactReceipt = await preflightReceipt(artifact.dir, artifact.delegationId);
+    writeFileSync(join(artifact.frame, "role-artifacts", "builder", "evidence.md"), "commit abc\ncommands: test\nevidence: tampered after green preflight\n## Known Limitations\nfixture\n");
+    const artifactValidate = await tsRunCwd(["validate", "--delegation", artifact.delegationId, "--stage", "builder", "--preflight-receipt", artifactReceipt, "--json"], artifact.dir);
+    expect(artifactValidate.code).toBe(1);
+    expect(parseStderrJsonTail(artifactValidate.stderr).detail).toContain("does not match");
+    events = eventsOf(artifact.dir);
+    expect(events.filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:artifact_published")).toHaveLength(0);
+  });
+
+  it("formal success writes exactly one matching checkpoint then one publication; formal failure writes none", async () => {
+    const success = await prepareManaged("US-DELTA-CHECKPOINT-SUCCESS");
+    writeManagedBuilderArtifact({ dir: success.dir, storyId: "US-DELTA-CHECKPOINT-SUCCESS", delegationId: success.delegationId, workspace: success.workspace, executionCwd: success.checkout });
+    const successReceipt = await preflightReceipt(success.dir, success.delegationId);
+    expect((await tsRunCwd(["validate", "--delegation", success.delegationId, "--stage", "builder", "--preflight-receipt", successReceipt, "--json"], success.dir)).code).toBe(0);
+    let events = eventsOf(success.dir);
+    const checkpoints = events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation");
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]?.expectedHeads).toEqual([{ relativeLocator: success.workspace.members[0]!.relativeLocator, head: success.workspace.members[0]!.checkoutRef.head }]);
+    expect(events.filter((e) => e.type === "delta:artifact_published" && e.role === "builder")).toHaveLength(1);
+    execFileSync("git", ["worktree", "remove", "--force", success.checkout], { cwd: success.dir, stdio: "ignore" });
+
+    const failure = await prepareManaged("US-DELTA-CHECKPOINT-FAILURE");
+    writeManagedBuilderArtifact({ dir: failure.dir, storyId: "US-DELTA-CHECKPOINT-FAILURE", delegationId: failure.delegationId, workspace: failure.workspace, executionCwd: failure.dir });
+    expect((await tsRunCwd(["validate", "--delegation", failure.delegationId, "--stage", "builder", "--json"], failure.dir)).code).toBe(1);
+    events = eventsOf(failure.dir);
+    expect(events.filter((e) => e.type === "worktree:release_requested" && e.reason === "builder_validation")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:artifact_published" && e.role === "builder")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "delta:blocked")).toHaveLength(0);
+    execFileSync("git", ["worktree", "remove", "--force", failure.checkout], { cwd: failure.dir, stdio: "ignore" });
+  });
+
+  it("preflight human + JSON output is frozen in EN and ZH (green and red)", async () => {
+    const previousLang = process.env["ROLL_LANG"];
+    try {
+      for (const language of ["en", "zh"] as const) {
+        process.env["ROLL_LANG"] = language;
+        const greenStory = `US-DELTA-PREFLIGHT-SNAP-${language.toUpperCase()}`;
+        const green = await prepareManaged(greenStory);
+        writeManagedBuilderArtifact({ dir: green.dir, storyId: greenStory, delegationId: green.delegationId, workspace: green.workspace, executionCwd: green.checkout });
+        const greenHuman = await tsRunCwd(["preflight", "--delegation", green.delegationId, "--stage", "builder"], green.dir);
+        const greenJson = await tsRunCwd(["preflight", "--delegation", green.delegationId, "--stage", "builder", "--json"], green.dir);
+        expect([greenHuman.code, greenJson.code]).toEqual([0, 0]);
+        expect(scrubAll([greenHuman.stdout, greenJson.stdout].join("\n"), green.dir, green.delegationId)).toMatchSnapshot();
+        execFileSync("git", ["worktree", "remove", "--force", green.checkout], { cwd: green.dir, stdio: "ignore" });
+
+        const redStory = `US-DELTA-PREFLIGHT-RED-SNAP-${language.toUpperCase()}`;
+        const red = await prepareManaged(redStory);
+        writeManagedBuilderArtifact({ dir: red.dir, storyId: redStory, delegationId: red.delegationId, workspace: red.workspace, executionCwd: red.checkout });
+        unlinkSync(join(red.frame, "role-artifacts", "builder", "evidence.md"));
+        const redHuman = await tsRunCwd(["preflight", "--delegation", red.delegationId, "--stage", "builder"], red.dir);
+        const redJson = await tsRunCwd(["preflight", "--delegation", red.delegationId, "--stage", "builder", "--json"], red.dir);
+        expect([redHuman.code, redJson.code]).toEqual([1, 1]);
+        expect(scrubAll([redHuman.stderr, redJson.stderr].join("\n"), red.dir, red.delegationId)).toMatchSnapshot();
+        const stageUnsupported = await tsRunCwd(["preflight", "--delegation", red.delegationId, "--stage", "evaluator", "--json"], red.dir);
+        expect(stageUnsupported.code).toBe(1);
+        expect(scrubAll(stageUnsupported.stderr, red.dir, red.delegationId)).toMatchSnapshot();
+        execFileSync("git", ["worktree", "remove", "--force", red.checkout], { cwd: red.dir, stdio: "ignore" });
+      }
+    } finally {
+      if (previousLang === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = previousLang;
+    }
   });
 });

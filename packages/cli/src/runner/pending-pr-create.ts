@@ -1,4 +1,7 @@
 /**
+ * @responsibility Queues branches whose PR could not be opened due to transient faults.
+ */
+/**
  * FIX-1214 — durable hand-off queue for branches that were pushed but whose PR
  * could not be opened because of a transient GitHub API fault.
  *

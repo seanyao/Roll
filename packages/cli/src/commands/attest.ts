@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll attest <story-id>` subcommand, composing the acceptance evidence chain into one report.
+ */
+/**
  * US-ATTEST-006 — `roll attest <story-id>`: compose the five-piece evidence
  * chain into one acceptance report.
  *
@@ -27,6 +30,7 @@ import {
   acForStory,
   BrowserOperationLedger,
   parseBacklog,
+  splitBacklogRow,
   CaptureBridge,
   CapturePlanner,
   captureReceiptEvidenceRef,
@@ -118,28 +122,19 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
-import {
-  cardArchiveDir,
-  epicFromFeaturePath,
-  findFeatureFile,
-  findFeatureFiles,
-  projectBacklogPath,
-  projectDataPath,
-  projectOperationalPath,
-  projectRuntimePath,
-  reportFileName,
-  reviewFileName,
-} from "../lib/archive.js";
+import { cardArchiveDir, epicFromFeaturePath, findFeatureFile, findFeatureFiles, reportFileName, reviewFileName } from "../lib/archive.js";
 import { currentLang } from "./agent-list.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
 import { collectRollCaptureReadiness, type RollCaptureReadiness } from "../lib/roll-capture-readiness.js";
 import { designContractDeliveredEvidence } from "../runner/attest-gate.js";
+import { skillDispatchActorForCwd } from "../runner/skill-dispatch-workspace.js";
 import { resolveCardDeliveryRecord } from "../lib/delivery-record.js";
 import { readReviewScoreTrend, readStoryReviewScores } from "../lib/review-score.js";
 import { collectToolEvidenceFromEventsPath, formatToolCostSummary } from "../lib/tool-display.js";
-import { isCanonicalWorkspaceSelectorToken } from "../lib/workspace-selector.js";
+import { recordHostDeltaAttestationClosure } from "../lib/delta-allocation.js";
 import { attestAuditCommand } from "./attest-audit.js";
 import { runOutwardSmoke, smokeResultsFromReport } from "../attest/outward-smoke-runner.js";
 import { parseEvaluationContract } from "../lib/evaluation-contract.js";
@@ -148,8 +143,6 @@ import { parseEvaluationContract } from "../lib/evaluation-contract.js";
 export { findFeatureFile } from "../lib/archive.js";
 
 export interface AttestDeps {
-  /** Explicit project-data authority root; canonical Workspace or legacy project. */
-  projectPath?: string;
   now?: () => Date;
   run?: EvidenceRun;
   ghProbe?: () => Promise<boolean>;
@@ -200,7 +193,7 @@ export interface ProcessReaders {
 
 /** Default readers over `<runtimeDir>/{runs.jsonl,events.ndjson,cycle-logs/}`. */
 function defaultProcessReaders(projectPath: string, env: Record<string, string | undefined>): ProcessReaders {
-  const rt = (env.ROLL_PROJECT_RUNTIME_DIR ?? "").trim() || projectRuntimePath(projectPath);
+  const rt = (env.ROLL_PROJECT_RUNTIME_DIR ?? "").trim() || join(projectPath, ".roll", "loop");
   // Reuse the event bus's read side — it already parses runs.jsonl / events.ndjson
   // and returns [] for a missing file (readText → "" on absence), no throw.
   const bus = new EventBus();
@@ -407,7 +400,20 @@ function tail(text: string, max = 4000): string {
   return text.length <= max ? text : text.slice(text.length - max);
 }
 
-async function runShell(line: string, deps: ScreenshotDeps | undefined): Promise<RunOut> {
+// FIX-1484: a capture command may be a FULL test suite (`roll test --full`
+// runs thousands of tests over many minutes). The old 120s / 4MB limits killed
+// such commands mid-run — and the kill was then misreported as "exit 1".
+const CAPTURE_COMMAND_TIMEOUT_MS = 30 * 60_000;
+const CAPTURE_COMMAND_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** FIX-1484: RunOut plus an explicit harness-kill cause (timeout / maxBuffer). */
+export type CaptureShellOut = RunOut & { killedBy?: string };
+
+export async function runShell(
+  line: string,
+  deps: ScreenshotDeps | undefined,
+  opts?: { timeoutMs?: number },
+): Promise<CaptureShellOut> {
   // RED LINE (US-ATTEST-012 / FIX-339 复核 #2): the GUI screen-capture lane already
   // refuses a command whose body carries a secret (screenshot.ts) — a token baked
   // into pixels can't be un-baked. The non-GUI command sink runs the command and
@@ -419,20 +425,61 @@ async function runShell(line: string, deps: ScreenshotDeps | undefined): Promise
   }
   const injected = deps?.run;
   if (injected !== undefined) return injected("sh", ["-lc", line]);
+  const timeoutMs = opts?.timeoutMs ?? CAPTURE_COMMAND_TIMEOUT_MS;
   try {
     const { stdout, stderr } = await execFileAsync("sh", ["-lc", line], {
       encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 120_000,
+      maxBuffer: CAPTURE_COMMAND_MAX_BUFFER,
+      timeout: timeoutMs,
     });
     return { code: 0, stdout, stderr };
   } catch (e) {
-    const err = e as { code?: number; stdout?: string; stderr?: string };
-    return { code: typeof err.code === "number" ? err.code : 1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+    // FIX-1484: a REAL exit code arrives as a number and passes through
+    // untouched. A harness kill is NOT the command's exit code — timeout gives
+    // code:null + signal SIGTERM, maxBuffer gives string code
+    // ERR_CHILD_PROCESS_STDIO_MAXBUFFER. Both used to be flattened to "exit 1",
+    // which condemned green suites and hid the cause. Report the kill as a kill.
+    const err = e as {
+      code?: number | string;
+      stdout?: string;
+      stderr?: string;
+      signal?: string;
+      message?: string;
+    };
+    if (typeof err.code === "number") {
+      return { code: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+    }
+    if (err.signal !== undefined) {
+      const sigNo = osConstants.signals[err.signal as keyof typeof osConstants.signals] ?? 0;
+      return {
+        code: 128 + sigNo,
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? "",
+        killedBy: `killed by the capture harness: signal ${err.signal} (timeout ${timeoutMs}ms or external kill) — NOT the command's exit code`,
+      };
+    }
+    return {
+      code: 1,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? "",
+      killedBy: `killed by the capture harness: ${String(err.code ?? err.message ?? "spawn error")} — NOT the command's exit code`,
+    };
   }
 }
 
-async function captureCommandFact(projectPath: string, command: string, deps: ScreenshotDeps | undefined): Promise<CaptureCommandFact> {
+interface CaptureDumpTarget {
+  /** This attest run's dir; the failure dump lands under its `evidence/`. */
+  runDir: string;
+  /** File stem per capture lane (capture-command, capture-command-1, …). */
+  stem: string;
+}
+
+async function captureCommandFact(
+  projectPath: string,
+  command: string,
+  deps: ScreenshotDeps | undefined,
+  dump?: CaptureDumpTarget,
+): Promise<CaptureCommandFact> {
   const wrappedCommand = commandInProject(projectPath, command);
   // FIX-339 (复核 #2): a secret in the command body ⇒ refuse, never run (runShell
   // guards). Surface a non-zero exit so the caller records a taken:false skip.
@@ -446,21 +493,42 @@ async function captureCommandFact(projectPath: string, command: string, deps: Sc
     };
   }
   const r = await runShell(wrappedCommand, deps);
-  // FIX-339 (复核 #2): scrub the PERSISTED stdout/stderr tails with the same
-  // redaction pipeline used for inlined evidence — a token printed BY the command
+  // FIX-339 (复核 #2): scrub the PERSISTED stdout/stderr with the same redaction
+  // pipeline used for inlined evidence — a token printed BY the command
   // (env dump, debug log) must never land in the archived evidence fact. A hit is
-  // WARNed (留痕), never silent.
-  const outR = redactSecrets(tail(r.stdout));
-  const errR = redactSecrets(tail(r.stderr));
+  // WARNed (留痕), never silent. FIX-1484: redact the FULL stream first, then cap
+  // the report tail — the cap governs display only, never what gets preserved.
+  const outR = redactSecrets(r.stdout);
+  const errR = redactSecrets(r.stderr);
   if (outR.hits.length > 0 || errR.hits.length > 0) {
     warn(`redacted secret(s) in capture command output (${command}): ${[...outR.hits, ...errR.hits].join(", ")}`);
+  }
+  // FIX-1484: a capped tail alone cannot explain WHY a capture failed — on
+  // failure persist the full redacted streams under the run's evidence/ so the
+  // report is self-diagnosable (paths recorded relative to the run dir).
+  let outputDump: { stdout?: string; stderr?: string } | undefined;
+  if (r.code !== 0 && dump !== undefined) {
+    const dir = join(dump.runDir, "evidence");
+    const dumpFiles: { stdout?: string; stderr?: string } = {};
+    if (outR.redacted !== "") {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${dump.stem}.stdout.log`), outR.redacted, "utf8");
+      dumpFiles.stdout = `evidence/${dump.stem}.stdout.log`;
+    }
+    if (errR.redacted !== "") {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${dump.stem}.stderr.log`), errR.redacted, "utf8");
+      dumpFiles.stderr = `evidence/${dump.stem}.stderr.log`;
+    }
+    if (dumpFiles.stdout !== undefined || dumpFiles.stderr !== undefined) outputDump = dumpFiles;
   }
   return {
     command,
     wrappedCommand,
     exitCode: r.code,
-    stdoutTail: outR.redacted,
-    stderrTail: errR.redacted,
+    stdoutTail: tail(outR.redacted),
+    stderrTail: (r.killedBy !== undefined ? `[${r.killedBy}]\n` : "") + tail(errR.redacted),
+    ...(outputDump !== undefined ? { outputDump } : {}),
   };
 }
 
@@ -476,51 +544,15 @@ export function captureFactFromShot(shot: ScreenshotResult, forcedError?: string
   };
 }
 
-const DOC_ALIGNMENT_PATTERNS: readonly RegExp[] = [
-  /^README(?:_[A-Z]+)?\.md$/,
-  /^AGENTS\.md$/,
-  /^CHANGELOG\.md$/,
-  /^docs\//,
-  /^guide\//,
-  /^site\//,
-];
-
-const USER_VISIBLE_SURFACE_PATTERNS: readonly RegExp[] = [
-  /^packages\/cli\/src\/commands\/[^/]+\.ts$/,
-  /^packages\/cli\/src\/commands\/index\.ts$/,
-  /^packages\/cli\/src\/index\.ts$/,
-  /^packages\/cli\/src\/render\.ts$/,
-  /^packages\/spec\/src\/i18n\//,
-];
-
-function normalizeDiffPath(file: string): string {
-  return file.replace(/\\/g, "/").replace(/^\.\//, "").trim();
-}
-
-export function isDocAlignmentFile(file: string): boolean {
-  const normalized = normalizeDiffPath(file);
-  return DOC_ALIGNMENT_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-export function isUserVisibleSurfaceFile(file: string): boolean {
-  const normalized = normalizeDiffPath(file);
-  return USER_VISIBLE_SURFACE_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-export function assessDocGapFromFiles(files: readonly string[]): DocGapWarning | undefined {
-  const seen = new Set<string>();
-  const changedFiles: string[] = [];
-  for (const file of files) {
-    const normalized = normalizeDiffPath(file);
-    if (normalized === "" || seen.has(normalized)) continue;
-    seen.add(normalized);
-    changedFiles.push(normalized);
-  }
-  const visibleFiles = changedFiles.filter(isUserVisibleSurfaceFile);
-  if (visibleFiles.length === 0) return undefined;
-  if (changedFiles.some(isDocAlignmentFile)) return undefined;
-  return { changedFiles, visibleFiles };
-}
+import { assessDocGapFromFiles, normalizeDiffPath } from "../lib/doc-drift.js";
+// US-RULE-004a — the doc-gap rules live in ONE shared home (lib/doc-drift.ts);
+// attest re-exports them so its public surface and behavior contract are
+// unchanged. Never fork a second copy of these rules into a caller.
+export {
+  assessDocGapFromFiles,
+  isDocAlignmentFile,
+  isUserVisibleSurfaceFile,
+} from "../lib/doc-drift.js";
 
 function gitNameOnly(projectPath: string, args: readonly string[]): string[] {
   try {
@@ -1020,7 +1052,7 @@ function recordAttestCaptureBridgeLink(projectPath: string, request: RollCapture
     );
     if (link === null) return;
     new BrowserOperationLedger().recordCaptureLink(
-      projectOperationalPath(projectPath, "browser-operations", "events.ndjson"),
+      join(projectPath, ".roll", "browser-operations", "events.ndjson"),
       link,
     );
   } catch (error) {
@@ -1159,7 +1191,7 @@ function backlogRowId(cell: string): string {
 }
 
 export function readBacklogRow(projectPath: string, storyId: string): { description?: string; status?: string } {
-  const p = projectBacklogPath(projectPath);
+  const p = join(projectPath, ".roll", "backlog.md");
   if (!existsSync(p)) return {};
   let text: string;
   try {
@@ -1169,7 +1201,7 @@ export function readBacklogRow(projectPath: string, storyId: string): { descript
   }
   for (const line of text.split("\n")) {
     if (!line.startsWith("|")) continue;
-    const cells = line.split("|").map((c) => c.trim());
+    const cells = splitBacklogRow(line).map((c) => c.trim());
     // FIX-1475: select the row by an EXACT id-cell match (link-stripped) — never
     // a substring. A prior `cells.findIndex(c => c.includes(storyId))` fallback
     // picked `US-DEMO-001-legacy` when asked for `US-DEMO-001` (worse when the
@@ -1347,6 +1379,10 @@ export function resolveStoryAcItems(projectPath: string, storyId: string): Retur
 /** `roll attest <story-id> [--deploy-url <url>] [--capture-tmux <s> | --capture-command <c>]` */
 export async function attestCommand(args: string[], deps: AttestDeps = {}): Promise<number> {
   if (args[0] === "audit") return attestAuditCommand(args.slice(1));
+  if (skillDispatchActorForCwd(process.cwd()) === "child") {
+    process.stderr.write("roll attest: refused in a Skill dispatch child workspace; only the parent DeliveryRun may attest.\n");
+    return 1;
+  }
   // FIX-329 — the `attest backfill` loophole is removed. Acceptance evidence is
   // produced DURING delivery (the loop's HARD attest:gate renders the report
   // in-cycle; manual deliveries run attest as their Phase 10.6 step), never
@@ -1366,7 +1402,7 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) continue;
-    if (isCanonicalWorkspaceSelectorToken(arg) || flagsWithValue.has(arg)) {
+    if (flagsWithValue.has(arg)) {
       i += 1;
       continue;
     }
@@ -1428,12 +1464,11 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   const captureWebSkip = flagVal("--capture-web-skip");
   const captureBrowser = flagVal("--capture-browser");
 
-  const projectPath = deps.projectPath ?? process.cwd();
+  const projectPath = process.cwd();
   const featureFile = findFeatureFile(projectPath, storyId);
   if (featureFile === null) {
-    const featuresPath = `${relative(projectPath, projectDataPath(projectPath, "features")) || "features"}/`;
-    process.stderr.write(`[roll] attest: story ${storyId} not found under ${featuresPath}\n`);
-    process.stderr.write(`[roll] attest：在 ${featuresPath} 下找不到 ${storyId}\n`);
+    process.stderr.write(`[roll] attest: story ${storyId} not found under .roll/features/\n`);
+    process.stderr.write(`[roll] attest：在 .roll/features/ 下找不到 ${storyId}\n`);
     return 1;
   }
   let featureText = "";
@@ -1501,7 +1536,10 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
       const out = join(runDir, "screenshots", stem);
       let fact: CaptureCommandFact | null = null;
       if (lane.command !== undefined) {
-        fact = await captureCommandFact(projectPath, lane.command, deps.capture);
+        fact = await captureCommandFact(projectPath, lane.command, deps.capture, {
+          runDir,
+          stem: li === 0 ? "capture-command" : `capture-command-${li}`,
+        });
         if (commandFact === null) commandFact = fact; // first command is the representative capture_command (back-compat)
       }
       let shot: ScreenshotResult =
@@ -1512,7 +1550,7 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
               taken: false,
               skipped: `capture command exited ${fact.exitCode}`,
               failed: true,
-              error: `capture command exited ${fact.exitCode}${fact.stderrTail !== "" ? `: ${fact.stderrTail}` : ""}`,
+              error: `capture command exited ${fact.exitCode}${fact.stderrTail !== "" ? `: ${fact.stderrTail}` : ""}${fact.outputDump !== undefined ? ` (full output: ${fact.outputDump.stdout ?? fact.outputDump.stderr ?? ""})` : ""}`,
             }
           : await captureScreenshot(
               {
@@ -1716,7 +1754,7 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
   // ac-map is visible to attest regardless of .roll layout.
   const acMap =
     readAcMap(storyDir) ??
-    readAcMap(projectDataPath(projectPath, "verification", storyId)) ??
+    readAcMap(join(projectPath, ".roll", "verification", storyId)) ??
     readAcMap(dirname(runDir));
 
   // US-ATTEST-016 — outward smoke checks
@@ -1958,5 +1996,11 @@ export async function attestCommand(args: string[], deps: AttestDeps = {}): Prom
     warn(`capture command failed with exit ${commandFact.exitCode}`);
     return 3;
   }
+  // Manual host-Delta delivery has no synthetic Cycle.  Once the owner has
+  // merged, pulled the integration branch, and this Story-scoped attestation
+  // has succeeded, bind that real closure to the retained reservation.  The
+  // reconcile tick releases it from the identity-bearing event; this command
+  // never releases a lease directly.
+  recordHostDeltaAttestationClosure(projectPath, storyId, relative(projectPath, reviewPath));
   return 0;
 }

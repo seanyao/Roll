@@ -1,4 +1,7 @@
 /**
+ * @responsibility Freezes the acceptance contract at cycle start and detects drift.
+ */
+/**
  * US-EVID-021 — freeze the acceptance contract at cycle start; detect drift.
  *
  * The attest gate reads the contract (AC set + evidence frontmatter) from the
@@ -12,6 +15,10 @@
  * to it. Drift is ALERT-ONLY — never a block — so a false positive can never
  * stall the loop (owner red line). The pure projection/hash lives in @roll/core
  * (US-EVID-020); this is the thin cycle-start I/O + drift wrapper around it.
+ *
+ * RL-EVID-005: registered redline in policy/rules.yaml — freeze the contract
+ * from design truth at cycle start; mid-cycle drift is detected and surfaced
+ * alert-only, never silently honored.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

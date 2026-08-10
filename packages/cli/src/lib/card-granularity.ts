@@ -1,4 +1,7 @@
 /**
+ * @responsibility Lints story granularity at design time to keep cards sized for a single cycle.
+ */
+/**
  * US-CYCLE-005 — design-time granularity lint. The biggest lever on cycle-time
  * mean is story granularity: a card that is too big is split at RUN time (paying
  * the full price passively) instead of at DESIGN time. This lint rejects an

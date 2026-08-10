@@ -1,4 +1,5 @@
 /**
+ * @responsibility Serves rendered capture requests through the v2 evidence protocol.
  * US-PHYSICAL-010 — serve `roll.capture.v2` rendered receipts in-process.
  *
  * The CapturePlanner (US-EVID-030) plans `playwright-rendered` lanes; this

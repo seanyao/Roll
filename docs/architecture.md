@@ -4,7 +4,7 @@
 
 roll 是 AI coding agent 的**外层控制系统**（agent harness / reliability layer）。它不进入 agent 内部（不管理 token 窗口、不压缩对话、不干预单次推理），而是在外部建立一个闭环：设定目标 → 调度执行 → 感知结果 → 修正方向。
 
-当前用户入口是 CLI-first：`roll init`、`roll supervisor`、`roll supervisor live`、`roll loop`、`roll status`、`roll loop cycle` 与按 Story 收口的 `roll attest` 验收 Review Page。浏览器/TUI 版 Supervisor Live Console 是下一阶段工作，不作为当前产品面承诺。安装方式：`npm install -g @bipo-ape/roll`。
+当前用户入口是 CLI-first：`roll init`、`roll supervisor`、`roll supervisor live`、`roll supervisor delivery`（只读统一功能交付视图）、`roll loop`、`roll status`、`roll loop cycle` 与按 Story 收口的 `roll attest` 验收 Review Page。浏览器/TUI 版 Supervisor Live Console 是下一阶段工作，不作为当前产品面承诺。安装方式：`npm install -g @bipo-ape/roll`。
 
 ## 为什么是分层闭环
 
@@ -60,36 +60,7 @@ web          站点与静态展示（当前不是活体 Supervisor 控制台）
 
 ## 领域模型
 
-系统定义 10 个 Bounded Context：Workspace Coordination、Planning、Execution、
-Delivery、Evidence、Economics、Release、Truth & Consistency、Presentation 与 Browser
-Operations。每个上下文内部一致，上下文之间通过共享 artifact、Published Language 和
-事件流协作——没有中央调度器。下方历史 `BC1..BC9` 章节按运行闭环展开实现视角；Policy、
-Evolution、运行模式和执行剖面是横切视图，不会额外增加 context 数量。权威关系图见
-roll-meta 中的 `.roll/domain/context-map.md`。
-
-| Bounded Context | Owns | Does not own |
-|---|---|---|
-| Workspace Coordination | Workspace identity/registry/lifecycle、Requirement bindings、Repository bindings、command target resolution、Workspace/Issue init plan | Git merge truth、agent capability、backlog business status |
-| Planning | Workspace-scoped backlog 与 Story contract | Issue completion truth |
-| Execution | Cycle、repo execution legs、TCR 与 scheduler runtime | provider merge verdict |
-| Delivery | per-repository PR/CI/merge facts 与 exact-SHA Integration Acceptance 的 Issue fold | 第二个 Delivery Set/entity |
-| Evidence | AC map、attest 与交付证据 | provider/main 权威事实 |
-| Economics | usage/cost facts 与预算投影 | agent capability |
-| Release | release delta、tag 与 consistency gate | Story 实现 |
-| Truth & Consistency | anchors、selectors、audit、reconcile 与 drift verdict | 独立业务写模型 |
-| Presentation | CLI、Charter/site、dashboard、dossier 等 projection | 持久真相 |
-| Browser Operations | typed browser operation/capture facts | Story 视觉验收结论 |
-
-### Workspace Coordination（supporting context）
-
-Workspace Coordination 把 stable `workspaceId` 解析到 canonical root，并拥有 registry、
-lifecycle events、Requirement/Repository binding 与确定性 init/migration/Issue plan。多个
-Workspace 可以同时 active；每个 mutation 必须解析一个精确目标，`--all` 只用于明确的
-read-only aggregate。
-
-Workspace 不保存常驻 product checkout。实际代码只存在于
-`issues/<storyId>/<repoAlias>/` worktree；机器级 `~/.roll/repos/<repoId>.git` 可被多个
-Workspace 复用。Repository Cache 是可重建 projection，不是 Story/Issue completion truth。
+系统分为 8 个 Bounded Context。每个上下文内部一致，上下文之间通过共享 artifact 和事件流协作——没有中央调度器。
 
 ### BC1 · Backlog
 
@@ -130,25 +101,10 @@ Workspace 复用。Repository Cache 是可重建 projection，不是 Story/Issue
 Scope -> Role -> Binding -> Agent -> optional Model
 ```
 
-**Scope**：`machine` / `workspace` / `project` / `story` / `skill` 等层级使用同一套形状。
+**Scope**：`machine` / `project` / `story` / `skill` 等层级使用同一套形状。
 Machine Scope 写在 `~/.roll/agents.yaml`，声明本机 Agent Pool、能力和机器级
 `supervise`；Project Scope 写在 `.roll/agents.yaml`，绑定项目/Story 默认角色并可
 `inherits: machine`。
-
-Workspace runtime 固定解析 `machine -> workspace -> story -> skill`。其中
-`<workspace>/agents.yaml` 是 closed、casting-only scope；agent/model/readiness/disabled
-能力仍只由 Machine Scope 声明，repository-local Project Scope 仅作 migration input。
-
-机器级 `capacity` 同样只属于 `~/.roll/agents.yaml`。每个 Builder 或 adversarial role
-进程在 spawn 前，必须通过机器 broker 原子获取一个带 Workspace/Story/Cycle/spawn
-身份的 lease；全局上限统计所有 lease，per-agent 上限跨 model/context 聚合。容量不足
-产生显式 `waiting_capacity`：不 spawn、不换 agent、不计 Story 失败或 no-progress，释放
-Story claim 后留待后续 tick。心跳或 release 的 exact ownership 丢失会立即终止未授权
-进程并 fail loud；只有同主机且确认死进程的 stale lease 可在 broker lock 内回收。broker transaction
-lock 记录 host、PID 与 process-start identity；进程崩溃或 PID 复用时可自动回收，也可通过
-`roll workspace doctor` 输出的 typed repair 清理，foreign、live 或不可解析 owner 一律保持阻塞。
-自动回收先建立唯一、带 owner identity 的 reclaim guard；所有新事务在 guard 存续时等待，guard
-崩溃后也只能按其唯一 token 与死进程证明清理，不能在检查与 rename 之间移走新 owner 的活锁。
 
 **Role**：Canonical user-facing role model is **Supervisor / Designer / Builder / Evaluator**。
 
@@ -182,40 +138,9 @@ cycle 写 `loop:pending`，只做恢复探测，不启动 Builder、不把卡记
 **反规则**：不因历史表现自动改写角色绑定。不做失败后的静默跨 agent 重试。指标可以*建议*
 策略变更，但绝不绕过 human-on-the-loop。
 
-### BC3.5 · Context Engineering
-
-Context Engineering 发布统一语言：`Context Provider`、`Context Binding`、`Context Page`、
-`Context Scope`、`Context Read`、`ContextReadSnapshotV1`、`Context Diagnostic` 与
-`Context Revision Decision`。v1 Provider 是 Git 承载的 LLM Wiki；repository、environment、
-workflow、DB、Kubernetes、测试账号与旧 shared execution context 都只是普通 Context Page，
-差异由 `page_type` 与 `scope` 表达，不形成新的运行时类型。
-
-能力边界：
-
-- **Machine registry** `~/.roll/context-providers.yaml` 归机器 operator；只保存 Provider
-  remote/branch/enablement，不保存 secret。
-- **Workspace Coordination** 发布 canonical Workspace target、schemeful repository identity、
-  Workspace `contexts` binding 与 authority paths；Context Engineering 不复制 target discovery
-  或 remote normalizer。
-- **Context Engineering** 编译授权 execution plan，每次 fresh read 对每个唯一 Provider fetch
-  一次，并从同一 commit 读取页面、校验 scope，产出不可变 Snapshot；fetch 失败无 stale fallback。
-- **Execution** 只通过 typed Snapshot reference 与 authority envelope 消费页面。复用 Snapshot
-  不 fetch；请求新页面必须新 read。revision 改变后由调用阶段记录
-  `continue_with_handoff_snapshot`、`adopt_new_snapshot` 或 `needs_reconciliation`，不得静默采用。
-- **Tool Use / Guardrails** 负责 DB、Kubernetes、测试账号与 credential 的实时访问授权。
-  Context 只保存 mapping、policy 和 opaque `credential_ref`，页面内容低于 system、developer、
-  skill、owner、Workspace authority 与工具安全策略。
-
-因此 Context Engineering 与 Workspace Coordination、Execution 的 published language 通过
-`WorkspaceExecutionContextV1 -> ContextReadRequestV1 -> ContextReadSnapshotV1 -> Agent handoff`
-单向传递；Context Provider 只获取和验证文档，不执行 Wiki 中的命令，也不查询外部系统。
-
 ### BC4 · 交付（Delivery Reconciler）
 
-一个 Issue 可以包含多个 required repository target；每个 target 至多有一个 governed open
-PR，并独立产生 CI 与 merge 事实。Story/Issue 是唯一统一交付单元：全部 required target
-merge 后，还必须针对精确 merged SHA 通过 Integration Acceptance。不存在额外的 Delivery
-Set，也不承诺跨 provider PR 的物理原子 merge。
+每次交付是一个 Pull Request。一个 Story 至多同时有一个 open PR。
 
 **最后一公里 = 一个 reconcile 闭环，无独立守护进程。**
 
@@ -266,10 +191,10 @@ building ──attest earned──► publishable ──push+PR──► awaitin
 
 #### Delivery Reconciler
 
-纯判定 + 薄 IO，在任意 `roll` 调用 / cycle 边界的 runner 内部时机会性运行：
+纯判定 + 薄 IO，在任意 `roll` 调用 / cycle 边界 / `roll loop reconcile` 时机会性运行：
 
-- **触发点**：(a) 每次 `roll loop` cycle 边界；(b) 任意 `roll` 命令的前置机会性 reconcile；(c) 显式 `roll loop reconcile [--json]`；(d) runner/CI 内部显式 tick
-- **自驱合并**：CI 绿且未合 → `gh pr merge --squash`，不依赖仓库 auto-merge 开关、不依赖 launchd
+- **触发点**：(a) 每次 `roll loop` cycle 边界；(b) 任意 `roll` 命令的前置机会性 reconcile；(c) 显式 `roll loop reconcile [--json]`；(d) CI 里可选一步
+- **自驱合并**：CI 绿且未合 → `gh pr merge --squash`，不依赖仓库 auto-merge 开关
 - **外部合并反查**：supervisor / 人手动合并被 patch-id / PR-state 自动回填为 `delivered_external`——手动合并是一等支持路径，不是泄漏
 - **幂等 & 崩溃可续**：reconcile 反复跑永远安全，向真相收敛
 - **无常驻进程**：合并逻辑住在 Delivery Reconciler 里，由驱动交付的那个会话调用
@@ -277,61 +202,6 @@ building ──attest earned──► publishable ──push+PR──► awaitin
 #### 交付判定
 
 合并入 main 才算交付。PR 已开、CI 已绿、agent 声称完成都不算——事后对账，只认 main 上真实的 merge commit。main 是唯一交付真相；reconcile 只把真相投影回 cycle 行。
-
-#### Workspace 多仓 Issue 与 Requirement 证明
-
-Workspace 中一个 Story 可以要求多个 repository 独立交付，但这些 repository 不形成新的
-Delivery Set 实体；它们仍是同一个 Issue 的交付事实。每条 required repository leg 先产生
-provider 或 integration-branch 强 merge evidence，Issue 只有在全部 leg 已合并、每个 exact
-merge SHA 都能从该 repository 配置的 integration branch 到达，并且同一组 SHA 上的
-Integration Acceptance 通过后才派生为 `delivered`。验收 evidence 同时记录 command digest、
-profile、artifact path 与时间；branch label、pre-merge HEAD、旧 Story 同名证据和 generated
-projection 都不能替代 exact-SHA 证明。任一 merge SHA 变化会使旧验收立即失效。
-
-Cycle capture 的 repository verification 只是 Workspace 验收输入，不直接等于 attest 通过。
-每个 cycle 必须在 `issues/<story>/evidence/<cycle>/`（或 runner 提供的同一 run dir）原子写入
-exact-cycle repository evidence、`ac-map.json` 与 Review Page；`ac-map.json` 的条目必须来自
-Workspace backlog 中唯一 Story Contract 的真实 AC，repository/integration verification 只作为
-`partial` evidence binding，不能被包装成伪 AC 或直接宣告通过。Evaluator 同时读取这些真实 AC、
-evaluation contract 与每个 writable repository 都成功采集的 multi-repo diff 作独立语义判断；
-任一 diff leg 不可读、Review Score 为 `regression`，或 `ok` 分数不高于质量门限时均 fail-loud。
-产物读回校验后才能记录
-`attest:gate produced`。Evaluator score 写入 `issues/<story>/notes/`，不依赖或创建 legacy `.roll`；
-verified/designed profile 缺任一 score、ac-map、Review Page 或独立 Evaluator artifact 都 fail-loud。
-
-Requirement `attest.md` 是可删除、可重建的只读 projection，不是 Issue authority。重建阶段才会
-读取 `issues/<story>/evidence`：路径必须保持在对应 Issue 的真实 `evidence/` 目录内，任何 symlink、
-special file、foreign Workspace identity 或并发变化都会 fail-loud，原 evidence 不被复制、移动或
-嵌入。缺失 Issue/evidence 必须以 pending 呈现，不能静默省略 Story；Requirement archive audit
-只要报告 `corrupt` 或 `untrusted`，最终 attestation 就保持 blocked 并原样列出 finding。重建或删除
-`attest.md` 永远不写 Issue manifest/events，因此不能改变 Story completion truth。
-
-`roll delivery list|show|reconcile` 是这组 Issue 事实的唯一公共交付视图：`show` 展开每个
-required repository 的 PR/CI/merge facts、缺失 gate 与 exact-SHA Integration Acceptance；
-`list --all` 只做跨 Workspace 聚合。`roll delivery reconcile` 重新折叠同一份 Issue events
-与 provider/main facts，先重建 Requirement attest projection，再把 backlog Done/Todo 更新为
-派生投影；它可以读取旧投影以进行安全、幂等更新，但绝不把 backlog Markdown 当成完成真相。
-写入前会完整预检 `workspace.yaml` 声明的 canonical Requirement manifests；缺失、损坏或
-schema/identity 不一致统一以 `invalid_requirement` fail-loud，且不会留下部分 attest/backlog
-更新。未声明的杂目录以及未关联本次 Story 的合法 Requirement 不参与本次 reconcile。
-它不创建 Delivery Set/store，也不把单仓 leg 描述为 Story Done。
-`roll loop reconcile` 仅保留为同一 Workspace-scoped reconcile 的 alias；旧的单仓 cycle
-reconciler 只供 runner 内部推进 PR/merge 事实，不能再从公共命令面恢复 repository-local 模式。
-
-#### Workspace doctor 与有界修复
-
-`roll workspace doctor <id>` 是 Workspace Coordination 的只读 guardrail：统一检查 registry/manifest、
-共享 repository cache、Requirement 当前投影与不可变 archive、Issue init journal/worktree、Workspace
-runtime locks 以及 machine capacity leases。所有 finding 使用闭合状态
-`healthy | repairable | blocked | data_loss_risk`，只输出相对 evidence path 和一个明确下一步；remote、
-host、PID、owner token、model/context credential 不进入终端或 JSON。
-
-修复不是通用 `--fix`。只有最新诊断明确给出的 typed action 才能执行：registry path 必须由 owner
-提供精确绝对路径；cache rebuild 在任何已登记或 Git-admin linked worktree 存在时拒绝；Requirement
-projection 只能从 archive audit 为 `healthy` 的当前不可变 revision 重建；Issue repair 复用严格 journal
-和 pinned base，遇到 dirty/unpushed/conflicting target 即停止；capacity lease 只清理同机、已超时且进程
-可证明死亡的精确 lease。registry/cache/Requirement/Issue 使用各自 write-ahead journal，重复或中断后
-重跑向同一健康结果收敛，同时绝不写 immutable revisions、Issue completion evidence 或 remote identity。
 
 ### BC5 · 演化
 
@@ -407,7 +277,7 @@ projection 只能从 archive audit 为 `healthy` 的当前不可变 revision 重
 
 #### Supervisor Live Board
 
-`roll supervisor live` 是当前已交付的 CLI-first 多角色 board：读取事件流生成 Supervisor pane 与 Designer / Builder / Evaluator role panes。默认模式输出一帧快照；`roll supervisor live --watch` 在交互式终端中原地重绘同一 view model，不追加重复帧，也不写任何 loop/backlog/release/evidence 状态。未来浏览器/TUI 面应复用同一 view model，并遵守以下边界：
+`roll supervisor live` 是当前已交付的 CLI-first 多角色 board：读取事件流生成 Supervisor pane 与 Designer / Builder / Evaluator role panes，并从共同 DeliveryRun 读模型呈现普通 Cycle、host Delta、Full Delta、Skill dispatch 的工作区预留/生命周期、Delta 状态、合并事实、证据事实和具体恢复原因。它向共同 adapter 注入当前时钟与只读 worktree audit 成员检查；只有已确认合并、已验收且每个成员均已注册/非活动/HEAD 匹配/干净的**尚未释放**运行，才能显示 `delivered_safe_to_release`。`handoff_ready` 明确不等于已交付；缺失或旧协议事实显示 unknown，绝不补造成功。默认模式输出一帧快照；`roll supervisor live --watch` 在交互式终端中原地重绘同一 view model，不追加重复帧，也不写任何 loop/backlog/release/evidence 状态。未来浏览器/TUI 面应复用同一 view model，并遵守以下边界：
 
 - **依赖方向**：浏览器可观测只读消费 `spec` 事件 schema 与 `core` 读侧选择器；loop 不依赖浏览器进程。
 - **只读隔离**：观察面不得写入 loop 状态，不得影响 Story delivery 的 TCR、CI、merge 或 attest 闸。
@@ -500,17 +370,83 @@ Backlog-clearing 模式下，Supervisor 的默认 scope 是所有 live 且非 Ho
 
 这套 runbook 是 `roll supervisor next/why/live` 的产品标准：CLI 输出应能解释当前卡、当前 cast、为什么继续、为什么停止，以及下一步需要谁做什么。
 
-#### 分支/worktree canary 与安全恢复 / Branch-worktree canary & safe recovery (FIX-1273)
+#### 受管 WorkspaceSet canary 与安全恢复 / Managed WorkspaceSet canary & safe recovery (FIX-1273)
 
-The branch/worktree leak canary (US-LOOP-096) counts every ephemeral branch + every dir under `.roll/loop/worktrees` and PAUSEs the loop over threshold (`ROLL_BRANCH_CANARY_MAX`, default 8). It counts inactive worktrees deliberately preserved for unpublished commits or dirty recovery too — so historical pressure can pause the loop even when nothing is genuinely leaking.
+The workspace leak canary (US-LOOP-096) reads the same projection-backed audit
+model as release: it counts anomalous managed WorkspaceSet members once each and
+reports healthy retained capacity separately. It PAUSEs the loop over
+`ROLL_BRANCH_CANARY_MAX` (default 8), but an unavailable inspection is fail-loud
+rather than a guessed zero. External/manual directories and a `.submodules`
+container are never silently promoted into a managed member merely by their path.
 
-- 触发即枚举 / Auditable trip：canary 触发时,PAUSE marker、ALERT 与 `branch_canary_tripped` 事件枚举出被计数的**每一条** ephemeral branch 与 loop worktree,并附上各 worktree 的审计处置 (disposition),而不是一个裸数字。
-- 唯一权威是审计 / Audit is the sole authority：`roll worktree cleanup` 从 `roll worktree audit` 派生动作,**只**移除审计判定为 inactive + merged + clean 的 `disposable_candidate`。Git 已不注册但仍存在于 `.roll/loop/worktrees/` 的直属孤儿目录也必须继续计入并显示；只有 cycle 已交付、无 active lock/heartbeat、无 `.git` 或 common-dir linked-worktree metadata，且内容为空或仅含明确受信的 `.next` 生成残留时，才产生带 material fingerprint 的 `orphan_reclaimable`。源码样文件、未发布材料、符号链接、外部 Git 所有权或任一无法确认的检查都落为 `preserved_orphan`。它绝不因为 worktree "旧" 或 "被计数" 就删除,也绝不把 canary 计数翻译成批量删除。
-- 先演练后执行 / Dry-run first：`roll worktree cleanup --dry-run`(默认)打印被计数的 refs/dirs、审计处置、以及把总数拉回阈值以下所需的**最小**候选集;它绝不改动 git 状态。
-- 应用即复核 / Apply revalidates：`roll worktree cleanup --apply` 在**每一次**移除前立刻重跑审计。已注册 worktree 要求 path + head + inactive + no-tracked-dirt + merged-ancestry + `disposable_candidate` 全部一致；孤儿目录要求同一 exact path 的 reclaimable disposition 与 material fingerprint 都和计划一致，并在 bounded-rm 前再次检查。changed head / 新脏 / 指纹变化 / linked metadata 出现 / 缺失 path / 并发激活一律 fail-closed(发 `worktree_cleanup_refused`),绝不改删其它 preserved worktree 作替补。
-- 恢复要显式 / Explicit resume：成功清理后,unpublished / dirty / active / external worktree 依旧保留在 canary 账上;操作者确认压力已清除后,显式执行 `roll loop resume` 让 loop 重新派卡。
+- 触发即枚举 / Auditable trip：canary 触发时，PAUSE marker、ALERT 与 `branch_canary_tripped` 事件枚举被计数的**每一个**受管 WorkspaceSet member 及其审计处置 (disposition)，而不是一个裸数字。
+- 唯一权威是集合审计 / WorkspaceSet audit is the sole authority：`roll worktree cleanup` 只从 fresh audit 派生动作，且只处理全体相关 members 都是 `safe_to_release` 的 WorkspaceSet。selector 必须证明 confirmed merge、accepted attest、inactive、clean、registered 与 expected HEAD；一个成员 unknown、stale、dirty、external 或 refused 就保留整个 Story reservation。
+- 先演练后执行 / Dry-run first：`roll worktree cleanup --dry-run`（默认）只打印 audit disposition、阻塞原因与可由操作者审阅的 release 计划；它绝不改动 Git 状态，也不把 canary 计数翻译为批量删除。
+- 应用即复核 / Apply revalidates：`roll worktree cleanup --apply` 是操作者显式请求的 release 操作；它在**每一个** member 删除前重跑 all-member audit，并以冻结的 expected HEAD compare-and-revalidate。任一 changed head、新脏、缺失注册、并发激活或未知状态都 fail-closed（`worktree_cleanup_refused`）：不删除该集合中的任何替补成员，不自动销毁 checkout。
+- 恢复要显式 / Explicit resume：清理拒绝或完成后，外部、脏、active、unknown 与 retained workspace 仍保留在 board/canary 账上；操作者确认压力已清除后，显式执行 `roll loop resume` 让 loop 重新派卡。
 
-Preserved（unpublished / dirty / active / external / ambiguous orphan）worktree 永远不会被 cleanup 移除;`--reclaim-orphan` 也不构成 review-only 或 trust-all 绕过，只接受与 `--apply` 相同的完整新鲜证明。它们仍计入 canary,是 Truth preflight 里 “preserved worktree” 这一停摆信号的一部分。
+`handoff_ready` 不是 Delivered/Done，也不是 cleanup trigger。没有 confirmed merge、accepted attest 和全体 relevant members 的 `safe_to_release` 证明，Roll 不会自动进行破坏性清理。
+
+#### 受管主 worktree 分配 / Managed primary-worktree allocation (US-LOOP-124)
+
+循环先以 Story ID 原子获取跨运行形态共享的 reservation，随后才在
+`.roll/loop/worktrees/cycle-<id>` 创建 detached checkout。发布目标是
+`refs/heads/loop/cycle-<id>`，不是本地 delivery branch。已有目标路径、无法验证的
+base HEAD、或 reservation 冲突都会输出 `recovery_required` 并保留现场；allocator 不会
+prune、force-remove、递归删除目标，也不会回退到 main checkout、`.worktrees/*` 或 `../wt-*`。
+
+在首个 Git effect 前先写入同一 operation 的 `worktree:recovery_required` allocating marker；
+`worktree:allocated` 仍只在 `.roll` link、skills、依赖与 prebuild bootstrap 全部完成后写入。
+任一 bootstrap 或事件写入失败，已创建的 Git worktree 与 reservation 都保留为可审计的
+`git_created_*` 恢复状态。恢复必须按同一 run/operation identity 检查**每个** workspace member
+的 Git 注册、repository identity 与 HEAD，并重新完成 bootstrap；event-present/Git-missing、
+缺失 submodule member 以及不匹配的现有目标都会阻塞，不得通过重建或删除来“修复”歧义。死 PID
+也不等于可重领：只要 lifecycle 仍是 allocated、recovery-required 或 release-requested，Story
+reservation 必须继续保留。
+
+#### Skill 并行 dispatch / Parallel Skill dispatch (US-LOOP-127)
+
+Skill 的并行 Action 是同一 `skill_dispatch` 父 DeliveryRun 的 detached child checkout，不是
+同一 Story 的独立 delivery。父 run 在任何 child checkout 分配前原子持有 Story reservation；
+每个 child 都从父 run 派生稳定 action ID、canonical-root-relative locator，以及已排序、成对
+互不重叠的 repository-relative file scope。重复 action ID、缺失/未知 scope、scope 重叠、无效
+parent reservation、已有目标或任何 root 外目标都会 fail-loud；不创建外部 `.worktrees/*`、`../wt-*`
+或 main checkout fallback。
+
+Child 只交回 commit 和 artifact inputs。PR、attest、Story closure 与 reservation release 全部由
+parent integration 执行；child 没有 merge/release authority。活跃 Skill contract 只可请求 allocator-backed
+parent/child dispatch，不可自行命名或创建 Git worktree。
+
+分配失败后的重试必须重复 `roll worktree dispatch allocate` 的同一 Story ID、dispatch run ID 和
+action contract；该命令只会采纳同一 `runId:allocate` recovery marker、逐一重新检查 Git identity，
+再补完 `.roll` link、skills、依赖及可选 prebuild bootstrap。它不会释放自己的 lease 后重新分配。
+父级集成必须调用 `roll worktree dispatch integrate <story-id> <dispatch-run-id> <action-id> <commit>`；
+命令在 cherry-pick 前验证该 commit 是对应 child checkout 的后代，并拒绝任何不在 child
+`declaredFileScope` 内的实际变更。若 Git 删除已完成但 lifecycle event 或 lease 写入失败，父控制面可
+用 `roll worktree dispatch release <story-id> <dispatch-run-id>` 重试：它只补写与 allocation operation
+配对的 release completion，绝不把“路径已不存在”当作无证据的 release。
+
+Release 也使用独立 operation ID：terminal writer 先 fresh-inspect 每个 member，证明 merged
+delivery + accepted attest，随后写入 `worktree:release_requested` 并冻结每个 member 的 expected
+HEAD。每次 retry 都使用这份 durable HEAD（绝不采用 retry 时新观察到的 HEAD），并仅在
+US-LOOP-123 的 merged + accepted-attest + inactive + clean selector 判为 `safe_to_release` 后，
+逐 member 执行非-force compare-and-revalidate 删除。若 Git 删除成功而 `released` 事件遗漏，
+retry 可跳过已证明缺失的 member、继续其余 member；只有全部 member 均已删除时才补写
+`worktree:released`。任一未知、变化或拒绝都会保留 checkout 和 Story reservation。
+
+#### 旧工作区迁移与恢复边界 / Legacy workspace migration and recovery
+
+`<project>/.roll/loop/worktrees/` 是唯一的 Roll-owned 创建根；`.worktrees/*`、`../wt-*`
+和其他项目外 checkout 都是 external/manual，不因名称相似而获得 DeliveryRun 身份。它们可以在
+audit 和 Supervisor board 中被看见，但不会被自动 adopt、move、reuse 或 cleanup。历史 Delta
+没有 workspace 字段时保留 legacy-protocol-only 读法，显示 unknown 而不是补造 WorkspaceSet。
+
+已有 workspace key、stale reservation、未注册 member 或 event/Git 不一致都进入
+`recovery_required`：保留现场和 Story reservation，读取 `roll worktree audit` 与
+`roll supervisor live` 的具体原因，按 owner 明确确认的恢复路径处理。`roll worktree cleanup`
+只能处理 fresh all-member audit 证明为 `safe_to_release` 的集合；这要求 confirmed merge、accepted
+attest、inactive、expected HEAD 和干净状态。`handoff_ready`、外部、脏、stale、unknown 或任一
+member 被拒绝时绝不成为自动候选。
 
 #### Retired terms and breaking boundary
 
@@ -552,6 +488,11 @@ Roll 有两种有名字的交付拓扑，二者不同，且都不同于健康修
 - **Host-guided 成本不可观测（`? (host_unobservable)`）。** 绝不估算、定价或写零；
   host-guided 委派不写 `runs.jsonl` usage 行、不派生每角色/总成本。
 
+历史恢复边界 / Legacy recovery boundary：若旧委派已经明确 `owner_hold`，但仍在保留的
+交付预留曾被错误改名给后继，owner 才可使用 `roll delta recover-held`。它要求重复旧委派 id
+作为明确确认，只追加恢复授权事实、不改写历史，也仍要由该同名后继走普通 continuation pickup。
+它不是通用释放、强占或借用预留入口。
+
 委派总有 Supervisor / Every delegation has a Supervisor：loop 是宿主会话内的 cycle
 连续链，与任何交付一样拥有主会话与完整 sub-agent 能力。trigger 轴只有一个取值，
 不存在准入禁令——solo / Delta Team / Full Delta Team 三种拓扑对 loop 一律可用。Host-guided
@@ -562,51 +503,61 @@ daemon 或新状态存储；`events.ndjson` 里的 `delta:*` 事件是 Delegatio
 ### 上下文协作
 
 ```
-Machine registry ──workspaceId/path/lifecycle──► Workspace Coordination
-                                                   │
-                       requirement/repo bindings    │ scoped target
-                                                   ▼
-Owner intent ──► Planning ──Story/Issue contract──► Execution
-                     ▲                                 │
-                     │ derived projection              ├── per-attempt evidence ─► Evidence
-                     │                                 ├── usage facts ─────────► Economics
-                     │                                 └── repo facts ──────────► Delivery
-                     │                                                            │
-                     │                   provider/main merge facts + exact-SHA     │
-                     │                   Integration Acceptance                    ▼
-                     └──────────────── Truth & Consistency ◄───────────────────────┘
-                                          │                 │
-                                          ▼                 ▼
-                                    Presentation          Release
-                               CLI / Charter / site    gate / tag / ship
-
-Browser Operations ──typed operation/capture facts──► Truth & Consistency / Evidence
+人（写故事 / 定策略）
+    │                          ┌──────────────┐
+    ▼                          │ BC6 策略      │
+┌──────────┐   Backlog         │ 规则          │
+│ BC1      │◄──────────────────│               │
+│ 意图管理  │                    └──┬───┬───────┘
+└────┬─────┘                      │   │
+     │ Todo                       ▼   ▼
+     ▼                      ┌──────────────────┐
+┌──────────┐  Route 请求     │ BC2 编排          │
+│ BC3 路由  │◄───────────────│ pick→TCR→PR→对账 │──cycle:*/heartbeat──┐
+└──────────┘──route:resolve─►│                  │                     │
+                             └──┬───┬───────────┘                     │
+                                │   │ git/PR                          ▼
+                          cost  │   ▼                    ┌──────────────────┐
+                                ▼  ┌──────────────────┐  │ BC4 交付          │
+                           ┌──────────┐               │  │ PR → CI → merge  │
+                           │ BC8 成本  │               │  └──────┬───────────┘
+                           │ 记录 + 闸 │               │         │ merged
+                           └──────────┘               │         ▼
+                                                      │     main (真相)
+                                                      │         │
+  全部事件 append ────────────────────────────────────────────► ┌──────────────────┐
+                                                                │ BC7 可观测        │
+  ALERT ← loop 写 ← alert loop 推 → 人                           │ 事件流 (唯一源)   │
+                                                                │ → BC5 + UI       │
+                                                                └──────────────────┘
 ```
 
-**协作模式**：Workspace Coordination 向 Planning/Execution 发布稳定 identity 与 binding；
-Planning 是愿望，Issue events、provider facts、required repository main 与 exact-SHA acceptance
-才进入交付真相链。策略被下游遵从（Conformist）、typed manifest/event 是 Published Language、
-对账层过滤假交付（Anti-Corruption）。loops coordinate via shared artifacts——多 loop 独立、
-event-driven，互不直接调用；machine cache 只是可重建基础设施，不进入 truth fold。
+**协作模式**：策略被下游遵从（Conformist）、Backlog 和 git/PR 是共享真相（Shared Kernel）、路由结果写事件（Customer/Supplier）、对账层过滤假交付（Anti-Corruption）、事件追加（Published Language）。loops coordinate via shared artifacts——多 loop 独立、event-driven，互不直接调用。
 
 ## 行为合同
 
-以下 12 条不变量定义了系统的可靠性边界。每条必须可测试（与 [specs/harness-principles](specs/harness-principles.md) 的 C1–C12 一一对应，那里有每条的 FIX 证据）。
+以下 12 条不变量定义了系统的可靠性边界。不变量散文的唯一作者源是
+[`policy/rules.yaml`](../policy/rules.yaml) 的 v2 `projection` 字段；下表由
+`scripts/gen-rule-projections.mjs` 生成（`--check` 为 CI 闸），禁止手改。
+每条必须可测试（验证锚点见注册表的 `verification` 声明）。
 
+<!-- ROLL-INVARIANTS:architecture:start -->
+<!-- GENERATED by scripts/gen-rule-projections.mjs; DO NOT EDIT. -->
 | # | 不变量 |
 |---|--------|
 | I1 | 在跑 Cycle 每 ≤60s 写心跳。超 watchdog 阈值必回收并落终态。进程活性 ⟂ 业务健康。 |
 | I2 | 任意时刻进程被 SIGKILL，下次重入检测孤儿态并安全接管。不依赖优雅退出。 |
-| I3 | 同一 Issue 的每个 repository target 至多一个 governed open PR；一个多仓 Story 可以有多个独立 PR，开 PR 前按 repo target 去重。 |
-| I4 | Backlog 是愿望；required repository 的 provider/main merge facts 与 exact-SHA Integration Acceptance 是 Story 完成真相。对账会修正过早 Done。退出码 0、单仓 CI 绿或单个 PR merge 都不等于统一交付。 |
+| I3 | 同一 Story 至多一个 open PR。开 PR 前先查去重。 |
+| I4 | Backlog 是愿望，main 是真相。每 Cycle 末对账——标了完成但未合并的自动退回。退出码 0 ≠ 已交付，CI 绿 ≠ 已交付。 |
 | I5 | 一个坏 Story 不冻结其他工作。连败 N 次 → 永久暂缓。不靠手动干预无限重试。 |
 | I6 | 连续失败 → 暂停 + 告警 + 通知，人决策。不自动跨 agent fallback。 |
-| I7 | Workspace ID 是身份，registry path 是可更新位置。Workspace runtime/Issue state 按 ID 隔离；只有显式 machine broker/cache 允许跨 Workspace 共享，并且 cache 不进入交付真相。 |
+| I7 | 路径即身份。所有运行态数据放在 `<project>/.roll/loop/`。不同项目并行互不污染，无共享可变状态。 |
 | I8 | 状态从不可变事件流重建，无独立缓存。追加原子（tmp→rename）。退出无条件写终态。 |
 | I9 | 多写并发用乐观锁。标记 Story 精确匹配，不用子串。 |
 | I10 | 按可预测规则路由（任务层级/类型）。spawn 前秒级探活。同输入路由恒定。 |
 | I11 | 每 Cycle 记录 `(agent, model, token, cost, 回退次数, 有效成本)`。逼近预算上限 → 降级或暂停并通知。有效成本含回退。 |
-| I12 | 一 Cycle 一个 Story/Issue，可包含多个独立 repo execution leg；每条可写 leg 都执行 TCR green-or-revert。0 个 TCR 提交且无合法 no-change 证明 → 判定失败并告警。 |
+| I12 | 一 Cycle 一个 Story，全新上下文，TCR 每步 green-or-revert。0 个 TCR 提交 → 判定失败并告警。 |
+<!-- ROLL-INVARIANTS:architecture:end -->
 
 ## 事实来源(US-TRUTH 系列)
 
@@ -693,3 +644,45 @@ shadow audit     queryStoryDelivery()      claim vs truth drift → .roll/report
 ```
 
 `roll release consistency` 的 `truth-live` 维度是该契约的 CI/发版闸：它先运行 `ensureDeliveriesFresh()`，再用 `queryStoryDelivery()` 断言发布增量里的故事确实由结构化投影证明为 `done`，并校验 Done 行上的 PR ref 与投影一致。
+
+## US-CYCLE-013 — durable build/tail handoff（事件族 + 项目级准入互斥）
+
+`ROLL_CYCLE_HANDOFF_V1=1`（默认关闭）下，一次绿色、已提交的构建会追加一个**持久、
+可恢复的交接点**，而不是在同一趟运行里烧掉评审/测试/发布尾巴。事件族
+`cycle-handoff/v1`（`cycle:admitted` → `cycle:builder_ready` → `cycle:builder_handoff`
+→ `cycle:tail_started/completed/cancelled` → `cycle:serial_recovery` →
+`cycle:cleanup_started/completed`、`cycle:queued/queue_rejected`、
+`cycle:main_freshness`、`cycle:rebased_attempt_planned/validated`）继续写进唯一的
+`events.ndjson`；**不新建事件文件**。
+
+- **唯一真相仍是事件流（扩展 I8）**：容量图、队列、租约处置全部由纯投影
+  （`projectCycleHandoff` / `projectHandoffCapacity`）从事件流重建；没有 status 文件、
+  内存 promise、目录扫描或 backlog 修改可以授予容量。读取侧对新旧形状永远可解析；
+  旧版本 runner 见到 v1 事件对受影响的 cycle 报 `upgrade_required` 并拒绝运行/恢复，
+  绝不当作串行副本重跑。
+- **项目级准入互斥**：`<project>/.roll/loop/handoff.lock`（与 per-run `inner.lock` 区分，
+  陈旧阈值 14_400s 对齐 `INNER_LOCK_STALE_SEC`）。临界区 = 读+校验事件投影 → 选 FIFO
+  队头 → **恰好追加一个**决策事件（`cycle:admitted` / `cycle:builder_handoff` /
+  `cycle:queued`）→ **fsync** → 解锁。append 是线性化点；锁拿不到则
+  `admission_unknown`（fail closed，不写任何决策）。同一 idempotency key + 相同 payload
+  是 no-op；同 key 不同 payload 是 `handoff:conflict`（阻断该 cycle）。
+- **容量不变量**：最多一个等待/评审/发布 tail + 恰好一个构建槽持有者（`building` 或
+  `builder complete — tail capacity full`）；第三个卡 FIFO 排队。ready 持有者在
+  `roll loop status` 里显示在队列上方，绝不在队列里。文件重叠准入是 US-CYCLE-010 的事，
+  本卡不做任何“互不相交可并行”的猜测。
+- **交接语义**：`cycle:builder_ready` 是持久、非终结的 Builder 完成事实（`cycle:end`
+  永远不是该转变的证据）；`cycle:builder_handoff` 是把该 ready 事实原子提升进唯一 tail
+  槽的独立事件；`cycle:cleanup_completed` 是唯一释放 workspace 与 story 交付租约的事实。
+- **未知永远退回串行**：`conflict` / `test_failed` / `unknown` / `timeout` 产生
+  `cycle:main_freshness` 相应 verdict，再在现行 fence 下 `cycle:tail_cancelled` +
+  `cycle:serial_recovery`；不发布、不合并、不自动删工作目录、不发明 merge。
+- **准入在执行层强制（无不变量变化）**：容量前置条件在调度互斥锁**内**再校验一遍——
+  `cycle:admitted` 在构建槽被占时拒写（`build_slot_full`），`cycle:builder_handoff` 在
+  tail 被占时拒写（`tail_occupied`）；run-once 没有持久 admission 就停止（写 `aborted`
+  终态 + runs 行并释放锁，绝不 spawn Builder），go worker 对 `queued` 判定跳过
+  runOnce 等待空槽，排队卡幂等（FIFO 位置稳定）。最新主干探测是**真实执行**的：
+  在临时校验工作树里 `merge-base --is-ancestor` + `rebase --onto` + 执行 allowlist 过滤后的
+  `deliverable_cmd`（与 attest 同一安全策略），`continue` 在真实 rebase head 上创建持久
+  不可变 pin `refs/roll/rebase-candidates/<cycle>/<attempt>` 并记录
+  `rebased_attempt_planned`（carry 真实 candidateHead）；`roll loop status` 在事件流含
+  v1 事实时渲染 HANDOFF 节（字面状态、ready 持有者在队列上方、队列行带 seq/原因/下一步）。

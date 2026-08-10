@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders the shared browser-operations truth surface for supervisor and dossier views.
+ */
+/**
  * US-BROW-009b — shared rendering surface that consumes {@link BrowserOperationsTruth}
  * from the truth adapter (US-BROW-009a). Both `roll supervisor next` and
  * `roll doctor --tools` render browser readiness through this module so there

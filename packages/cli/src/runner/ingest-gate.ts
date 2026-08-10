@@ -1,4 +1,7 @@
 /**
+ * @responsibility Applies the shift-left ingest soft gate.
+ */
+/**
  * US-EVID-022 — SHIFT-LEFT ingest soft gate.
  *
  * A card with an AC block but no declared capture surface (and no exemption)

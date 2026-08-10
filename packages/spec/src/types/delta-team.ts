@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the shared Delta Team type vocabulary.
+ */
+/**
  * US-DELTA-001 — Shared Delta Team types: orthogonal trigger, topology, quality
  * profile, and the derived visible-mode projection.
  *
@@ -122,7 +125,8 @@ export type DeltaRole = (typeof DELTA_ROLES)[number];
 
 // ── Model resolution (host-neutral contract) ─────────────────────────────────
 
-export type ResolutionSource = "user-pin" | "preset-preference" | "availability-fallback";
+export const RESOLUTION_SOURCES = ["user-pin", "preset-preference", "availability-fallback"] as const;
+export type ResolutionSource = (typeof RESOLUTION_SOURCES)[number];
 
 /** Opaque host model descriptor — Roll never queries a host. */
 export interface HostModelDescriptor {
@@ -195,6 +199,25 @@ export interface DeltaArtifactManifest {
   readonly delegationId: string;
   readonly storyId: string;
   readonly cycleId?: string;
+  /**
+   * US-LOOP-126: newly prepared host Delta frames are bound to the delivery
+   * run and one registered member.  They are optional only because v2 was
+   * already persisted before the managed-workspace cutover; readers must not
+   * reinterpret those historical records.
+   */
+  readonly runId?: string;
+  readonly workspaceMember?: {
+    readonly workspaceKey: string;
+    readonly relativeLocator: string;
+    readonly checkoutRef: { readonly kind: "detached"; readonly head: string };
+    readonly publishRef?: string;
+    /**
+     * Host-attested canonical Builder cwd for a post-cutover managed run.
+     * It is deliberately an assertion, not an OS execution proof; validation
+     * resolves it afresh against the registered managed member.
+     */
+    readonly executionCwd?: string;
+  };
   readonly role: DeltaRole;
   /** Read contract over a persisted v2 artifact — may be a historical value. */
   readonly trigger: DelegationTrigger | HistoricalDelegationTrigger;
@@ -265,3 +288,114 @@ export function isKnownHistoricalBlockReason(value: unknown): boolean {
 export type DeltaTerminalOutcome = "handoff_ready" | "blocked" | "abandoned";
 export type TerminalBinding = "cycle_adoption" | "manual_host_bridge" | "handoff_only";
 export type DeliveryDisposition = "owner_continue" | "owner_hold" | "owner_redelegate";
+
+// ── US-DELTA-012 — attempt outcome and availability observations ───────────
+
+/**
+ * Closed, descriptive causes for a Delta delivery attempt.  These facts explain
+ * an observed protocol outcome; they are never a routing rule or a judgement
+ * about a provider.
+ */
+export const ATTEMPT_CAUSES = [
+  "implementation_gap",
+  "evaluator_finding",
+  "artifact_protocol",
+  "identity_or_routing",
+  "ci_or_test_flake",
+  "external_liveness",
+  "owner_scope_change",
+  "unknown",
+] as const;
+export type AttemptCause = (typeof ATTEMPT_CAUSES)[number];
+
+/** How the availability fact reached Roll; this is not a model invocation claim. */
+export const ROLE_AVAILABILITY_TRANSPORT_CLASSES = [
+  "host-resolution",
+  "host-probe",
+  "roll-adapter",
+  "unknown",
+] as const;
+export type RoleAvailabilityTransportClass = (typeof ROLE_AVAILABILITY_TRANSPORT_CLASSES)[number];
+
+/** A bounded observation outcome. `not_measured` is deliberately distinct from failure. */
+export type RoleAvailabilityProbeOutcome = "passed" | "failed" | "not_measured";
+
+/**
+ * FIX-1502 — provenance of a run that picked up a redelegated reservation via
+ * `roll delta prepare --continuation-run <name>`.  The named successor only
+ * verifies the pickup; the new run always carries a fresh standard identity.
+ */
+export interface DeltaContinuationProvenance {
+  /** Delegation whose owner recorded the `owner_redelegate` terminal. */
+  fromDelegationId: string;
+  /** Run of that redelegating delegation. */
+  fromRunId: string;
+  /** Named successor the reservation was transferred to. */
+  continuationRunId: string;
+}
+
+// ── US-DELTA-017 — machine-local rig readiness diagnostics ─────────────────
+
+/** Immutable readiness observation file schema. This is not Delta lifecycle state. */
+export const RIG_READINESS_SNAPSHOT_SCHEMA = "roll-delta-rig-readiness/v1" as const;
+/** Mutable pointer schema for the latest complete readiness observation. */
+export const RIG_READINESS_LATEST_SCHEMA = "roll-delta-rig-readiness-latest/v1" as const;
+/** Versioned, machine-local configured-model to adapter mapping schema. */
+export const RIG_ADAPTERS_SCHEMA = "roll-delta-rig-adapters/v1" as const;
+
+export const RIG_PROBE_REASON_CODES = [
+  "probe_passed", "adapter_missing", "adapter_model_selection_unsupported",
+  "auth_required", "quota_exhausted", "rate_limited", "network_unreachable",
+  "model_rejected", "probe_timeout", "probe_failed", "probe_output_unverified",
+  "cache_missing", "cache_stale", "cache_incompatible",
+] as const;
+export type RigProbeReasonCode = (typeof RIG_PROBE_REASON_CODES)[number];
+
+export interface RigAdapterMapping {
+  /** Exact configured key; it is never trimmed, parsed, or otherwise normalized. */
+  readonly configuredModelId: string;
+  readonly adapter: string;
+  /** Opaque CLI model selection value. */
+  readonly cliModelId: string;
+}
+
+export interface RigReadinessCandidate {
+  readonly adapter: string;
+  readonly configuredModelId: string;
+  readonly cliModelId: string;
+  readonly roles: readonly string[];
+  readonly presetIds: readonly string[];
+}
+
+export interface RigProbeObservation {
+  readonly adapter: string;
+  readonly configuredModelId: string;
+  readonly cliModelId: string;
+  readonly outcome: "ready" | "blocked" | "unknown";
+  readonly reasonCode: RigProbeReasonCode;
+  readonly detail: string;
+  readonly latencyMs?: number;
+}
+
+export interface RigReadinessSnapshot {
+  readonly schema: typeof RIG_READINESS_SNAPSHOT_SCHEMA;
+  readonly refreshId: string;
+  readonly candidateFingerprint: string;
+  /** Authoritative freshness timestamp. */
+  readonly observedAt: string;
+  readonly observations: readonly RigProbeObservation[];
+}
+
+export interface RigReadinessLatest {
+  readonly schema: typeof RIG_READINESS_LATEST_SCHEMA;
+  readonly refreshId: string;
+  readonly candidateFingerprint: string;
+  /** Pointer publication metadata; never use this to calculate freshness. */
+  readonly publishedAt: string;
+}
+
+export interface RigReadinessLimits {
+  readonly probeTimeoutMs: number;
+  readonly maxConcurrency: number;
+  readonly freshnessTtlMs: number;
+}

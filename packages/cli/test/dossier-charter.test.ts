@@ -14,7 +14,7 @@
  * Plus the pure collectors over injected deps (deterministic, offline).
  */
 import { describe, expect, it } from "vitest";
-import { serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
+import { GENERATED_INVARIANTS, serializeTruthSnapshot, type TruthSnapshot } from "@roll/spec";
 import { renderTruthConsole } from "../src/lib/truth-console.js";
 import { collectCharter, type CharterDeps, type CharterVM } from "../src/lib/page-charter.js";
 import { collectAbout, renderAboutPage } from "../src/lib/page-about.js";
@@ -112,6 +112,18 @@ describe("collectAbout — US-DOSSIER-041 (pure, structured charter)", () => {
     // invariants — exactly 12, I1..I12
     expect(vm.invariants).toHaveLength(12);
     expect(vm.invariants.map((iv) => iv.n)).toEqual(["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10", "I11", "I12"]);
+  });
+
+  it("US-RULE-013: the Invariants section consumes the generated typed data (no local ROLL_INVARIANTS copy)", () => {
+    const vm = collectAbout({ docExists: () => true });
+    expect(vm.invariants[0]).toEqual({
+      n: "I1",
+      t: { en: GENERATED_INVARIANTS[0]!.projection.about.en, zh: GENERATED_INVARIANTS[0]!.projection.about.zh },
+    });
+    expect(vm.invariants[11]).toEqual({
+      n: "I12",
+      t: { en: GENERATED_INVARIANTS[11]!.projection.about.en, zh: GENERATED_INVARIANTS[11]!.projection.about.zh },
+    });
   });
 
   it("AC2: records whether the source docs (manifesto/architecture) are present, to cite them honestly", () => {
@@ -311,8 +323,10 @@ describe("About machine page — US-DOSSIER-041 (structured charter)", () => {
     for (let i = 1; i <= 12; i++) {
       expect(html).toContain(`>I${i}<`);
     }
-    expect(html).toContain("Heartbeat ≤60s");
-    expect(html).toContain("一周期一故事");
+    // US-RULE-013 — the About Invariants section renders the registry
+    // projection sentences (I1 about.en, I12 about.zh), not the old short copy.
+    expect(html).toContain("heartbeat at least every 60s");
+    expect(html).toContain("0 个 TCR 提交");
   });
 
   it("AC2: cites the source docs when present; degrades gracefully when absent", () => {

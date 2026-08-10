@@ -10,7 +10,7 @@ cd roll
 ./install.sh
 ```
 
-`install.sh` builds the workspace and symlinks the TS launcher (`packages/cli/bin/roll.js`) into `~/.local/bin/roll`, so a rebuild (`pnpm -r build`) and `skills/` edits take effect immediately for any project on the same machine.
+`install.sh` builds the workspace and symlinks the TS launcher (`packages/cli/bin/roll.js`) into `~/.local/bin/roll`, so a rebuild (`pnpm -r build`) and `skills/` edits take effect immediately for any project on the same machine. After changing CLI source, run `pnpm -r build` before using that local command; it will stop rather than quietly use an older build.
 
 ## Tests
 

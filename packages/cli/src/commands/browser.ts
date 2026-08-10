@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll browser` setup, doctor, and update subcommands for managed browser operations.
+ */
+/**
  * US-BROW-003 — `roll browser setup` / `roll browser doctor`.
  * US-BROW-010 — `roll browser update` — check and approve DevTools transport updates.
  *

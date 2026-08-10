@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the terminal event schema.
+ */
+/**
  * US-TRUTH-001 — the Terminal Event schema (versioned, complete-or-reasoned).
  *
  * The cycle's old terminal records (cycle:end + runs row) mixed
@@ -71,9 +74,6 @@ export const TERMINAL_OUTCOMES = [
   // from `gave_up` (agent ran, 0 output, nothing to preserve) and from
   // `idle_no_work` (no agent ran at all, no dirt).
   "handoff_without_tcr",
-  // US-WS-017b — machine capacity was unavailable. No agent process started;
-  // the Story remains eligible for a later scheduler tick.
-  "waiting_capacity",
   "unknown",
 ] as const;
 export type TerminalOutcome = (typeof TERMINAL_OUTCOMES)[number];

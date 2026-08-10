@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides the one command-surface truth source for the CLI.
+ */
+/**
  * REFACTOR-056 — the ONE command-surface truth source.
  *
  * Roll's public CLI is a short list of product nouns and actions. A command is
@@ -23,7 +26,7 @@ export type CommandAudience = "human" | "internal" | "hidden";
 export type CommandDisposition = "public" | "nested" | "internal" | "remove";
 
 /**
- * The eighteen approved public top-level commands. Every decision's `owner` is
+ * The sixteen approved public top-level commands. Every decision's `owner` is
  * one of these — a nested/internal/removed surface names the public command it
  * belongs under; a public surface owns itself.
  */
@@ -31,7 +34,6 @@ export type CommandOwner =
   | "agent"
   | "backlog"
   | "config"
-  | "delivery"
   | "design"
   | "doctor"
   | "help"
@@ -44,14 +46,11 @@ export type CommandOwner =
   | "setup"
   | "status"
   | "test"
-  | "workspace"
   | "update";
 
 export interface CommandSurfaceDecision {
   /** The current command surface as a user types it today (e.g. `prices` or `loop monitor`). */
   readonly current: string;
-  /** Fixed parser aliases. They canonicalize to `current` and never appear as separate public commands. */
-  readonly aliases?: readonly string[];
   /** Where it should live (only meaningful for nested/internal moves); omitted for public commands that own themselves. */
   readonly target?: string;
   /** The public top-level command this surface belongs under. */
@@ -72,7 +71,6 @@ export const COMMAND_SURFACE: readonly CommandSurfaceDecision[] = [
   { current: "agent", owner: "agent", audience: "human", disposition: "public", rationale: "Agent Scope roles and installed-agent management." },
   { current: "backlog", owner: "backlog", audience: "human", disposition: "public", rationale: "The product noun for the work queue." },
   { current: "config", owner: "config", audience: "human", disposition: "public", rationale: "Project + tool configuration root." },
-  { current: "delivery", owner: "delivery", audience: "human", disposition: "public", rationale: "Inspect and reconcile Workspace Issue delivery facts without creating a second delivery entity." },
   { current: "design", owner: "design", audience: "human", disposition: "public", rationale: "Launches $roll-design; a core workflow verb." },
   { current: "doctor", owner: "doctor", audience: "human", disposition: "public", rationale: "Toolchain + install diagnosis root." },
   { current: "help", owner: "help", audience: "human", disposition: "public", rationale: "Built-in documentation and command usage." },
@@ -85,7 +83,6 @@ export const COMMAND_SURFACE: readonly CommandSurfaceDecision[] = [
   { current: "setup", owner: "setup", audience: "human", disposition: "public", rationale: "Project/tooling setup lifecycle root." },
   { current: "status", owner: "status", audience: "human", disposition: "public", rationale: "Project health snapshot." },
   { current: "test", owner: "test", audience: "human", disposition: "public", rationale: "Run the project's tests; a core workflow verb." },
-  { current: "workspace", aliases: ["ws"], owner: "workspace", audience: "human", disposition: "public", rationale: "Inspect and control explicitly targeted Workspace lifecycle state." },
   { current: "update", owner: "update", audience: "human", disposition: "public", rationale: "Upgrade the global roll." },
 
   // ── Nested: useful capabilities that move under their owning command ──
@@ -104,8 +101,6 @@ export const COMMAND_SURFACE: readonly CommandSurfaceDecision[] = [
   // ── Internal/machine: callable only while an external process boundary needs them; never advertised ──
   { current: "story", owner: "backlog", audience: "internal", disposition: "internal", rationale: "story new/validate are machine entry points under backlog." },
   { current: "attest", owner: "release", audience: "internal", disposition: "internal", rationale: "Acceptance attestation is a release-gate machine surface." },
-  { current: "capture", owner: "release", audience: "internal", disposition: "internal", rationale: "Capture policy and evidence repair are release-evidence machine surfaces." },
-  { current: "context", owner: "workspace", audience: "internal", disposition: "internal", rationale: "Execution-context reads remain directly callable for agents and operators without expanding the primary help surface." },
   { current: "truth", owner: "status", audience: "internal", disposition: "internal", rationale: "truth query/audit are internal snapshot surfaces." },
   { current: "supervisor", owner: "loop", audience: "internal", disposition: "internal", rationale: "Observations surface through status/next/loop; internals stay hidden." },
 
@@ -128,19 +123,11 @@ export const COMMAND_SURFACE: readonly CommandSurfaceDecision[] = [
  */
 export function validateCommandSurface(decisions: readonly CommandSurfaceDecision[]): void {
   const seen = new Set<string>();
-  const aliases = new Set<string>();
-  const canonicalNames = new Set(decisions.map((decision) => decision.current));
   for (const d of decisions) {
     if (seen.has(d.current)) {
       throw new Error(`command-surface: duplicate decision for '${d.current}'`);
     }
     seen.add(d.current);
-    for (const alias of d.aliases ?? []) {
-      if (canonicalNames.has(alias) || aliases.has(alias)) {
-        throw new Error(`command-surface: duplicate alias '${alias}'`);
-      }
-      aliases.add(alias);
-    }
     if (d.disposition === "public") {
       if (d.owner !== d.current) {
         throw new Error(`command-surface: public '${d.current}' must own itself (owner='${d.owner}')`);
@@ -174,195 +161,4 @@ export function publicCommands(): string[] {
 /** Look up a single decision by its current surface name. */
 export function commandDecision(current: string): CommandSurfaceDecision | undefined {
   return COMMAND_SURFACE.find((d) => d.current === current);
-}
-
-/** Canonicalize one exact top-level token without creating a second command surface. */
-export function canonicalTopLevelCommand(command: string): string {
-  return COMMAND_SURFACE.find((decision) => decision.aliases?.includes(command) === true)?.current ?? command;
-}
-
-/** One actual CLI leaf/subcommand registration. */
-export interface CliCommandOperationRegistration {
-  readonly command: string;
-  readonly operation: string;
-  readonly route: readonly string[];
-  readonly canonicalCommand: string;
-  /** One matcher-only argument shape that must resolve back to this registration. */
-  readonly exampleArgs: readonly string[];
-  readonly supportsWorkspaceSelector: boolean;
-  /** Root operation may consume positional operands instead of a nested route token. */
-  readonly acceptsPositionalArgs?: boolean;
-  /** Optional executable matcher for aliases or argument-shaped operations. */
-  readonly matchesArgs?: (args: readonly string[]) => boolean;
-}
-
-/** One current CLI leaf that already accepts the canonical Workspace selector. */
-export interface WorkspaceSelectorOperationDecision {
-  readonly id: string;
-  readonly operation: string;
-  readonly command: string;
-  readonly route: readonly string[];
-  readonly canonicalCommand: string;
-  readonly exampleArgs: readonly string[];
-  readonly acceptsWorkspaceSelector: true;
-}
-
-/** The one fixed selector alias map consumed by normalization, help and tests. */
-export const WORKSPACE_SELECTOR_ALIAS = {
-  canonical: "--workspace",
-  aliases: ["--ws"],
-} as const;
-
-export function isWorkspaceSelectorAlias(
-  token: string,
-): token is typeof WORKSPACE_SELECTOR_ALIAS.aliases[number] {
-  return WORKSPACE_SELECTOR_ALIAS.aliases.some((alias) => alias === token);
-}
-
-export function cliOperation(
-  command: string,
-  name: string,
-  route: readonly string[] = [],
-  selector = false,
-  exampleArgs?: readonly string[],
-  acceptsPositionalArgs = false,
-): CliCommandOperationRegistration {
-  return {
-    command,
-    operation: name,
-    route,
-    canonicalCommand: `roll ${command}${route.length === 0 ? "" : ` ${route.join(" ")}`}`,
-    exampleArgs: exampleArgs ?? (acceptsPositionalArgs ? ["operation-probe"] : [...route]),
-    supportsWorkspaceSelector: selector,
-    ...(acceptsPositionalArgs ? { acceptsPositionalArgs: true } : {}),
-  };
-}
-
-export function cliPositionalOperation(
-  command: string,
-  name: string,
-): CliCommandOperationRegistration {
-  return cliOperation(command, name, [], false, undefined, true);
-}
-
-export function cliMatchedOperation(
-  command: string,
-  name: string,
-  route: readonly string[],
-  exampleArgs: readonly string[],
-  matchesArgs: (args: readonly string[]) => boolean,
-): CliCommandOperationRegistration {
-  return { ...cliOperation(command, name, route, false, exampleArgs), matchesArgs };
-}
-
-export function cliMatchedSelectorOperation(
-  command: string,
-  name: string,
-  route: readonly string[],
-  exampleArgs: readonly string[],
-  matchesArgs: (args: readonly string[]) => boolean,
-): CliCommandOperationRegistration {
-  return { ...cliSelectorOperation(command, name, route, exampleArgs), matchesArgs };
-}
-
-export function cliSelectorOperation(command: string, name: string, route: readonly string[], exampleArgs: readonly string[]): CliCommandOperationRegistration {
-  return cliOperation(command, name, route, true, exampleArgs);
-}
-
-/**
- * Resolve the live operation registration before invoking a mixed-family
- * handler. Longest registered routes win. A root operation accepts only bare
- * or flag-led calls unless it explicitly declares positional operands.
- */
-export function cliOperationForArgs(
-  command: string,
-  args: readonly string[],
-  operations: readonly CliCommandOperationRegistration[],
-): CliCommandOperationRegistration | undefined {
-  const commandOperations = operations.filter((entry) => entry.command === command);
-  const first = args[0];
-  const matches = commandOperations.filter((entry) => {
-    if (entry.matchesArgs !== undefined) return entry.matchesArgs(args);
-    if (entry.route.length > 0) return entry.route.every((token, index) => args[index] === token);
-    return first === undefined || first === "--" || first.startsWith("-") || entry.acceptsPositionalArgs === true;
-  });
-  if (matches.length === 0) return undefined;
-  const longest = Math.max(...matches.map((entry) => entry.route.length));
-  const winners = matches.filter((entry) => entry.route.length === longest);
-  return winners.length === 1 ? winners[0] : undefined;
-}
-
-export function workspaceSelectorOperations(
-  operations: readonly CliCommandOperationRegistration[],
-): WorkspaceSelectorOperationDecision[] {
-  const decisions = operations
-  .filter((entry) => entry.supportsWorkspaceSelector)
-  .map((entry) => ({
-    id: `${entry.command}.${entry.operation}`,
-    operation: entry.operation,
-    command: entry.command,
-    route: entry.route,
-    canonicalCommand: entry.canonicalCommand,
-    exampleArgs: entry.exampleArgs,
-    acceptsWorkspaceSelector: true as const,
-  }));
-  validateWorkspaceSelectorOperations(decisions);
-  return decisions;
-}
-
-export function validateWorkspaceSelectorOperations(
-  operations: readonly WorkspaceSelectorOperationDecision[],
-): void {
-  const ids = new Set<string>();
-  const routes = new Set<string>();
-  for (const operation of operations) {
-    if (ids.has(operation.id)) throw new Error(`workspace-selector: duplicate id '${operation.id}'`);
-    ids.add(operation.id);
-    const route = `${operation.command}\0${operation.route.join("\0")}`;
-    if (routes.has(route)) throw new Error(`workspace-selector: duplicate route '${operation.canonicalCommand}'`);
-    routes.add(route);
-    if (operation.acceptsWorkspaceSelector !== true) {
-      throw new Error(`workspace-selector: '${operation.id}' must explicitly accept the selector`);
-    }
-    const canonicalCount = operation.exampleArgs.filter((arg) => arg === WORKSPACE_SELECTOR_ALIAS.canonical).length;
-    if (canonicalCount !== 1) {
-      throw new Error(`workspace-selector: '${operation.id}' example must contain one canonical selector`);
-    }
-    if (operation.exampleArgs.some(isWorkspaceSelectorAlias)) {
-      throw new Error(`workspace-selector: '${operation.id}' canonical example contains an alias`);
-    }
-  }
-}
-
-export interface AliasHelpDecision {
-  readonly canonicalCommand: string;
-  readonly commandAliases: readonly string[];
-  readonly workspaceSelectorAliases: readonly string[];
-}
-
-/** Project visible alias notes from the same registries that drive dispatch. */
-export function aliasHelpDecision(
-  command: string,
-  operations: readonly CliCommandOperationRegistration[],
-): AliasHelpDecision | undefined {
-  const commandAliases = commandDecision(command)?.aliases ?? [];
-  const acceptsWorkspaceSelector = operations.some((operation) =>
-    operation.command === command && operation.supportsWorkspaceSelector);
-  if (commandAliases.length === 0 && !acceptsWorkspaceSelector) return undefined;
-  return {
-    canonicalCommand: command,
-    commandAliases: [...commandAliases],
-    workspaceSelectorAliases: acceptsWorkspaceSelector ? [...WORKSPACE_SELECTOR_ALIAS.aliases] : [],
-  };
-}
-
-/** Resolve the leaf capability before its registered family handler dispatches. */
-export function workspaceSelectorOperation(
-  command: string,
-  args: readonly string[],
-  operations: readonly CliCommandOperationRegistration[],
-): WorkspaceSelectorOperationDecision | undefined {
-  const registration = cliOperationForArgs(command, args, operations);
-  if (registration?.supportsWorkspaceSelector !== true) return undefined;
-  return workspaceSelectorOperations([registration])[0];
 }

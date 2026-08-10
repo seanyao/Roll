@@ -1,4 +1,5 @@
 /**
+ * @responsibility Classifies capture artifacts and rejects evidence that cannot satisfy visual criteria.
  * US-BROW-006 — EvidenceClassifier: the single authority for distinguishing
  * Playwright diagnostics, DevTools diagnostics and physical-capture evidence.
  *

@@ -1479,9 +1479,9 @@
   "en": "Upgrading via npm...",
   "zh": "正在通过 npm 升级..."
  },
- "update.upgrading_via_curl": {
-  "en": "Upgrading via curl...",
-  "zh": "正在通过 curl 升级..."
+ "update.curl_retired_use_npm": {
+  "en": "This machine is marked as a curl install, but the curl upgrade path is retired (the product repo is private, so its release tarballs are not anonymously fetchable). Upgrading via npm instead — if that fails, reinstall with: npm i -g %s",
+  "zh": "本机标记为 curl 安装，但 curl 升级路径已退役（产品仓已转为私有，其 release 包无法匿名下载）。改走 npm 升级 —— 若失败请重装：npm i -g %s"
  },
  "update.npm_install_failed_check_network_proxy": {
   "en": "npm install failed. Check network/proxy and try again.",

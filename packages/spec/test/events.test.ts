@@ -1,71 +1,50 @@
 import { describe, expect, it } from "vitest";
-import {
-  LEGACY_PROJECT_EVENT_MIGRATION_V1,
-  WORKSPACE_ISSUE_INIT_FAILURE_CODES,
-  parseEventLine,
-  parseLegacyProjectEventMigrationInput,
-  type RollEvent,
-} from "../src/types/events.js";
-import type { IssueIdentity, RepositoryIssueIdentity, WorkspaceIdentity } from "../src/types/workspace.js";
+import { eventTsMs, parseEventLine, type RollEvent } from "../src/types/events.js";
+
+describe("FIX-1490 — event ts is epoch MILLISECONDS, on both sides", () => {
+  // 24.6% of the historical stream (5,483 / 22,293) carries seconds, mixed
+  // WITHIN the same event types — because three writers hand-rolled their own
+  // appendFileSync and bypassed the bus's normalization (which landed 2026-06-18
+  // in c881f0ab but only covers `serializeEvent`).
+  it("promotes a seconds value to milliseconds", () => {
+    // 2026-06-05 as seconds — a real value from the stream.
+    expect(eventTsMs(1_780_682_826)).toBe(1_780_682_826_000);
+  });
+
+  it("leaves a millisecond value untouched", () => {
+    expect(eventTsMs(1_780_682_826_000)).toBe(1_780_682_826_000);
+  });
+
+  it("is idempotent — normalizing twice never double-scales", () => {
+    const once = eventTsMs(1_780_682_826);
+    expect(eventTsMs(once)).toBe(once);
+  });
+
+  it("leaves small synthetic values alone — they cannot be epoch seconds", () => {
+    // Regression guard: a bare `< 1e12` floor check rescaled these and broke
+    // every relative-duration renderer built on synthetic fixtures.
+    expect(eventTsMs(1000)).toBe(1000);
+    expect(eventTsMs(120_000)).toBe(120_000);
+    expect(eventTsMs(0)).toBe(0);
+  });
+
+  it("promoting a seconds stamp lands in 2026, not 1970", () => {
+    // Read as ms, 1780682826 is 1970-01-21 — that is how a 2026 event rendered as
+    // 1970 and poisoned every time-bucketed aggregation.
+    expect(new Date(1_780_682_826).getUTCFullYear()).toBe(1970);
+    expect(new Date(eventTsMs(1_780_682_826)).getUTCFullYear()).toBe(2026);
+  });
+
+  it("parseEventLine does NOT rewrite ts — normalization belongs at the comparison", () => {
+    // Deliberate: parseEventLine is the universal read primitive and most callers
+    // compare one event's ts to another's (unit-agnostic). Rewriting it for
+    // everyone broke the relative-duration renderers and the loop-digest window.
+    const line = '{"type":"cycle:start","cycleId":"c1","storyId":"US-1","agent":"","model":"","ts":1780682826}';
+    expect(parseEventLine(line)?.ts).toBe(1_780_682_826);
+  });
+});
 
 describe("parseEventLine (I8: readers skip bad lines, never crash)", () => {
-  it("keeps Workspace identity envelopes composable without adding runtime events", () => {
-    const workspace: WorkspaceIdentity = { workspaceId: "ws-sot" };
-    const issue: IssueIdentity = { ...workspace, storyId: "US-WS-001" };
-    const repository: RepositoryIssueIdentity = { ...issue, repoId: "repo-0123456789ab" };
-    expect(repository).toEqual({ workspaceId: "ws-sot", storyId: "US-WS-001", repoId: "repo-0123456789ab" });
-  });
-
-  it("types and parses a closed Workspace Issue initialization failure", () => {
-    expect(WORKSPACE_ISSUE_INIT_FAILURE_CODES).toEqual([
-      "rejected",
-      "manifest_conflict",
-      "apply_failed",
-      "symlink_escape",
-      "unexpected",
-    ]);
-    const failure: RollEvent = {
-      type: "workspace:issue_init_failed",
-      workspaceId: "ws-sot",
-      storyId: "US-WS-011",
-      cycleId: "cycle-11",
-      code: "apply_failed",
-      repairJournal: "issues/US-WS-011/.roll-issue-init.pending.json",
-      ts: 11,
-    };
-    expect(parseEventLine(JSON.stringify(failure))).toEqual(failure);
-
-    const beforeJournal: RollEvent = {
-      ...failure,
-      code: "manifest_conflict",
-      repairJournal: null,
-    };
-    expect(parseEventLine(JSON.stringify(beforeJournal))).toEqual(beforeJournal);
-  });
-
-  it("parses legacy Project events only through the migration input API", () => {
-    const input = {
-      schema: LEGACY_PROJECT_EVENT_MIGRATION_V1,
-      projectSlug: "roll-ecf079",
-      event: { type: "cycle:start", cycleId: "legacy-c1", storyId: "US-1", agent: "claude", model: "opus", ts: 1 },
-    };
-    expect(parseLegacyProjectEventMigrationInput(input)).toEqual({ ok: true, value: input });
-    expect(parseEventLine(JSON.stringify(input))).toBeNull();
-  });
-
-  it("rejects unknown legacy migration versions and wrapper fields", () => {
-    const parsed = parseLegacyProjectEventMigrationInput({
-      schema: "roll.legacy-project-event-migration/v2",
-      projectSlug: "roll-ecf079",
-      event: { type: "cycle:start", ts: 1 },
-      compatibilityMode: true,
-    });
-    expect(parsed.ok).toBe(false);
-    if (parsed.ok) return;
-    expect(parsed.errors.map((error) => error.code)).toEqual(
-      expect.arrayContaining(["unknown_version", "unknown_field"]),
-    );
-  });
   it("parses a valid cycle:start line", () => {
     const e = parseEventLine(
       '{"type":"cycle:start","cycleId":"c1","storyId":"US-1","agent":"claude","model":"opus","ts":1}',
@@ -605,5 +584,155 @@ describe("parseEventLine (I8: readers skip bad lines, never crash)", () => {
       expect(parsed.reason).toBe("console locked — physical-surface cards held");
       expect(parsed.storyId).toBe("US-CAPTURE-007");
     }
+  });
+});
+
+// ── US-CYCLE-013 — cycle-handoff/v1 event family (schema round-trip + strict parse) ──
+import { parseCycleHandoffEvent, parseHandoffIdentity, type CycleHandoffEvent, type HandoffIdentity } from "../src/types/events.js";
+import type { ManagedWorkspaceSet } from "../src/types/managed-workspace.js";
+
+const HAN_WS: ManagedWorkspaceSet = {
+  schema: 1,
+  runId: "c1",
+  storyId: "US-1",
+  kind: "cycle",
+  topology: "solo",
+  members: [{
+    repositoryId: "repo-id",
+    workspaceKey: "cycle-c1",
+    relativeLocator: "cycle-c1",
+    checkoutRef: { kind: "detached", head: "base-sha" },
+    publishRef: "refs/heads/loop/cycle-c1",
+  }],
+};
+
+const HAN_ID: HandoffIdentity = {
+  schema: "cycle-handoff/v1",
+  cycleId: "c1",
+  storyId: "US-1",
+  workspace: HAN_WS,
+  branch: "loop/cycle-c1",
+  builderHead: "head-sha",
+  baseSha: "base-sha",
+  builderEvidenceRefs: ["ev-1"],
+  builderValidationRef: "builder-validation:c1:1",
+  profile: "standard",
+  attempt: 1,
+  fence: "fence-1",
+};
+
+describe("US-CYCLE-013 — cycle-handoff/v1 schema round-trip + strict parse (matrix #1)", () => {
+  it("round-trips a valid builder_ready through parseEventLine and the strict parser", () => {
+    const ready: CycleHandoffEvent = {
+      type: "cycle:builder_ready",
+      eventId: "ev-1",
+      idempotencyKey: "ready:US-1:1:fence-1",
+      identity: HAN_ID,
+      reason: "tail_capacity_full",
+      ts: 1_780_000_000,
+    };
+    const parsedLine = parseEventLine(JSON.stringify(ready));
+    expect(parsedLine?.type).toBe("cycle:builder_ready");
+    const strict = parseCycleHandoffEvent(ready);
+    expect(strict).not.toBeNull();
+    expect(strict?.type).toBe("cycle:builder_ready");
+  });
+
+  it("round-trips the whole family (admitted → ready → handoff → tail → cleanup)", () => {
+    const events: CycleHandoffEvent[] = [
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:c1:1", identity: HAN_ID, queueSequence: 1, ts: 1 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-1:1:fence-1", identity: HAN_ID, reason: "promotion_pending", ts: 2 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-1:1:fence-1", identity: HAN_ID, previousReadyKey: "ready:US-1:1:fence-1", next: "evaluate_or_test", ts: 3 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", ts: 4 },
+      { type: "cycle:tail_completed", eventId: "e5", idempotencyKey: "tail_completed:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", evidenceRefs: ["ev"], ts: 5 },
+      { type: "cycle:cleanup_started", eventId: "e6", idempotencyKey: "cleanup_started:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", ts: 6 },
+      { type: "cycle:cleanup_completed", eventId: "e7", idempotencyKey: "cleanup_completed:c1:1:fence-1", cycleId: "c1", attempt: 1, fence: "fence-1", releasedWorkspace: true, ts: 7 },
+    ];
+    for (const ev of events) {
+      const line = parseEventLine(JSON.stringify(ev));
+      expect(line, `${ev.type} parses leniently`).not.toBeNull();
+      expect(parseCycleHandoffEvent(ev), `${ev.type} passes the strict parser`).not.toBeNull();
+    }
+    const queued: CycleHandoffEvent = {
+      type: "cycle:queued",
+      eventId: "e8",
+      idempotencyKey: "queue:US-2:2",
+      storyId: "US-2",
+      requestedByCycleId: "c2",
+      queueSequence: 2,
+      reason: "build_slot_full",
+      ts: 8,
+    };
+    expect(parseCycleHandoffEvent(queued)).not.toBeNull();
+    const freshness: CycleHandoffEvent = {
+      type: "cycle:main_freshness",
+      eventId: "e9",
+      idempotencyKey: "freshness:c1:fence-1",
+      cycleId: "c1",
+      fence: "fence-1",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+      verdict: "conflict",
+      evidenceRefs: [],
+      ts: 9,
+    };
+    expect(parseCycleHandoffEvent(freshness)).not.toBeNull();
+    const rebased: CycleHandoffEvent = {
+      type: "cycle:rebased_attempt_validated",
+      eventId: "e10",
+      idempotencyKey: "rebased_validated:c1:1",
+      cycleId: "c1",
+      sourceAttempt: 1,
+      sourceFence: "fence-1",
+      candidateRef: "refs/roll/rebase-candidates/c1/1",
+      candidateHead: "r1",
+      predecessorMergeSha: "m1",
+      identity: HAN_ID,
+      validationRef: "v1",
+      evidenceRefs: ["ev"],
+      ts: 10,
+    };
+    expect(parseCycleHandoffEvent(rebased)).not.toBeNull();
+  });
+
+  it("rejects malformed / v0 payloads (missing fields, wrong shapes, bad verdicts)", () => {
+    expect(parseHandoffIdentity({ ...HAN_ID, schema: "cycle-handoff/v0" })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, fence: "" })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, attempt: 0 })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, profile: "wild" })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, workspace: { ...HAN_WS, members: [] } })).toBeNull();
+    expect(parseHandoffIdentity({ ...HAN_ID, builderEvidenceRefs: ["ok", 42] })).toBeNull();
+    const ready = { type: "cycle:builder_ready", eventId: "e1", idempotencyKey: "ready:US-1:1:fence-1", identity: HAN_ID, reason: "tail_capacity_full", ts: 1 };
+    expect(parseCycleHandoffEvent({ ...ready, idempotencyKey: "admit:c1:1" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, reason: "wrong" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, ts: "1" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, eventId: "" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...ready, type: "cycle:unknown_handoff" })).toBeNull();
+    const freshness = {
+      type: "cycle:main_freshness",
+      eventId: "e9",
+      idempotencyKey: "freshness:c1:fence-1",
+      cycleId: "c1",
+      fence: "fence-1",
+      predecessorMergeSha: "m1",
+      recordedBaseSha: "base-sha",
+      builderHead: "head-sha",
+      verdict: "maybe",
+      evidenceRefs: [],
+      ts: 9,
+    };
+    expect(parseCycleHandoffEvent(freshness)).toBeNull();
+    const tailCancelled = { type: "cycle:tail_cancelled", eventId: "e4", idempotencyKey: "x", cycleId: "c1", attempt: 1, fence: "fence-1", reason: "stale_fence", ts: 4 };
+    expect(parseCycleHandoffEvent(tailCancelled)).not.toBeNull();
+    expect(parseCycleHandoffEvent({ ...tailCancelled, reason: "not_a_reason" })).toBeNull();
+    expect(parseCycleHandoffEvent({ ...tailCancelled, idempotencyKey: "" })).toBeNull();
+  });
+
+  it("old events (pre-v1) still parse through parseEventLine unchanged (matrix #1/#16)", () => {
+    const legacy = '{"type":"cycle:end","cycleId":"c-old","outcome":"delivered","cost":{"cycleId":"c-old","agent":"a","model":"m","tokensIn":0,"tokensOut":0,"estimatedCost":0,"revertCount":0,"effectiveCost":0,"currency":"USD"},"ts":1}';
+    const parsed = parseEventLine(legacy);
+    expect(parsed?.type).toBe("cycle:end");
+    expect(parseCycleHandoffEvent(parsed)).toBeNull(); // not a handoff row
   });
 });

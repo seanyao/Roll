@@ -1,4 +1,7 @@
 /**
+ * @responsibility Cleans up the post-cycle environment.
+ */
+/**
  * US-LOOP-088 — post-cycle environment cleanup.
  *
  * Declarative, fail-safe cleanup of scratch/toolchain artifacts produced inside a

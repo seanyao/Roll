@@ -1,4 +1,5 @@
 /**
+ * @responsibility Reruns evidence capture without reopening a completed delivery build.
  * US-EVID-032 — Evidence-only repair (AC2).
  *
  * A `degraded-infrastructure` delivery is a COMPLETED story whose capture

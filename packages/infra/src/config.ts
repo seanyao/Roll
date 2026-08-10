@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reads the v2 config surface with scoped registry resolution.
+ */
+/**
  * Config module — TS port of the v2 config read surface (US-INFRA-001).
  *
  * ─── v2 oracle (frozen bash, bin/roll) ──────────────────────────────────────
@@ -218,10 +221,6 @@ export interface ConfigKeyRecord {
  * agree on scope/default semantics.
  */
 export const CONFIG_KEYS: readonly ConfigKeyRecord[] = [
-  { key: "loop_active_start", scope: "project", store: "nested:loop_schedule", min: "0", max: "23", default: "0" },
-  { key: "loop_active_end", scope: "project", store: "nested:loop_schedule", min: "1", max: "24", default: "24" },
-  { key: "loop_schedule.period_minutes", scope: "project", store: "nested:loop_schedule", min: "1", max: "1440", default: "60" },
-  { key: "loop_schedule.offset_minute", scope: "project", store: "nested:loop_schedule", min: "0", max: "59", default: "0" },
   { key: "loop_dream_hour", scope: "global", store: "flat", min: "0", max: "23", default: "3" },
   { key: "loop_dream_minute", scope: "global", store: "flat", min: "0", max: "59", default: "-" },
   // E1: the loop's integration branch — the ref cycles rebase/merge/reset onto.
@@ -491,6 +490,7 @@ export function applyConfigSet(text: string, key: string, value: string): string
  * single-writer CLI (write through; bash uses mktemp+mv — equivalent here).
  */
 export function configSet(key: string, value: string, file: string): void {
+  if (!CONFIG_KEYS.some((record) => record.key === key)) return;
   mkdirSync(dirname(file), { recursive: true });
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
   writeFileSync(file, applyConfigSet(text, key, value));

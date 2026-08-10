@@ -27,17 +27,11 @@
  * event STILL written, lock released, and a fresh runCycleOnce takes over cleanly.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { deriveWorkspaceExecutionAuthorities, type CycleContext, type RouteDeps } from "@roll/core";
-import {
-  REPOSITORY_BINDING_V1,
-  WORKSPACE_EXECUTION_CONTEXT_V1,
-  repositoryIdFromRemote,
-  type WorkspaceExecutionContextV1,
-} from "@roll/spec";
+import type { RouteDeps } from "@roll/core";
 import {
   type AgentSpawn,
   type AgentSpawnResult,
@@ -190,78 +184,8 @@ function paths(rt: string, cycleId: string): RunnerPaths {
   };
 }
 
-function fixtureCycleContext(
-  rt: string,
-  runnerPaths: RunnerPaths,
-  cycleId: string,
-  storyId = "US-RUN-001",
-): CycleContext {
-  const workspaceRoot = join(rt, "workspace-fixture");
-  const issueRoot = join(workspaceRoot, "issues", storyId);
-  const workspaceWorktreePath = join(issueRoot, "product");
-  mkdirSync(issueRoot, { recursive: true });
-  if (lstatSync(workspaceWorktreePath, { throwIfNoEntry: false }) !== undefined) {
-    unlinkSync(workspaceWorktreePath);
-  }
-  symlinkSync(runnerPaths.worktreePath, workspaceWorktreePath, "dir");
-  const remote = "git@github.com:fixture/runner.git";
-  const identity = repositoryIdFromRemote(remote);
-  if (!identity.ok) throw new Error("runner fixture remote must be canonical");
-  const binding = {
-    schema: REPOSITORY_BINDING_V1,
-    repoId: identity.value,
-    alias: "product",
-    remote,
-    integrationBranch: "main",
-    provider: "github" as const,
-    workflow: { branchPattern: "roll/{workspace_id}/{story_id}", requiredChecks: [] },
-  };
-  const execution = {
-    workspaceId: "runner-fixture",
-    issueRoot,
-    repositories: {
-      [identity.value]: {
-        repoId: identity.value,
-        alias: binding.alias,
-        access: "write" as const,
-        requiredDelivery: true,
-        noChangePolicy: "changes_required" as const,
-        workBranch: `roll/runner-fixture/${storyId}/product`,
-        worktreePath: workspaceWorktreePath,
-        baseSha: "1".repeat(40),
-        headSha: "2".repeat(40),
-        commands: { test: [], integration: [] },
-      },
-    },
-  };
-  const workspaceExecution: WorkspaceExecutionContextV1 = {
-    schema: WORKSPACE_EXECUTION_CONTEXT_V1,
-    workspace: {
-      workspaceId: execution.workspaceId,
-      root: workspaceRoot,
-      canonicalRoot: workspaceRoot,
-      lifecycle: "active",
-    },
-    resolution: { source: "explicit", evidence: [] },
-    bindings: [binding],
-    issue: {
-      storyId,
-      manifestPath: join(issueRoot, "manifest.json"),
-      execution,
-    },
-    authorities: deriveWorkspaceExecutionAuthorities(workspaceRoot),
-  };
-  return {
-    cycleId,
-    branch: `loop/cycle-${cycleId}`,
-    loop: "ci" as never,
-    workspaceExecution,
-    workspaceContextScope: "issue_required",
-  };
-}
-
 const routeDeps: RouteDeps = {
-  readSlot: () => ({ agent: "claude" }),
+  readSlot: () => "claude",
   firstInstalled: () => "claude",
 };
 
@@ -395,147 +319,6 @@ function fixedClock(start: number): { clock: () => number; set: (v: number) => v
 }
 
 describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
-  it("US-WS-017b capacity exhaustion emits a neutral zero-spawn terminal and restores Todo", async () => {
-    const { repo } = makeFixture("capacity-wait");
-    const rt = tmp("capacity-wait-rt");
-    const cycleId = "20260722-230000-1701";
-    const p = paths(rt, cycleId);
-    let spawnCount = 0;
-    const base = nodePorts({
-      repoCwd: repo,
-      paths: p,
-      skillBody: "deliver",
-      routeDeps,
-      capacityRoot: tmp("capacity-wait-broker"),
-    });
-    const ports: Ports = {
-      ...base,
-      github: fakeGithub(0),
-      agentSpawn: async () => {
-        spawnCount += 1;
-        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
-      },
-      capacity: {
-        ...base.capacity,
-        acquire: () => ({
-          kind: "waiting",
-          retryAtMs: 1_800_000_000,
-          contenders: [{ agent: "claude", cycleId: "private-contender-cycle" }],
-          suspect: false,
-        }),
-      },
-    };
-
-    const result = await runCycleOnce({
-      ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
-    });
-
-    expect(result.terminal).toBe("waiting_capacity");
-    expect(spawnCount).toBe(0);
-    expect(readFileSync(join(repo, ".roll", "backlog.md"), "utf8")).toContain("| US-RUN-001 | Runner adapter smoke story est_min:5 | 📋 Todo |");
-    const events = readFileSync(p.eventsPath, "utf8");
-    expect(events).toContain('"type":"workspace:waiting_capacity"');
-    expect(events).toContain('"contenders":["claude"]');
-    expect(events).not.toContain("private-contender-cycle");
-    const row = JSON.parse(readFileSync(p.runsPath, "utf8").trim()) as Record<string, unknown>;
-    expect(row).toMatchObject({ status: "waiting_capacity", outcome: "waiting_capacity" });
-  });
-
-  it("US-WS-017b unexpected agent throw releases the residual exact-owned capacity lease", async () => {
-    const { repo } = makeFixture("capacity-throw");
-    const rt = tmp("capacity-throw-rt");
-    const cycleId = "20260722-230000-1702";
-    const p = paths(rt, cycleId);
-    const base = nodePorts({
-      repoCwd: repo,
-      paths: p,
-      skillBody: "deliver",
-      routeDeps,
-      capacityRoot: tmp("capacity-throw-broker"),
-    });
-    let releases = 0;
-    const ports: Ports = {
-      ...base,
-      github: fakeGithub(0),
-      agentSpawn: async () => {
-        throw new Error("fixture agent exploded");
-      },
-      capacity: {
-        ...base.capacity,
-        release(leaseId, ownerToken) {
-          releases += 1;
-          return base.capacity.release(leaseId, ownerToken);
-        },
-      },
-    };
-
-    await expect(runCycleOnce({
-      ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
-    })).rejects.toThrow("fixture agent exploded");
-
-    expect(releases).toBe(1);
-    expect(readFileSync(p.eventsPath, "utf8")).toContain('"outcome":"aborted_no_delivery"');
-  });
-
-  it("US-WS-017b heartbeat ownership loss kills the live agent before failing loud", async () => {
-    const { repo } = makeFixture("capacity-heartbeat-loss");
-    const rt = tmp("capacity-heartbeat-loss-rt");
-    const cycleId = "20260722-230000-1703";
-    const p = paths(rt, cycleId);
-    const base = nodePorts({
-      repoCwd: repo,
-      paths: p,
-      skillBody: "deliver",
-      routeDeps,
-      capacityRoot: tmp("capacity-heartbeat-loss-broker"),
-    });
-    let heartbeatCalls = 0;
-    let releaseCalls = 0;
-    let killCalls = 0;
-    let finishSpawn!: () => void;
-    const spawnFinished = new Promise<void>((resolve) => {
-      finishSpawn = resolve;
-    });
-    const ports: Ports = {
-      ...base,
-      github: fakeGithub(0),
-      agentSpawn: async () => {
-        await spawnFinished;
-        return { stdout: "", stderr: "", exitCode: 137, timedOut: false };
-      },
-      capacity: {
-        ...base.capacity,
-        heartbeatIntervalMs: 5,
-        heartbeat(leaseId, ownerToken) {
-          heartbeatCalls += 1;
-          if (heartbeatCalls === 1) return base.capacity.heartbeat(leaseId, ownerToken);
-          return { kind: "ownership_lost", reason: "lease_missing_or_unreadable" };
-        },
-        release(leaseId, ownerToken) {
-          releaseCalls += 1;
-          return base.capacity.release(leaseId, ownerToken);
-        },
-      },
-    };
-
-    await expect(runCycleOnce({
-      ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
-      killAgents: () => {
-        killCalls += 1;
-        finishSpawn();
-        return 1;
-      },
-    })).rejects.toThrow("agent_capacity_ownership_lost:lease_missing_or_unreadable");
-
-    expect(killCalls).toBe(1);
-    expect(releaseCalls).toBe(1);
-    expect(readFileSync(p.alertsPath, "utf8")).toContain("killed live agent process");
-    expect(readFileSync(p.eventsPath, "utf8")).toContain('"outcome":"aborted_no_delivery"');
-  });
-
   it("US-LOOP-098 proves detached cycle branch governance against real git refs", async () => {
     const { repo, remote } = makeGitignoredFixture("branch-gov");
     // CI runners carry no global git identity; the cycle's own commits (worktree
@@ -588,8 +371,8 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
           expectWorktreeDetached("after-worktree-creation");
           return r;
         },
-        async worktreeRemove(repoCwd, path, branchName, bundleUnpushed) {
-          const r = await base.git.worktreeRemove(repoCwd, path, branchName, bundleUnpushed);
+        async managedWorktreeRelease(repoCwd, path, expectedHead, repositoryId) {
+          const r = await base.git.managedWorktreeRelease!(repoCwd, path, expectedHead, repositoryId);
           expectMainHasNoLocalLoopBranches("after-cleanup");
           return r;
         },
@@ -632,7 +415,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch, loop: "ci" as never },
     });
 
     expect(result.ran).toBe(true);
@@ -643,11 +426,13 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       "after-agent-commit",
       "after-refspec-push",
       "after-publish",
-      "after-cleanup",
     ]);
     expect(localLoopCycleBranches(repo)).toEqual([]);
     expect(bareRemoteHasRef(remote, branch)).toBe(false);
-    expect(existsSync(p.worktreePath)).toBe(false);
+    // A published PR is not merge + accepted-attest truth.  US-LOOP-124 keeps
+    // the managed checkout and its Story reservation for the later release
+    // operation instead of treating an open-PR terminal as permission to delete.
+    expect(existsSync(p.worktreePath)).toBe(true);
   });
 
   it("drives pick→route→worktree→execute→publish→done, writes events/runs, releases lock", async () => {
@@ -675,47 +460,15 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // so the shim's claude wire-format stdout is parsed (the pool agents pi/kimi
     // do not emit claude stream-json).
     const claudeStreamRoute: RouteDeps = {
-      readSlot: () => ({ agent: "claude-stream" }),
+      readSlot: () => "claude-stream",
       firstInstalled: () => "claude-stream",
     };
     const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps: claudeStreamRoute });
-    const ports: Ports = {
-      ...base,
-      agentSpawn: shim,
-      github: fakeGithub(0),
-      capacity: {
-        ...base.capacity,
-        acquire(pending, ctx) {
-          return {
-            kind: "acquired",
-            lease: {
-              schema: "roll-agent-capacity-lease/v1",
-              key: pending.key,
-              owner: {
-                leaseId: `lease:${pending.spawnId}`,
-                ownerToken: `token:${pending.spawnId}`,
-                workspaceId: "legacy-cost-fixture",
-                storyId: ctx.storyId ?? "",
-                cycleId: ctx.cycleId,
-                spawnId: pending.spawnId,
-                host: "fixture",
-                pid: process.pid,
-                processStartedAtMs: 1,
-              },
-              acquiredAtMs: 1,
-              heartbeatAtMs: 1,
-            },
-          };
-        },
-        heartbeat: () => ({ kind: "updated" }),
-        release: () => ({ kind: "released" }),
-        releaseCurrent: () => ({ kind: "already_released" }),
-      },
-    };
+    const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
 
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     // Terminal: published → done.
@@ -781,7 +534,9 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // The shim's tcr commit really landed in the worktree (captured at execute
     // time; the worktree is cleaned by the `done` terminal path afterward).
     expect(tcrLogAtExecute).toContain("tcr: deliver US-RUN-001");
-    expect(existsSync(p.worktreePath)).toBe(false);
+    // Published is pending merge, so the managed release writer preserves this
+    // checkout until the merged-delivery and accepted-attest facts are durable.
+    expect(existsSync(p.worktreePath)).toBe(true);
 
     // FIX-343 (step ③): the cycle:terminal twin resolves report/ac-map from the
     // PERSISTENT .roll (repoCwd) — never the worktree, which is torn down before
@@ -824,7 +579,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -843,7 +598,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     });
   });
 
-  it("kill-mid-execute (watchdog breach): terminal still written, lock released, next cycle takes over (I2)", async () => {
+  it("US-LOOP-124: watchdog breach preserves its Story reservation; a new cycle does not reuse the worktree", async () => {
     const { repo } = makeFixture("kill");
     const rt = tmp("kill-rt");
     const cycleId = "20260605-111111-2222";
@@ -869,7 +624,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
       timeoutSec: 2700,
     });
 
@@ -889,7 +644,8 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     // Lock released despite the abort.
     expect(existsSync(p.lockPath)).toBe(false);
 
-    // A FRESH runCycleOnce takes over cleanly (lock free, new terminal).
+    // A FRESH runCycleOnce finds the lock free but must not reuse the Story:
+    // the ambiguous preserved checkout retains its delivery reservation.
     const cycleId2 = "20260605-222222-3333";
     const p2 = paths(rt, cycleId2);
     // US-CYCLE-011: the takeover cycle actually PUBLISHES, so its evidence gate
@@ -906,10 +662,10 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     const ports2: Ports = { ...base2, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result2 = await runCycleOnce({
       ports: ports2,
-      ctx: fixtureCycleContext(rt, p2, cycleId2),
+      ctx: { cycleId: cycleId2, branch: `loop/cycle-${cycleId2}`, loop: "ci" as never },
     });
     expect(result2.ran).toBe(true);
-    expect(result2.terminal).toBe("published"); // FIX-244
+    expect(result2.terminal).toBe("idle");
   });
 
   // FIX-1244 (实证 cycle-20260713-154751): a builder killed by the watchdog AFTER
@@ -944,7 +700,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
       timeoutSec: 2700,
     });
 
@@ -1016,7 +772,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       const startedWallMs = Date.now();
       const result = await runCycleOnce({
         ports,
-        ctx: fixtureCycleContext(rt, p, cycleId),
+        ctx: { cycleId, branch, loop: "ci" as never },
       });
       const elapsedWallMs = Date.now() - startedWallMs;
 
@@ -1097,7 +853,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
       const startedWallMs = Date.now();
       const result = await runCycleOnce({
         ports,
-        ctx: fixtureCycleContext(rt, p, cycleId),
+        ctx: { cycleId, branch, loop: "ci" as never },
       });
       const elapsedWallMs = Date.now() - startedWallMs;
 
@@ -1150,7 +906,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
     expect(result.ran).toBe(false);
     expect(result.heldByPid).toBe(process.pid);
@@ -1183,7 +939,7 @@ describe("runCycleOnce E2E (fixture repo + shim agent + faked gh)", () => {
 
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
     // idle folds to the `built` spec outcome but the v2 terminal status is idle.
     expect(result.terminal).toBe("idle");
@@ -1333,7 +1089,7 @@ describe("FIX-206 — a partial-fossil .roll is relinked so the backlog is visib
     const ports: Ports = { ...base, agentSpawn: shim, github: selfPublishedGithub };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1368,7 +1124,7 @@ describe("FIX-198 status flips on the gitignored-.roll layout", () => {
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1390,7 +1146,7 @@ describe("FIX-198 status flips on the gitignored-.roll layout", () => {
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending // recycled → re-picked → delivered
@@ -1418,7 +1174,7 @@ describe("FIX-211 — Done ≡ merged: no publish-time 抢跑 on the gitignored 
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0, "OPEN") };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     // Cycle still lands `done` (published, handed to the async PR loop) and the
@@ -1441,7 +1197,7 @@ describe("FIX-211 — Done ≡ merged: no publish-time 抢跑 on the gitignored 
     const ports: Ports = { ...base, agentSpawn: shimAgentTcr, github: fakeGithub(0, "MERGED") };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1482,7 +1238,7 @@ describe("FIX-304 — enforce done ≡ merged: a non-merged cycle leaves no prem
     const ports: Ports = { ...base, agentSpawn: shimFlipsDone, github: fakeGithub(0, "OPEN") };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published");
@@ -1504,7 +1260,7 @@ describe("FIX-304 — enforce done ≡ merged: a non-merged cycle leaves no prem
     const ports: Ports = { ...base, agentSpawn: shimFlipsDone, github: fakeGithub(0, "MERGED") };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published");
@@ -1594,7 +1350,7 @@ describe("FIX-211 — preflight reconcile 补翻: async PR-loop merge flips a st
     };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1626,7 +1382,7 @@ describe("FIX-211 — preflight reconcile 补翻: async PR-loop merge flips a st
     };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1654,7 +1410,7 @@ describe("FIX-211 — preflight reconcile 补翻: async PR-loop merge flips a st
     };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId, "US-PRIOR"),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1683,7 +1439,7 @@ describe("US-PORT-011 — live.log streams the agent transcript", () => {
     };
     const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
     const ports: Ports = { ...base, agentSpawn: streamingShim, github: fakeGithub(0) };
-    const result = await runCycleOnce({ ports, ctx: fixtureCycleContext(rt, p, cycleId) });
+    const result = await runCycleOnce({ ports, ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never } });
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
     const live = readFileSync(join(rt, "live.log"), "utf8");
     expect(live).toContain(`── cycle ${cycleId}`);
@@ -1714,7 +1470,7 @@ describe("FIX-204B — the executor pins the picked story into the agent spawn",
     const ports: Ports = { ...base, agentSpawn: pinProbe, github: fakeGithub(0), installedAgents: () => ["claude"] };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
     expect(seenStoryId).toBe("US-RUN-001");
@@ -1747,7 +1503,7 @@ describe("FIX-204C — worktree sees the main .roll via symlink", () => {
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1757,8 +1513,9 @@ describe("FIX-204C — worktree sees the main .roll via symlink", () => {
     // the delivered commit carries the work, never the link
     expect(committed).toContain("delivered.txt");
     expect(committed).not.toContain(".roll");
-    // cleanup: worktree gone, MAIN .roll intact (the LINK died, not the target)
-    expect(existsSync(p.worktreePath)).toBe(false);
+    // The `.roll` link remains with the preserved managed checkout while the PR
+    // is pending; the persistent main `.roll` is still the source of truth.
+    expect(existsSync(p.worktreePath)).toBe(true);
     expect(readFileSync(join(repo, ".roll", "backlog.md"), "utf8")).toContain("✅ Done");
   });
 
@@ -1776,7 +1533,7 @@ describe("FIX-204C — worktree sees the main .roll via symlink", () => {
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
     expect(isLink).toBe(false);
@@ -1813,7 +1570,7 @@ describe("FIX-209 — cycle baseline freshness: preflight fetches the remote mer
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.terminal).toBe("published"); // FIX-244: publish-ok = PR open, merge pending
@@ -1865,7 +1622,7 @@ describe("FIX-284 — RESUME-PRIOR-WORK engages POST-pick (the storyId-timing wi
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.ran).toBe(true);
@@ -1895,12 +1652,540 @@ describe("FIX-284 — RESUME-PRIOR-WORK engages POST-pick (the storyId-timing wi
     const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
     const result = await runCycleOnce({
       ports,
-      ctx: fixtureCycleContext(rt, p, cycleId),
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
     });
 
     expect(result.ran).toBe(true);
     expect(strayResumeFile).toBe(false); // pure fresh-context — nothing resumed
     const alerts = existsSync(p.alertsPath) ? readFileSync(p.alertsPath, "utf8") : "";
     expect(alerts).not.toContain("resume-prior-work");
+  });
+});
+
+// ── US-CYCLE-013 — durable build/tail handoff (matrix #2/#11/#12/#13/#15) ────
+import { EventBus, projectCycleHandoff, projectHandoffCapacity } from "@roll/core";
+import type { CycleHandoffEvent, HandoffIdentity, ManagedWorkspaceSet, RollEvent } from "@roll/spec";
+import { runTailOnce } from "../src/runner/run-cycle.js";
+import { createPinRef, verifyRebaseTemp, checkoutPin } from "../src/runner/node-ports.js";
+import { makeFreshnessCheck } from "../src/commands/loop-run-once.js";
+
+describe("US-CYCLE-013 — durable build handoff (ROLL_CYCLE_HANDOFF_V1=1)", () => {
+  it("a built cycle stops at a NON-terminal builder_ready: no cycle:end, lock released, workspace retained", async () => {
+    const { repo } = makeFixture("handoff");
+    const rt = tmp("handoff-rt");
+    const cycleId = "20260620-000000-1313";
+    const p = paths(rt, cycleId);
+
+    const shim: AgentSpawn = async (agent, opts) => shimAgentTcr(agent, opts);
+    const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+
+    const result = await runCycleOnce({
+      ports,
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      handoff: true,
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.handedOff).toBe(true); // durable handoff, NOT a terminal
+    expect(result.terminal).toBeUndefined();
+    // No cycle:end — a build handoff is never evidence of a terminal.
+    const eventsText = readFileSync(p.eventsPath, "utf8");
+    expect(eventsText).not.toContain('"type":"cycle:end"');
+    // The durable facts exist: admitted (fenced) + builder_ready.
+    expect(eventsText).toContain('"type":"cycle:admitted"');
+    expect(eventsText).toContain('"type":"cycle:builder_ready"');
+    // Lock released; the retained workspace is NOT cleaned by the handoff.
+    expect(existsSync(p.lockPath)).toBe(false);
+    expect(existsSync(p.worktreePath)).toBe(true);
+
+    // The projection reads the handoff back from the event stream.
+    const view = projectCycleHandoff(new EventBus().readEvents(p.eventsPath), cycleId);
+    expect(view?.state).toBe("builder_validated_waiting_for_tail");
+    expect(view?.readyKey).toContain("ready:");
+  });
+
+  it("resumes the retained tail to a terminal (publish → cleanup), never rebuilding", async () => {
+    const { repo } = makeFixture("tail");
+    const rt = tmp("tail-rt");
+    const cycleId = "20260620-111111-4242";
+    const p = paths(rt, cycleId);
+
+    // Phase 1: build to the durable handoff.
+    const shim: AgentSpawn = async (agent, opts) => shimAgentTcr(agent, opts);
+    const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    const buildPorts: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+    const built = await runCycleOnce({
+      ports: buildPorts,
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      handoff: true,
+    });
+    expect(built.handedOff).toBe(true);
+
+    // Phase 2: promote the ready holder under the mutex, then resume the tail.
+    const events = new EventBus().readEvents(p.eventsPath);
+    const view = projectCycleHandoff(events, cycleId);
+    expect(view?.identity).toBeDefined();
+    const identity = view!.identity!;
+    const bus = new EventBus();
+    bus.appendEventSynced(p.eventsPath, {
+      type: "cycle:builder_handoff",
+      eventId: "ev-promote",
+      idempotencyKey: `handoff:${identity.storyId}:${identity.attempt}:${identity.fence}`,
+      identity,
+      previousReadyKey: view!.readyKey!,
+      next: "evaluate_or_test",
+      ts: Date.now(),
+    });
+
+    const resumePorts: Ports = { ...base, github: fakeGithub(0) };
+    const tail = await runTailOnce({
+      ports: resumePorts,
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      identity,
+      checkFreshness: async () => undefined, // no predecessor merge in the fixture
+    });
+
+    expect(tail.ran).toBe(true);
+    expect(tail.resumedTail).toBe(true);
+    expect(tail.terminal).toBe("published");
+    const tailEvents = readFileSync(p.eventsPath, "utf8");
+    expect(tailEvents).toContain('"type":"cycle:tail_started"');
+    expect(tailEvents).toContain('"type":"cycle:tail_completed"');
+    expect(tailEvents).toContain('"type":"cycle:end"');
+    // The tail never re-ran Builder: no second cycle:start for this cycle.
+    const starts = tailEvents.split("\n").filter((l) => l.includes('"type":"cycle:start"'));
+    expect(starts.length).toBeLessThanOrEqual(1);
+  });
+
+  it("a freshness conflict routes the resumed tail to serial_recovery with leases retained (matrix #13)", async () => {
+    const { repo } = makeFixture("fresh-conflict");
+    const rt = tmp("fresh-conflict-rt");
+    const cycleId = "20260620-222222-7777";
+    const p = paths(rt, cycleId);
+
+    const shim: AgentSpawn = async (agent, opts) => shimAgentTcr(agent, opts);
+    const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    const buildPorts: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+    const built = await runCycleOnce({ ports: buildPorts, ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never }, handoff: true });
+    expect(built.handedOff).toBe(true);
+
+    const events = new EventBus().readEvents(p.eventsPath);
+    const view = projectCycleHandoff(events, cycleId);
+    const identity = view!.identity!;
+    const bus = new EventBus();
+    bus.appendEventSynced(p.eventsPath, {
+      type: "cycle:builder_handoff",
+      eventId: "ev-promote",
+      idempotencyKey: `handoff:${identity.storyId}:${identity.attempt}:${identity.fence}`,
+      identity,
+      previousReadyKey: view!.readyKey!,
+      next: "evaluate_or_test",
+      ts: Date.now(),
+    });
+
+    const tail = await runTailOnce({
+      ports: base,
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      identity,
+      checkFreshness: async () => ({
+        verdict: "conflict",
+        predecessorMergeSha: "m1",
+        recordedBaseSha: identity.baseSha,
+        builderHead: identity.builderHead,
+      }),
+    });
+
+    expect(tail.recoveryRecorded).toBe(true);
+    expect(tail.terminal).toBeUndefined();
+    const tailEvents = readFileSync(p.eventsPath, "utf8");
+    expect(tailEvents).toContain('"type":"cycle:main_freshness"');
+    expect(tailEvents).toContain('"type":"cycle:tail_cancelled"');
+    expect(tailEvents).toContain('"type":"cycle:serial_recovery"');
+    // Leases retained: no cleanup_completed, no worktree deletion.
+    expect(tailEvents).not.toContain('"type":"cycle:cleanup_completed"');
+    expect(tailEvents).not.toContain('"type":"cycle:end"');
+    expect(existsSync(p.worktreePath)).toBe(true);
+    // The projection agrees: the cycle is blocked (serial recovery).
+    const after = projectCycleHandoff(new EventBus().readEvents(p.eventsPath), cycleId);
+    expect(after?.state).toBe("serial_recovery");
+  });
+});
+
+// ── US-CYCLE-013 repair (delta-58f2373d) — F1 admission enforcement + F2 real probe ──
+
+function handoffWorkspace(cycleId: string, storyId: string): ManagedWorkspaceSet {
+  return {
+    schema: 1,
+    runId: cycleId,
+    storyId,
+    kind: "cycle",
+    topology: "solo",
+    members: [{
+      repositoryId: "repo-id",
+      workspaceKey: `cycle-${cycleId}`,
+      relativeLocator: `cycle-${cycleId}`,
+      checkoutRef: { kind: "detached", head: "base-sha" },
+      publishRef: `refs/heads/loop/cycle-${cycleId}`,
+    }],
+  };
+}
+
+function handoffIdentity(cycleId: string, storyId: string, fence = "fence"): HandoffIdentity {
+  return {
+    schema: "cycle-handoff/v1",
+    cycleId,
+    storyId,
+    workspace: handoffWorkspace(cycleId, storyId),
+    branch: `loop/cycle-${cycleId}`,
+    builderHead: "head-sha",
+    baseSha: "base-sha",
+    builderEvidenceRefs: [],
+    builderValidationRef: `builder-validation:${cycleId}:1`,
+    profile: "standard",
+    attempt: 1,
+    fence,
+  };
+}
+
+function appendEvents(eventsPath: string, events: RollEvent[]): void {
+  const bus = new EventBus();
+  for (const ev of events) bus.appendEvent(eventsPath, ev);
+}
+
+/** A small real git repo for the F2 probe: main M0 → B1 on top of M0 → M1.
+ *  B1 always ADDS `builder.txt` (a new path); the clean case has M1 only touch
+ *  `base.txt`, the `conflict` case has M1 ALSO add `builder.txt` (add/add ⇒ a
+ *  rebase conflict that is unambiguous across git versions). */
+function makeProbeRepo(tag: string, opts: { conflict?: boolean } = {}): { repo: string; base: string; head: string; onto: string } {
+  const repo = tmp(`${tag}-repo`);
+  git(repo, ["init", "-q", "-b", "main"]);
+  writeFileSync(join(repo, "base.txt"), "base line\n");
+  git(repo, [...GIT_ID, "add", "-A"]);
+  git(repo, [...GIT_ID, "commit", "-qm", "M0"]);
+  const base = git(repo, ["rev-parse", "HEAD"]).trim();
+  // B1 — the recorded builderHead (on top of M0): adds a NEW path.
+  git(repo, ["checkout", "-qb", "b1"]);
+  writeFileSync(join(repo, "builder.txt"), "builder work\n");
+  git(repo, [...GIT_ID, "add", "-A"]);
+  git(repo, [...GIT_ID, "commit", "-qm", "B1"]);
+  const head = git(repo, ["rev-parse", "HEAD"]).trim();
+  // main advances to M1 — the predecessor merge.
+  git(repo, ["checkout", "-q", "main"]);
+  if (opts.conflict === true) {
+    writeFileSync(join(repo, "builder.txt"), "predecessor took the same path\n");
+  } else {
+    writeFileSync(join(repo, "base.txt"), "base line modified on main\n");
+  }
+  git(repo, [...GIT_ID, "add", "-A"]);
+  git(repo, [...GIT_ID, "commit", "-qm", "M1"]);
+  const onto = git(repo, ["rev-parse", "HEAD"]).trim();
+  return { repo, base, head, onto };
+}
+
+describe("US-CYCLE-013 repair F1 — execution-enforced admission (matrix #3/#4)", () => {
+  it("runCycleOnce refuses a SECOND admission under the scheduler mutex: admissionBlocked=build_slot_full, NO Builder spawn, one build holder", async () => {
+    const { repo } = makeFixture("f1-second");
+    const rt = tmp("f1-second-rt");
+    const cycleA = "20260620-010000-3001";
+    const cycleB = "20260620-010100-3002";
+    const pA = paths(rt, cycleA);
+    // Seed A as an admitted+ready build holder on the SHARED event stream.
+    const A = handoffIdentity(cycleA, "US-RUN-001");
+    appendEvents(pA.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace(cycleA, "US-RUN-001"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-RUN-001:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+    ]);
+
+    let spawnCalls = 0;
+    const shim: AgentSpawn = async (agent, opts) => {
+      spawnCalls += 1;
+      return shimAgentTcr(agent, opts);
+    };
+    const pB = paths(rt, cycleB);
+    const base = nodePorts({ repoCwd: repo, paths: pB, skillBody: "deliver", routeDeps });
+    const ports: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+    const result = await runCycleOnce({
+      ports,
+      ctx: { cycleId: cycleB, branch: `loop/cycle-${cycleB}`, loop: "ci" as never },
+      handoff: true,
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.admissionBlocked).toBe("build_slot_full");
+    // The Builder NEVER spawned (admission is a precondition for the spawn).
+    expect(spawnCalls).toBe(0);
+    // NO durable cycle:admitted for B; the projection still shows ONE build holder.
+    const events = new EventBus().readEvents(pA.eventsPath);
+    expect(events.some((ev) => ev.type === "cycle:admitted" && "identity" in ev && ev.identity?.cycleId === cycleB)).toBe(false);
+    const cap = projectHandoffCapacity(events);
+    expect(cap.buildHolderCycleId).toBe(cycleA);
+    expect(cap.readyHolderCycleId).toBe(cycleA);
+  });
+
+  it("runTailOnce refuses to promote into an OCCUPIED tail: refused=tail_occupied, no builder_handoff appended, holder stays ready", async () => {
+    const repo = tmp("f1-tail-repo");
+    const rt = tmp("f1-tail-rt");
+    const cycleA = "20260620-020000-3003";
+    const cycleB = "20260620-020100-3004";
+    const p = paths(rt, cycleA);
+    const A = handoffIdentity(cycleA, "US-A");
+    const B = handoffIdentity(cycleB, "US-B");
+    // A owns the live tail; B is the validated ready holder waiting for capacity.
+    appendEvents(p.eventsPath, [
+      { type: "worktree:allocated", workspace: handoffWorkspace(cycleA, "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence", identity: A, reason: "promotion_pending", ts: 3 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence", identity: A, previousReadyKey: "ready:US-A:1:fence", next: "evaluate_or_test", ts: 4 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence", cycleId: cycleA, attempt: 1, fence: "fence", ts: 5 },
+      { type: "worktree:allocated", workspace: handoffWorkspace(cycleB, "US-B"), ts: 6 },
+      { type: "cycle:admitted", eventId: "e5", idempotencyKey: "admit:cB:1", identity: B, queueSequence: 2, ts: 7 },
+      { type: "cycle:builder_ready", eventId: "e6", idempotencyKey: "ready:US-B:1:fence", identity: B, reason: "tail_capacity_full", ts: 8 },
+    ]);
+
+    const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    const result = await runTailOnce({
+      ports: base,
+      ctx: { cycleId: cycleB, branch: `loop/cycle-${cycleB}`, loop: "ci" as never },
+      identity: B,
+    });
+
+    expect(result.ran).toBe(false);
+    expect(result.refused).toBe("tail_occupied");
+    // No new builder_handoff was appended (only A's original promotion exists).
+    const events = new EventBus().readEvents(p.eventsPath);
+    const handoffs = events.filter((ev) => ev.type === "cycle:builder_handoff");
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0]).toMatchObject({ type: "cycle:builder_handoff" });
+    if ("identity" in handoffs[0]!) {
+      expect((handoffs[0] as { identity?: { cycleId?: string } }).identity?.cycleId).toBe(cycleA);
+    }
+    // B stays builder_validated_waiting_for_tail — no mutation, no ALERT spam.
+    const viewB = projectCycleHandoff(events, cycleB);
+    expect(viewB?.state).toBe("builder_validated_waiting_for_tail");
+  });
+});
+
+describe("US-CYCLE-013 repair F2 — the REAL probe against a fixture repo (matrix #5/#6/#7)", () => {
+  it("continue: a clean rebase + passing testCmd returns the rebased head; createPinRef pins it; checkoutPin checks it out; the temp worktree is removed", async () => {
+    const { repo, base, head, onto } = makeProbeRepo("probe-continue");
+    const rt = tmp("probe-continue-rt");
+    const verify = join(rt, "verify-wt");
+
+    const result = await verifyRebaseTemp(repo, base, head, onto, verify, ["true"]);
+    expect(result.verdict).toBe("continue");
+    expect(result.evidenceRefs).toHaveLength(1);
+    const rebasedHead = result.evidenceRefs[0]!;
+    expect(rebasedHead).not.toBe(head); // the rebased commit is a NEW head
+    // The temporary verify worktree is always removed afterwards.
+    expect(existsSync(verify)).toBe(false);
+
+    // The durable, immutable pin.
+    const ref = "refs/roll/rebase-candidates/c1/1";
+    expect((await createPinRef(repo, ref, rebasedHead)).code).toBe(0);
+    expect(git(repo, ["rev-parse", ref]).trim()).toBe(rebasedHead);
+    // A second createPinRef on the SAME ref is refused (immutable by construction).
+    expect((await createPinRef(repo, ref, head)).code).not.toBe(0);
+
+    // checkoutPin moves an owned worktree onto the pinned candidate.
+    const owned = join(rt, "owned-wt");
+    git(repo, ["worktree", "add", "--detach", owned, onto]);
+    try {
+      expect((await checkoutPin(owned, ref)).code).toBe(0);
+      expect(git(owned, ["rev-parse", "HEAD"]).trim()).toBe(rebasedHead);
+    } finally {
+      git(repo, ["worktree", "remove", "--force", owned]);
+    }
+  });
+
+  it("conflict: B1 and M1 edit the same line ⇒ verdict conflict, no pin, temp worktree removed", async () => {
+    const { repo, base, head, onto } = makeProbeRepo("probe-conflict", { conflict: true });
+    const rt = tmp("probe-conflict-rt");
+    const verify = join(rt, "verify-wt");
+    const result = await verifyRebaseTemp(repo, base, head, onto, verify, ["true"]);
+    expect(result.verdict).toBe("conflict");
+    expect(result.evidenceRefs).toEqual([]);
+    expect(existsSync(verify)).toBe(false);
+  });
+
+  it("test_failed on a failing testCmd; timeout on a slow testCmd bounded by timeoutMs", async () => {
+    const { repo, base, head, onto } = makeProbeRepo("probe-testfail");
+    const rt = tmp("probe-testfail-rt");
+    const failed = await verifyRebaseTemp(repo, base, head, onto, join(rt, "v1"), ["false"]);
+    expect(failed.verdict).toBe("test_failed");
+    expect(failed.evidenceRefs).toEqual([]);
+    expect(existsSync(join(rt, "v1"))).toBe(false);
+
+    const timedOut = await verifyRebaseTemp(repo, base, head, onto, join(rt, "v2"), ["sleep 2"], 100);
+    expect(timedOut.verdict).toBe("timeout");
+    expect(existsSync(join(rt, "v2"))).toBe(false);
+  });
+
+  it("makeFreshnessCheck passes the allowlist-filtered deliverable_cmd, pins the rebased head, and carries candidateHead (matrix #8)", async () => {
+    const { repo, base, head, onto } = makeProbeRepo("freshness-wire");
+    const rt = tmp("freshness-wire-rt");
+    const cycleId = "20260620-030000-3005";
+    const storyId = "US-FRESH";
+    const p = paths(rt, cycleId);
+    // The recorded workspace carries the card spec with `deliverable_cmd: roll test`.
+    const specDir = join(rt, "worktrees", `cycle-${cycleId}`, ".roll", "features", "uncategorized", storyId);
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(
+      join(specDir, "spec.md"),
+      `---\nid: ${storyId}\ndeliverable_cmd: roll test\n---\n\n# ${storyId}\n`,
+      "utf8",
+    );
+    const identity: HandoffIdentity = {
+      schema: "cycle-handoff/v1",
+      cycleId,
+      storyId,
+      workspace: handoffWorkspace(cycleId, storyId),
+      branch: `loop/cycle-${cycleId}`,
+      builderHead: head,
+      baseSha: base,
+      builderEvidenceRefs: [],
+      builderValidationRef: `builder-validation:${cycleId}:1`,
+      profile: "standard",
+      attempt: 1,
+      fence: "fence-fresh",
+    };
+    // A predecessor merge landed after the admission.
+    appendEvents(p.eventsPath, [
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cB:1", identity, queueSequence: 1, ts: 100 },
+      { type: "delivery:merge_confirmed", cycleId: "cP", storyId: "US-P", branch: "loop/cycle-cP", signal: "merge_commit", mergeCommit: onto, ts: 200 },
+    ]);
+
+    const base2 = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    let captured: string[] | undefined;
+    const ports: Ports = {
+      ...base2,
+      git: {
+        ...base2.git,
+        verifyRebaseTemp: async (rc, b, h, o, wp, testCmd) => {
+          captured = testCmd;
+          // Delegate to the REAL probe with a no-op command: the recorded
+          // `roll test` needs a built roll on PATH — the assertion is that the
+          // allowlist-filtered recorded command is what WOULD run.
+          return base2.git.verifyRebaseTemp!(rc, b, h, o, wp, ["true"]);
+        },
+      },
+    };
+    const result = await makeFreshnessCheck(ports, p.eventsPath, rt)(identity);
+    expect(captured).toEqual(["roll test"]);
+    expect(result?.verdict).toBe("continue");
+    expect(result?.candidateHead).toBe(result?.evidenceRefs?.[0]);
+    expect(result?.candidateHead).not.toBe(head);
+    // The durable pin exists at the rebased head.
+    const ref = `refs/roll/rebase-candidates/${cycleId}/1`;
+    expect(git(repo, ["rev-parse", ref]).trim()).toBe(result?.candidateHead);
+  });
+
+  it("the resumed tail runs the REAL probe end-to-end: continue pins the rebased head → main_freshness{continue} + rebased_attempt_planned (true R1) + serial_recovery (matrix #9)", async () => {
+    const { repo } = makeFixture("f9-continue");
+    const rt = tmp("f9-continue-rt");
+    const cycleId = "20260620-040000-3006";
+    const p = paths(rt, cycleId);
+
+    // Phase 1: build to the durable handoff (records the real baseSha + builderHead).
+    const shim: AgentSpawn = async (agent, opts) => shimAgentTcr(agent, opts);
+    const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    const buildPorts: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+    const built = await runCycleOnce({ ports: buildPorts, ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never }, handoff: true });
+    expect(built.handedOff).toBe(true);
+
+    const events1 = new EventBus().readEvents(p.eventsPath);
+    const view = projectCycleHandoff(events1, cycleId);
+    expect(view?.identity).toBeDefined();
+    const identity = view!.identity!;
+    const builderHead = identity.builderHead;
+    const admitted = events1.find((ev) => ev.type === "cycle:admitted" && "identity" in ev && ev.identity?.cycleId === cycleId);
+
+    // The predecessor merge lands on main AFTER the build (non-conflicting).
+    git(repo, ["checkout", "-q", "main"]);
+    writeFileSync(join(repo, "merged-on-main.txt"), "predecessor merge\n");
+    git(repo, [...GIT_ID, "add", "-A"]);
+    git(repo, [...GIT_ID, "commit", "-qm", "M1 predecessor merge"]);
+    const mergeSha = git(repo, ["rev-parse", "HEAD"]).trim();
+
+    // Record the predecessor merge fact + promote the ready holder.
+    appendEvents(p.eventsPath, [
+      { type: "delivery:merge_confirmed", cycleId: "cP", storyId: "US-P", branch: "loop/cycle-cP", signal: "merge_commit", mergeCommit: mergeSha, ts: (admitted?.ts ?? 0) + 1000 },
+      { type: "cycle:builder_handoff", eventId: "ev-promote", idempotencyKey: `handoff:${identity.storyId}:${identity.attempt}:${identity.fence}`, identity, previousReadyKey: view!.readyKey!, next: "evaluate_or_test", ts: Date.now() },
+    ]);
+
+    const resumePorts: Ports = { ...base, github: fakeGithub(0) };
+    const tail = await runTailOnce({
+      ports: resumePorts,
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      identity,
+      checkFreshness: makeFreshnessCheck(resumePorts, p.eventsPath, rt),
+    });
+
+    expect(tail.recoveryRecorded).toBe(true);
+    expect(tail.terminal).toBeUndefined();
+    const tailEvents = new EventBus().readEvents(p.eventsPath);
+    const freshness = tailEvents.find((ev) => ev.type === "cycle:main_freshness");
+    expect(freshness).toBeDefined();
+    expect(freshness).toMatchObject({ verdict: "continue", predecessorMergeSha: mergeSha, builderHead });
+    const planned = tailEvents.find((ev) => ev.type === "cycle:rebased_attempt_planned");
+    expect(planned).toBeDefined();
+    if (planned !== undefined && "candidateHead" in planned) {
+      // The planned attempt carries the TRUE rebased head (≠ the old builderHead).
+      expect(planned.candidateHead).not.toBe(builderHead);
+      expect(git(repo, ["rev-parse", `refs/roll/rebase-candidates/${cycleId}/1`]).trim()).toBe(planned.candidateHead);
+    }
+    expect(tailEvents.some((ev) => ev.type === "cycle:serial_recovery")).toBe(true);
+    // Leases + retained workspace: no cleanup, no worktree deletion.
+    expect(tailEvents.some((ev) => ev.type === "cycle:cleanup_completed")).toBe(false);
+    expect(existsSync(p.worktreePath)).toBe(true);
+  });
+
+  it("the resumed tail runs the REAL probe end-to-end: a rebase conflict → main_freshness{conflict} + tail_cancelled + serial_recovery, no pin (matrix #9)", async () => {
+    const { repo } = makeFixture("f9-conflict");
+    const rt = tmp("f9-conflict-rt");
+    const cycleId = "20260620-040100-3007";
+    const p = paths(rt, cycleId);
+
+    const shim: AgentSpawn = async (agent, opts) => shimAgentTcr(agent, opts);
+    const base = nodePorts({ repoCwd: repo, paths: p, skillBody: "deliver", routeDeps });
+    const buildPorts: Ports = { ...base, agentSpawn: shim, github: fakeGithub(0) };
+    const built = await runCycleOnce({ ports: buildPorts, ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never }, handoff: true });
+    expect(built.handedOff).toBe(true);
+
+    const events1 = new EventBus().readEvents(p.eventsPath);
+    const view = projectCycleHandoff(events1, cycleId);
+    const identity = view!.identity!;
+    const admitted = events1.find((ev) => ev.type === "cycle:admitted" && "identity" in ev && ev.identity?.cycleId === cycleId);
+
+    // The predecessor merge writes the SAME path the builder shipped → conflict.
+    git(repo, ["checkout", "-q", "main"]);
+    writeFileSync(join(repo, "delivered.txt"), "predecessor wrote the same path\n");
+    git(repo, [...GIT_ID, "add", "-A"]);
+    git(repo, [...GIT_ID, "commit", "-qm", "M1 same-path merge"]);
+    const mergeSha = git(repo, ["rev-parse", "HEAD"]).trim();
+
+    appendEvents(p.eventsPath, [
+      { type: "delivery:merge_confirmed", cycleId: "cP", storyId: "US-P", branch: "loop/cycle-cP", signal: "merge_commit", mergeCommit: mergeSha, ts: (admitted?.ts ?? 0) + 1000 },
+      { type: "cycle:builder_handoff", eventId: "ev-promote", idempotencyKey: `handoff:${identity.storyId}:${identity.attempt}:${identity.fence}`, identity, previousReadyKey: view!.readyKey!, next: "evaluate_or_test", ts: Date.now() },
+    ]);
+
+    const resumePorts: Ports = { ...base, github: fakeGithub(0) };
+    const tail = await runTailOnce({
+      ports: resumePorts,
+      ctx: { cycleId, branch: `loop/cycle-${cycleId}`, loop: "ci" as never },
+      identity,
+      checkFreshness: makeFreshnessCheck(resumePorts, p.eventsPath, rt),
+    });
+
+    expect(tail.recoveryRecorded).toBe(true);
+    const tailEvents = new EventBus().readEvents(p.eventsPath);
+    expect(tailEvents.find((ev) => ev.type === "cycle:main_freshness")).toMatchObject({ verdict: "conflict" });
+    expect(tailEvents.some((ev) => ev.type === "cycle:tail_cancelled")).toBe(true);
+    expect(tailEvents.some((ev) => ev.type === "cycle:serial_recovery")).toBe(true);
+    // No planned rebase, no pin.
+    expect(tailEvents.some((ev) => ev.type === "cycle:rebased_attempt_planned")).toBe(false);
+    expect(gitSucceeds(repo, ["rev-parse", "--verify", `refs/roll/rebase-candidates/${cycleId}/1`])).toBe(false);
+    expect(existsSync(p.worktreePath)).toBe(true);
   });
 });

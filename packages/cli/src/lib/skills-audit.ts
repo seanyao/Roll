@@ -1,4 +1,7 @@
 /**
+ * @responsibility Audits the skills catalog against the one yardstick.
+ */
+/**
  * US-DOSSIER-032 — the ONE skills-audit yardstick, ported to TS so it ships
  * inside `@roll/cli` as a pinned, version-controlled dependency. This is the
  * single source consumed by:

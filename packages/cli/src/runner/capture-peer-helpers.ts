@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs capture helper peer processes for the capture lane.
+ */
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -6,9 +9,11 @@ import {
   authCooldownExclusions,
   canonicalAgentName,
   excludedPeers,
-  peerReviewCost,
+  parsePeerReviewOutput,
+  peerRunIdentity,
   type CycleContext,
 } from "@roll/core";
+import { configuredPeerModel } from "./node-ports.js";
 import { parseEventLine, type RollEvent } from "@roll/spec";
 import { classifyBlockSignature } from "./agent-liveness.js";
 import { blockIfAgentCredentialsMissing } from "./agent-routing.js";
@@ -28,7 +33,6 @@ export function createCapturePeerHelpers(params: {
   ctx: CycleContext;
   commitsAhead: number;
   tcrCount: number;
-  reviewCwd?: string;
 }): {
   attributeBlockCause: (
     peer: string,
@@ -165,6 +169,11 @@ export function createCapturePeerHelpers(params: {
         ts: eventTs(ports),
       });
     let res;
+    // US-PAIR-011: the CONFIGURED model for this peer — rig-declared if agents.yaml
+    // pins one, else the agent's registered default. Resolved BEFORE the spawn so
+    // selection never depends on post-hoc observation (several agents have stub
+    // usage extractors and would be permanently undeterminable).
+    const reviewModel = configuredPeerModel(ports.repoCwd, peer);
     const credentialBlock = blockIfAgentCredentialsMissing(peer, "review", ports, ctx);
     if (credentialBlock !== null) {
       emitConsult("error", "auth", credentialBlock);
@@ -176,7 +185,7 @@ export function createCapturePeerHelpers(params: {
       // timeoutMs. Whichever loses, the cycle is never stalled.
       // E4: the reviewer inspects the committed delivery, so it runs in the
       // execution worktree (submodule cycle worktree for a submodule story).
-      const reviewCwd = params.reviewCwd ?? resolveExecutionCwd(ports, ctx);
+      const reviewCwd = resolveExecutionCwd(ports, ctx);
       // US-CYCLE-002: the peer-review sub-spawn is watchdog-wrapped (evaluator
       // role) for uniform accounting + no bypass; its own short `timeoutMs` race
       // stays the primary cap for this quick read-only consult.
@@ -191,16 +200,12 @@ export function createCapturePeerHelpers(params: {
             ports.agentSpawn(peer, {
               cwd: reviewCwd,
               skillBody: prompt,
-              workspaceExecution: ctx.workspaceExecution,
-              workspaceSkillInvocation: {
-                skillName: "roll-peer",
-                operation: "review",
-                expectedWorkspaceId: ctx.workspaceExecution?.workspace.workspaceId,
-                expectedStoryId: ctx.storyId,
-                repositorySelector: ctx.repositorySelector,
-              },
               timeoutMs,
               bare: true, // FIX-319: review-only framing, no worker autorun directive
+              // US-PAIR-011: pin the CONFIGURED model. Without this the reviewer ran
+              // whatever its CLI defaulted to (cursor defaults to `auto`), so any
+              // isolation claim about "which model reviewed this" was unfounded.
+              ...(reviewModel !== "" ? { model: reviewModel } : {}),
               ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
             }),
         }).then((r) => r.result),
@@ -229,21 +234,28 @@ export function createCapturePeerHelpers(params: {
       emitConsult("error", cause ?? undefined, `exit code ${res.exitCode}; raw output saved`, artifactPath);
       return null;
     }
-    const vm = /VERDICT:\s*(agree|refine|object)/i.exec(res.stdout);
-    if (vm === null) {
+    // FIX-1491: the accept/refuse decision is a pure function so the invariant
+    // "no clear verdict ⇒ NO review" is pinned by a test and cannot be softened
+    // into a default `agree` later.
+    const parsed = parsePeerReviewOutput(res.stdout);
+    if (!parsed.ok) {
       const artifactPath = savePeerRawOutput(peer, "review", res.stdout, res.stderr);
       emitConsult("error", undefined, "unparseable: missing or invalid VERDICT line", artifactPath);
       return null;
     }
-    const verdict = (vm?.[1]?.toLowerCase() ?? "agree") as PairReview["verdict"];
-    const findings = [...res.stdout.matchAll(/^\s*FINDING:\s*(.+)$/gim)].map((m) => (m[1] ?? "").trim());
+    const { verdict } = parsed;
+    const findings = [...parsed.findings];
     // US-PAIR-006 cost observability (owner's top priority "至少知道花了多少钱"):
     // the pair:verdict cost is now the peer's REAL list cost, parsed from its
     // own stdout (claude stream-json or the per-agent stdout-scrape extractors).
     // Best-effort by contract — an unparseable peer records 0, never throws.
-    const cost = peerReviewCost(peer, res.stdout);
+    // US-PAIR-014: carry the BASIS, not just the number — an unparseable peer is
+    // "unobservable", which must never be rendered as "$0.00 / free".
     emitConsult("reviewed");
-    return { verdict, findings, cost };
+    // US-PAIR-011: `model` is what config pinned (selection identity);
+    // `observedModel` is what the peer's own usage footer claimed, when it claimed
+    // anything — reconciliation only (US-PAIR-018), never an input to selection.
+    return { verdict, findings, ...peerRunIdentity(peer, res.stdout, reviewModel) };
   };
   // Full cycle diff (origin/main...HEAD), shared by the gate retry + pairing.
   const cycleDiff = async (cwd: string): Promise<string> => {

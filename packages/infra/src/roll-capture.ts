@@ -1,3 +1,6 @@
+/**
+ * @responsibility Runs the roll-capture binary for physical evidence.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";

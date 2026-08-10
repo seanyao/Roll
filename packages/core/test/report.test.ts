@@ -2,6 +2,10 @@
  * US-ATTEST-005 — report renderer pins: the no-evidence red line (forced
  * Claimed + Discrepancies appendix), deletion-not-placeholder for screenshots,
  * single-file self-containment, and the 5-level badge ladder.
+ *
+ * RL-EVID-003: verification anchor for the registered redline
+ * (policy/rules.yaml) — the "red line" describes below prove enforceRedLine()
+ * is still alive.
  */
 import { describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";

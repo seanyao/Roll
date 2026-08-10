@@ -35,7 +35,7 @@ const saveCwd = process.cwd();
 let code: number;
 try {
   process.chdir(projectDir);
-  code = deltaCommand([
+  code = await deltaCommand([
     "prepare", storyId,
     "--trigger", "host-guided",
     "--topology", "delta-team",

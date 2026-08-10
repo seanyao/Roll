@@ -1,4 +1,5 @@
 /**
+ * @responsibility Determines delivery truth from layered merge signals.
  * US-DELIV-002 — layered reconcile-from-main: the heart of the delivery
  * reconciler epic. A PURE function that determines delivery truth from
  * layered signals (design §3.3, §4).
@@ -9,6 +10,11 @@
  * - When no signal hits, return `wait` — never fabricate a delivery.
  * - main is the single anchor; cycle ledger is a pure projection.
  *
+ * RL-TRUTH-001: registered redline in policy/rules.yaml — only real merge
+ * evidence on main credits a delivery; backlog Done + attest alone is never
+ * sufficient, and no signal means `wait`, never a fabricated delivered. The
+ * CLI/infra adapter side lives in packages/cli/src/lib/delivery-facts.ts.
+ *
  * Pure: no filesystem, no network, no clock, no side effects.
  * Idempotent: same inputs → same output.
  * Exhaustively unit-testable.
@@ -16,6 +22,7 @@
 
 import type { DeliveryState } from "@roll/spec";
 import type { PrMergeableState } from "./pr-reconcile.js";
+import { DEFAULT_REQUIRED_CHECK, requiredCheckVerdict, type CheckConclusion } from "./required-check.js";
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -39,6 +46,8 @@ export interface ReconcileCycle {
 export interface ReconcileFacts {
   /** L1: PR state from gh (undefined = gh unavailable / PR not found). */
   prState?: "OPEN" | "MERGED" | "CLOSED";
+  /** FIX-1487: head sha the CI verdict came from; pinned into the merge request. */
+  headSha?: string;
   /** L1: merge commit SHA from the PR (only when prState is MERGED). */
   prMergeCommit?: string;
   /**
@@ -54,8 +63,26 @@ export interface ReconcileFacts {
    * for a merged PR, but handled gracefully).
    */
   mainPatchIds: ReadonlySet<string>;
-  /** CI status for the PR (drives merge_now vs ci_failed). */
+  /**
+   * Aggregate CI status for the PR. FIX-1489: this is now only a WAIT/RED signal —
+   * it can no longer license a merge on its own, because `reduceStatusCheckRollup`
+   * counts SKIPPED/NEUTRAL as green and `ci.yml` has a real `if:` that makes
+   * `test-ts` skipped. Merge permission comes from {@link checks} below.
+   */
   ciGreen?: boolean;
+  /**
+   * FIX-1489: per-check name+conclusion on the CI verdict's head sha. Merge
+   * permission is a NAMED judgment over this list (see {@link requiredChecks}).
+   * Absent → fail-closed: the reconciler waits instead of falling back to
+   * `ciGreen`. "A gate that never ran is not a gate that passed."
+   */
+  checks?: readonly CheckConclusion[];
+  /**
+   * FIX-1489/FIX-1488: the required-check SET. Every name must be present on the
+   * head sha AND conclude `success`. Defaults to `[DEFAULT_REQUIRED_CHECK]`; the
+   * doc-drift gate joins it when that flips hard (IDEA-084 US-RULE-004c).
+   */
+  requiredChecks?: readonly string[];
   /** L3 cross-check: does the backlog row say Done? */
   backlogDone: boolean;
   /** L3 cross-check: does an attest report exist? */
@@ -209,6 +236,17 @@ export function reconcileDelivery(
       // a green CI alone is not license to squash → wait, never merge blind.
       if (facts.prMergeable === "UNKNOWN") {
         return { kind: "wait" };
+      }
+      // FIX-1489: the aggregate got us this far; the NAMED verdict decides.
+      // Without this, a skipped `test-ts` reduced to "green" and merged untested —
+      // the hole FIX-1487 closed for the release path but not for story cards.
+      if (facts.checks === undefined) return { kind: "wait" };
+      const verdict = requiredCheckVerdict(facts.checks, facts.requiredChecks ?? DEFAULT_REQUIRED_CHECK);
+      if (!verdict.ok) {
+        // pending → keep waiting; anything else (absent / skipped / failed) is a
+        // refusal, never a merge.
+        if (verdict.reason === "pending") return { kind: "wait" };
+        return { kind: "ci_failed" };
       }
       return { kind: "merge_now", method: "squash" };
     }

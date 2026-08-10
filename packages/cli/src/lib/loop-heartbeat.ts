@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects loop heartbeat facts for the Truth Console overview.
+ */
+/**
  * US-DOSSIER-011 — loop heartbeat collection for the Truth Console overview.
  *
  * Best-effort, injected-fs. A collection miss yields an honest empty/partial

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop pardon-skip-list` transition alias delegating to doctor pardon.
+ */
+/**
  * `roll loop pardon-skip-list` — legacy transition command.
  *
  * REFACTOR-073: the canonical surface is now `roll doctor pardon`.

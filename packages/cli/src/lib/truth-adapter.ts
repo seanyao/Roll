@@ -1,4 +1,7 @@
 /**
+ * @responsibility Re-exports the core truth adapter for backward compatibility.
+ */
+/**
  * US-OBS-016 — truth-adapter moved to @roll/core (single read-side home).
  * Re-export for backward compat; new consumers import from @roll/core.
  */

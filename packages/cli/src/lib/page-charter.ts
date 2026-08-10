@@ -1,4 +1,7 @@
 /**
+ * @responsibility Collects the Charter project tab as a markdown browser.
+ */
+/**
  * US-DOSSIER-033 — the Charter PROJECT TAB collector: a markdown browser.
  *
  * The design reference (`Delivery Dossier.dc.html`) proves the render primitive

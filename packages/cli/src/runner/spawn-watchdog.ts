@@ -1,4 +1,7 @@
 /**
+ * @responsibility Watches spawned sub-agents and fails the role on hang.
+ */
+/**
  * US-CYCLE-002 — per-role sub-agent spawn watchdog. A supervisor delegates to
  * sequential heterogeneous subagents (designer / evaluator / adversarial builder
  * / pick-ranking); each of those spawns is wrapped by {@link spawnWatched} so it

@@ -1,110 +1,108 @@
-# roll backlog sync — pull GitHub Issues into a Workspace backlog
+# roll backlog sync — pull GitHub Issues into your backlog
 
-`roll backlog sync` pulls GitHub Issues into one resolved Workspace. It writes
-planning artifacts only and never writes back to GitHub.
+`roll backlog sync` pulls issues from a GitHub repository and writes them
+into your local `.roll/backlog.md`. It is single-direction
+(issues → backlog) in v1: nothing is written back to GitHub.
 
-The command resolves its target from `--workspace <id|path>` (or `--ws`), the
-standard Workspace environment, reachable Workspace/Issue context, or an exact
-requirement match. Active lifecycle alone never selects a mismatched Workspace.
-Ambiguous, conflicting, incomplete-discovery, legacy-repository, or
-out-of-Workspace targets fail before any file is written. `--all` is read-only
-and is rejected for sync.
+`roll backlog sync` 把 GitHub Issues 拉进本地 `.roll/backlog.md`。
 
 ## Authentication
 
 The sync resolves a GitHub token in this order:
 
-1. `$GITHUB_TOKEN` from the environment or CI secrets.
-2. `gh auth token` after `gh auth login`.
+1. `$GITHUB_TOKEN` — set it in your environment or CI secrets.
+2. `gh auth token` — falls back to the GitHub CLI if you have run
+   `gh auth login`.
 
-If neither is available, the command stops with setup guidance.
+If neither is available the command stops and tells you how to set one.
+
+```bash
+export GITHUB_TOKEN=ghp_xxx
+# or, if you use the GitHub CLI:
+gh auth login
+```
 
 ## Quick start
 
 ```bash
-# First sync for this Workspace must name the GitHub repository.
-roll backlog sync --workspace ws-product --repo seanyao/roll-meta
+# First sync must name the repo explicitly:
+roll backlog sync --repo seanyao/roll-meta
 
-# Preview without writing planning artifacts.
-roll backlog sync --workspace ws-product --repo seanyao/roll-meta --dry-run
+# Preview without writing anything:
+roll backlog sync --repo seanyao/roll-meta --dry-run
 
-# Pull issues carrying any listed label.
-roll backlog sync --workspace ws-product --repo seanyao/roll-meta --label P1,bug
+# Only pull issues carrying specific labels (OR semantics):
+roll backlog sync --repo seanyao/roll-meta --label P1,bug
 
-# Later runs reuse this Workspace's saved repository.
-roll backlog sync --workspace ws-product
+# After the first run the repo is remembered, so you can omit --repo:
+roll backlog sync
 ```
-
-When the current directory already identifies the Workspace, `--workspace` may
-be omitted.
-
-## Workspace-owned artifacts
-
-| Artifact | Workspace path |
-|---|---|
-| Planning index | `backlog/index.md` |
-| Imported Story contract | `backlog/backlog-lifecycle/<STORY-ID>/spec.md` |
-| Sync configuration | `runtime/backlog-sync.yaml` |
-
-These paths cannot be overridden with legacy `--backlog`, `--features`, or
-`--local-yaml` flags.
 
 ## Flags
 
-| Flag | Notes |
-|---|---|
-| `--workspace` | Workspace ID or absolute path. Uses the canonical resolver when omitted. |
-| `--repo` | `owner/repo`. Required on the first sync for each Workspace. |
-| `--dry-run` | Prints the planned add/skip result without writing Workspace artifacts. |
-| `--label` | Comma-separated label filter. May repeat; matching uses OR semantics. |
+| Flag         | Notes |
+|--------------|-------|
+| `--repo`     | `owner/repo`. Required on the first sync; afterwards read from config. |
+| `--dry-run`  | Compute the diff and print it, but leave `.roll/backlog.md` unchanged. |
+| `--label`    | Comma-separated label filter. May repeat. Matches any (OR). |
 
-## Planning identity and status
+## label → type mapping
 
-The first recognized label selects the Story type:
+The issue's labels decide the backlog type prefix. The first matching
+label wins; with no match the default is `US`.
 
-| GitHub label | Story type |
-|---|---|
-| `bug` | `FIX` |
-| `enhancement`, `feature`, `US` | `US` |
-| `refactor` | `REFACTOR` |
-| no recognized label | `US` |
+| GitHub label                | Backlog type |
+|-----------------------------|--------------|
+| `bug`                       | `FIX`        |
+| `enhancement` / `feature` / `US` | `US`    |
+| `refactor`                  | `REFACTOR`   |
+| (no matching label)         | `US`         |
 
-Issue #13 therefore becomes one canonical Story ID such as `FIX-GH-13`. The
-same ID appears in the index link, contract directory, contract heading, and
-command output, so `roll backlog show FIX-GH-13` opens the generated contract.
-If labels change later, the durable planning ID is preserved.
+Issue state maps to the status column: `open` → `📋 Todo`,
+`closed` → `✅ Done`. The issue title becomes the row description.
 
-GitHub state does not decide Roll planning completion. New open or closed Issues
-enter the backlog as `📋 Todo`; an existing planning status is never overwritten
-by sync. Delivery completion remains governed by Roll delivery truth.
+## IDs and idempotency
 
-Sync is idempotent by GitHub issue number. A later run skips an existing Story
-and reports its durable full ID:
+Each issue gets a stable backlog id `GH-<number>` (e.g. issue #13 →
+`GH-13`), combined with the type prefix (`US-GH-13`, `FIX-GH-13`).
 
-```text
-skipped (already exists): FIX-GH-13
-added: 0, skipped: 1, total issues: 1
+Sync is idempotent: a second run skips any issue whose id already exists
+in `.roll/backlog.md` — it never overwrites the status or description of
+an existing row, and prints `skipped (already exists): GH-13`. Each run
+ends with a summary:
+
+```
+added: 2, skipped: 5, total issues: 7
 ```
 
-## One GitHub source per Workspace
+`--dry-run` prints the same diff with `+` (would add) and `=` (would
+skip) markers and never touches the file.
 
-The first successful sync binds the Workspace to one GitHub `owner/repo` source
-in `runtime/backlog-sync.yaml`. Later explicit values must identify the same
-repository; a different source fails before fetching or writing. Owner and
-repository name comparison is case-insensitive.
+## Configuration: `.roll/local.yaml`
+
+After a successful real sync the resolved repo, labels and timestamp are
+persisted so later runs can omit `--repo`:
 
 ```yaml
 backlog_sync:
   repo: seanyao/roll-meta
   direction: issues-to-backlog
   labels: []
-  last_sync_at: 2026-07-21T10:00:00Z
+  last_sync_at: 2026-05-28T10:00:00Z
 ```
 
-Each Workspace owns its own source binding and sync timestamp.
+| Field           | Meaning |
+|-----------------|---------|
+| `repo`          | Default `owner/repo` for flagless syncs. |
+| `direction`     | Always `issues-to-backlog` in v1. |
+| `labels`        | Default label filter; an explicit `--label` flag overrides it. |
+| `last_sync_at`  | Timestamp of the last successful sync. |
 
-## Not supported
+An explicit flag always overrides the persisted config. If
+`.roll/local.yaml` has no `backlog_sync:` block, the first sync must pass
+`--repo`.
 
-Multiple GitHub issue sources in one Workspace, two-way write-back, Projects or
-Milestones mapping, PR linking, non-GitHub providers, and custom mapping rules
-are outside this command.
+## Not in v1
+
+Two-way write-back, Projects/Milestones mapping, PR linking, non-GitHub
+platforms, and custom mapping rules are out of scope for v1.

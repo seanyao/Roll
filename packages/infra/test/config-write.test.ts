@@ -22,8 +22,8 @@ describe("configValidate — integer range, bilingual lines (no [roll] prefix)",
     expect(configValidate("loop_dream_hour", "5")).toEqual({ ok: true });
   });
   it("accepts the min and max boundaries", () => {
-    expect(configValidate("loop_active_end", "1")).toEqual({ ok: true });
-    expect(configValidate("loop_active_end", "24")).toEqual({ ok: true });
+    expect(configValidate("loop_dream_hour", "0")).toEqual({ ok: true });
+    expect(configValidate("loop_dream_hour", "23")).toEqual({ ok: true });
   });
   it("rejects a non-integer", () => {
     expect(configValidate("loop_dream_hour", "abc")).toEqual({
@@ -35,11 +35,11 @@ describe("configValidate — integer range, bilingual lines (no [roll] prefix)",
     });
   });
   it("rejects below min", () => {
-    expect(configValidate("loop_active_end", "0")).toEqual({
+    expect(configValidate("loop_dream_hour", "-1")).toEqual({
       ok: false,
       lines: [
-        "config: 'loop_active_end' must be >= 1 (got 0)",
-        "config：'loop_active_end' 必须 >= 1（收到 0）",
+        "config: 'loop_dream_hour' must be >= 0 (got -1)",
+        "config：'loop_dream_hour' 必须 >= 0（收到 -1）",
       ],
     });
   });
@@ -126,28 +126,9 @@ describe("applyConfigSet — pure idempotent yaml transform (mirrors _config_set
     const src = "loop_dream_hour: 3\nloop_dream_minute: 0\n";
     expect(applyConfigSet(src, "loop_dream_hour", "9")).toBe("loop_dream_hour: 9\nloop_dream_minute: 0\n");
   });
-  it("nested key into empty text creates parent block", () => {
-    expect(applyConfigSet("", "loop_schedule.period_minutes", "30")).toBe(
-      "loop_schedule:\n  period_minutes: 30\n",
-    );
-  });
-  it("nested key appends child under an existing parent block", () => {
+  it("retired scheduler keys leave config text unchanged", () => {
     const src = "loop_schedule:\n  period_minutes: 30\n";
-    expect(applyConfigSet(src, "loop_schedule.offset_minute", "7")).toBe(
-      "loop_schedule:\n  period_minutes: 30\n  offset_minute: 7\n",
-    );
-  });
-  it("nested key replaces an existing child in place", () => {
-    const src = "loop_schedule:\n  period_minutes: 30\n  offset_minute: 0\n";
-    expect(applyConfigSet(src, "loop_schedule.offset_minute", "7")).toBe(
-      "loop_schedule:\n  period_minutes: 30\n  offset_minute: 7\n",
-    );
-  });
-  it("nested append stops at the next top-level key (no leak into siblings)", () => {
-    const src = "loop_schedule:\n  period_minutes: 30\nother:\n  x: 1\n";
-    expect(applyConfigSet(src, "loop_schedule.offset_minute", "7")).toBe(
-      "loop_schedule:\n  period_minutes: 30\n  offset_minute: 7\nother:\n  x: 1\n",
-    );
+    expect(applyConfigSet(src, "loop_schedule.offset_minute", "7")).toBe(src);
   });
 });
 
@@ -164,10 +145,17 @@ describe("configSet — file wrapper (mkdir + write through applyConfigSet)", ()
     configSet("loop_dream_hour", "5", f);
     expect(readFileSync(f, "utf8")).toBe("loop_dream_hour: 5\n");
   });
-  it("rewrites an existing file in place", () => {
+  it("does not create a file for a retired scheduler key", () => {
     const f = join(dir, "local.yaml");
-    writeFileSync(f, "loop_schedule:\n  period_minutes: 30\n");
+    expect(() => readFileSync(f, "utf8")).toThrow();
     configSet("loop_schedule.offset_minute", "7", f);
-    expect(readFileSync(f, "utf8")).toBe("loop_schedule:\n  period_minutes: 30\n  offset_minute: 7\n");
+    expect(() => readFileSync(f, "utf8")).toThrow();
+  });
+  it("does not modify an existing file for a retired scheduler key", () => {
+    const f = join(dir, "local.yaml");
+    const src = "loop_schedule:\n  period_minutes: 30\n";
+    writeFileSync(f, src);
+    configSet("loop_schedule.offset_minute", "7", f);
+    expect(readFileSync(f, "utf8")).toBe(src);
   });
 });

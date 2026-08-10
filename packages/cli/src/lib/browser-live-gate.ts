@@ -1,4 +1,7 @@
 /**
+ * @responsibility Provides the live managed-lane regression gate seam.
+ */
+/**
  * US-BROW-020 — live managed-lane gate seam.
  *
  * Minimal, testable glue between the environment and the pure evaluator

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Projects one cycle's event stream into a readable role chain.
  * CycleRoleSummary — US-OBS-032: a pure projection that reads the RollEvent
  * stream for one cycle and translates low-level events into a readable role
  * chain: Builder, Peer Reviewer, Evaluator, and Attest Gate.

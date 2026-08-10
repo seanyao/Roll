@@ -6,9 +6,8 @@ Roll 把 AI agent 当作一个按 scope 管理的执行身份池。当前模型�
 Scope -> Role -> Binding -> Agent -> optional Model
 ```
 
-这个形状在每一层递归复用：Machine 声明能力；Project 继续承载 legacy 仓库绑定；
-已注册 Workspace 则固定通过 `machine -> workspace -> story -> skill` casting，Story
-或 Skill 可以继续收窄绑定。
+这个形状在每一层递归复用：Machine 声明本机有哪些 agent，Project 绑定项目和
+Story 的角色，Story 或 Skill 可以在需要时进一步收窄绑定。
 
 ## Agent 领域文件
 
@@ -16,9 +15,6 @@ Scope -> Role -> Binding -> Agent -> optional Model
   `supervise` 这类机器级角色。
 - `.roll/agents.yaml` 是 Project Scope，用来绑定项目/Story 角色，例如
   `supervise`、`execute`、`evaluate`。
-- `<workspace>/agents.yaml` 是 Workspace Scope，只允许 `roles` 与
-  `defaults.story` / `defaults.skill`。它不能声明 agent、model、disabled state 或
-  capacity；Workspace runtime 也不会 fallback 到仓库内 Project Scope。
 
 `~/.roll/config.yaml` 仍可作为通用偏好和 legacy migration 输入存在，但它不再是
 agent 语义的主配置面。常用命令：
@@ -28,12 +24,7 @@ roll agent                      # 查看 Machine Scope、有效 Project Scope �
 roll agent migrate --dry-run    # 预览 legacy 文件迁移
 roll agent migrate              # 写入 roll-agents/v1 文件
 roll agent list                 # 查看本机已安装 agent
-roll agent readiness [agent]    # 查看机器 readiness
-roll agent --workspace <id>     # 只读查看 Workspace 有效 casting 与来源链
 ```
-
-`roll agent list` 与 `roll agent readiness` 始终是 machine view，不随 cwd 或当前
-Workspace 改变。auth/network/quota 等运行时信号只影响本次 trace，不会回写配置。
 
 ## 角色
 
@@ -84,33 +75,7 @@ agents:
 roles:
   supervise:
     use: codex
-capacity:
-  global: auto
-  default_per_agent: 1
-  agents:
-    codex: 2
-  heartbeat_seconds: 30
-  stale_after_seconds: 120
 ```
-
-## 机器进程容量
-
-`capacity` 是 closed Machine Scope policy；Project 与 Workspace 文件不能声明或扩大
-它。`global: auto` 等于所有启用 agent 的 slot 总和。若整个 block 缺失，每个启用的
-machine agent 默认一个 slot，global limit 就是这些 slot 的总和。
-
-每个 Builder、test-author、implementer 和 attacker 进程都必须在 spawn 前取得一个
-exact-owned lease。per-agent limit 跨 model 与 account/context key 聚合。没有可用 slot
-时，cycle 记录中性的 `waiting_capacity`，把 Story 恢复为 Todo，等后续 eligible tick
-再试；它不会触发 fallback、Story failure 或 no-progress 计数。当前 acquired/waiting
-agent、model 与 retry 状态可用以下命令查看：
-
-```bash
-roll loop status --all
-```
-
-lease event 只保留 routing identity 与时间信息；auth、quota、network 和 credential
-状态不会写入 capacity policy 或 status。
 
 ## 公平候选池
 
@@ -216,6 +181,41 @@ Roll 区分两种有名字的交付拓扑，二者不可混为一谈，也不要
 角色之间只通过命名、带校验和的 artifact 与事件流交接，绝不传递原始会话。Builder 是
 唯一的 worktree 写者；Designer、Evaluator、Peer 除自己的 artifact 目录外均只读。Peer
 只是 Evaluator 的可选咨询输入，绝不替代 Evaluator。
+
+### 本机指定模型就绪状态
+
+`roll delta rigs` 是面向人的、本机诊断命令，用于查看本机 Delta preset 中引用的指定模型。
+不带标志时，它只渲染由指针选中的缓存观测：不会启动进程、联系服务、写配置或快照、追加项目
+事件，也不会修改工作区、租约、派工、角色解析或交付事实。
+
+只有在 owner 需要新的有界本机观测时，才运行 `roll delta rigs --refresh`。它派生相同的已配置
+候选，探测每个精确的 `{adapter, cliModelId}`，并且只在每个候选都有观测后发布完整快照。例如，
+Codex 映射使用精确选择器 `codex exec --model <cliModelId> ...`，绝不使用默认模型。找不到
+可执行文件会显示为**不可用**并提示安装；没有已验证安全的指定模型非交互方式的适配器也会显示为
+**不可用**，且不会执行。
+
+视图把结果分为**通过**、**不可用**和**待确认**。兼容但过期的快照是待确认/过期；指纹不匹配
+是待确认/不兼容；超时、固定令牌输出未验证或未分类失败也都是待确认。修复界面显示的问题后再刷新。
+当前的通过观测绝不证明后续长任务、交付、宿主会话新鲜度或最终角色分配；正常解析仍会应用 pin、
+排除规则、标签、成本上限和角色多样性。
+
+一次调用只使用一种语言：`ROLL_LANG` 是单进程覆盖，其后是持久化的 `roll config lang` 偏好，
+再后是 `LC_ALL`、`LANG` 和英文。中文操作者可用
+`ROLL_LANG=zh roll delta rigs --refresh` 获得完整的简体中文本机诊断。
+
+Builder 完成最后一次 green TCR 提交后、进行唯一一次正式 Builder 校验前，运行
+`roll delta preflight --delegation <id> --stage builder --json` 做只读自检：它使用与正式校验
+相同的结构检查（prepared 上下文、受管工作区身份与分离 HEAD、manifest 与产物校验和、
+路径包含、身份/attestation、Builder 证据格式），但不追加任何事件，也不改动
+lease/帧/工作区/检查点。失败的预检只是本地诊断，Builder 可在同一委派/帧内修复。它不产生
+生命周期成功，也不证明模型执行；它绝不替代正式 fail-closed 校验或独立 Evaluator。把 JSON
+输出保存在受管帧之外，随后传给 `roll delta validate --delegation <id> --stage builder
+--preflight-receipt <path>`。正式门会把收据与新读取的 heads 和产物字节逐一比对后才推进委派；
+收据缺失、格式损坏、过期或不匹配时不写任何生命周期事件，Builder 可以重新预检。
+
+**Builder 交接示例：**`预检失败 → 在同一帧修复 → 预检通过 → 正式 validate`。例如 Builder
+证据文件缺失会令预检失败；Builder 在当前帧补齐文件后重跑预检，只有通过后才将收据交给唯一一次
+正式 validate。这是本地修复，不是正式 blocked delegation，也不表示自动重试或 fallback。
 
 **诚实边界——这些是协议明说的限制，绝不可夸大：**
 

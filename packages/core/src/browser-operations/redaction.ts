@@ -1,4 +1,5 @@
 /**
+ * @responsibility Redacts untrusted diagnostic artifacts before they enter the ledger.
  * US-BROW-005 — diagnostic artifacts are untrusted and secret-free before
  * they can enter the Browser Operations ledger.
  */

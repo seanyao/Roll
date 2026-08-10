@@ -1,4 +1,7 @@
 /**
+ * @responsibility Triggers the peer review hard gate.
+ */
+/**
  * FIX-150b / FIX-293 — the peer HARD-trigger gate.
  *
  * v2's peer review was a skill-text suggestion: nothing enforced it, non-claude
@@ -142,8 +145,6 @@ export interface PeerGateOptions {
    *  @roll/core (vendor-based, agent-agnostic). When omitted the gate keeps the
    *  legacy complexity-only behaviour (high-complexity + no evidence ⇒ block). */
   heteroAvailable?: boolean;
-  /** Workspace cycles aggregate changed files across repository legs. */
-  changedFiles?: (worktreeCwd: string) => Promise<string[]>;
 }
 
 /** Read `loop_safety.peer_gate` from `<repoCwd>/.roll/policy.yaml`; default hard.
@@ -205,7 +206,7 @@ export async function runPeerGate(
   opts: PeerGateOptions = {},
 ): Promise<PeerGateResult> {
   try {
-    const files = await (opts.changedFiles ?? cycleChangedFiles)(worktreeCwd);
+    const files = await cycleChangedFiles(worktreeCwd);
     const cx = assessComplexity(files);
     const { heteroAvailable } = opts;
 

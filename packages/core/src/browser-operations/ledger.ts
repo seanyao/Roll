@@ -1,4 +1,6 @@
-/** US-BROW-005 — append-only operation and lease transition ledger. */
+/**
+ * @responsibility Appends operation and lease transition facts to the browser ledger.
+ * US-BROW-005 — append-only operation and lease transition ledger. */
 import { createHash, randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import type { BrowserActionResult, BrowserOperationEvent, BrowserOperationRun, CaptureBridgeLink } from "@roll/spec";

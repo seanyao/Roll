@@ -1,4 +1,7 @@
-import { EventBus, parseBacklog, ensureDeliveriesFresh, nodeExecPort, queryStoryDelivery, assessBootstrapArtifacts, readPendingDeliveryEvidenceManifests, type AuditPrEvidence, type FreshnessPort, type PendingDeliveryEvidenceManifest, type StoryDeliveryTruth, type StoryTruth } from "@roll/core";
+/**
+ * @responsibility Runs the `roll loop go` subcommand, starting a loop cycle over the routed next card.
+ */
+import { EventBus, parseBacklog, ensureDeliveriesFresh, nodeExecPort, projectCycleHandoff, projectHandoffCapacity, queryStoryDelivery, assessBootstrapArtifacts, readPendingDeliveryEvidenceManifests, type AuditPrEvidence, type FreshnessPort, type PendingDeliveryEvidenceManifest, type StoryDeliveryTruth, type StoryTruth } from "@roll/core";
 import {
   GOAL_REVIEW_MODES,
   GOAL_SCHEMA_VERSION,
@@ -27,8 +30,8 @@ import { runPeerReview, spawnPeerReviewAgent, type SpawnPeerReviewResult } from 
 import { guideExternalToolSetup, silentPreinstallChromium } from "../lib/external-tools.js";
 import { loopControlRunnerReadout, rollBin, staleLoopRunnerMessage } from "./loop-runner-readout.js";
 import { screenLockedCycleIds } from "../runner/screen-lock-events.js";
-import { emitBacklogTargetError, resolveBacklogCommandTarget, type BacklogTargetResolver } from "./backlog-target.js";
-import { canonicalWorkspaceSelectorIndex, isCanonicalWorkspaceSelectorToken, workspaceSelectorArgs } from "../lib/workspace-selector.js";
+import { handoffEnabled, withHandoffMutex } from "../runner/run-cycle.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * FIX-906: node fs-backed {@link FreshnessPort} for `ensureDeliveriesFresh`.
@@ -90,6 +93,12 @@ export interface RunOnceInput {
    * scoped card even while autonomous scheduling is paused. See {@link GOAL_GUIDED_ENV}.
    */
   guided?: boolean;
+  /**
+   * US-CYCLE-013: resume the retained tail of this exact cycle instead of
+   * starting a new build (the scheduler promoted a ready holder). Threaded to
+   * the run-once child via ROLL_LOOP_GO_RESUME.
+   */
+  resumeCycleId?: string;
 }
 
 export interface StartTmuxInput {
@@ -97,9 +106,6 @@ export interface StartTmuxInput {
   slug: string;
   args: string[];
   rollBin: string;
-  workspaceId?: string;
-  runtimeRoot?: string;
-  backlogPath?: string;
 }
 
 export interface LoopGoDeps {
@@ -122,7 +128,6 @@ export interface LoopGoDeps {
   preinstallChromium?: () => void;
   prEvidence?: (projectPath: string, storyId: string, backlogStatus: string) => Promise<AuditPrEvidence | undefined>;
   finalReview?: (input: GoalFinalReviewInput) => Promise<GoalFinalReviewResult>;
-  resolveTarget?: BacklogTargetResolver;
 }
 
 interface GoOptions {
@@ -270,7 +275,6 @@ function realDeps(): LoopGoDeps {
       silentPreinstallChromium();
     },
     prEvidence: defaultPrEvidence,
-    resolveTarget: resolveBacklogCommandTarget,
   };
 }
 
@@ -292,13 +296,7 @@ async function defaultPrEvidence(projectPath: string, _storyId: string, backlogS
 }
 
 function runtimeDir(projectPath: string): string {
-  const override = (process.env["ROLL_PROJECT_RUNTIME_DIR"] ?? "").trim();
-  return override === "" ? join(projectPath, ".roll", "loop") : override;
-}
-
-function backlogPath(projectPath: string): string {
-  const override = (process.env["ROLL_WORKSPACE_BACKLOG_PATH"] ?? "").trim();
-  return override === "" ? join(projectPath, ".roll", "backlog.md") : override;
+  return join(projectPath, ".roll", "loop");
 }
 
 function goalPath(projectPath: string): string {
@@ -481,10 +479,6 @@ function parseOptions(args: string[]): GoOptions {
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!;
-    if (isCanonicalWorkspaceSelectorToken(arg)) {
-      i += 1;
-      continue;
-    }
     if (arg === "--worker") {
       worker = true;
       continue;
@@ -614,12 +608,11 @@ function isGuidedRun(opts: GoOptions): boolean {
 
 function loopGoHelp(): string {
   return [
-    "Usage: roll loop go [--workspace <id|path>] [--epic <name>|--cards <ids>|--all] [--for <duration>] [--max-cycles <n>] [--review <auto|hetero|self|off>] [--attach] [--no-tmux]",
+    "Usage: roll loop go [--epic <name>|--cards <ids>|--all] [--for <duration>] [--max-cycles <n>] [--review <auto|hetero|self|off>] [--attach] [--no-tmux]",
     "  Chain goal-mode cycles until the scoped backlog is complete, paused, or capped.",
     "  按 goal 范围连续执行 cycle，直到完成、暂停或达到上限。",
     "",
     "Options:",
-    "  --workspace <id|path> Bind this goal session to one Workspace runtime and backlog.",
     "  --epic <name>       Limit the goal to one epic.",
     "  --cards <ids>       Limit the goal to comma/space separated card IDs.",
     "  --all               Reset the goal scope to the full Todo backlog (undo a prior --epic/--cards goal).",
@@ -647,6 +640,10 @@ function loopGoHelp(): string {
     "  productivity floor  A cycle whose agent EXECUTED but produced 0 commits and no delivery is a `gave_up` terminal — alerted on the first occurrence (no streak).",
     "  dead-loop breaker   A card is skipped after consecutive no-progress cycles; the whole goal STOPS after K consecutive no-progress cycles (a loud ALERT) — an unmergeable card can never spin forever.",
     "  timebox             Stops only at a cycle boundary and records a goal:gate_tripped event.",
+    "",
+    "Durable build/tail handoff (US-CYCLE-013):",
+    "  With `ROLL_CYCLE_HANDOFF_V1=1`, one completed build waits in its retained workspace while the next card builds; a third card queues. See guide/loop.md.",
+    "  设置 `ROLL_CYCLE_HANDOFF_V1=1` 后，一张完成构建的卡会在其保留工作目录中等待，同时下一张卡开始构建；第三张卡进入队列。详见 guide/loop.md。",
     "",
     "Review modes:",
     "  auto    Default. Try heterogeneous reviewers in ranked order; degrade to self review only after every heterogeneous candidate fails or when no other provider is installed.",
@@ -741,16 +738,13 @@ export function planGoTmuxCommands(input: StartTmuxInput, state: GoTmuxState): s
     .concat("--worker")
     .map(shellQuote)
     .join(" ");
-  const workspaceEnv = input.workspaceId === undefined
-    ? ""
-    : ` ROLL_WORKSPACE=${shellQuote(input.workspaceId)} ROLL_PROJECT_RUNTIME_DIR=${shellQuote(input.runtimeRoot ?? "")} ROLL_WORKSPACE_BACKLOG_PATH=${shellQuote(input.backlogPath ?? "")}`;
   // US-LOOP-117: the worker runs in a fresh tmux shell, so only the variables
   // named here reach it. ROLL_LOOP_FORCE asks for readable text instead of a JSON
   // stream — a display choice the owner made for THIS run, so forward it when set
   // (codex r6: the docs promised it worked here, and it silently did not).
   const force = (process.env["ROLL_LOOP_FORCE"] ?? "").trim();
   const forceEnv = force === "" ? "" : `ROLL_LOOP_FORCE=${shellQuote(force)} `;
-  const command = `cd ${shellQuote(input.projectPath)} && ${forceEnv}ROLL_LOOP_GO_WORKER=1 ROLL_LOOP_NO_TMUX=1 ROLL_NO_SCREENCAP=1${workspaceEnv} ROLL_BIN=${shellQuote(input.rollBin)} ${shellQuote(input.rollBin)} loop go ${workerArgs}`;
+  const command = `cd ${shellQuote(input.projectPath)} && ${forceEnv}ROLL_LOOP_GO_WORKER=1 ROLL_LOOP_NO_TMUX=1 ROLL_NO_SCREENCAP=1 ROLL_BIN=${shellQuote(input.rollBin)} ${shellQuote(input.rollBin)} loop go ${workerArgs}`;
   const plan: string[][] = [];
   if (!state.sessionExists) {
     plan.push(["new-session", "-d", "-s", session, "-x", "200", "-y", "50", "-n", "watch", watch]);
@@ -835,6 +829,10 @@ export function buildRunOnceChildEnv(input: RunOnceInput, base: NodeJS.ProcessEn
     // inherited ambient "1" cannot survive into an unguided child. Fail closed
     // to "0" — isGuidedRunOnce treats anything but "1" as not guided.
     [GOAL_GUIDED_ENV]: input.guided === true ? "1" : "0",
+    // US-CYCLE-013: a scheduler-promoted tail resume. Unset on every call (the
+    // "0" sentinel) so an inherited ambient value cannot survive into a child
+    // that should build instead.
+    ROLL_LOOP_GO_RESUME: input.resumeCycleId ?? "",
   };
 }
 
@@ -852,6 +850,146 @@ function realRunOnce(input: RunOnceInput): Promise<number> {
     child.on("exit", (code) => resolve(code ?? 1));
     child.on("error", () => resolve(1));
   });
+}
+
+// ── US-CYCLE-013 — scheduler mutex + FIFO admission (default off) ────────────
+
+/** The project-wide scheduler lock file (distinct from the per-run inner.lock). */
+export const HANDOFF_LOCK_FILE = "handoff.lock";
+
+/** The next monotonic FIFO queue sequence (max existing + 1; 1 when empty). */
+export function nextHandoffQueueSequence(eventsPath: string): number {
+  let max = 0;
+  for (const ev of new EventBus().readEvents(eventsPath)) {
+    if ((ev.type === "cycle:queued" || ev.type === "cycle:queue_rejected") && ev.queueSequence > max) {
+      max = ev.queueSequence;
+    }
+    if (ev.type === "cycle:admitted" && ev.queueSequence > max) {
+      max = ev.queueSequence;
+    }
+  }
+  return max + 1;
+}
+
+export type HandoffSchedulerDecision =
+  | { decision: "promoted"; cycleId: string }
+  | { decision: "admit"; storyId: string }
+  | { decision: "queued"; storyId: string; requestedByCycleId: string; queueSequence: number; reason: "build_slot_full" | "tail_slot_full" | "delivery_lease_held" | "recovery_required" }
+  | { decision: "noop" }
+  | { decision: "admission_unknown"; heldByPid?: number };
+
+export interface HandoffSchedulerInput {
+  eventsPath: string;
+  lockPath: string;
+  nowSec: number;
+  /** The card the scheduler is about to spawn (when known). */
+  nextStory?: { storyId: string; requestedByCycleId: string };
+}
+
+/**
+ * US-CYCLE-013 — the scheduler's atomic decision, run UNDER the handoff mutex
+ * (append + fsync is the linearization point):
+ *   1. promote the oldest ready holder to `cycle:builder_handoff` when the tail
+ *      is free (BEFORE any queued new build may claim the build slot);
+ *   2. with a build-slot holder (building or ready) and a visible next card,
+ *      append one fenced `cycle:queued` (monotonic queueSequence);
+ *   3. otherwise report `admit` — the run-once child performs the durable
+ *      `cycle:admitted` append with its allocated workspace under the mutex.
+ * If the lock cannot be acquired (staleness proof fails) → `admission_unknown`,
+ * fail closed, NO decision event is written.
+ */
+export function handoffSchedulerDecision(input: HandoffSchedulerInput): HandoffSchedulerDecision {
+  const outcome = withHandoffMutex(input.lockPath, () => {
+    const bus = new EventBus();
+    const events = bus.readEvents(input.eventsPath);
+    const capacity = projectHandoffCapacity(events);
+    // 1. Promote the oldest ready holder when the tail is free.
+    if (capacity.readyHolderCycleId !== undefined && capacity.tailCycleId === undefined) {
+      const view = projectCycleHandoff(events, capacity.readyHolderCycleId);
+      if (view?.identity !== undefined && view.readyKey !== undefined) {
+        bus.appendEventSynced(input.eventsPath, {
+          type: "cycle:builder_handoff",
+          eventId: randomUUID(),
+          idempotencyKey: `handoff:${view.identity.storyId}:${view.identity.attempt}:${view.identity.fence}`,
+          identity: view.identity,
+          previousReadyKey: view.readyKey,
+          next: "evaluate_or_test",
+          ts: input.nowSec * 1000,
+        });
+        return { decision: "promoted", cycleId: view.identity.cycleId } as const;
+      }
+    }
+    // 2. A build-slot holder exists → the next card queues (FIFO sequence).
+    if (capacity.buildHolderCycleId !== undefined) {
+      if (input.nextStory !== undefined) {
+        const nextStory = input.nextStory;
+        // F1-4 — idempotent queued append: a card already LIVE in the queue
+        // keeps its FIFO position (the projection dedupes by storyId, last fact
+        // wins — re-appending with a fresh monotonic sequence would silently
+        // push the card to the back of the FIFO on every scheduler tick). A new
+        // `cycle:queued` is appended only when the card is not already queued.
+        const existing = capacity.queue.find((q) => q.storyId === nextStory.storyId);
+        if (existing !== undefined) {
+          return {
+            decision: "queued",
+            storyId: existing.storyId,
+            requestedByCycleId: existing.cycleId,
+            queueSequence: existing.queueSequence,
+            reason: existing.reason as Extract<HandoffSchedulerDecision, { decision: "queued" }>["reason"],
+          } as const;
+        }
+        const queueSequence = nextHandoffQueueSequence(input.eventsPath);
+        bus.appendEventSynced(input.eventsPath, {
+          type: "cycle:queued",
+          eventId: randomUUID(),
+          idempotencyKey: `queue:${nextStory.storyId}:${queueSequence}`,
+          storyId: nextStory.storyId,
+          requestedByCycleId: nextStory.requestedByCycleId,
+          queueSequence,
+          reason: "build_slot_full",
+          ts: input.nowSec * 1000,
+        });
+        return { decision: "queued", storyId: nextStory.storyId, requestedByCycleId: nextStory.requestedByCycleId, queueSequence, reason: "build_slot_full" } as const;
+      }
+      return { decision: "noop" } as const;
+    }
+    // 3. Capacity available → admit (the run-once child performs the durable
+    //    `cycle:admitted` append with its allocated workspace + fresh fence).
+    if (input.nextStory !== undefined) {
+      return { decision: "admit", storyId: input.nextStory.storyId } as const;
+    }
+    return { decision: "noop" } as const;
+  });
+  if (!outcome.ok) return { decision: "admission_unknown", heldByPid: outcome.heldByPid };
+  return outcome.value;
+}
+
+/** Did the just-run cycle stop at a durable handoff (builder_ready, no terminal)? */
+export function runHandedOffSince(eventsPath: string, cycleId: string): boolean {
+  const events = new EventBus().readEvents(eventsPath);
+  let readyAt = -1;
+  let terminalAt = -1;
+  events.forEach((ev, index) => {
+    if (ev.type === "cycle:builder_ready" && "identity" in ev && ev.identity?.cycleId === cycleId) readyAt = index;
+    // The handoff lifecycle's terminal facts (a build handoff is NEVER a
+    // cycle:end): cleanup_completed releases, serial_recovery blocks.
+    if ((ev.type === "cycle:cleanup_completed" || ev.type === "cycle:serial_recovery") && ev.cycleId === cycleId) terminalAt = index;
+  });
+  return readyAt !== -1 && readyAt > terminalAt;
+}
+
+/** The cycleId of the newest durable builder_ready without a following cycle:end. */
+export function latestHandedOffCycleId(eventsPath: string): string | undefined {
+  const events = new EventBus().readEvents(eventsPath);
+  let latest: string | undefined;
+  for (let index = 0; index < events.length; index += 1) {
+    const ev = events[index]!;
+    if (ev.type === "cycle:builder_ready" && "identity" in ev && ev.identity?.cycleId !== undefined && ev.identity.cycleId !== "") {
+      latest = ev.identity.cycleId;
+    }
+  }
+  if (latest === undefined) return undefined;
+  return runHandedOffSince(eventsPath, latest) ? latest : undefined;
 }
 
 function writeGoal(path: string, goal: RollGoal): void {
@@ -952,7 +1090,7 @@ function readRunSnapshot(path: string): RunRowSnapshot {
 
 function readBacklogRows(projectPath: string): ScopeRow[] {
   try {
-    return parseBacklog(readFileSync(backlogPath(projectPath), "utf8")).map((row) => ({
+    return parseBacklog(readFileSync(join(projectPath, ".roll", "backlog.md"), "utf8")).map((row) => ({
       id: row.id,
       status: row.status,
     }));
@@ -1003,7 +1141,7 @@ function allScopeCardsSkipped(projectPath: string, goal: RollGoal, progress: Pro
 }
 
 function readRunRows(projectPath: string): TruthRunRow[] {
-  const runsPath = join(runtimeDir(projectPath), "runs.jsonl");
+  const runsPath = join(projectPath, ".roll", "loop", "runs.jsonl");
   let content = "";
   try {
     content = readFileSync(runsPath, "utf8");
@@ -1134,7 +1272,6 @@ function updateProgressFromRows(
   let accountableRows = 0;
   const lockedCycleIds = screenLockedCycleIds(eventsPath(projectPath));
   for (const row of rows) {
-    if (row["status"] === "waiting_capacity" || row["outcome"] === "waiting_capacity") continue;
     const cycleId = typeof row["cycle_id"] === "string" ? row["cycle_id"] : typeof row["cycleId"] === "string" ? row["cycleId"] : undefined;
     // FIX-1268b: a lock-screen wait is an externally imposed pause, not a
     // failed attempt. Its event is durable and cycle-bound, so only that exact
@@ -1363,7 +1500,7 @@ async function defaultFinalReview(input: GoalFinalReviewInput): Promise<GoalFina
 }
 
 function backlogExists(projectPath: string): boolean {
-  return existsSync(backlogPath(projectPath));
+  return existsSync(join(projectPath, ".roll", "backlog.md"));
 }
 
 interface FinalReviewGateResult {
@@ -1946,66 +2083,25 @@ export async function loopGoCommand(args: string[], deps: LoopGoDeps = realDeps(
     return 0;
   }
   const opts = parseOptions(args);
-  let id: ProjectId;
-  let workspace: { workspaceId: string; runtimeRoot: string; backlogPath: string } | undefined;
-  if (deps.resolveTarget !== undefined) {
-    const selectorArgs: string[] = [];
-    const workspaceIndex = canonicalWorkspaceSelectorIndex(args);
-    if (workspaceIndex >= 0) selectorArgs.push(...workspaceSelectorArgs(args[workspaceIndex + 1] ?? ""));
-    const decision = deps.resolveTarget(selectorArgs, "mutation");
-    if (!decision.ok) return emitBacklogTargetError(decision);
-    if ("aggregate" in decision) return emitBacklogTargetError({ ok: false, code: "invalid_target", candidates: [] });
-    id = { path: decision.workspaceRoot, slug: decision.workspaceId };
-    workspace = {
-      workspaceId: decision.workspaceId,
-      runtimeRoot: decision.runtimeRoot,
-      backlogPath: decision.backlogPath,
-    };
-  } else {
-    id = await deps.identity();
-  }
-
-  const savedWorkspace = process.env["ROLL_WORKSPACE"];
-  const savedRuntime = process.env["ROLL_PROJECT_RUNTIME_DIR"];
-  const savedBacklog = process.env["ROLL_WORKSPACE_BACKLOG_PATH"];
-  if (workspace !== undefined) {
-    process.env["ROLL_WORKSPACE"] = workspace.workspaceId;
-    process.env["ROLL_PROJECT_RUNTIME_DIR"] = workspace.runtimeRoot;
-    process.env["ROLL_WORKSPACE_BACKLOG_PATH"] = workspace.backlogPath;
-  }
-  try {
-    if (!opts.worker && !opts.noTmux && deps.hasTmux()) {
-      const started = deps.startTmux({
-        projectPath: id.path,
-        slug: id.slug,
-        args,
-        rollBin: rollBin(),
-        ...(workspace === undefined ? {} : workspace),
-      });
-      if (started) {
-        process.stdout.write(goStartupFeedback(id.slug, resolveEffectiveScope(id.path, opts)));
-        // FIX-289 (AC3): --attach follows the read-only live feed in the
-        // foreground. Ctrl-C there only stops this view; the cycle keeps running
-        // in its detached tmux window.
-        if (opts.attach && deps.followFeed !== undefined) {
-          process.stdout.write(
-            "Following live feed (Ctrl-C stops the view, not the loop) …\n" +
-              "正在跟随实时输出 (Ctrl-C 只停止查看，不会停止 loop) …\n",
-          );
-          await deps.followFeed(id.path, rollBin());
-        }
-        return 0;
+  const id = await deps.identity();
+  if (!opts.worker && !opts.noTmux && deps.hasTmux()) {
+    const started = deps.startTmux({ projectPath: id.path, slug: id.slug, args, rollBin: rollBin() });
+    if (started) {
+      process.stdout.write(goStartupFeedback(id.slug, resolveEffectiveScope(id.path, opts)));
+      // FIX-289 (AC3): --attach follows the read-only live feed in the
+      // foreground. Ctrl-C there only stops this view; the cycle keeps running
+      // in its detached tmux window.
+      if (opts.attach && deps.followFeed !== undefined) {
+        process.stdout.write(
+          "Following live feed (Ctrl-C stops the view, not the loop) …\n" +
+            "正在跟随实时输出 (Ctrl-C 只停止查看，不会停止 loop) …\n",
+        );
+        await deps.followFeed(id.path, rollBin());
       }
+      return 0;
     }
-    return await runGoWorker(id, opts, deps);
-  } finally {
-    if (savedWorkspace === undefined) delete process.env["ROLL_WORKSPACE"];
-    else process.env["ROLL_WORKSPACE"] = savedWorkspace;
-    if (savedRuntime === undefined) delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
-    else process.env["ROLL_PROJECT_RUNTIME_DIR"] = savedRuntime;
-    if (savedBacklog === undefined) delete process.env["ROLL_WORKSPACE_BACKLOG_PATH"];
-    else process.env["ROLL_WORKSPACE_BACKLOG_PATH"] = savedBacklog;
   }
+  return runGoWorker(id, opts, deps);
 }
 
 async function runGoWorker(id: ProjectId, opts: GoOptions, deps: LoopGoDeps): Promise<number> {
@@ -2218,7 +2314,36 @@ async function runGoWorker(id: ProjectId, opts: GoOptions, deps: LoopGoDeps): Pr
       if (stopRequested) break;
       if (!guided && existsSync(pauseMarkerPath(id.path, id.slug))) continue;
       const before = readRunSnapshot(runsPath(id.path));
-      await deps.runOnce({ projectPath: id.path, allowedCards, ...(guided ? { guided: true } : {}) });
+      // US-CYCLE-013 — scheduler mutex + FIFO admission (behind the flag): the
+      // decision runs UNDER the handoff lock and appends exactly one fsynced
+      // decision event (promote a ready holder / queue the next card). A
+      // promoted tail is handed to run-once as a resume; an admitted card builds.
+      let resumeCycleId: string | undefined;
+      if (handoffEnabled()) {
+        const lockPath = join(rt, HANDOFF_LOCK_FILE);
+        const nextStory = allowedCards.length > 0 ? { storyId: allowedCards[0]!, requestedByCycleId: sid } : undefined;
+        const decision = handoffSchedulerDecision({ eventsPath: evPath, lockPath, nowSec: deps.nowSec(), nextStory });
+        if (decision.decision === "promoted") {
+          resumeCycleId = decision.cycleId;
+        } else if (decision.decision === "queued") {
+          process.stdout.write(
+            `roll loop go: handoff queue seq=${decision.queueSequence} ${decision.storyId} — ${decision.reason}; awaiting a free slot\n`,
+          );
+          // F1-3 — a `queued` verdict NEVER hands the card to the runner: the
+          // go worker waits for a free slot (the sleep avoids a hot spin) and
+          // continues WITHOUT calling deps.runOnce. Skipping the post-runOnce
+          // block (usage update, no-cycle-terminal check) is correct: no cycle
+          // ran this tick, and the queued card is legitimate progress being
+          // waited on, not a no-progress event.
+          await (deps.sleep ?? ((ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))))(INNER_LOCK_WAIT_MS);
+          continue;
+        } else if (decision.decision === "admission_unknown") {
+          process.stdout.write(
+            `roll loop go: handoff admission_unknown — scheduler mutex held (pid ${decision.heldByPid ?? "?"}); fail closed, no parallel decision\n`,
+          );
+        }
+      }
+      await deps.runOnce({ projectPath: id.path, allowedCards, ...(guided ? { guided: true } : {}), ...(resumeCycleId !== undefined ? { resumeCycleId } : {}) });
       goal = updateUsage(id.path, goal, baseline, initialUsage, deps.nowIso());
       writeGoal(gPath, goal);
       const after = readRunSnapshot(runsPath(id.path));
@@ -2245,10 +2370,6 @@ async function runGoWorker(id: ProjectId, opts: GoOptions, deps: LoopGoDeps): Pr
       // count survives this session ending (resume-safe global backstop).
       goal = goalWithProgress(goal, progress);
       writeGoal(gPath, goal);
-      if (appendedRows.some((row) => row["status"] === "waiting_capacity" || row["outcome"] === "waiting_capacity")) {
-        stopReason = "waiting_capacity";
-        break;
-      }
       // Hook 2 (post-cycle): the dead-loop breaker now occupies the slot the
       // budget gate vacated. K consecutive whole-goal no-progress cycles STOP.
       const progressGate = applyProgressGate(id.path, bus, sid, id.slug, goal, progress, deps);
@@ -2308,18 +2429,18 @@ async function runGoWorker(id: ProjectId, opts: GoOptions, deps: LoopGoDeps): Pr
         stopReason = "pause_marker";
         break;
       }
-      if (after.summary.cycles <= before.summary.cycles) {
+      // US-CYCLE-013: a durable handoff appends NO runs row (it is a non-terminal
+      // builder_ready) — the cycles-count check below would misread it as "no
+      // cycle terminal". A handed-off build IS progress: skip the stop.
+      const handedOffRun = handoffEnabled() && latestHandedOffCycleId(evPath) !== undefined;
+      if (!handedOffRun && after.summary.cycles <= before.summary.cycles) {
         stopReason = noCycleTerminalReason(id.path, id.slug, startedSec);
         break;
       }
     }
 
     const finalReason = stopReason ?? "stop_requested";
-    const finalGoal = finalReason === "waiting_capacity"
-      ? goal
-      : goal.status === "complete" || goal.status === "paused"
-        ? goal
-        : pauseGoal(id.path, bus, finalReason, deps.nowIso(), deps.nowSec()) ?? goal;
+    const finalGoal = goal.status === "complete" || goal.status === "paused" ? goal : pauseGoal(id.path, bus, finalReason, deps.nowIso(), deps.nowSec()) ?? goal;
     bus.appendEvent(evPath, {
       type: "goal:session_end",
       sessionId: sid,

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Gathers reconcile delivery facts for the loop reconcile and cycles read paths.
+ */
+/**
  * US-DELIV-008 — the SINGLE reconcile fact-gathering adapter, shared by the
  * `roll loop reconcile` command and the `roll loop cycles` read path so both
  * feed the SAME pure `reconcileDelivery` (packages/core/src/delivery/
@@ -20,6 +23,11 @@
  * string match over the already-collected git snapshot, so a row whose merge
  * is visible in main's log costs ZERO spawns; the per-branch patch-id spawns
  * only run when L1 is silent.
+ *
+ * RL-TRUTH-001: registered redline in policy/rules.yaml — this module is the
+ * CLI/infra adapter side of the merged-truth redline: it gathers the gh/git
+ * facts and defers every verdict to the pure `reconcileDelivery` in @roll/core
+ * (packages/core/src/delivery/reconcile.ts), never deciding delivery itself.
  */
 import { nodeExecPort, reconcileDelivery, type ReconcileCycle, type ReconcileFacts, type ReconcileResult } from "@roll/core";
 import { resolveIntegrationBranch } from "@roll/infra";

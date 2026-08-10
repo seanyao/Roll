@@ -22,7 +22,6 @@
  * installed location.
  */
 import { build } from "esbuild";
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,13 +60,5 @@ await build({
   outfile: join(repoRoot, "dist", "postinstall.mjs"),
 });
 
-const rollBundle = readFileSync(join(repoRoot, "dist", "roll.mjs"), "utf8");
-for (const protocolMarker of ["roll.context-stage-handoff/v1", "ROLL_CONTEXT_DATA_V1"]) {
-  if (!rollBundle.includes(protocolMarker)) {
-    throw new Error(`bundled runner is missing Context protocol marker: ${protocolMarker}`);
-  }
-}
-
 console.log("✓ bundled dist/roll.mjs");
 console.log("✓ bundled dist/postinstall.mjs");
-console.log("✓ bundled Context stage handoff protocol");

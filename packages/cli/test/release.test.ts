@@ -15,10 +15,12 @@ import {
   commitPushWithGate,
   enableAutoMergeResilient,
   openPrResilient,
+  recoverMergedRelease,
   releaseCommand,
   runReleaseFlow,
   runReleaseVerify,
   type ReleaseFlowDeps,
+  type ReleaseRecoveryDeps,
 } from "../src/commands/release.js";
 
 describe("runReleaseVerify (FIX-1480 two-phase promote)", () => {
@@ -79,11 +81,18 @@ function fakeDeps(over: Partial<ReleaseFlowDeps> = {}): { deps: ReleaseFlowDeps;
     version: () => "3.612.2",
     // Default to roll's own package so the base fixture stays on the calver path
     // (FIX-1247); target-project cases override packageName to exercise semver.
-    packageName: () => "@seanyao/roll",
+    // FIX-1493: roll's own package name (the alias is the other repo's now).
+    packageName: () => "@bipo-ape/roll",
     branch: () => "main",
     clean: () => true,
     synced: () => true,
     tagExists: () => false,
+    headSha: () => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    recovery: {
+      listReleasePrs: () => ({ ok: true, value: [] }),
+      remoteTagExists: () => ({ ok: true, value: false }),
+      readFileAt: () => ({ ok: false, reason: "no recovery candidate" }),
+    },
     readChangelog: () => "# C\n\n## Unreleased\n\n- thing one\n\n## v3.612.2 — 2026-06-12\n\n- old\n",
     writeChangelog: (_c, text) => void writes.push(`changelog:${text.length}`),
     bumpVersion: (_c, v) => void writes.push(`bump:${v}`),
@@ -95,7 +104,7 @@ function fakeDeps(over: Partial<ReleaseFlowDeps> = {}): { deps: ReleaseFlowDeps;
     waitMerged: () => true,
     syncMain: () => true,
     consistencyGate: () => true,
-    tag: (_c, t2) => void writes.push(`tag:${t2}`),
+    tag: (_c, t2, _v, sha) => void writes.push(`tag:${t2}:${sha}`),
     pushTag: (_c, t2) => void writes.push(`pushTag:${t2}`),
     confirm: () => true,
     now: () => new Date("2026-06-13T08:00:00Z"),
@@ -103,6 +112,134 @@ function fakeDeps(over: Partial<ReleaseFlowDeps> = {}): { deps: ReleaseFlowDeps;
   };
   return { deps: { ...deps, ...over }, steps, writes };
 }
+
+const OLD_RELEASE_SHA = "1111111111111111111111111111111111111111";
+const CURRENT_MAIN_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+function recoveryDeps(over: Partial<ReleaseRecoveryDeps> = {}): { deps: ReleaseRecoveryDeps; calls: string[] } {
+  const calls: string[] = [];
+  const deps: ReleaseRecoveryDeps = {
+    listReleasePrs: () => ({
+      ok: true,
+      value: [{ number: 81, title: "Release: v4.802.1", state: "MERGED", mergeSha: OLD_RELEASE_SHA }],
+    }),
+    remoteTagExists: (_cwd, tag) => {
+      calls.push(`tag-fact:${tag}`);
+      return { ok: true, value: false };
+    },
+    readFileAt: (_cwd, sha, path) => {
+      calls.push(`read:${sha}:${path}`);
+      if (path === "package.json") return { ok: true, value: '{"name":"@bipo-ape/roll","version":"4.802.1"}' };
+      return { ok: true, value: "# Changelog\n\n## v4.802.1 — 2026-08-04\n\n- recovered\n" };
+    },
+    ...over,
+  };
+  return { deps, calls };
+}
+
+describe("FIX-1514 — recover exactly one verified, merged-but-untagged release", () => {
+  it("tags the verified OLD merge SHA, then records the same release fact", () => {
+    const { deps: recovery, calls } = recoveryDeps();
+    const actions: string[] = [];
+    const result = recoverMergedRelease("/repo", {
+      packageName: () => "@bipo-ape/roll",
+      recovery,
+      tag: (_cwd, tag, version, sha) => void actions.push(`tag:${tag}:${version}:${sha}`),
+      pushTag: (_cwd, tag) => void actions.push(`push:${tag}`),
+      recordReleaseFact: (_cwd, tag, sha) => void actions.push(`fact:${tag}:${sha}`),
+    });
+
+    expect(result).toEqual({ status: "recovered", tag: "v4.802.1", version: "4.802.1", targetSha: OLD_RELEASE_SHA });
+    expect(actions).toEqual([
+      `tag:v4.802.1:4.802.1:${OLD_RELEASE_SHA}`,
+      "push:v4.802.1",
+      `fact:v4.802.1:${OLD_RELEASE_SHA}`,
+    ]);
+    expect(actions.join(" ")).not.toContain(CURRENT_MAIN_SHA);
+    expect(calls).toContain("read:1111111111111111111111111111111111111111:package.json");
+    expect(calls).toContain("read:1111111111111111111111111111111111111111:CHANGELOG.md");
+  });
+
+  it("finds no unfinished release without mutating; normal release can continue", () => {
+    const { deps: recovery } = recoveryDeps({
+      remoteTagExists: () => ({ ok: true, value: true }),
+    });
+    const actions: string[] = [];
+    const result = recoverMergedRelease("/repo", {
+      packageName: () => "@bipo-ape/roll",
+      recovery,
+      tag: () => void actions.push("tag"),
+      pushTag: () => void actions.push("push"),
+    });
+    expect(result).toEqual({ status: "none" });
+    expect(actions).toEqual([]);
+  });
+
+  it.each([
+    ["multiple merged candidates", {
+      listReleasePrs: () => ({ ok: true, value: [
+        { number: 81, title: "Release: v4.802.1", state: "MERGED", mergeSha: OLD_RELEASE_SHA },
+        { number: 82, title: "Release: v4.803.1", state: "MERGED", mergeSha: "2222222222222222222222222222222222222222" },
+      ] }),
+    }, /exactly one/],
+    ["unmerged release PR", {
+      listReleasePrs: () => ({ ok: true, value: [
+        { number: 81, title: "Release: v4.802.1", state: "OPEN", mergeSha: undefined },
+      ] }),
+    }, /not merged/],
+    ["package identity mismatch", {
+      readFileAt: (_cwd: string, _sha: string, path: string) =>
+        path === "package.json"
+          ? { ok: true as const, value: '{"name":"wrong-package","version":"4.802.1"}' }
+          : { ok: true as const, value: "## v4.802.1 — 2026-08-04\n" },
+    }, /package identity/],
+    ["version mismatch", {
+      readFileAt: (_cwd: string, _sha: string, path: string) =>
+        path === "package.json"
+          ? { ok: true as const, value: '{"name":"@bipo-ape/roll","version":"4.802.2"}' }
+          : { ok: true as const, value: "## v4.802.1 — 2026-08-04\n" },
+    }, /version identity/],
+    ["changelog mismatch", {
+      readFileAt: (_cwd: string, _sha: string, path: string) =>
+        path === "package.json"
+          ? { ok: true as const, value: '{"name":"@bipo-ape/roll","version":"4.802.1"}' }
+          : { ok: true as const, value: "## v4.801.1 — 2026-08-03\n" },
+    }, /CHANGELOG identity/],
+    ["unreadable PR facts", {
+      listReleasePrs: () => ({ ok: false as const, reason: "gh unavailable" }),
+    }, /PR facts unreadable/],
+  ])("stops loudly for %s and never tags, records, or publishes", (_name, override, reason) => {
+    const { deps: recovery } = recoveryDeps(override);
+    const actions: string[] = [];
+    const result = recoverMergedRelease("/repo", {
+      packageName: () => "@bipo-ape/roll",
+      recovery,
+      tag: () => void actions.push("tag"),
+      pushTag: () => void actions.push("push"),
+      recordReleaseFact: () => void actions.push("fact"),
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.status === "blocked" ? result.reason : "").toMatch(reason);
+    expect(actions).toEqual([]);
+  });
+
+  it("rechecks the remote tag immediately before mutation and stops on a race", () => {
+    let checks = 0;
+    const { deps: recovery } = recoveryDeps({
+      remoteTagExists: () => ({ ok: true, value: ++checks > 1 }),
+    });
+    const actions: string[] = [];
+    const result = recoverMergedRelease("/repo", {
+      packageName: () => "@bipo-ape/roll",
+      recovery,
+      tag: () => void actions.push("tag"),
+      pushTag: () => void actions.push("push"),
+      recordReleaseFact: () => void actions.push("fact"),
+    });
+    expect(result).toEqual({ status: "blocked", reason: "tag v4.802.1 already exists" });
+    expect(actions).toEqual([]);
+  });
+});
 
 describe("runReleaseFlow — the one transaction", () => {
   it("happy path executes every step in the gated order and ends at tag-push", async () => {
@@ -126,6 +263,7 @@ describe("runReleaseFlow — the one transaction", () => {
       "tag-push",
     ]);
     expect(writes.at(-1)).toBe("pushTag:v3.613.1");
+    expect(writes).toContain(`tag:v3.613.1:${CURRENT_MAIN_SHA}`);
   });
 
   it("FIX-1247: a target project's release anchors to ITS semver, not roll's build number", async () => {
@@ -158,7 +296,7 @@ describe("runReleaseFlow — the one transaction", () => {
     expect(writes).toContain("bump:0.1.0");
   });
 
-  it("FIX-288 AC4: a drifting consistency gate aborts BEFORE the PR/merge — nothing lands on main", async () => {
+  it("FIX-288 AC4 / RL-REL-010: a drifting consistency gate aborts BEFORE the PR/merge — nothing lands on main", async () => {
     const { deps, writes } = fakeDeps({ consistencyGate: () => false });
     const res = await runReleaseFlow("/repo", deps, { dryRun: false, yes: true });
     expect(res.status).toBe("aborted");

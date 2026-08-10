@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the cycle activity projection types.
+ */
+/**
  * US-OBS-026 — the standard cycle activity projection type.
  *
  * THREE-STREAM AUTHORITY BOUNDARY (the keystone contract):

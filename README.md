@@ -9,18 +9,13 @@
 
 **[中文版 README](README_CN.md)**
 
-[![Website](https://img.shields.io/badge/Website-seanyao.github.io%2Froll-blue)](https://seanyao.github.io/roll/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@bipo-ape/roll.svg)](https://www.npmjs.com/package/@bipo-ape/roll)
-[![CI](https://github.com/seanyao/roll/actions/workflows/ci.yml/badge.svg)](https://github.com/seanyao/roll/actions/workflows/ci.yml)
+[![CI](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml/badge.svg)](https://github.com/BIPOSVC/ape-roll/actions/workflows/ci.yml)
 
 Roll — a Supervisor-led CLI harness that routes AI agents through story-scoped planning, building, evaluation, git, CI, and acceptance evidence. Works with Claude, Cursor, Codex, Kimi, Pi, Reasonix, and other local rigs when they are available.
 
 ## Install
-
-```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
-```
 
 ```bash
 npm install -g @bipo-ape/roll
@@ -43,6 +38,11 @@ sudo/root shells, offline downloads, or `ROLL_SKIP_CAPTURE_INSTALL=1` skip this
 step without failing install; when skipped under sudo/root, re-run `roll setup`
 as a regular user so the app installs into that user's `~/Applications`.
 `roll setup` and `roll doctor tools` report the same readiness and repair path.
+To update an already installed Capture.app, run `roll setup --update-capture`.
+It shows the installed version, available release, and destination first, then
+replaces the app only when you enter `y`; use `--yes` only for intentional
+non-interactive automation. A refusal, failed download, or failed replacement
+keeps the existing app intact.
 
 ## Use
 
@@ -117,6 +117,59 @@ health-remediation **delivery team** (the FIX-routing target):
   topology that shares the same protocol but launches distinct role sessions
   through Roll's generic adapters.
 
+**Builder preflight comes after the Builder's final green TCR commit and before
+its one formal Builder validate.** It is a read-only, repairable self-check: it
+writes no lifecycle success and does not prove that a model executed. A red
+preflight is repaired in the same frame, then the Builder runs a green preflight
+before formal `roll delta validate --stage builder --preflight-receipt <path>`.
+The formal validation remains fail-closed and is not replaced by preflight; the
+independent Evaluator still reviews the formally validated handoff.
+
+If an old delivery was explicitly put on hold but its still-live reservation
+was historically renamed to a successor, the owner may use the deliberately
+narrow `roll delta recover-held` command. It requires repeating the old
+delegation id as confirmation, records that recovery without rewriting history,
+and still requires that exact named successor to run the ordinary continuation
+pickup. It is not a general release or takeover command.
+
+#### Local exact-model rig readiness
+
+Before asking a host to resolve a Delta role, inspect its machine-local
+diagnostic with `roll delta rigs`. This ordinary read only renders the most
+recent complete local observation: it does not start a model, write a snapshot,
+or change a workspace, lease, dispatch, resolution, or event. Use
+`roll delta rigs --refresh` only when you want bounded probes of every exact
+configured `{adapter, cliModelId}` and publication of one complete new local
+snapshot.
+
+For example, a configured Codex candidate is probed with its exact local model
+mapping (equivalent to `codex exec --model <cliModelId> ...`), not Codex's
+default model. A missing executable is shown as **blocked** with an installation
+action; an adapter without a verified safe exact-model noninteractive selector
+is also **blocked** and is not executed. **Unknown** includes stale or
+incompatible cache, timeout, unverified token output, and unclassified failure;
+refresh after fixing the actionable condition.
+
+Output follows one language per process: `ROLL_LANG` is the one-process
+override, then `roll config lang` is the persisted preference, then `LC_ALL`,
+`LANG`, and English. A `ready` observation means only that this exact model
+returned the fixed minimal token at that observation time. It never proves a
+future long task, delivery, host-session freshness, or final role assignment;
+pins, exclusions, tags, cost caps, and role diversity still make the real
+allocation decision.
+
+### Feature delivery view
+
+To see how a feature or a single card actually delivered, run
+`roll supervisor delivery <feature-id|card-id> [--from <ISO>] [--to <ISO>] [--json]`.
+It is one read-only view: one card has one final delivery conclusion, every
+attempt stays visible under that card, timing/TCR/rework numbers show their
+sample size, and missing history stays incomplete (`?` / `n/a`) rather than a
+zero or a success. It cannot route an agent, retry work, change the backlog,
+merge a PR, or attest a card. See the
+[delivery metrics dictionary](guide/en/delivery-metrics.md) for the worked
+example and the exact source facts.
+
 Honest boundaries the protocol states and never overclaims:
 
 - **Terminal binding is Option C, handoff-only.** A valid Evaluator report reaches
@@ -131,6 +184,16 @@ Honest boundaries the protocol states and never overclaims:
   project config.
 - **Host-guided cost is `? (host_unobservable)`** — never estimated, priced, or
   zeroed.
+- **`roll delta metrics` remains a retained Delta-only detail dictionary**; for
+  a feature or card use the unified `roll supervisor delivery` view first. It
+  derives counts, timing, TCR facts, redelegation, and rig diversity from
+  immutable event and delivery records. Its window and percentile samples are
+  shown explicitly; missing or contradictory facts stay marked incomplete
+  rather than becoming a zero or a success. It never selects a model, changes
+  backlog order, or merges a PR. See the
+  [delivery metrics dictionary](guide/en/delivery-metrics.md) for every
+  Delta and Supervisor source fact, denominator, time boundary, and unknown
+  behavior.
 
 Every delegation has a Supervisor: a loop is a chain of cycles running inside a
 host session, so it has a main session and full sub-agent capability like any
@@ -190,75 +253,9 @@ defaults:
         strategy: health-aware
 ```
 
-Machine Scope also owns the closed process-capacity policy shared by every
-registered Workspace:
-
-```yaml
-schema: roll-agents/v1
-scope: machine
-agents:
-  codex:
-    capabilities: [supervise, execute, evaluate]
-  kimi:
-    capabilities: [execute, evaluate]
-capacity:
-  global: auto
-  default_per_agent: 1
-  agents:
-    codex: 2
-  heartbeat_seconds: 30
-  stale_after_seconds: 120
-```
-
-When `capacity` is absent, each enabled machine agent gets one slot and the
-global limit is their sum. Every Builder and adversarial role process acquires
-one exact-owned lease before spawn. Exhaustion is a neutral wait: no agent is
-spawned, the Story returns to Todo, and `roll loop status --all` shows the
-agent/model/retry state without exposing credentials or provider health.
-
 Runtime availability is explicit: if a candidate is not callable on the current
 machine because of auth, network, VPN, or account state, the current resolution
 records that limitation instead of rewriting the static pool.
-Workspace execution uses a separate `machine -> workspace -> story -> skill`
-chain. `<workspace>/agents.yaml` may only cast roles and refine Story/skill
-defaults; machine declarations, models, disabled state, and readiness remain
-machine-owned. Repository-local Project Scope is migration input only for a
-Workspace run. Inspect the read-only effective trace with
-`roll agent --workspace <id|path>`; `roll agent list` and `roll agent readiness`
-always remain machine views.
-
-Before moving a historical repository-local Roll project into Workspace Scope,
-run the read-only migration check:
-
-```bash
-roll workspace migrate --from . --check
-roll workspace migrate --from . --workspace ws-team --check --json > workspace-migration-plan.json
-roll workspace migrate --from . --workspace ws-team --plan workspace-migration-plan.json
-```
-
-The command reads product Git, linked worktrees, recursive submodules, runtime
-leases, `.roll` ownership/inventory, shared cache and registry facts. It never
-fetches, prunes, updates refs, or writes source/cache/registry/destination state.
-The second example is an explicit shell redirection by the owner; the command
-itself never creates a plan file. Exit `0` means the plan is ready or needs an
-explicit product cutover/manual metadata handoff; exit `2` means safety facts
-block migration.
-
-Apply consumes that exact owner-saved plan and re-collects the source facts
-before any write. It prepares a durable journal and staging manifest, creates or
-reuses only the machine cache under `~/.roll/repos/`, verifies every mapped
-digest, then registers and activates the Workspace last. Re-running the same
-command resumes an interrupted transaction or reports `reused`; before
-registration, `--rollback` restores atomically moved source files and removes
-the non-active staging Workspace. Ordinary/product-tracked metadata is relocated
-and leaves `.roll/RELOCATED.json`; an independent roll-meta repository is copied
-without any link, commit, or push and keeps a manual handoff.
-
-The complete Workspace-first path — deterministic creation, explicit target
-resolution, multiple active Workspaces, Requirement/Issue layout, shared
-machine cache, multi-repository Story execution and exact-SHA delivery — is in
-the [Workspace guide](guide/en/workspaces.md).
-
 For open role casting, `strategy: health-aware` keeps the installed pool visible
 and ranks candidates by capability, recent health, successful deliveries, recent
 use, and cost band. Inspect a cast with
@@ -293,11 +290,6 @@ roll loop go
 
 Roll diagnoses the repository without destructive migration, writes or updates Roll metadata only after review, and then lets the Supervisor reason over existing backlog, docs, context, open PRs, and scoped role bindings. Current state is visible through CLI-first observability: `roll status`, `roll loop watch`, `roll loop runs`, `roll loop cycle <id>`, `roll loop alert`, and story reports.
 
-This path is for an existing codebase without current Roll markers. If the
-repository already contains a historical repository-local `.roll/`, use
-`roll workspace migrate --from . --check` first instead of grafting a second
-Roll layout onto it.
-
 ## Quick start for new projects
 
 A new project needs a remote before the loop can push branches and open PRs:
@@ -317,31 +309,25 @@ unreachable, so it never burns agent tokens against a broken push target.  If
 you need to stop the loop, `roll loop pause` persists a pause marker; resume
 with `roll loop resume` when ready.
 
-Exception: a campaign explicitly configured with `publish_mode: local` stays on
-its local integration branch and does not push or open a PR until the owner
-opens the remote publication gate after local acceptance.
-
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `roll agent [--workspace <id\|path>\|migrate\|list\|readiness]` | Agent Scope, machine inventory/readiness, and read-only Workspace casting |
-| `roll backlog [show\|sync\|block\|defer\|lint\|…] [--workspace <id\|path>]` | View and manage one Workspace backlog; `--all` is read-only |
+| `roll agent [migrate\|list\|cast]` | Agent Scope, installed-agent inventory, and role casting |
+| `roll backlog [sync\|block\|defer\|lint\|…]` | View, manage, lint, and sync pending tasks |
 | `roll config [lang\|prices\|tune\|…]` | Read/write configuration, model prices, and suggest-only tuning |
-| `roll delivery <list\|show\|reconcile> [--workspace <id\|path>]` | Inspect Issue repository PR/CI/merge facts and exact-SHA integration acceptance; `list --all` is read-only |
-| `roll design [--from-file <path>] [--agent <name>] [--workspace <id\|path>] [--verbose\|--raw]` | Launch `$roll-design` against one Workspace authority, with bounded live progress and handoff |
+| `roll design [--from-file <path>] [--agent <name>] [--verbose\|--raw]` | Launch `$roll-design` with bounded live progress, handoff, and an optional `roll loop go --review auto` continuation when new Todo cards are created |
 | `roll doctor [skills\|tools\|language\|repair-protection]` | Diagnose install health, skills, tools, permissions, language drift, and stale main-checkout write protection |
 | `roll help [--lang en\|zh] [name]` | View built-in Charter / guide docs; `roll --help` prints CLI usage |
-| `roll idea "<one-sentence description>" --workspace <id\|path>` | Capture and classify a new card in one Workspace backlog |
+| `roll idea [--type us\|fix\|idea] "<one-sentence description>"` | Capture a backlog card; use `--type us` when a new user story mentions a failure it will prevent |
 | `roll init` | Diagnose this directory and route setup/onboarding |
-| `roll loop <on\|go\|pause\|resume> --workspace <id\|path>` / `roll loop status --all` | Run or mutate one Workspace scheduler; aggregate status is read-only |
+| `roll loop <on\|off [--all]\|go\|watch\|runs\|cycles\|cycle\|alert\|…>` | Run, observe, stop, and maintain the autonomous executor |
 | `roll next` | Continue init/onboard with one best next command |
 | `roll north [--json] [--no-color]` | North-star terminal panel for autonomy, delivery rate, fix tax, and attribution errors |
 | `roll release [--dry-run\|--showcase]` | Release planning/flow plus golden-path showcase support |
-| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup skills\|offboard` | Install/sync conventions, repair Roll Capture.app readiness, or remove Roll-owned project artifacts |
+| `roll setup [-f\|--force] [--reselect] [--no-capture-install]` / `roll setup --update-capture [--yes]` / `roll setup skills\|offboard` | Install/sync conventions, safely update Roll Capture.app after explicit confirmation, repair readiness, or remove Roll-owned project artifacts |
 | `roll status [ci\|pulse] [--json]` | Project health, CI state, and delivery pulse |
 | `roll test [--where] [--reset]` | Run tests through the isolation adapter |
-| `roll workspace <create\|edit\|issue\|requirement\|doctor\|migrate\|list\|show\|register\|activate\|pause\|archive>` / `roll ws ...` | Create, edit and target a Workspace; `roll ws` aliases the complete subtree, and public `--workspace` selectors also accept `--ws` |
 | `roll update` | Upgrade the global Roll install and re-sync conventions |
 | `roll --version` / `roll -v` | Print installed roll version |
 
@@ -350,13 +336,6 @@ Retained support surfaces live under their owners: `roll config prices`, `roll c
 `roll loop cycles`, `roll loop cycle`, `roll release showcase`, and `roll setup offboard`.
 Historical top-level aliases for those capabilities now return the standard
 unknown-command response.
-
-Direct skill handoffs never acquire Workspace authority from requirement
-keywords. When owner text mentions exactly one registered Workspace ID, Roll
-presents it as a soft suggestion and waits for confirmation. Partial matches,
-multiple mentions, or no safe suggestion present the available Workspaces for
-the owner to choose. Only an explicit selector or an already resolved authority
-continues into the skill context.
 
 ## Observability Now
 
@@ -427,11 +406,74 @@ smoke not run` are never green, so acceptance cannot overstate outward behavior.
 No real publish or account action ever runs without a declared authority. See
 [Outward behavior verification](guide/en/acceptance-evidence.md#outward-behavior-verification).
 
-`roll supervisor live` is the shipped CLI-first multi-role board. It prints a
-one-frame snapshot for scripts and quick inspection; `roll supervisor live --watch`
-keeps the same board open and redraws it in-place from the same event-backed view
+`roll supervisor live` is the shipped CLI-first multi-role board. Alongside the
+role panes it renders one shared DeliveryRun projection for ordinary cycles,
+host Delta, Full Delta, and Skill dispatch: workspace reservation/lifecycle,
+Delta handoff state, merge truth, evidence truth, and an explicit recovery
+reason remain separate. Missing or legacy facts render as unknown; a
+`handoff_ready` row is never presented as delivered. The board supplies its
+clock and concrete read-only worktree-audit member checks to the shared adapter:
+only a registered, inactive, expected-HEAD, clean member set with confirmed
+merge and accepted evidence can render `delivered_safe_to_release` — before
+release, never after it. It prints a one-frame
+snapshot for scripts and quick inspection; `roll supervisor live --watch` keeps
+the same board open and redraws it in-place from the same event-backed view
 model. A browser/TUI Supervisor Live Console remains future work and must reuse
 that view model.
+
+`roll supervisor metrics [--json]` remains a retained flow-lag projection
+(queue/dependency/merge/CI/reconciliation); the unified
+`roll supervisor delivery <id>` view is the primary way to read a feature's
+delivery conclusion. It derives per-card and aggregate queue, dependency,
+first-action, merge, PR/CI, and reconciliation lag from the event ledger. Its
+terminal output names the observation window, sample sizes, `nearest-rank`
+percentiles, and every missing upstream fact; JSON preserves the same
+uncertainty. Dependency wait keeps
+blocked-by-not-Done separate from satisfied-but-not-dispatched. A
+`handoff_ready` fact remains a handoff only — it is never a Delivered claim.
+The [delivery metrics dictionary](guide/en/delivery-metrics.md) and its
+[Chinese counterpart](guide/zh/delivery-metrics.md) also document the causal
+limits of attempt outcomes and why a missing artifact is not evidence about a
+model invocation.
+
+All Roll-owned delivery workspaces live under `.roll/loop/worktrees/` as one
+managed WorkspaceSet per DeliveryRun; submodule worktrees are explicit members.
+`handoff_ready` preserves its Story reservation and workspace and is never
+Delivered/Done. Only a confirmed merge, accepted attest, and fresh clean,
+registered, inactive all-member inspection make a run eligible for release.
+Start recovery with `roll worktree audit` and `roll supervisor live`; cleanup is
+dry-run-first and refuses stale, unknown, dirty, external, or unregistered
+members. Legacy `.worktrees/*` and `../wt-*` checkouts are external/manual:
+Roll shows them but never adopts or deletes them automatically.
+
+## Rules registry and doc-drift
+
+[`policy/rules.yaml`](policy/rules.yaml) is the single machine-readable authority
+for registered redlines, the doc-drift mode, and source-to-documentation mappings.
+The README, guides, verification notes, and generated
+[responsibility maps](docs/maps/) explain that registry; they do not declare a
+second policy. `node scripts/audit-rules.mjs` reports that the **registered N**
+rules are live. It is not a claim that every possible repository rule has already
+been registered.
+[`policy/rules-inventory.yaml`](policy/rules-inventory.yaml) is the audited
+coverage predicate over rule-candidate files: declared roots, include patterns,
+and reasoned exclusions, with every candidate classified registered or
+out-of-scope. Coverage is that audited predicate plus its exclusions — never a
+keyword-search completeness claim; the audit fails on unclassified candidates
+and orphan anchors rather than assuming every rule is already registered.
+
+The current `doc_drift: soft` mode is registry-driven and observable: a declared
+source surface changed without its declared documentation emits a diagnostic, but
+the soft hit exits 0. There is no exemption path. The named CI check is likewise
+advisory for manual GitHub UI merges in this repository shape; CI records its
+result but does not create Roll events or authenticate a merge decision.
+
+Hard doc-drift enforcement is **not enabled**. Enabling it needs a trusted owner
+authorization and calibration design first. A peer session, an interactive TTY,
+or an `actor` field is not owner authentication and must not be presented as one.
+Flipping the mode to hard is tracked as US-RULE-006, which is on Hold: the loop
+must not auto-pick it, and activation requires a trusted-owner authorization and
+calibration design first.
 
 ## Repository layout
 
@@ -453,12 +495,12 @@ Published as a single npm package `@bipo-ape/roll`: `dist/` (the CLI bundled to 
 
 | | |
 |---|---|
-| **Start here** | [Getting started](guide/en/getting-started.md) · [Workspace-first delivery](guide/en/workspaces.md) · [Workspace-first 交付](guide/zh/workspaces.md) · [Workspace context compatibility matrix](docs/generated/workspace-context-compatibility-matrix.json) · [Workspace context validation cases](docs/generated/workspace-context-validation-cases.json) · [Overview & architecture](guide/en/overview.md) · [Engineering methodology](guide/en/methodology.md) |
-| **Daily driving** | [The loop (autonomous executor)](guide/en/loop.md) · [Context Engineering](guide/en/context.md) · [APE Context migration](guide/en/context-ape-migration.md) · [Workspace doctor](guide/en/workspace-doctor.md) · [Tools & policy](guide/en/tools.md) · [Browser operations (managed + interactive lanes; optional diagnostics are opt-in only)](guide/en/browser-operations.md) · [Configuration](guide/en/configuration.md) · [Pricing & cost](guide/en/pricing.md) · [FAQ](guide/en/faq.md) |
+| **Start here** | [Getting started](guide/en/getting-started.md) · [Overview & architecture](guide/en/overview.md) · [Engineering methodology](guide/en/methodology.md) |
+| **Daily driving** | [The loop (autonomous executor)](guide/en/loop.md) · [Tools & policy](guide/en/tools.md) · [Browser operations (managed + interactive lanes; optional diagnostics are opt-in only)](guide/en/browser-operations.md) · [External page acquisition (`roll-browse`)](guide/en/skills.md#roll-browse--external-page-acquisition) · [Configuration](guide/en/configuration.md) · [Pricing & cost](guide/en/pricing.md) · [FAQ](guide/en/faq.md) |
 | **Quality machinery** | [Acceptance evidence (`roll attest`)](guide/en/acceptance-evidence.md) · [Evidence lifecycle](guide/en/acceptance-evidence.md#lifecycle-in-three-stages) · [Consistency & release gate](guide/en/consistency.md) · [Cross-agent pairing](guide/en/pairing.md) · [Peer review](guide/en/peer.md) · [Test isolation](guide/en/test-isolation.md) |
 | **Under the hood** | [Architecture: layers · domain · invariants](docs/architecture.md) · [Verification system](docs/verification.md) · [Manifesto](docs/manifesto.md) |
 
-Full guide index: [guide/en/README.md](guide/en/README.md) — agents, peer review, feedback, backlog sync, adoption patterns, and more.
+Full guide index: [guide/en/](guide/en/) — agents, peer review, feedback, backlog sync, adoption patterns, and more.
 
 ## Contributing
 

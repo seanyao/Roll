@@ -1,3 +1,6 @@
+/**
+ * @responsibility Maps correction signals to conservative or auto actuator actions.
+ */
 import type { RollEvent } from "@roll/spec";
 
 export type CorrectionActuatorMode = "conservative" | "auto";

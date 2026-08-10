@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll test` subcommand, porting the isolation dispatcher and the test runner.
+ */
+/**
  * `roll test` — TS port of bin/roll cmd_test (6849-6942) plus the isolation
  * dispatcher it drives: `_cmd_test_where` (6821-6847), `_isolation_get_type`
  * (6552-6577), `_isolation_dispatch` (6582-6617), the `none` adapter
@@ -46,6 +49,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { isNoTestsFoundOutput, resolveGateCommand, type GateMode } from "@roll/core";
+import { beginTcrRound, completeTcrRound, type TcrRoundSession } from "../runner/tcr-observation-emit.js";
 import { rollPkgDir } from "./setup-shared.js";
 
 // ─── bash UI helpers (bin/roll:41-56) ────────────────────────────────────────
@@ -245,9 +249,11 @@ function resetReleaseLock(): void {
  * Returns the exit status plus the combined child output so the gate can inspect
  * it (e.g. detect a zero-test `--changed` selection — FIX-1274).
  */
-function runForward(cmd: string, argv: string[]): { status: number; output: string } {
+function runForward(cmd: string, argv: string[], extraEnv?: Record<string, string>): { status: number; output: string } {
   const frame = currentEvidenceFrame();
-  const r = spawnSync(cmd, argv, { encoding: "utf8", env: childEnvForEvidence(frame) });
+  let env = childEnvForEvidence(frame);
+  if (extraEnv !== undefined) env = { ...(env ?? process.env), ...extraEnv };
+  const r = spawnSync(cmd, argv, { encoding: "utf8", env });
   const stdout = typeof r.stdout === "string" ? r.stdout : "";
   const stderr = typeof r.stderr === "string" ? r.stderr : "";
   const status = r.status ?? 1;
@@ -297,23 +303,88 @@ function gitCapture(cwd: string, args: string[]): string {
 }
 
 /**
+ * Correlation a `roll test` round carries into the test-pass proof so the git
+ * commit hook can append the matching `tcr:committed` fact (US-DELTA-011).
+ * Recorded additively — legacy proofs without these fields stay valid.
+ */
+export interface TcrProofCorrelation {
+  roundId: string;
+  storyId: string;
+  delegationId?: string;
+  /** Exact completion clock of the observed test run, in epoch milliseconds. */
+  testFinishedAtMs: number;
+}
+
+/** Trimmed env value, or undefined when unset/empty. */
+function envValue(key: string): string | undefined {
+  const v = (process.env[key] ?? "").trim();
+  return v === "" ? undefined : v;
+}
+
+/**
+ * Begin a story-associated TCR round before the gate command starts. Observation
+ * is best-effort and never affects the test verdict.
+ */
+function beginGateRound(cwd: string): TcrRoundSession | null {
+  const storyId = envValue("ROLL_STORY_ID");
+  if (storyId === undefined) return null;
+  const top = gitCapture(cwd, ["rev-parse", "--show-toplevel"]);
+  if (top === "") return null;
+  return beginTcrRound({
+    storyId,
+    delegationId: envValue("ROLL_DELEGATION_ID"),
+    hostId: envValue("ROLL_HOST_ID") ?? "unknown",
+    modelId: envValue("ROLL_MODEL_ID") ?? "unknown",
+    headSha: gitCapture(cwd, ["rev-parse", "HEAD"]),
+    startedMs: Date.now(),
+    eventsPath: join(top, ".roll", "loop", "events.ndjson"),
+  });
+}
+
+function roundChildEnv(session: TcrRoundSession | null): Record<string, string> | undefined {
+  return session === null ? undefined : { ROLL_TCR_ROUND_ID: session.roundId };
+}
+
+function roundCorrelation(session: TcrRoundSession | null, testFinishedAtMs: number): TcrProofCorrelation | undefined {
+  if (session === null) return undefined;
+  return {
+    roundId: session.roundId,
+    storyId: session.storyId,
+    testFinishedAtMs,
+    ...(session.delegationId !== undefined ? { delegationId: session.delegationId } : {}),
+  };
+}
+
+/**
  * Record a fresh `.roll/last-test-pass` proof AFTER a supported command has
  * actually executed and returned zero. The proof binds the exact tested tree
  * hash to the executed command + selected mode + timestamp so the pre-commit
  * freshness/tree-match guard stays effective. Fail-safe: if the tree cannot be
  * computed (not a git worktree) the proof is NOT written — a missing proof
  * blocks the commit loudly rather than fabricating a green (FIX-1274).
+ *
+ * US-DELTA-011: when the gate run was story-associated, the proof additively
+ * carries the round correlation (roundId/storyId/delegationId) so the commit
+ * hook can append the round's `tcr:committed` fact. Legacy consumers parse
+ * ts/tree/mode by field and are unaffected.
  */
-function writeTestProof(cwd: string, mode: GateMode, command: string): void {
+function writeTestProof(cwd: string, mode: GateMode, command: string, correlation?: TcrProofCorrelation): void {
   const top = gitCapture(cwd, ["rev-parse", "--show-toplevel"]);
   if (top === "") return;
   const tree = gitCapture(cwd, ["write-tree"]);
   if (tree === "") return;
   const ts = Math.floor(Date.now() / 1000);
   const proofPath = join(top, ".roll", "last-test-pass");
+  const record: Record<string, unknown> = { ts, tree, mode, command, scope: mode };
+  if (correlation !== undefined) {
+    record["roundId"] = correlation.roundId;
+    record["storyId"] = correlation.storyId;
+    record["testFinishedAtMs"] = correlation.testFinishedAtMs;
+    if (correlation.delegationId !== undefined) record["delegationId"] = correlation.delegationId;
+  }
   try {
     mkdirSync(dirname(proofPath), { recursive: true });
-    writeFileSync(proofPath, JSON.stringify({ ts, tree, mode, command, scope: mode }) + "\n", "utf8");
+    writeFileSync(proofPath, JSON.stringify(record) + "\n", "utf8");
   } catch {
     /* best-effort write; an absent proof fails the commit loudly, never green */
   }
@@ -440,6 +511,9 @@ export function testCommand(args: string[]): number {
         fullRequested = true;
         continue;
       }
+      // A bare `--affected` names the default gate. Strip it so it enters the
+      // shared observed flow; `-- --affected` remains an explicit passthrough.
+      if (!sawSep && a === "--affected") continue;
       if (a === "--") sawSep = true;
       cleaned.push(a);
     }
@@ -496,10 +570,16 @@ export function testCommand(args: string[]): number {
     return 1;
   }
 
-  // Explicit passthrough: `roll test -- <args>` forwards verbatim. The caller
-  // owns the exact command and its proof; roll does not resolve or mint one.
+  // Explicit passthrough forwards verbatim but remains one observed TCR round.
   if (argv.length > 0) {
-    return runForward("npm", ["test", "--", ...argv]).status;
+    const cwd = process.cwd();
+    const session = beginGateRound(cwd);
+    const run = runForward("npm", ["test", "--", ...argv], roundChildEnv(session));
+    completeTcrRound(session, {
+      finishedMs: Date.now(), command: ["npm", "test", "--", ...argv].join(" "),
+      affectedScope: "custom", exitCode: run.status, output: run.output,
+    });
+    return run.status;
   }
 
   // Default per-commit gate → resolve a version-compatible runner (FIX-1274).
@@ -539,20 +619,35 @@ export function testCommand(args: string[]): number {
   // Full mode runs the project's own `npm test` with no separator; changed /
   // affected append their flag after `--`.
   const npmArgv = plan.npmTestArgs.length > 0 ? ["test", "--", ...plan.npmTestArgs] : ["test"];
-  const primary = runForward("npm", npmArgv);
+  // Start before the command so the proof writer can carry the real round id.
+  const session = beginGateRound(cwd);
+  const childEnv = roundChildEnv(session);
+  const primary = runForward("npm", npmArgv, childEnv);
 
   // A `--changed` selection that matched ZERO tests is not an honest green — and
   // Vitest exits 0 in that case ("No test files found, exiting with code 0"), so
   // the exit code alone would fabricate a pass. Detect the empty selection from
   // the runner output and fall back to the FULL suite (stricter), regardless of
   // exit code, rather than mint a proof for a run that executed no tests.
+  let finalMode = plan.mode;
+  let finalCommand = ["npm", ...npmArgv].join(" ");
+  let finalRun = primary;
   if (plan.mode === "changed" && isNoTestsFoundOutput(primary.output)) {
     infoErr("test gate: changed-test mode matched 0 tests → running full suite (conservative fallback)");
-    const full = runForward("npm", ["test"]);
-    return finishGate(cwd, "full", "npm test", full, plan.writesProof);
+    finalMode = "full";
+    finalCommand = "npm test";
+    finalRun = runForward("npm", ["test"], childEnv);
   }
 
-  return finishGate(cwd, plan.mode, ["npm", ...npmArgv].join(" "), primary, plan.writesProof);
+  const testFinishedAtMs = Date.now();
+  completeTcrRound(session, {
+    finishedMs: testFinishedAtMs,
+    command: finalCommand,
+    affectedScope: finalMode,
+    exitCode: finalRun.status,
+    output: finalRun.output,
+  });
+  return finishGate(cwd, finalMode, finalCommand, finalRun, plan.writesProof, roundCorrelation(session, testFinishedAtMs));
 }
 
 /**
@@ -568,6 +663,7 @@ function finishGate(
   command: string,
   run: { status: number; output: string },
   writesProof: boolean,
+  correlation?: TcrProofCorrelation,
 ): number {
   if (run.status !== 0) return run.status;
   // FIX-1274's zero-test rejection guards the raw-vitest changed/full modes,
@@ -584,6 +680,6 @@ function finishGate(
     process.stderr.write("  a green gate requires at least one executed test; add tests or scope the run\n");
     return 1;
   }
-  if (writesProof) writeTestProof(cwd, mode, command);
+  if (writesProof) writeTestProof(cwd, mode, command, correlation);
   return 0;
 }

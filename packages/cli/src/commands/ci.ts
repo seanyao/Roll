@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `ci` subcommand, reporting GitHub Actions run status for the current HEAD.
+ */
+/**
  * `roll ci` — TS port of bin/roll cmd_ci (14390-14416) plus the `_gh_available`
  * probe (10987). Reports the GitHub Actions run status for the current HEAD
  * commit.

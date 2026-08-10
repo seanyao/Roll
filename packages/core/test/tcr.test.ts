@@ -1,4 +1,6 @@
 /**
+ * RL-TCR-001: verification anchor for the registered redline (policy/rules.yaml)
+ * — non-docs-only commits must carry a fresh test-pass proof for this cycle.
  * Unit tests for the TCRPipeline pure decision logic (delivery/tcr.ts).
  * Byte-equivalence vs the bash/hook oracle is covered in tcr.difftest.test.ts.
  */

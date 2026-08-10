@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll truth query` subcommand, the CLI entry point for deterministic delivery-truth queries.
+ */
+/**
  * FIX-389a / US-TRUTH-016 AC4 — `roll truth query <storyId>`: the one CLI
  * entry point for deterministic delivery-truth queries.
  *
@@ -29,7 +32,7 @@ import {
 import { TERMINAL_SCHEMA_EPOCH_SEC } from "../lib/consistency-audit.js";
 
 export const TRUTH_USAGE =
-  "Usage: roll truth <command> [--workspace <id|path>]\n" +
+  "Usage: roll truth <command>\n" +
   "  query <storyId>  Deterministic delivery-truth query (structured, zero markdown parse).\n" +
   "  audit            Bidirectional drift audit: backlog Done ↔ projection truth.\n" +
   "命令:\n" +
@@ -51,12 +54,6 @@ function formatTruth(t: StoryDeliveryTruth, lang: "en" | "zh"): string {
     lines.push(`  ${label}: ${t.missingReason}`);
   }
   return `${lines.join("\n")}\n`;
-}
-
-export interface TruthCommandDeps {
-  readonly projectPath?: string;
-  readonly backlogPath?: string;
-  readonly runtimeRoot?: string;
 }
 
 // ── Node-backed FreshnessPort ────────────────────────────────────────────────
@@ -85,19 +82,19 @@ const nodeFreshnessPort: FreshnessPort = {
 
 // ── `roll truth audit` — bidirectional drift audit (FIX-390) ─────────────
 
-function truthAuditCommand(args: string[], lang: "en" | "zh", deps: TruthCommandDeps): number {
+function truthAuditCommand(args: string[], lang: "en" | "zh"): number {
   const json = args.includes("--json");
-  const cwd = deps.projectPath ?? process.cwd();
+  const cwd = process.cwd();
   const nowSec = Math.floor(Date.now() / 1000);
 
   // Read backlog
-  const backlogPath = deps.backlogPath ?? join(cwd, ".roll", "backlog.md");
+  const backlogPath = join(cwd, ".roll", "backlog.md");
   const backlogRows: Array<{ id: string; status: string }> = existsSync(backlogPath)
     ? parseBacklog(readFileSync(backlogPath, "utf8")).map((r) => ({ id: r.id, status: r.status }))
     : [];
 
   // Load deliveries (ensure fresh projection)
-  const deliveries = ensureDeliveriesFresh(cwd, nodeFreshnessPort, nodeExecPort, undefined, deps.runtimeRoot);
+  const deliveries = ensureDeliveriesFresh(cwd, nodeFreshnessPort, nodeExecPort);
 
   // Build snapshot — only feedback sources needed for claim-drift (FIX-390)
   const snapshot = emptyAuditSnapshot(nowSec, TERMINAL_SCHEMA_EPOCH_SEC);
@@ -170,7 +167,7 @@ function truthAuditCommand(args: string[], lang: "en" | "zh", deps: TruthCommand
   return 1;
 }
 
-export function truthCommand(args: string[], deps: TruthCommandDeps = {}): number {
+export function truthCommand(args: string[]): number {
   const lang = resolveLang({
     rollLang: process.env["ROLL_LANG"],
     lcAll: process.env["LC_ALL"],
@@ -185,7 +182,7 @@ export function truthCommand(args: string[], deps: TruthCommandDeps = {}): numbe
   }
 
   if (sub === "audit") {
-    return truthAuditCommand(args.slice(1), lang, deps);
+    return truthAuditCommand(args.slice(1), lang);
   }
 
   if (sub !== "query") {
@@ -212,8 +209,8 @@ export function truthCommand(args: string[], deps: TruthCommandDeps = {}): numbe
 
   // FIX-389a AC2: ensure the deliveries cache is fresh (project from runs+git)
   // before querying. Delete deliveries.jsonl + re-run → same result.
-  const cwd = deps.projectPath ?? process.cwd();
-  const deliveries = ensureDeliveriesFresh(cwd, nodeFreshnessPort, nodeExecPort, undefined, deps.runtimeRoot);
+  const cwd = process.cwd();
+  const deliveries = ensureDeliveriesFresh(cwd, nodeFreshnessPort, nodeExecPort);
   const truth = queryStoryDelivery(storyId, deliveries);
 
   if (json) {

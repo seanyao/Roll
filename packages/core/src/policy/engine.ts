@@ -1,4 +1,5 @@
 /**
+ * @responsibility Applies policy decisions to observed loop and delivery facts.
  * PolicyEngine — parse + enforce `.roll/policy.yaml` (US-CORE-010).
  *
  * v2 reality vs v3 spec

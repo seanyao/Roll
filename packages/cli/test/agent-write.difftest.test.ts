@@ -150,7 +150,7 @@ describe("roll agent write surface (v4)", () => {
           cursor      not found     runtime auth/network/account checked at spawn
 
         Role bindings are authored in ~/.roll/agents.yaml and .roll/agents.yaml.
-        roll agent migrate [--dry-run]  — convert legacy defaults/routes/pairing to roll-agents/v1
+        roll agent migrate [--dry-run]  — convert legacy defaults/routes and enabled code reviewer pools; score/design/test/cycle pairing settings are retired
         roll agent list                 — show installed agents
 
       "
@@ -237,7 +237,7 @@ rigs:
           cursor      not found     runtime auth/network/account checked at spawn
 
         Role bindings are authored in ~/.roll/agents.yaml and .roll/agents.yaml.
-        roll agent migrate [--dry-run]  — convert legacy defaults/routes/pairing to roll-agents/v1
+        roll agent migrate [--dry-run]  — convert legacy defaults/routes and enabled code reviewer pools; score/design/test/cycle pairing settings are retired
         roll agent list                 — show installed agents
 
       "
@@ -302,7 +302,7 @@ agents:
           cursor      not found     runtime auth/network/account checked at spawn
 
         Role bindings are authored in ~/.roll/agents.yaml and .roll/agents.yaml.
-        roll agent migrate [--dry-run]  — convert legacy defaults/routes/pairing to roll-agents/v1
+        roll agent migrate [--dry-run]  — convert legacy defaults/routes and enabled code reviewer pools; score/design/test/cycle pairing settings are retired
         roll agent list                 — show installed agents
 
       "
@@ -349,7 +349,7 @@ roles:
           cursor      not found     runtime auth/network/account checked at spawn
 
         Role bindings are authored in ~/.roll/agents.yaml and .roll/agents.yaml.
-        roll agent migrate [--dry-run]  — convert legacy defaults/routes/pairing to roll-agents/v1
+        roll agent migrate [--dry-run]  — convert legacy defaults/routes and enabled code reviewer pools; score/design/test/cycle pairing settings are retired
         roll agent list                 — show installed agents
 
       "
@@ -399,7 +399,7 @@ roles:
         mkdirSync(rollHome(cwd), { recursive: true });
         writeFileSync(join(rollHome(cwd), "config.yaml"), "primary_agent: codex\nai_codex: ~/.codex|AGENTS.md|AGENTS.md\n", "utf8");
         seedRoutes(cwd, { default: "pi", hard: "kimi" });
-        writeFileSync(join(cwd, ".roll", "pairing.yaml"), "enabled: true\nstages: [score]\ncapability:\n  reasonix: [score]\n", "utf8");
+        writeFileSync(join(cwd, ".roll", "pairing.yaml"), "enabled: true\nstages: [code]\ncapability:\n  reasonix: [code]\n", "utf8");
         writeFileSync(join(cwd, ".roll", "local.yaml"), "agent: claude\n", "utf8");
       },
     });
@@ -411,7 +411,7 @@ roles:
     expect(r.stdout).toContain(`${rollHome(r.cwd)}/config.yaml ai_codex -> ${rollHome(r.cwd)}/agents.yaml agents.codex`);
     expect(r.stdout).toContain(`${rollHome(r.cwd)}/config.yaml primary_agent -> ${rollHome(r.cwd)}/agents.yaml roles.supervise = fixed codex`);
     expect(r.stdout).toContain(".roll/agents.yaml v3 routes -> .roll/agents.yaml defaults.story.roles.execute = select [pi, kimi]");
-    expect(r.stdout).toContain(".roll/pairing.yaml capability -> .roll/agents.yaml defaults.story.roles.evaluate = select [reasonix]");
+    expect(r.stdout).toContain(".roll/pairing.yaml code capability -> .roll/agents.yaml defaults.story.roles.evaluate = select [reasonix]");
     expect(r.stdout).toContain(".roll/local.yaml agent ignored (project execute binding already exists; legacy source preserved)");
     expect(r.stdout).toContain("Dry run: no files written");
     expect(existsSync(join(rollHome(r.cwd), "agents.yaml"))).toBe(false);
@@ -424,13 +424,13 @@ roles:
         mkdirSync(rollHome(cwd), { recursive: true });
         writeFileSync(join(rollHome(cwd), "config.yaml"), "primary_agent: codex\nai_codex: ~/.codex|AGENTS.md|AGENTS.md\n", "utf8");
         seedRoutes(cwd, { default: "pi" });
-        writeFileSync(join(cwd, ".roll", "pairing.yaml"), "enabled: true\nstages: [score]\ncapability:\n  kimi: [score]\n", "utf8");
+        writeFileSync(join(cwd, ".roll", "pairing.yaml"), "enabled: true\nstages: [code]\ncapability:\n  kimi: [code]\n", "utf8");
       },
     });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Migration written");
     expect(readFileSync(join(rollHome(r.cwd), "config.yaml"), "utf8")).toContain("primary_agent: codex");
-    expect(readFileSync(join(r.cwd, ".roll", "pairing.yaml"), "utf8")).toContain("kimi: [score]");
+    expect(readFileSync(join(r.cwd, ".roll", "pairing.yaml"), "utf8")).toContain("kimi: [code]");
     const machine = readFileSync(join(rollHome(r.cwd), "agents.yaml"), "utf8");
     const project = readFileSync(join(r.cwd, ".roll", "agents.yaml"), "utf8");
     expect(machine).toContain("schema: roll-agents/v1");
@@ -448,7 +448,7 @@ roles:
         writeFileSync(join(rollHome(cwd), "agents.yaml"), machine, "utf8");
         mkdirSync(join(cwd, ".roll"), { recursive: true });
         writeFileSync(join(cwd, ".roll", "agents.yaml"), project, "utf8");
-        writeFileSync(join(cwd, ".roll", "pairing.yaml"), "enabled: true\nstages: [score]\ncapability:\n  kimi: [score]\n", "utf8");
+        writeFileSync(join(cwd, ".roll", "pairing.yaml"), "enabled: true\nstages: [code]\ncapability:\n  kimi: [code]\n", "utf8");
       },
     });
     expect(again.code).toBe(0);
@@ -460,7 +460,7 @@ roles:
   it("unknown subcommand is TS-owned (v4 usage line)", () => {
     expect(run(["bogus"])).toMatchObject({
       code: 1,
-      stdout: "Usage: roll agent [--workspace <id|path>|migrate [--dry-run]|list|readiness [agent]|disable <name> [--machine] [--force]|enable <name> [--machine]]\n",
+      stdout: "Usage: roll agent [migrate [--dry-run]|list|readiness [agent]|disable <name> [--machine] [--force]|enable <name> [--machine]]\n",
       stderr: "[roll] Unknown subcommand: bogus\n",
     });
   });

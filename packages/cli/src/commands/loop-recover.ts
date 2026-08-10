@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop recover` subcommand, the supervised recovery path out of a no-progress stop.
+ */
+/**
  * `roll loop recover [<story-id>] [--reason "..."] [--actor <who>] [--json]`
  *
  * FIX-1049 — the supervised recovery path out of a no-progress STOP. When the

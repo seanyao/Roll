@@ -1,4 +1,7 @@
 /**
+ * @responsibility Executes the adversarial-pairing spawn_role command.
+ */
+/**
  * US-LOOP-102 — the adversarial-pairing `spawn_role` executor.
  *
  * The orchestrator (pure) sequences test_author → implementer → attack rounds
@@ -34,14 +37,13 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { CycleCommand, CycleContext } from "@roll/core";
-import { adversarialRolePrompt, agentSpawnEnvironment, workspaceExecutionEnvironment } from "./agent-spawn.js";
-import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection } from "./main-checkout-guard.js";
+import { adversarialRolePrompt, agentSpawnEnvironment } from "./agent-spawn.js";
+import { applyMainCheckoutWriteProtection, releaseMainCheckoutWriteProtection, worktreeGitEnv } from "./main-checkout-guard.js";
 import { appendWriteProtectionEvent, quarantineMainCheckoutForCycle, startMainCheckoutLeakWatchdog } from "./sandbox-boundary.js";
 import { spawnWatched } from "./spawn-watchdog.js";
 import { resolveIntegrationBranch } from "@roll/infra";
 import { eventTs, guardRuntimeDir } from "./runner-time.js";
-import { prepareWorkspaceBuilderSkillBody } from "./workspace-builder-context.js";
-import { repositoryAgentWritableRoots, submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
+import { submoduleAgentWritableRoots } from "./worktree-bootstrap.js";
 import { resolveExecutionCwd, resolveExecutionRepoCwd } from "./submodule-worktree.js";
 import type { ExecuteResult, Ports } from "./ports.js";
 
@@ -89,22 +91,6 @@ export async function executeSpawnRoleCommand(
 
   const startSec = ports.clock();
   const rolePrompt = adversarialRolePrompt(cmd.role);
-  const skillHandoff = prepareWorkspaceBuilderSkillBody(ctx, `${rolePrompt}\n\n${ports.skillBody}`);
-  if (!skillHandoff.ok) {
-    ports.events.appendAlert(
-      ports.paths.alertsPath,
-      `Workspace skill handoff blocked for ${ctx.storyId ?? "?"}: ${skillHandoff.code} (cycle ${ctx.cycleId ?? "?"})`,
-    );
-    return {
-      event: {
-        type: "role_exited",
-        role: cmd.role,
-        exit: 1,
-        timedOut: false,
-        elapsedSec: 0,
-      },
-    };
-  }
   // US-LOOP-106: guard the shared main checkout for the role's whole lifetime,
   // exactly as the standard builder does — write-protect + watch for a leak,
   // quarantine any pollution pre/post. A detected active leak forces a failure
@@ -124,19 +110,15 @@ export async function executeSpawnRoleCommand(
       }),
     );
     mainLeakWatchdog = startMainCheckoutLeakWatchdog(ports, ctx);
+    // The adversarial writer has the same main-checkout boundary as the normal
+    // builder: do not launch it until the watchdog's baseline is immutable.
+    await mainLeakWatchdog.ready();
     // E4: an adversarial role (test_author/implementer/attacker) writes code +
     // tests just like the builder, so a submodule cycle runs it in the submodule
     // cycle worktree (execCwd) with the submodule's git env + writable roots. No
     // targetSubmodule ⇒ ports.paths.worktreePath / ports.repoCwd, unchanged.
-    const selectedRepository = skillHandoff.selectedRepository;
-    const execCwd = selectedRepository?.worktreePath ?? resolveExecutionCwd(ports, ctx);
-    const execRepoCwd = selectedRepository?.worktreePath ?? resolveExecutionRepoCwd(ports, ctx);
-    const writableRoots = ctx.repositoryExecution === undefined || selectedRepository === undefined
-      ? submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath)
-      : repositoryAgentWritableRoots({
-          ...ctx.repositoryExecution,
-          repositories: { [selectedRepository.repoId]: selectedRepository },
-        });
+    const execCwd = resolveExecutionCwd(ports, ctx);
+    const execRepoCwd = resolveExecutionRepoCwd(ports, ctx);
     // US-CYCLE-002: the code-writing adversarial role (test_author/implementer/
     // attacker) goes through the shared run-watchdog with the BUILDER cap — the
     // in-await liveness belt the between-step orchestrator watchdog cannot be for
@@ -154,21 +136,16 @@ export async function executeSpawnRoleCommand(
           ports.agentSpawn(cmd.agent, {
             purpose: cmd.role,
             cwd: execCwd,
-            skillBody: skillHandoff.skillBody,
-            writableRoots,
+            skillBody: `${rolePrompt}\n\n${ports.skillBody}`,
+            writableRoots: submoduleAgentWritableRoots(ports.repoCwd, execRepoCwd, ports.paths.alertsPath),
             ...(ctx.model !== undefined && ctx.model !== "" ? { model: ctx.model } : {}),
             ...(ctx.storyId !== undefined && ctx.storyId !== "" ? { storyId: ctx.storyId } : {}),
-            ...(ctx.workspaceExecution === undefined ? {} : { workspaceExecution: ctx.workspaceExecution }),
             ...(ctx.evidenceRunDir !== undefined ? { runDir: ctx.evidenceRunDir } : {}),
             env: {
               ...process.env,
               ROLL_LOOP_ALERT: ports.paths.alertsPath,
               ROLL_ADVERSARIAL_MARKER: markerPath,
-              ...workspaceExecutionEnvironment(ctx.workspaceExecution),
-              ...(selectedRepository === undefined ? {} : {
-                ROLL_REPOSITORY_ID: selectedRepository.repoId,
-                ROLL_REPOSITORY_ALIAS: selectedRepository.alias,
-              }),
+              ...worktreeGitEnv(execCwd, ports.repoCwd),
               ...agentSpawnEnvironment(cmd.agent),
             },
           }),

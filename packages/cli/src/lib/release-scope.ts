@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the release tab pending-delivery and shipped-changelog sections.
+ */
+/**
  * US-DOSSIER-016 / FIX-372 — the release tab's pending-delivery and
  * shipped-changelog sections, plus the collapsible version history.
  *

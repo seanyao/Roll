@@ -1,4 +1,7 @@
 /**
+ * @responsibility Renders terminal output with byte-aligned layout, color, and CJK width handling.
+ */
+/**
  * Terminal rendering primitives — TS port of lib/roll_render.py (the shared
  * layout engine for status/prices/backlog/dashboard views). Byte-aligned with
  * the python oracle; CJK/fullwidth glyphs occupy 2 cells (strw) which is what

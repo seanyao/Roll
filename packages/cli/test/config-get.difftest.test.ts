@@ -83,31 +83,22 @@ describe("frozen: roll config (read) render", () => {
         "status": 0,
         "stderr": "",
         "stdout": "Usage: roll config <key>                 print current value + source
-             roll config --list                list all loop/dream config keys
+             roll config --list                list all config keys
              roll config <key> <value> [--global|--project]   set a value
-                                                                        统一调度配置
-      Read / list / set loop and dream config keys without hand-editing yaml.
+                                                                        配置读写
+      Read / list / set config keys without hand-editing yaml.
       Default write scope is --project (.roll/local.yaml); --global writes
-      ~/.roll/config.yaml. The window/period/time keys below are INACTIVE — they are
-      still stored and printed, but nothing reads them.
-      读 / 列 / 写 loop、dream 配置 key，免去手工编辑 yaml。默认写 --project
-      （.roll/local.yaml）；--global 写 ~/.roll/config.yaml。下面的窗口/周期/时刻 key
-      都已**失效**：仍然会存、会打印，但没有任何东西读它们。
+      ~/.roll/config.yaml. Legacy dream-time keys are INACTIVE — reads, writes, and
+      --list disclose that nothing reads them.
+      读 / 列 / 写配置 key，免去手工编辑 yaml。默认写 --project
+      （.roll/local.yaml）；--global 写 ~/.roll/config.yaml。历史 dream 时刻 key
+      已**失效**：读、写、--list 都会说明没有任何东西读它们。
 
-      Supported keys (range):
-        loop_active_start              0-23    (inactive) stored hour, unread
-        loop_active_end                1-24    (inactive) stored hour, unread
-        loop_schedule.period_minutes   1-1440  (inactive) stored minutes, unread
-        loop_schedule.offset_minute    0-59    (inactive) stored offset, unread
+      Legacy inactive keys (range):
         loop_dream_hour                0-23    (inactive) stored hour, unread
         loop_dream_minute              0-59    (inactive) stored minute, unread
 
-      Compact facades (write multiple keys at once):
-        roll config loop-window 9-18              loop_active_start + loop_active_end
-        roll config loop-schedule 30/7            period_minutes + offset_minute
-        roll config dream-time 03:20              loop_dream_hour + loop_dream_minute
-        (these three write values nothing reads — delivery is driven by "roll loop go"
-         in a session you open, and a scan by "roll dream run-once")
+      Run "roll dream run-once" when you want a scan.
 
       Language (REFACTOR-049: roll lang → roll config lang):
         roll config lang                          show current language + source
@@ -116,11 +107,9 @@ describe("frozen: roll config (read) render", () => {
         roll config lang --reset                  clear preference (follow locale)
 
       Examples:
-        roll config loop_dream_hour
+        roll config integration_branch
         roll config --list
-        roll config loop_schedule.period_minutes 30
-        roll config loop_dream_hour 3 --global
-        roll config dream-time 03:20
+        roll config publish_mode local
       ",
       }
     `);
@@ -130,59 +119,11 @@ describe("frozen: roll config (read) render", () => {
       {
         "status": 0,
         "stderr": "",
-        "stdout": "  loop_active_start              = 9        (.roll/local.yaml)  [inactive]
-        loop_active_end                = 24       (default)  [inactive]
-        loop_schedule.period_minutes   = 30       (.roll/local.yaml)  [inactive]
-        loop_schedule.offset_minute    = 0        (default)  [inactive]
-        loop_dream_hour                = 5        (<HOME>/.roll/config.yaml)  [inactive]
+        "stdout": "  loop_dream_hour                = 5        (<HOME>/.roll/config.yaml)  [inactive]
         loop_dream_minute              = -        (default)  [inactive]
         integration_branch             = origin/main (default)
         publish_mode                   = remote   (default)
         default_submodule              =          (default)
-      ",
-      }
-    `);
-  });
-  it("config loop_active_start (project nested, set)", () => {
-    expect(tsCfg(["loop_active_start"])).toMatchInlineSnapshot(`
-      {
-        "status": 0,
-        "stderr": "",
-        "stdout": "loop_active_start = 9  (from .roll/local.yaml)
-      note: this key is inactive — nothing reads it
-      ",
-      }
-    `);
-  });
-  it("config loop_active_end (project nested, default)", () => {
-    expect(tsCfg(["loop_active_end"])).toMatchInlineSnapshot(`
-      {
-        "status": 0,
-        "stderr": "",
-        "stdout": "loop_active_end = 24  (from default)
-      note: this key is inactive — nothing reads it
-      ",
-      }
-    `);
-  });
-  it("config loop_schedule.period_minutes (dotted nested, set)", () => {
-    expect(tsCfg(["loop_schedule.period_minutes"])).toMatchInlineSnapshot(`
-      {
-        "status": 0,
-        "stderr": "",
-        "stdout": "loop_schedule.period_minutes = 30  (from .roll/local.yaml)
-      note: this key is inactive — nothing reads it
-      ",
-      }
-    `);
-  });
-  it("config loop_schedule.offset_minute (dotted nested, default)", () => {
-    expect(tsCfg(["loop_schedule.offset_minute"])).toMatchInlineSnapshot(`
-      {
-        "status": 0,
-        "stderr": "",
-        "stdout": "loop_schedule.offset_minute = 0  (from default)
-      note: this key is inactive — nothing reads it
       ",
       }
     `);

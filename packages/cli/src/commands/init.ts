@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll init` subcommand, scaffolding a new project with AGENTS.md and the roll structure.
+ */
+/**
  * `roll init` — TS port of bin/roll cmd_init (2147-2210) and its scaffolding
  * helpers, plus the v2 UI renderer lib/roll-init.py (rendered natively here via
  * the shared render primitives). Mirrors the DETERMINISTIC happy path:
@@ -66,7 +69,7 @@ import {
 import { computeInitFactsHash } from "../lib/onboard-plan.js";
 import { discoverInteractiveAgents } from "../lib/interactive-agent.js";
 import { confirmYesNo, readConfirmLine } from "../lib/tty-confirm.js";
-import { initOnboardDesignCommand, type DesignCommandDeps } from "./design.js";
+import { designCommand } from "./design.js";
 
 /**
  * FIX-283 (AC4): adopting roll registers the project into `~/.roll/projects.json`
@@ -1747,21 +1750,8 @@ interface InitCommandDeps {
   runDesign?: (args: string[]) => number;
 }
 
-export function runDesignSync(
-  args: string[],
-  runDesign: (args: string[], deps: Partial<DesignCommandDeps>) => number | Promise<number> = initOnboardDesignCommand,
-): number {
-  const cwd = process.cwd();
-  const result = runDesign(args, {
-    cwd,
-    invocationCwd: cwd,
-    workspaceContextScope: "legacy_migration_only",
-    workspaceContextOperationProvenance: {
-      surface: "cli",
-      id: "init",
-      operation: "onboard",
-    },
-  });
+function runDesignSync(args: string[]): number {
+  const result = designCommand(args);
   if (typeof result === "number") return result;
   process.stderr.write("roll design failed during init handoff: async design continuation is unsupported in init\n");
   return 1;
@@ -2179,7 +2169,6 @@ include_existing: []
 privacy:
   gitignore_dot_roll: true
 sync_targets: []
-enable_loop: false
 agent_routes_template: skip
 `;
 }

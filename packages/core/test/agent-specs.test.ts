@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentDefaultModel,
+  peerModelFor,
   agentCanReviewHeadless,
   agentNormalizerKind,
   agentSmokeCommand,
@@ -85,5 +86,30 @@ describe("AgentSpec registry — FIX-313", () => {
     expect(agentNormalizerKind("fixture-agent", specs)).toBe("generic");
     expect(agentSmokeCommand("fixture-agent", specs)).toBe("fixture-agent --smoke");
     expect(agentCanReviewHeadless("fixture-agent", specs)).toBe(true);
+  });
+});
+
+describe("US-PAIR-011 — peerModelFor: selection reads the CONFIGURED model", () => {
+  it("prefers the rig-declared model over the agent default", () => {
+    // This repo pins BOTH pi and reasonix to deepseek-v4-pro via rigs — the
+    // isolation ladder must see one model, not two agent names.
+    expect(peerModelFor("pi", "deepseek-v4-pro")).toBe("deepseek-v4-pro");
+    expect(peerModelFor("reasonix", "deepseek-v4-pro")).toBe("deepseek-v4-pro");
+  });
+
+  it("falls back to the registered default when no rig pins a model", () => {
+    expect(peerModelFor("claude", "")).toBe(agentDefaultModel("claude"));
+  });
+
+  it("treats whitespace as no pin", () => {
+    expect(peerModelFor("claude", "   ")).toBe(agentDefaultModel("claude"));
+  });
+
+  it("claims nothing for an unknown agent instead of echoing its name", () => {
+    // agentDefaultModel() returns the NAME as a last resort; that would let an
+    // unknown agent masquerade as its own model identity and satisfy a vendor
+    // comparison it cannot actually prove.
+    expect(agentDefaultModel("totally-unknown-agent")).toBe("totally-unknown-agent");
+    expect(peerModelFor("totally-unknown-agent", "")).toBe("");
   });
 });

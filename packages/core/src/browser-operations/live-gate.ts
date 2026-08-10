@@ -1,4 +1,5 @@
 /**
+ * @responsibility Evaluates the managed-lane regression gate verdict from observed capability.
  * US-BROW-020 — pure live managed-lane gate evaluator + summary renderer.
  *
  * This is the honesty core of the regression gate. It has NO Chrome, MCP or

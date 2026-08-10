@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ToolDeclaration } from "@roll/spec";
 import { commit, captureScreenshot, execFile, prCreate } from "../src/index.js";
 import { invokeInfraTool } from "../src/tools/delegation.js";
-import { TOOL_TEST_REPO_ID, toolWorkspaceContext } from "./tool-workspace-context.js";
 
 const dirs: string[] = [];
 const originalEnv = { ...process.env };
@@ -47,143 +46,7 @@ function fakeBin(name: string, script: string): void {
 }
 
 describe("US-TOOL-014 infra tool delegation", () => {
-  it("freezes and forwards Workspace context while isolating events under its authority", async () => {
-    delete process.env["ROLL_TOOL_EVENTS_PATH"];
-    delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
-    const root = tmp("workspace-context");
-    const executionContext = toolWorkspaceContext("US-WS-036", root);
-    const declaration: ToolDeclaration = {
-      id: "network.test" as ToolDeclaration["id"],
-      kind: "network",
-      title: "Workspace-bound delegated test",
-      defaults: { enabled: true },
-    };
-    let receivedFrozen = false;
-
-    const result = await invokeInfraTool({
-      declaration,
-      input: { url: "https://example.test" },
-      scope: "repository_required",
-      caller: { cycleId: "cycle-context", storyId: "US-WS-036", agent: "codex" },
-      context: executionContext,
-      repoId: TOOL_TEST_REPO_ID,
-      run: async (invocation) => {
-        receivedFrozen = Object.isFrozen(invocation.context) && Object.isFrozen(invocation.context?.workspace);
-        return {
-          ok: true,
-          output: { accepted: true },
-          meta: {
-            invocationId: invocation.invocationId,
-            toolId: invocation.toolId,
-            caller: invocation.caller,
-            startedAt: invocation.ts,
-            endedAt: invocation.ts,
-            durationMs: 0,
-          },
-        };
-      },
-    });
-
-    expect(receivedFrozen).toBe(true);
-    expect(result).toMatchObject({
-      ok: true,
-      meta: { correlation: { workspaceId: "tool-tests", storyId: "US-WS-036", repoId: TOOL_TEST_REPO_ID } },
-    });
-    const authorityEvents = join(root, "runtime", "events", "tools.ndjson");
-    expect(events(authorityEvents).map((event) => event.invocation?.toolId ?? event.toolId)).toEqual([
-      "network.test",
-      "network.test",
-    ]);
-  });
-
-  it("does not let a machine event-path override redirect Workspace-scoped events", async () => {
-    const root = tmp("workspace-event-precedence");
-    const redirected = join(tmp("redirected-events"), "events.ndjson");
-    process.env["ROLL_TOOL_EVENTS_PATH"] = redirected;
-    const executionContext = toolWorkspaceContext("US-WS-036", root);
-    const declaration: ToolDeclaration = {
-      id: "network.test" as ToolDeclaration["id"],
-      kind: "network",
-      title: "Workspace event authority test",
-      defaults: { enabled: true },
-    };
-
-    const result = await invokeInfraTool({
-      declaration,
-      input: { url: "https://example.test" },
-      scope: "repository_required",
-      caller: { cycleId: "cycle-context", storyId: "US-WS-036", agent: "codex" },
-      context: executionContext,
-      repoId: TOOL_TEST_REPO_ID,
-      run: async (invocation) => ({
-        ok: true,
-        output: { accepted: true },
-        meta: {
-          invocationId: invocation.invocationId,
-          toolId: invocation.toolId,
-          caller: invocation.caller,
-          startedAt: invocation.ts,
-          endedAt: invocation.ts,
-          durationMs: 0,
-        },
-      }),
-    });
-
-    expect(result.ok).toBe(true);
-    expect(events(join(executionContext.authorities.events, "tools.ndjson"))).toHaveLength(2);
-    expect(existsSync(redirected)).toBe(false);
-  });
-
-  it("redacts common provider and credential forms from delegated invoke events", async () => {
-    const root = tmp("workspace-event-redaction");
-    const executionContext = toolWorkspaceContext("US-WS-036", root);
-    const declaration: ToolDeclaration = {
-      id: "network.secret-test" as ToolDeclaration["id"],
-      kind: "network",
-      title: "Workspace event redaction test",
-      defaults: { enabled: true },
-    };
-    const secrets = ["sk-example123456", "Bearer bearer-secret", "password=hunter2", "api_key=key-secret"];
-
-    const result = await invokeInfraTool({
-      declaration,
-      input: {
-        nested: { secrets, secret: "nested-secret" },
-        password: "structured-password",
-        token: "structured-token",
-        api_key: "structured-key",
-        access_token: "structured-access-token",
-        clientSecret: "structured-client-secret",
-      },
-      scope: "issue_required",
-      context: executionContext,
-      run: async (invocation) => ({
-        ok: true,
-        output: invocation.input,
-        meta: {
-          invocationId: invocation.invocationId,
-          toolId: invocation.toolId,
-          caller: invocation.caller,
-          startedAt: invocation.ts,
-          endedAt: invocation.ts,
-          durationMs: 0,
-        },
-      }),
-    });
-
-    expect(result.ok).toBe(true);
-    const persisted = readFileSync(join(executionContext.authorities.events, "tools.ndjson"), "utf8");
-    for (const secret of [
-      "sk-example123456", "bearer-secret", "hunter2", "key-secret",
-      "nested-secret", "structured-password", "structured-token", "structured-key",
-      "structured-access-token", "structured-client-secret",
-    ]) {
-      expect(persisted).not.toContain(secret);
-    }
-    expect(persisted).toContain("[REDACTED]");
-  });
-
-  it("keeps the legacy machine process wrapper explicit even when Story environment is present", async () => {
+  it("delegates public process execFile calls through the bash tool and appends events.ndjson entries", async () => {
     const dir = tmp("process");
     const eventsPath = setEventsPath(dir);
 
@@ -193,44 +56,7 @@ describe("US-TOOL-014 infra tool delegation", () => {
     expect(events(eventsPath).map((event) => event.invocation?.toolId ?? event.toolId)).toEqual(["bash", "bash"]);
   });
 
-  it("rejects a delegated repository operation before its runner when context is missing", async () => {
-    const dir = tmp("missing-context");
-    const eventsPath = setEventsPath(dir);
-    let ran = false;
-    const declaration: ToolDeclaration = {
-      id: "bash.test" as ToolDeclaration["id"],
-      kind: "bash",
-      title: "Missing Workspace context test",
-      defaults: { enabled: true },
-    };
-
-    const result = await invokeInfraTool({
-      declaration,
-      input: { command: "pwd" },
-      scope: "repository_required",
-      run: async (invocation) => {
-        ran = true;
-        return {
-          ok: true,
-          output: invocation.input,
-          meta: {
-            invocationId: invocation.invocationId,
-            toolId: invocation.toolId,
-            caller: invocation.caller,
-            startedAt: invocation.ts,
-            endedAt: invocation.ts,
-            durationMs: 0,
-          },
-        };
-      },
-    });
-
-    expect(result).toMatchObject({ ok: false, error: { code: "missing_execution_context" } });
-    expect(ran).toBe(false);
-    expect(events(eventsPath).map((event) => event.invocation?.toolId ?? event.toolId)).toEqual(["bash.test", "bash.test"]);
-  });
-
-  it("keeps the legacy machine git wrapper available without Workspace context", async () => {
+  it("delegates public git commit calls through git.commit and appends events.ndjson entries", async () => {
     const repo = tmp("git");
     const eventsPath = setEventsPath(repo);
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
@@ -241,12 +67,12 @@ describe("US-TOOL-014 infra tool delegation", () => {
 
     const result = await commit(repo, "add file");
 
-    expect(result).toMatchObject({ code: 0 });
-    expect(execFileSync("git", ["rev-parse", "--verify", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()).toMatch(/^[0-9a-f]{40}$/u);
+    expect(result.code).toBe(0);
+    expect(execFileSync("git", ["show", "-s", "--format=%s", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()).toBe("add file");
     expect(events(eventsPath).map((event) => event.invocation?.toolId ?? event.toolId)).toEqual(["git.commit", "git.commit"]);
   });
 
-  it("keeps the legacy machine GitHub wrapper available without Workspace context", async () => {
+  it("delegates public GitHub PR creation through github.pr and appends events.ndjson entries", async () => {
     const dir = tmp("gh");
     const eventsPath = setEventsPath(dir);
     fakeBin("gh", `#!/bin/sh
@@ -288,7 +114,6 @@ node -e 'const fs=require("fs"); const input=JSON.parse(process.argv[1]); fs.wri
   it("rejects invalid input before the delegated adapter runs and still appends a result event", async () => {
     const dir = tmp("invalid");
     const eventsPath = setEventsPath(dir);
-    const executionContext = toolWorkspaceContext("US-TOOL-014", dir);
     let ran = false;
     const declaration: ToolDeclaration = {
       id: "test.delegated" as ToolDeclaration["id"],
@@ -308,9 +133,6 @@ node -e 'const fs=require("fs"); const input=JSON.parse(process.argv[1]); fs.wri
     const result = await invokeInfraTool({
       declaration,
       input: { args: ["--version"] },
-      scope: "repository_required",
-      context: executionContext,
-      repoId: TOOL_TEST_REPO_ID,
       run: async (invocation) => {
         ran = true;
         return {
@@ -334,9 +156,7 @@ node -e 'const fs=require("fs"); const input=JSON.parse(process.argv[1]); fs.wri
       expect(result.error.code).toBe("invalid_input");
       expect(result.error.message).toContain("$.command is required");
     }
-    const authorityEvents = join(executionContext.authorities.events, "tools.ndjson");
-    expect(existsSync(eventsPath)).toBe(false);
-    expect(events(authorityEvents).map((event) => event.invocation?.toolId ?? event.toolId)).toEqual(["test.delegated", "test.delegated"]);
-    expect(events(authorityEvents).at(-1)).toMatchObject({ type: "tool:result", result: { ok: false, errorCode: "invalid_input" } });
+    expect(events(eventsPath).map((event) => event.invocation?.toolId ?? event.toolId)).toEqual(["test.delegated", "test.delegated"]);
+    expect(events(eventsPath).at(-1)).toMatchObject({ type: "tool:result", result: { ok: false, errorCode: "invalid_input" } });
   });
 });

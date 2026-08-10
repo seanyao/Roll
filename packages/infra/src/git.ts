@@ -1,4 +1,7 @@
 /**
+ * @responsibility Adapts git operations exactly as the v2 loop performs them.
+ */
+/**
  * Git module — TS I/O adapters mirroring the git operations the v2 loop performs
  * (US-INFRA-002).
  *
@@ -45,9 +48,8 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
 import {
-  isImmutableGitObjectId,
-  isSafeGitRef,
   type ProjectIdentityInputs,
   projectSlug,
   type ToolDeclaration,
@@ -56,6 +58,8 @@ import {
 } from "@roll/spec";
 import { invokeInfraTool } from "./tools/delegation.js";
 import { configResolve, projectConfigPath } from "./config.js";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * E1: the historical hardcoded integration branch. Kept as the default for every
@@ -209,140 +213,33 @@ export interface GitResult {
   code: number;
   stdout: string;
   stderr: string;
-  /** Present when Node terminated the process after the configured timeout. */
-  readonly timedOut?: boolean;
-  /** PID of a timed-out Git child, retained for termination evidence. */
-  readonly pid?: number;
-  /** Termination signal reported by Node for a failed Git child. */
-  readonly signal?: string;
 }
-
-/** Result of an argv-only raw Git invocation whose stdout must remain byte exact. */
-export interface GitBinaryResult {
-  /** Process exit code (0 = success). */
-  code: number;
-  stdout: Uint8Array;
-  stderr: string;
-  /** Present when Node terminated the process after the configured timeout. */
-  readonly timedOut?: boolean;
-  /** PID of a timed-out Git child, retained for termination evidence. */
-  readonly pid?: number;
-  /** Termination signal reported by Node for a failed Git child. */
-  readonly signal?: string;
-}
-
-export interface GitExecutionOptions {
-  /** Maximum wall-clock time before the Git child is terminated. */
-  readonly timeoutMs?: number;
-  /** Narrow environment overrides for one Git invocation. */
-  readonly env?: Readonly<Record<string, string>>;
-}
-
-/** True only for a full, lowercase-hex Git object id — NEVER a ref name, a
- *  short/abbreviated SHA, or any other rev-parse-able expression. This is the
- *  ONE shared gate for every "immutable baseSha" this codebase persists or
- *  trusts from a prior run: `git cat-file -e <value>^{commit}` alone is NOT
- *  sufficient, because git happily RESOLVES a ref-like string (`HEAD`,
- *  `refs/remotes/origin/main`, a branch name, even a short SHA) to a real
- *  commit and reports success — it does not distinguish "you gave me an
- *  immutable id" from "you gave me something I resolved for you". A pinned
- *  base recorded as `HEAD` or a branch ref would silently drift out from
- *  under an Issue every time that ref moves, defeating the entire pinning
- *  contract. Checking the STRING shape first, independent of and prior to any
- *  git call, is what actually enforces immutability. */
-export { isImmutableGitObjectId } from "@roll/spec";
 
 /**
  * Run `git <args>` in `cwd`. Never throws on non-zero exit — returns the code
  * + captured streams so callers can mirror bash's explicit exit-code handling
- * (`if git ...; then` / `|| true`). A spawn failure is also represented as
- * code 1, preserving the existing adapter contract for missing cwd/binary cases.
+ * (`if git ...; then` / `|| true`). Throws only on spawn failure (git missing).
  */
-export async function rawGit(
-  args: readonly string[],
-  cwd?: string,
-  options: GitExecutionOptions = {},
-): Promise<GitResult> {
-  return new Promise<GitResult>((resolveGit) => {
-    let pid: number | undefined;
-    const child = execFile("git", [...args], {
+export async function rawGit(args: readonly string[], cwd?: string): Promise<GitResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync("git", [...args], {
       cwd,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
-      timeout: options.timeoutMs,
-      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
-    }, (error, stdout, stderr) => {
-      if (error === null) {
-        resolveGit({ code: 0, stdout, stderr });
-        return;
-      }
-      const err = error as NodeJS.ErrnoException & {
-        readonly killed?: boolean;
-        readonly signal?: string;
-        readonly stdout?: string;
-        readonly stderr?: string;
-      };
-      const timedOut = err.killed === true && err.signal === "SIGTERM";
-      const detail = {
-        ...(timedOut ? { timedOut: true as const } : {}),
-        ...(timedOut && pid !== undefined ? { pid } : {}),
-        ...(err.signal === undefined ? {} : { signal: err.signal }),
-      };
-      resolveGit({
-        code: typeof err.code === "number" ? err.code : 1,
-        stdout,
-        stderr,
-        ...detail,
-      });
     });
-    pid = child.pid;
-  });
-}
-
-/**
- * Run `git <args>` without a shell and preserve stdout as the exact bytes Git
- * emitted. This is intentionally separate from {@link rawGit}: blob consumers
- * must validate UTF-8 before any decoding or digest/byte accounting occurs.
- */
-export async function rawGitBinary(
-  args: readonly string[],
-  cwd?: string,
-  options: GitExecutionOptions = {},
-): Promise<GitBinaryResult> {
-  return new Promise<GitBinaryResult>((resolveGit) => {
-    let pid: number | undefined;
-    const child = execFile("git", [...args], {
-      cwd,
-      encoding: "buffer",
-      maxBuffer: 64 * 1024 * 1024,
-      timeout: options.timeoutMs,
-      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
-    }, (error, stdout, stderr) => {
-      const stdoutBytes = new Uint8Array(stdout);
-      const stderrText = stderr.toString("utf8");
-      if (error === null) {
-        resolveGit({ code: 0, stdout: stdoutBytes, stderr: stderrText });
-        return;
-      }
-      const err = error as NodeJS.ErrnoException & {
-        readonly killed?: boolean;
-        readonly signal?: string;
-      };
-      const timedOut = err.killed === true && err.signal === "SIGTERM";
-      const detail = {
-        ...(timedOut ? { timedOut: true as const } : {}),
-        ...(timedOut && pid !== undefined ? { pid } : {}),
-        ...(err.signal === undefined ? {} : { signal: err.signal }),
-      };
-      resolveGit({
-        code: typeof err.code === "number" ? err.code : 1,
-        stdout: stdoutBytes,
-        stderr: stderrText,
-        ...detail,
-      });
-    });
-    pid = child.pid;
-  });
+    return { code: 0, stdout, stderr };
+  } catch (e) {
+    const err = e as { code?: number; stdout?: string; stderr?: string; errno?: string };
+    // execFile sets a numeric/string `code`; a non-process spawn error has no
+    // stdout/stderr captured. Distinguish "git ran and failed" from "no git".
+    if (typeof err.code === "number") {
+      return { code: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+    }
+    if (err.stdout !== undefined || err.stderr !== undefined) {
+      return { code: 1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+    }
+    throw e; // git binary not found / unspawnable
+  }
 }
 
 const GIT_RAW_DECLARATION: ToolDeclaration = {
@@ -379,24 +276,11 @@ const GIT_PUSH_DECLARATION: ToolDeclaration = {
  * old return shape while adding tool events for callers that set
  * ROLL_TOOL_EVENTS_PATH or ROLL_PROJECT_RUNTIME_DIR.
  */
-export async function git(
-  args: readonly string[],
-  cwd?: string,
-  options: GitExecutionOptions = {},
-): Promise<GitResult> {
+export async function git(args: readonly string[], cwd?: string): Promise<GitResult> {
   const result = await invokeInfraTool<GitRawInput, GitResult>({
     declaration: GIT_RAW_DECLARATION,
     input: { args: [...args], cwd },
-    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
-    scope: "machine_only",
-    ...(options.timeoutMs === undefined ? {} : { policy: { timeoutMs: options.timeoutMs } }),
-    run: async (invocation) => ok(
-      invocation,
-      await rawGit(invocation.input.args, invocation.input.cwd, {
-        timeoutMs: invocation.policy.timeoutMs,
-        ...(options.env === undefined ? {} : { env: options.env }),
-      }),
-    ),
+    run: async (invocation) => ok(invocation, await rawGit(invocation.input.args, invocation.input.cwd)),
   });
   if (result.ok) return result.output;
   throw new Error(result.error.message);
@@ -409,8 +293,9 @@ export async function git(
  *
  * Steps:
  *   1. `mkdir -p $(dirname path)`.
- *   2. if `path` exists on disk → `git worktree remove --force path` (lenient)
- *      then `rm -rf path` (lenient).
+ *   2. refuse when `path` already exists. A caller must inspect and recover the
+ *      exact prior run; allocation never makes an existing checkout convenient
+ *      by pruning, force-removing, or recursively deleting it.
  *   3. `git worktree add --detach <path> <base>` — STRICT: the one step whose
  *      failure the caller propagates. NO local branch is created.
  *
@@ -434,12 +319,12 @@ export async function worktreeAdd(
   exists: (p: string) => boolean = defaultExists,
 ): Promise<GitResult> {
   mkdirSync(dirname(path), { recursive: true });
-  // US-LOOP-096: clear stale worktree admin metadata a crashed prior cycle left
-  // behind (git's default prune expiry is 3 months) BEFORE creating this one.
-  await git(["worktree", "prune", "--expire", "now"], repoCwd); // lenient
   if (exists(path)) {
-    await git(["worktree", "remove", "--force", path], repoCwd); // lenient
-    rmSyncQuiet(path);
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `recovery_required: managed worktree target already exists: ${path}`,
+    };
   }
   const result = await git(["worktree", "add", "--detach", path, base], repoCwd);
   // FIX-1231: enable extensions.worktreeConfig on the new worktree so
@@ -502,6 +387,228 @@ export async function worktreeRemove(
   // prune expiry is 3 months). No `git branch -D` — detached, there is no branch.
   await git(["worktree", "prune", "--expire", "now"], repoCwd); // lenient
   return { code: 0, stdout: r.stdout, stderr: r.stderr };
+}
+
+/**
+ * The managed-workspace releaser is deliberately stricter than the historical
+ * tolerant `worktreeRemove` helper.  A lifecycle caller supplies the HEAD it
+ * observed while recording `worktree:release_requested`; this function obtains
+ * fresh registration, identity, cleanliness and HEAD facts immediately before
+ * the destructive effect. A populated submodule is the one explicit exception:
+ * Git refuses its normal removal, so a freshly revalidated, tightly guarded
+ * checkout uses one `worktree remove --force`. It never uses `rm -rf` or a
+ * replacement path.
+ */
+export async function managedWorktreeRelease(
+  repoCwd: string,
+  path: string,
+  expectedHead: string,
+  repositoryId: string,
+  options: ManagedWorktreeReleaseOptions = {},
+): Promise<{ code: number; reason?: string }> {
+  const initial = await managedWorktreeReleaseReady(repoCwd, path, expectedHead, repositoryId);
+  if ("reason" in initial) return initial;
+
+  // Git's own normal removal rejects populated submodules. Revalidate every
+  // guard immediately before this one narrowly-authorized force invocation;
+  // ordinary worktrees never receive `--force`.
+  if (initial.mode === "populated_submodule") {
+    if (options.allowVerifiedSubmoduleForce !== true) return { code: 1, reason: "submodule_force_not_authorized" };
+    const final = await managedWorktreeReleaseReady(repoCwd, path, expectedHead, repositoryId);
+    if ("reason" in final) return final;
+    if (final.mode !== "populated_submodule") return { code: 1, reason: "submodule_state_changed" };
+    const removed = await git(["--no-optional-locks", "worktree", "remove", "--force", final.path], repoCwd);
+    if (removed.code !== 0) return { code: removed.code, reason: "remove_refused" };
+    await git(["--no-optional-locks", "worktree", "prune", "--expire", "now"], repoCwd);
+    return { code: 0 };
+  }
+
+  const removed = await git(["--no-optional-locks", "worktree", "remove", initial.path], repoCwd);
+  if (removed.code !== 0) return { code: removed.code, reason: "remove_refused" };
+  await git(["--no-optional-locks", "worktree", "prune", "--expire", "now"], repoCwd);
+  return { code: 0 };
+}
+
+type ManagedWorktreeReleaseMode = "plain" | "populated_submodule";
+
+/** A lifecycle admission fence must opt into the sole managed release force path. */
+export interface ManagedWorktreeReleaseOptions {
+  readonly allowVerifiedSubmoduleForce?: boolean;
+}
+
+type ManagedWorktreeReleaseReady =
+  | { readonly mode: ManagedWorktreeReleaseMode; readonly path: string }
+  | { readonly code: 1; readonly reason: string };
+
+async function managedWorktreeReleaseReady(
+  repoCwd: string,
+  path: string,
+  expectedHead: string,
+  repositoryId: string,
+): Promise<ManagedWorktreeReleaseReady> {
+  const canonicalPath = await realpathQuiet(path);
+  if (canonicalPath === undefined) return { code: 1, reason: "registration_missing" };
+
+  const identity = (await managedRepositoryIdentity(repoCwd)).slug;
+  if (identity !== repositoryId) return { code: 1, reason: "repository_identity_changed" };
+
+  const registered = await git(["--no-optional-locks", "worktree", "list", "--porcelain"], repoCwd);
+  const record = registered.code === 0 ? managedWorktreeRecord(registered.stdout, canonicalPath) : undefined;
+  if (
+    record === undefined ||
+    record.head === undefined ||
+    !record.detached ||
+    record.locked ||
+    record.prunable
+  ) {
+    return { code: 1, reason: "registration_missing" };
+  }
+  if (record.head !== expectedHead) return { code: 1, reason: "head_changed" };
+  const head = await git(["--no-optional-locks", "rev-parse", "HEAD"], canonicalPath);
+  if (head.code !== 0 || head.stdout.trim() !== expectedHead) return { code: 1, reason: "head_changed" };
+  const dirt = await git(
+    ["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"],
+    canonicalPath,
+  );
+  if (dirt.code !== 0 || dirt.stdout.trim() !== "") return { code: 1, reason: "workspace_dirty" };
+  const submodules = await managedWorktreeSubmoduleMode(canonicalPath);
+  if (submodules === undefined) return { code: 1, reason: "submodule_untrusted" };
+  return { mode: submodules, path: canonicalPath };
+}
+
+/**
+ * Return the special release mode only when every declared recursive submodule
+ * is populated at its recorded commit and independently clean. A missing,
+ * conflicted, or otherwise non-current submodule is untrusted and must refuse.
+ */
+async function managedWorktreeSubmoduleMode(path: string): Promise<ManagedWorktreeReleaseMode | undefined> {
+  const status = await git(["--no-optional-locks", "submodule", "status", "--recursive"], path);
+  if (status.code !== 0) return undefined;
+
+  const entries = status.stdout.split("\n").filter((line) => line !== "");
+  if (entries.length === 0) return "plain";
+  if (entries.every((line) => line[0] === "-")) {
+    // A never-populated declared submodule is harmless: Git's normal remove
+    // accepts it. A retained per-worktree modules directory means it was once
+    // populated/deinitialized, so preserve it for human recovery instead.
+    const modules = await git(["--no-optional-locks", "rev-parse", "--git-path", "modules"], path);
+    return modules.code === 0 && !existsSync(modules.stdout.trim()) ? "plain" : undefined;
+  }
+  if (entries.some((line) => line[0] !== " ")) return undefined;
+
+  // `--quiet` suppresses foreach progress. Explicit porcelain flags override
+  // status/ignore config in every nested checkout; the command is fixed and
+  // never interpolates repository-controlled paths or names.
+  const nestedDirt = await git(
+    [
+      "--no-optional-locks",
+      "submodule",
+      "foreach",
+      "--quiet",
+      "--recursive",
+      "git --no-optional-locks status --porcelain=v1 --untracked-files=all --ignore-submodules=none",
+    ],
+    path,
+  );
+  return nestedDirt.code === 0 && nestedDirt.stdout.trim() === "" ? "populated_submodule" : undefined;
+}
+
+interface ManagedWorktreeRecord {
+  readonly path: string;
+  readonly head: string | undefined;
+  readonly detached: boolean;
+  readonly locked: boolean;
+  readonly prunable: boolean;
+}
+
+function managedWorktreeRecord(stdout: string, canonicalPath: string): ManagedWorktreeRecord | undefined {
+  const records: ManagedWorktreeRecord[] = [];
+  let path: string | undefined;
+  let head: string | undefined;
+  let detached = false;
+  let locked = false;
+  let prunable = false;
+  const finish = (): void => {
+    if (path !== undefined) records.push({ path, head, detached, locked, prunable });
+  };
+
+  for (const line of stdout.split("\n")) {
+    if (line === "") {
+      finish();
+      path = undefined;
+      head = undefined;
+      detached = false;
+      locked = false;
+      prunable = false;
+    } else if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length);
+    } else if (line.startsWith("HEAD ")) {
+      head = line.slice("HEAD ".length);
+    } else if (line === "detached") {
+      detached = true;
+    } else if (line === "locked" || line.startsWith("locked ")) {
+      locked = true;
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      prunable = true;
+    }
+  }
+  finish();
+  const matches = records.filter((record) => record.path === canonicalPath);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Fresh, non-destructive inspection used immediately before a managed release. */
+export async function inspectManagedWorktree(
+  repoCwd: string,
+  path: string,
+): Promise<{ repositoryId: string; head: string; registered: boolean; clean: boolean } | undefined> {
+  const identity = (await managedRepositoryIdentity(repoCwd)).slug;
+  const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
+  const head = await git(["rev-parse", "HEAD"], path);
+  const dirt = await git(["status", "--porcelain"], path);
+  if (registered.code !== 0 || head.code !== 0 || dirt.code !== 0 || head.stdout.trim() === "") return undefined;
+  return {
+    repositoryId: identity,
+    head: head.stdout.trim(),
+    registered: registered.stdout.split("\n").some((line) => line === `worktree ${path}`),
+    clean: dirt.stdout.trim() === "",
+  };
+}
+
+/**
+ * Stronger than an unsuccessful inspection: used only to finish the durable
+ * event after Git removed a worktree but the `released` append crashed.
+ */
+export async function managedWorktreeAbsent(repoCwd: string, path: string): Promise<boolean> {
+  const registered = await git(["worktree", "list", "--porcelain"], repoCwd);
+  return registered.code === 0
+    && !registered.stdout.split("\n").some((line) => line === `worktree ${path}`)
+    && !existsSync(path);
+}
+
+/**
+ * Pin abandoned work before its managed checkout is removed. A pre-existing
+ * matching ref is a crash-retry no-op; a different ref is never overwritten.
+ */
+export async function retainManagedWorktreeHead(
+  repoCwd: string,
+  runId: string,
+  relativeLocator: string,
+  head: string,
+): Promise<{ readonly ok: true; readonly ref: string } | { readonly ok: false }> {
+  const safeLocator = relativeLocator.replace(/[^A-Za-z0-9._-]/g, "-");
+  const ref = `refs/roll-retained/${runId}/${safeLocator}`;
+  const existing = await git(["rev-parse", "--verify", ref], repoCwd);
+  if (existing.code === 0) return existing.stdout.trim() === head ? { ok: true, ref } : { ok: false };
+  const created = await git(["update-ref", ref, head], repoCwd);
+  return created.code === 0 ? { ok: true, ref } : { ok: false };
+}
+
+/** Returns undefined when remote containment cannot be established. */
+export async function managedWorktreeRemoteContainment(repoCwd: string, head: string): Promise<readonly string[] | undefined> {
+  const result = await git(["branch", "-r", "--contains", head], repoCwd);
+  if (result.code !== 0) return undefined;
+  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
 }
 
 /**
@@ -630,19 +737,14 @@ export async function worktreeAddInSubmodule(
   // (3) Detached worktree on the SUBMODULE repo (same contract as worktreeAdd).
   const path = submoduleWorktreePath(cycleWorktreePath, submoduleName);
   mkdirSync(dirname(path), { recursive: true });
-  await git(["worktree", "prune", "--expire", "now"], submoduleCwd); // lenient
   if (exists(path)) {
-    await git(["worktree", "remove", "--force", path], submoduleCwd); // lenient
-    rmSyncQuiet(path);
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `recovery_required: managed submodule worktree target already exists: ${path}`,
+    };
   }
   const result = await git(["worktree", "add", "--detach", path, base], submoduleCwd);
-  if (result.code === 0) {
-    try {
-      await git(["config", "extensions.worktreeConfig", "true"], path);
-    } catch {
-      /* best-effort defense-in-depth (mirrors worktreeAdd) */
-    }
-  }
   return result;
 }
 
@@ -905,8 +1007,6 @@ export async function commit(
   const result = await invokeInfraTool<GitCommitInput, GitResult>({
     declaration: GIT_COMMIT_DECLARATION,
     input: { cwd: repoCwd, message, allowEmpty: opts.allowEmpty },
-    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
-    scope: "machine_only",
     run: async (invocation) => {
       const args = ["commit", "-m", invocation.input.message];
       if (invocation.input.allowEmpty === true) args.splice(1, 0, "--allow-empty");
@@ -929,8 +1029,6 @@ export async function push(
   const result = await invokeInfraTool<GitPushInput, GitResult>({
     declaration: GIT_PUSH_DECLARATION,
     input: { cwd: repoCwd, branch, remote: opts.remote, setUpstream: opts.setUpstream },
-    // Legacy repository lifecycle helper; Agent-facing GitTool is repository-scoped.
-    scope: "machine_only",
     run: async (invocation) => {
       const remote = invocation.input.remote ?? "origin";
       const args = invocation.input.setUpstream === true
@@ -976,21 +1074,6 @@ export async function isAncestor(
   if (r.code === 0) return true;
   if (r.code === 1) return false;
   return undefined;
-}
-
-/**
- * Proves that one immutable merge commit is contained by the configured
- * integration branch. Ref-like or unsafe inputs fail closed without invoking
- * Git, so diagnostics can report only the typed repo/SHA identity supplied by
- * the caller and never echo remote URLs or credentials.
- */
-export async function isCommitReachableFromIntegrationBranch(
-  repoCwd: string,
-  mergeCommit: string,
-  integrationBranch: string,
-): Promise<boolean | undefined> {
-  if (!isImmutableGitObjectId(mergeCommit) || !isSafeGitRef(integrationBranch)) return undefined;
-  return isAncestor(repoCwd, mergeCommit, integrationBranch);
 }
 
 /** A remote ref row from `git ls-remote`. */
@@ -1109,6 +1192,22 @@ export async function projectIdentity(
   const url = await remoteUrl(canon);
   const inputs: ProjectIdentityInputs = { path: canon, remoteUrl: url };
   return { path: canon, slug: projectSlug(inputs) };
+}
+
+/**
+ * Identity for one managed workspace repository.
+ *
+ * `ROLL_MAIN_SLUG` namespaces the owning Roll project. It cannot prove that a
+ * superproject and a subordinate Git repository are identical, so lifecycle
+ * facts must derive each member identity without that process-wide override.
+ */
+export async function managedRepositoryIdentity(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<ProjectIdentity> {
+  const canon = await canonicalProjectPath(path, platform);
+  const url = await remoteUrl(canon);
+  return { path: canon, slug: projectSlug({ path: canon, remoteUrl: url }) };
 }
 
 // ─── small lenient fs helpers (mirror bash `rm -rf ... || true`) ──────────────

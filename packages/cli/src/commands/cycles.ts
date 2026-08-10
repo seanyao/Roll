@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `cycles` subcommand, rendering the cycle ledger as a first-class command.
+ */
+/**
  * US-CLI-012 — `roll cycles [--since 1d|3d|7d|all]`: the cycle ledger as a
  * first-class command. cycle is a first-class noun in the philosophy; now it
  * has a name on the command surface too. Same aggregation as the web ledger

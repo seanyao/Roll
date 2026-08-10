@@ -1,6 +1,8 @@
+/**
+ * @responsibility Declares the tool registry vocabulary: costs, deps, events and declarations.
+ */
 import type {
   ToolCost,
-  ToolContextCorrelation,
   ToolDeclaration,
   ToolDeps,
   ToolError,
@@ -12,7 +14,6 @@ import type {
   ToolRequirement,
   ToolRequirementResolution,
   ToolResult,
-  WorkspaceExecutionContextV1,
 } from "@roll/spec";
 import { deriveToolReadiness, type ToolRequirementResolver } from "./readiness.js";
 import { validateJsonSchemaValue } from "./schema.js";
@@ -36,8 +37,6 @@ export interface ToolInvokeRequest<I = unknown> {
   invocationId: string;
   input: I;
   caller: Omit<ToolInvocation<I>["caller"], "cycleId"> & { cycleId?: string };
-  context?: WorkspaceExecutionContextV1;
-  repoId?: string;
 }
 
 export interface ToolRegistryOptions {
@@ -63,15 +62,6 @@ function error(code: ToolError["code"], message: string, retryable = false, deta
   return { code, message, retryable, detail };
 }
 
-function correlation(request: Pick<ToolInvokeRequest, "context" | "repoId">): ToolContextCorrelation | undefined {
-  if (request.context === undefined) return undefined;
-  return {
-    workspaceId: request.context.workspace.workspaceId,
-    ...(request.context.issue?.storyId === undefined ? {} : { storyId: request.context.issue.storyId }),
-    ...(request.repoId === undefined ? {} : { repoId: request.repoId }),
-  };
-}
-
 function meta(toolId: ToolId, request: ToolInvokeRequest, startedAt: number, endedAt: number, attempt?: number): ToolMeta {
   return {
     invocationId: request.invocationId,
@@ -81,7 +71,6 @@ function meta(toolId: ToolId, request: ToolInvokeRequest, startedAt: number, end
     endedAt,
     durationMs: Math.max(0, endedAt - startedAt),
     attempt,
-    correlation: correlation(request),
   };
 }
 
@@ -104,8 +93,8 @@ function delay(ms: number): Promise<void> {
 
 export class ToolRegistry {
   private readonly tools = new Map<ToolId, ToolState>();
-  private readonly budgetCounts = new Map<string, number>();
-  private readonly costs = new Map<string, ToolCost>();
+  private readonly budgetCounts = new Map<ToolId, number>();
+  private readonly costs = new Map<ToolId, ToolCost>();
   private shutdownStarted = false;
 
   constructor(private readonly options: ToolRegistryOptions) {}
@@ -170,7 +159,7 @@ export class ToolRegistry {
       return failed(toolId, request, initResult.error, startedAt, this.options.deps.now()) as ToolResult<O>;
     }
 
-    if (!this.reserveBudget(toolId, policy, request)) {
+    if (!this.reserveBudget(toolId, policy)) {
       return failed(toolId, request, error("budget_exhausted", `tool invocation budget exhausted: ${toolId}`), startedAt, this.options.deps.now()) as ToolResult<O>;
     }
 
@@ -181,8 +170,6 @@ export class ToolRegistry {
       caller: request.caller as ToolInvocation<I>["caller"],
       policy,
       ts: startedAt,
-      context: request.context,
-      repoId: request.repoId,
     };
 
     const emitEvents = state.tool.declaration.emitsEvents !== false;
@@ -190,13 +177,13 @@ export class ToolRegistry {
       await this.emit({
         type: "tool:invoke",
         cycleId: request.caller.cycleId,
-        invocation: sanitizeInvocation(invocation, this.options.deps.redact),
+        invocation,
         declaration: state.tool.declaration,
         ts: startedAt,
       } as ToolEvent);
     }
 
-    const result = withCorrelation(await this.executeWithRetry<I, O>(state.tool, invocation, request, policy), request);
+    const result = await this.executeWithRetry<I, O>(state.tool, invocation, request, policy);
     const resultWithWarnings = appendWarnings(result, requirementWarnings);
     if (emitEvents || !result.ok) {
       await this.emit({
@@ -258,13 +245,12 @@ export class ToolRegistry {
     return deriveToolReadiness(declaration, this.options.requirementResolver);
   }
 
-  private reserveBudget(toolId: ToolId, policy: ToolPolicy, request: ToolInvokeRequest): boolean {
+  private reserveBudget(toolId: ToolId, policy: ToolPolicy): boolean {
     const max = policy.maxInvocationsPerCycle;
     if (max === undefined) return true;
-    const key = toolInvocationScopeKey(toolId, request);
-    const current = this.budgetCounts.get(key) ?? 0;
+    const current = this.budgetCounts.get(toolId) ?? 0;
     if (current >= max) return false;
-    this.budgetCounts.set(key, current + 1);
+    this.budgetCounts.set(toolId, current + 1);
     return true;
   }
 
@@ -310,11 +296,8 @@ export class ToolRegistry {
 
   private accumulateCost(toolId: ToolId, input: unknown, result: ToolResult<unknown>): void {
     if (result.meta.caller.cycleId === undefined || result.meta.caller.cycleId === "") return;
-    const costCorrelation = result.meta.correlation;
-    const costKey = toolCostKey(toolId, costCorrelation);
-    const current = this.costs.get(costKey) ?? {
+    const current = this.costs.get(toolId) ?? {
       toolId,
-      ...(costCorrelation === undefined ? {} : { correlation: costCorrelation }),
       invocations: 0,
       durationMs: 0,
       failures: 0,
@@ -324,7 +307,7 @@ export class ToolRegistry {
       outputBytes: 0,
     };
     const output = result.ok ? result.output : result.error;
-    this.costs.set(costKey, {
+    this.costs.set(toolId, {
       ...current,
       invocations: current.invocations + 1,
       durationMs: (current.durationMs ?? 0) + result.meta.durationMs,
@@ -335,50 +318,9 @@ export class ToolRegistry {
   }
 }
 
-function toolCostKey(toolId: ToolId, value: ToolContextCorrelation | undefined): string {
-  if (value === undefined) return String(toolId);
-  return [toolId, value.workspaceId, value.storyId ?? "", value.repoId ?? ""].join("\u0000");
-}
-
-function toolInvocationScopeKey(toolId: ToolId, request: ToolInvokeRequest): string {
-  const value = correlation(request);
-  return [
-    toolId,
-    request.caller.cycleId ?? "",
-    value?.workspaceId ?? "",
-    value?.storyId ?? "",
-    value?.repoId ?? "",
-  ].join("\u0000");
-}
-
 function sanitizeResult(result: ToolResult<unknown>): SanitizedToolResult {
   if (result.ok) return { ok: true, meta: result.meta };
   return { ok: false, errorCode: result.error.code, meta: result.meta };
-}
-
-function sanitizeInvocation<I>(invocation: ToolInvocation<I>, redact: ToolDeps["redact"]): ToolInvocation<I> {
-  return {
-    ...invocation,
-    input: sanitizeInvocationValue(invocation.input, redact, undefined, new WeakSet<object>()) as I,
-  };
-}
-
-function sanitizeInvocationValue(value: unknown, redact: ToolDeps["redact"], key: string | undefined, seen: WeakSet<object>): unknown {
-  if (key !== undefined && sensitiveInvocationKey(key)) return "[REDACTED]";
-  if (typeof value === "string") return redact(value);
-  if (value === null || typeof value !== "object") return value;
-  if (seen.has(value)) return "[Circular]";
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((entry) => sanitizeInvocationValue(entry, redact, undefined, seen));
-  return Object.fromEntries(
-    Object.entries(value).map(([childKey, entry]) => [childKey, sanitizeInvocationValue(entry, redact, childKey, seen)]),
-  );
-}
-
-function sensitiveInvocationKey(key: string): boolean {
-  const segments = key.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase().split(/[_-]+/u);
-  return segments.some((segment) => ["authorization", "cookie", "credential", "password", "passwd", "secret", "token"].includes(segment)) ||
-    segments.some((segment, index) => ["api", "private"].includes(segment) && segments[index + 1] === "key");
 }
 
 function formatRequirement(requirement: ToolRequirement): string {
@@ -397,17 +339,5 @@ function appendWarnings<T>(result: ToolResult<T>, warnings: readonly string[]): 
   return {
     ...result,
     warnings: [...(result.warnings ?? []), ...warnings],
-  };
-}
-
-function withCorrelation<T>(result: ToolResult<T>, request: Pick<ToolInvokeRequest, "context" | "repoId">): ToolResult<T> {
-  const value = correlation(request);
-  if (value === undefined) return result;
-  return {
-    ...result,
-    meta: {
-      ...result.meta,
-      correlation: { ...result.meta.correlation, ...value },
-    },
   };
 }

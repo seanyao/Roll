@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll dream run-once` subcommand, driving the nightly code-health scan agent.
+ */
+/**
  * `roll dream run-once` — US-PORT-008: the v3-native heart of the dream service
  * (the nightly code-health scan, skill `roll-.dream`). It is to dream what
  * `roll loop run-once` is to the loop: a thin TS entry that resolves the project,

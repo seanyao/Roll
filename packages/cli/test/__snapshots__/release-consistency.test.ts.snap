@@ -1,0 +1,29 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`checkSite — actual site checks only (FIX-1505) > freezes a broken guide link as a site failure 1`] = `
+{
+  "gaps": [
+    "site/roll-data.js links a guide that does not exist: guide/en/ghost.md",
+  ],
+  "note": "checked top-level commands and guide links; story-to-site coverage is not configured",
+  "status": "fail",
+}
+`;
+
+exports[`checkSite — actual site checks only (FIX-1505) > freezes a missing top-level command as a site failure 1`] = `
+{
+  "gaps": [
+    "site/roll-data.js:2 references hidden/retired top-level 'roll alert' (use 'roll loop alert')",
+  ],
+  "note": "checked top-level commands and guide links; story-to-site coverage is not configured",
+  "status": "fail",
+}
+`;
+
+exports[`checkSite — actual site checks only (FIX-1505) > freezes a v3 Done card as unconfigured story-to-site coverage 1`] = `
+{
+  "gaps": [],
+  "note": "checked top-level commands and guide links; story-to-site coverage is not configured",
+  "status": "pass",
+}
+`;

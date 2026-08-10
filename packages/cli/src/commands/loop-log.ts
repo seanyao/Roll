@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop log` subcommand, reading per-cycle logs from the cycle-logs directory.
+ */
+/**
  * `roll loop log [<cycle-id|prefix>]` — TS port of bin/roll's `_loop_log` +
  * `_loop_log_show` (US-PORT-022). Reads `.roll/cycle-logs/*.log`: no arg shows
  * the latest cycle (with a stderr steer toward per-cycle search); an arg does

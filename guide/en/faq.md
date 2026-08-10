@@ -156,7 +156,7 @@ bash, curl, and tar — all preinstalled on macOS and Linux.
 **Details:**
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 No Node.js, no npm, no package manager needed. The script downloads a tarball,
@@ -168,7 +168,7 @@ everything.
 To pin a specific version (recommended for production):
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
+npm install -g @bipo-ape/roll
 ```
 
 ---
@@ -565,8 +565,10 @@ dominated by `agent_invoke` in almost every cycle.
      a main-loop phase.
    - `worktree_setup` > 30 s → likely a slow `git fetch origin`; transient
      network issue.
-   - `preflight` > 30 s → previous cycles left orphan worktrees; loop is
-     recovering them. Self-heals on next cycle.
+   - `preflight` > 30 s → the managed-workspace audit found a stale, unknown,
+     or unregistered member. Inspect `roll worktree audit` and `roll supervisor
+     live`; Roll preserves it and prints an owner recovery action rather than
+     deleting or recreating it automatically.
 
 The phase tracing data also lives in `runs.jsonl` under the `phases` key
 (per-phase seconds), so you can post-process across many cycles.

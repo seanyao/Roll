@@ -665,7 +665,7 @@ describe("frozen: roll loop status (live)", () => {
     expect(ts).toMatchInlineSnapshot(`
       "roll loop  ·  health                                               <NOW> · 2 cycles / 72h
 
-      ◆ session-driven   run roll loop go in this session                       last ✓ 10:48  US-CLI-006${"  "}
+      ◆ session-driven   run roll loop go in this session                       last ✓ 10:48  US-CLI-006  
         会话驱动 · 在本会话运行 roll loop go
 
       ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -832,5 +832,81 @@ describe("frozen: roll loop status (live)", () => {
     // The marker's contents never reach the screen.
     expect(ts).not.toContain("2026-06-25T04:00:00Z");
     expect(ts).not.toContain("idle for 6h");
+  });
+
+  it("US-CYCLE-013 F3: `roll loop status` renders the HANDOFF truth section (literal states, ready holder above queue, queue rows, serial recovery)", () => {
+    const env = sandboxEnv({ ROLL_RENDER_NOW: LIVE_NOW });
+    const rt = env["ROLL_PROJECT_RUNTIME_DIR"] as string;
+
+    // Fabricated cycle-handoff/v1 facts (stable fences / workspace keys so the
+    // snapshot freezes; timestamps are scrubbed to <NOW> by tsRun):
+    //   A owns the live tail, B is the ready holder (builder complete — tail
+    //   capacity full), C is queued, D is in serial recovery.
+    const ws = (runId: string, storyId: string) => ({
+      schema: 1,
+      runId,
+      storyId,
+      kind: "cycle",
+      topology: "solo",
+      members: [{
+        repositoryId: "repo-id",
+        workspaceKey: `cycle-${runId}`,
+        relativeLocator: `cycle-${runId}`,
+        checkoutRef: { kind: "detached", head: "base-sha" },
+        publishRef: `refs/heads/loop/cycle-${runId}`,
+      }],
+    });
+    const ident = (runId: string, storyId: string, fence: string) => ({
+      schema: "cycle-handoff/v1",
+      cycleId: runId,
+      storyId,
+      workspace: ws(runId, storyId),
+      branch: `loop/cycle-${runId}`,
+      builderHead: "head-sha",
+      baseSha: "base-sha",
+      builderEvidenceRefs: [],
+      builderValidationRef: `builder-validation:${runId}:1`,
+      profile: "standard",
+      attempt: 1,
+      fence,
+    });
+    const A = ident("cA", "US-A", "fence-a");
+    const B = ident("cB", "US-B", "fence-b");
+    const D = ident("cD", "US-D", "fence-d");
+    const handoffEvents = [
+      { type: "worktree:allocated", workspace: ws("cA", "US-A"), ts: 1 },
+      { type: "cycle:admitted", eventId: "e1", idempotencyKey: "admit:cA:1", identity: A, queueSequence: 1, ts: 2 },
+      { type: "cycle:builder_ready", eventId: "e2", idempotencyKey: "ready:US-A:1:fence-a", identity: A, reason: "promotion_pending", ts: 3 },
+      { type: "cycle:builder_handoff", eventId: "e3", idempotencyKey: "handoff:US-A:1:fence-a", identity: A, previousReadyKey: "ready:US-A:1:fence-a", next: "evaluate_or_test", ts: 4 },
+      { type: "cycle:tail_started", eventId: "e4", idempotencyKey: "tail_started:cA:1:fence-a", cycleId: "cA", attempt: 1, fence: "fence-a", ts: 5 },
+      { type: "worktree:allocated", workspace: ws("cB", "US-B"), ts: 6 },
+      { type: "cycle:admitted", eventId: "e5", idempotencyKey: "admit:cB:1", identity: B, queueSequence: 2, ts: 7 },
+      { type: "cycle:builder_ready", eventId: "e6", idempotencyKey: "ready:US-B:1:fence-b", identity: B, reason: "tail_capacity_full", ts: 8 },
+      { type: "cycle:queued", eventId: "e7", idempotencyKey: "queue:US-C:3", storyId: "US-C", requestedByCycleId: "cC", queueSequence: 3, reason: "build_slot_full", ts: 9 },
+      { type: "worktree:allocated", workspace: ws("cD", "US-D"), ts: 10 },
+      { type: "cycle:admitted", eventId: "e8", idempotencyKey: "admit:cD:1", identity: D, queueSequence: 4, ts: 11 },
+      { type: "cycle:builder_ready", eventId: "e9", idempotencyKey: "ready:US-D:1:fence-d", identity: D, reason: "promotion_pending", ts: 12 },
+      { type: "cycle:builder_handoff", eventId: "e10", idempotencyKey: "handoff:US-D:1:fence-d", identity: D, previousReadyKey: "ready:US-D:1:fence-d", next: "evaluate_or_test", ts: 13 },
+      { type: "cycle:serial_recovery", eventId: "e11", idempotencyKey: "recovery:cD:1:fence-d:repair_required", cycleId: "cD", attempt: 1, fence: "fence-d", reason: "repair_required", ts: 14 },
+    ];
+    writeFileSync(join(rt, "events.ndjson"), handoffEvents.map((e) => JSON.stringify(e)).join("\n") + "\n");
+
+    const proj = mkdtempSync(join(tmpdir(), "roll-dash-handoff-"));
+    dirs.push(proj);
+    mkdirSync(join(proj, ".roll"), { recursive: true });
+    writeFileSync(join(proj, ".roll", "backlog.md"), "");
+
+    const ts = tsRun(env, ["--no-color"], proj);
+    // The HANDOFF section renders the literal states + queue rows + recovery.
+    expect(ts).toContain("HANDOFF");
+    expect(ts).toContain("builder complete — tail capacity full");
+    expect(ts).toContain("waiting for evaluation/test");
+    expect(ts).toContain("queue[1] seq=3 US-C (cC)");
+    expect(ts).toContain("serial recovery required");
+    expect(ts).toContain("repair_required");
+    // The ready holder is rendered ABOVE the queue, never as a queue member.
+    expect(ts).not.toMatch(/queue\[\d+\][^\n]*US-B/);
+    // The tail + ready holder story ids appear; volatile fields are scrubbed.
+    expect(ts).not.toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/); // <NOW>-scrubbed
   });
 });

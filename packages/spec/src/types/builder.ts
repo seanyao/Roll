@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the builder finalization hard-gate types.
+ */
+/**
  * FIX-1068 — Builder finalization hard gate.
  *
  * These types formalize the adapter-agnostic contract that runs after every

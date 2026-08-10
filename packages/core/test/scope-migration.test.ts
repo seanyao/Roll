@@ -59,23 +59,136 @@ fallback: { agent: claude }
     });
   });
 
-  it("migrates pairing score capability into evaluation role binding", () => {
+  it("migrates an enabled legacy code reviewer pool into the evaluation role binding", () => {
     const plan = planAgentScopeMigration({
       pairingText: `enabled: true
-stages: [code, score]
+stages: [code]
 capability:
-  kimi: [code, score]
-  pi: [code, score]
+  kimi: [code]
+  pi: [score]
   codex: [code]
 `,
       machineTargetPath: "~/.roll/agents.yaml",
       projectTargetPath: ".roll/agents.yaml",
     });
     expect(plan.project.text).toContain("evaluate:");
-    expect(plan.project.text).toContain("from: [kimi, pi]");
+    expect(plan.project.text).toContain("from: [kimi, codex]");
     expect(plan.project.text).not.toContain("avoid: [execute]");
     expect(plan.project.text).toContain("strategy: health-aware");
-    expect(plan.summary.some((s) => s.includes(".roll/pairing.yaml capability -> .roll/agents.yaml defaults.story.roles.evaluate = select [kimi, pi]"))).toBe(true);
+    expect(plan.summary.some((s) => s.includes(".roll/pairing.yaml code capability -> .roll/agents.yaml defaults.story.roles.evaluate = select [kimi, codex]"))).toBe(true);
+  });
+
+  it("retires a score-only legacy pairing pool instead of enabling code review", () => {
+    const plan = planAgentScopeMigration({
+      pairingText: `enabled: true
+stages: [score]
+capability:
+  kimi: [score]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(plan.project.text).not.toContain("evaluate:");
+    expect(plan.summary.some((s) => s.includes("pairing.yaml"))).toBe(false);
+  });
+
+  it("does not migrate code-capable agents when legacy code review was disabled", () => {
+    const plan = planAgentScopeMigration({
+      pairingText: `enabled: true
+stages: [score]
+capability:
+  kimi: [code, score]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(plan.project.text).not.toContain("evaluate:");
+  });
+
+  it("does not migrate a code reviewer pool from a disabled legacy config", () => {
+    const plan = planAgentScopeMigration({
+      pairingText: `enabled: false
+stages: [code]
+capability:
+  kimi: [code]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(plan.project.text).not.toContain("evaluate:");
+  });
+
+  it("migrates only code-capable candidates from a mixed legacy stage list", () => {
+    const plan = planAgentScopeMigration({
+      pairingText: `enabled: true
+stages: [code, score]
+capability:
+  kimi: [code, score]
+  pi: [score]
+  codex: [code]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(plan.project.text).toContain("from: [kimi, codex]");
+    expect(plan.project.text).not.toContain("from: [kimi, pi, codex]");
+  });
+
+  it("never overwrites an existing scoped evaluate binding with legacy code candidates", () => {
+    const plan = planAgentScopeMigration({
+      projectAgentsText: `schema: roll-agents/v1
+scope: project
+defaults:
+  story:
+    roles:
+      evaluate:
+        kind: fixed
+        agent: pi
+`,
+      pairingText: `enabled: true
+stages: [code]
+capability:
+  kimi: [code]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(plan.project.text).toContain("agent: pi");
+    expect(plan.project.text).not.toContain("from: [kimi]");
+    expect(plan.summary.some((s) => s.includes("pairing.yaml code capability"))).toBe(false);
+
+    const topLevel = planAgentScopeMigration({
+      projectAgentsText: `schema: roll-agents/v1
+scope: project
+roles:
+  evaluate:
+    kind: fixed
+    agent: codex
+`,
+      pairingText: `enabled: true
+stages: [code]
+capability:
+  kimi: [code]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(topLevel.project.text).toContain("agent: codex");
+    expect(topLevel.project.text).not.toContain("from: [kimi]");
+  });
+
+  it("retires legacy pairing stages that have no scoped evaluate-role equivalent", () => {
+    const plan = planAgentScopeMigration({
+      pairingText: `enabled: true
+stages: [design, test, cycle]
+capability:
+  pi: [design, test, cycle]
+`,
+      machineTargetPath: "~/.roll/agents.yaml",
+      projectTargetPath: ".roll/agents.yaml",
+    });
+    expect(plan.project.text).not.toContain("evaluate:");
+    expect(plan.summary.some((s) => s.includes("pairing.yaml capability"))).toBe(false);
   });
 
   it("uses .roll/local.yaml agent only when no project execute binding exists", () => {

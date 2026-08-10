@@ -5,8 +5,13 @@ Seven dimensions are continuously reconciled against truth anchors. A backlog
 cycle events, and release-gate events are the facts. The dimensions are:
 ① code ↔ backlog claims · ② cards (every live backlog row owns
 `features/<epic>/<ID>/spec.md`; evidence links never dangle; card-era delivered
-stories with ACs own a `latest/<ID>-report.html`; pre-card-era Done rows are
-counted, not failed) · ③ docs (changelog / features / guide / README / --help)
+stories with ACs own a `latest/<ID>-report.html`; a manually completed card
+without ACs or a report must include a `manual:` reason in its Done status. A
+same-ID record that was already Done before the rule is counted rather than
+failed only when the tracked `.roll/policy/manual-done-epoch.json` baseline and
+every later committed backlog state prove it stayed Done continuously; a missing,
+damaged, or disconnected record blocks release clearly) ·
+③ docs (changelog / features / guide / README / --help)
 · ④ tests · ⑤ locale parity (guide en↔zh + i18n keys) · ⑥ site ·
 ⑦ truth-live (`ensureDeliveriesFresh` + `queryStoryDelivery` must prove each
 release-delta story is actually delivered, with PR refs matching the Done row
@@ -41,6 +46,10 @@ asking you to enable the setting or merge the PR manually — never a silent han
 The acceptance-evidence gate is `hard` by default. `loop_safety.attest_gate: soft`
 is an explicit project policy for migration windows; consistency still reports
 missing or dangling evidence so the gap cannot disappear silently.
+
+The site dimension checks the surviving public top-level command mentions in
+site copy and resolves `guide/<lang>/*.md` links. It does not verify that every
+completed story has a site page.
 
 The truth-live dimension is the anti-false-Done guard. It first rebuilds the
 delivery projection from `runs.jsonl` plus first-parent `main` merge commits,

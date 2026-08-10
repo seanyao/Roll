@@ -1,102 +1,105 @@
-# roll backlog sync —— 把 GitHub Issues 同步到工作区 backlog
+# roll backlog sync —— 把 GitHub Issues 同步进 backlog
 
-`roll backlog sync` 把 GitHub Issues 拉入一个明确解析出的工作区。它只写规划
-产物，不会回写 GitHub。
+`roll backlog sync` 从 GitHub 仓库拉取 issues,写进本地
+`.roll/backlog.md`。v1 是单向的(issues → backlog),不回写 GitHub。
 
-命令按 `--workspace <ID|路径>`（或 `--ws`）、标准工作区环境、可达 Workspace/Issue
-context 或精确 requirement match 解析目标。Active lifecycle 本身绝不能选择与当前
-requirement 不匹配的 Workspace。目标歧义、冲突、discovery 不完整、仍处于旧单仓模式，
-或路径越出工作区时，都会在任何写入前失败。`--all` 只用于只读聚合，因此 sync 会拒绝它。
+`roll backlog sync` pulls GitHub issues into your local backlog
+(one-direction in v1).
 
 ## 鉴权
 
-sync 按以下顺序解析 GitHub token：
+sync 按以下顺序解析 GitHub token:
 
-1. 环境变量或 CI secret 中的 `$GITHUB_TOKEN`。
-2. 已执行 `gh auth login` 时使用 `gh auth token`。
+1. `$GITHUB_TOKEN` —— 在环境变量或 CI secret 里设置。
+2. `gh auth token` —— 跑过 `gh auth login` 后回退到 GitHub CLI。
 
-两者都不可用时，命令会停止并给出配置指引。
+两者都没有时命令会停下来,并提示怎么设置。
+
+```bash
+export GITHUB_TOKEN=ghp_xxx
+# 或者用 GitHub CLI:
+gh auth login
+```
 
 ## 快速上手
 
 ```bash
-# 该工作区首次 sync 必须指定 GitHub 仓库。
-roll backlog sync --workspace ws-product --repo seanyao/roll-meta
+# 首次 sync 必须显式指定仓库:
+roll backlog sync --repo seanyao/roll-meta
 
-# 只预览，不写规划产物。
-roll backlog sync --workspace ws-product --repo seanyao/roll-meta --dry-run
+# 只预览,不写文件:
+roll backlog sync --repo seanyao/roll-meta --dry-run
 
-# 拉取命中任一指定标签的 Issue。
-roll backlog sync --workspace ws-product --repo seanyao/roll-meta --label P1,bug
+# 只拉带指定标签的 issue(命中任一即可,OR 语义):
+roll backlog sync --repo seanyao/roll-meta --label P1,bug
 
-# 后续运行复用该工作区保存的仓库。
-roll backlog sync --workspace ws-product
+# 首次成功后会记住仓库,之后可以省略 --repo:
+roll backlog sync
 ```
-
-当前目录已经能识别工作区时，可以省略 `--workspace`。
-
-## 工作区自有产物
-
-| 产物 | 工作区内路径 |
-|---|---|
-| 规划索引 | `backlog/index.md` |
-| 导入的 Story 契约 | `backlog/backlog-lifecycle/<STORY-ID>/spec.md` |
-| sync 配置 | `runtime/backlog-sync.yaml` |
-
-这些路径不能通过旧的 `--backlog`、`--features` 或 `--local-yaml` 参数覆盖。
 
 ## 参数
 
-| 参数 | 说明 |
-|---|---|
-| `--workspace` | 工作区 ID 或绝对路径；省略时使用统一目标解析器。 |
-| `--repo` | `owner/repo`；每个工作区首次 sync 必填。 |
-| `--dry-run` | 打印计划新增和跳过结果，不写工作区产物。 |
-| `--label` | 逗号分隔的标签过滤，可重复；命中任一即可。 |
+| 参数         | 说明 |
+|--------------|------|
+| `--repo`     | `owner/repo`。首次 sync 必填,之后从配置读取。 |
+| `--dry-run`  | 计算并打印差异,但不改动 `.roll/backlog.md`。 |
+| `--label`    | 逗号分隔的标签过滤,可重复;命中任一即匹配(OR)。 |
 
-## 规划身份与状态
+## label → type 映射
 
-第一个识别到的标签决定 Story 类型：
+issue 的标签决定 backlog 类型前缀。第一个命中的标签生效;都不命中
+时默认 `US`。
 
-| GitHub 标签 | Story 类型 |
-|---|---|
-| `bug` | `FIX` |
-| `enhancement`、`feature`、`US` | `US` |
-| `refactor` | `REFACTOR` |
-| 没有识别到的标签 | `US` |
+| GitHub 标签                  | Backlog 类型 |
+|-----------------------------|--------------|
+| `bug`                       | `FIX`        |
+| `enhancement` / `feature` / `US` | `US`    |
+| `refactor`                  | `REFACTOR`   |
+| (无匹配标签)                | `US`         |
 
-例如 Issue #13 会得到唯一 Story ID `FIX-GH-13`。索引链接、契约目录、契约
-标题和命令输出都使用同一个 ID，因此 `roll backlog show FIX-GH-13` 可以直接
-打开刚生成的契约。外部标签后续变化时，已有的规划 ID 保持不变。
+issue 状态映射到状态列:`open` → `📋 Todo`,`closed` → `✅ Done`。
+issue 标题作为行描述。
 
-GitHub 状态不决定 Roll 的规划完成状态。新导入的 open 或 closed Issue 都进入
-`📋 Todo`；sync 不覆盖已有规划状态。是否完成仍由 Roll 的交付真相判定。
+## ID 与幂等
 
-sync 按 GitHub Issue 编号保持幂等。后续运行会跳过已存在的 Story，并输出
-durable 完整 ID：
+每个 issue 得到稳定的 backlog id `GH-<编号>`(例如 issue #13 →
+`GH-13`),再与类型前缀组合(`US-GH-13`、`FIX-GH-13`)。
 
-```text
-skipped (already exists): FIX-GH-13
-added: 0, skipped: 1, total issues: 1
+sync 是幂等的:二次运行会跳过 backlog 里已存在 id 的 issue —— 不覆盖
+已有行的状态或描述,并打印 `skipped (already exists): GH-13`。每次运行
+结尾给出汇总:
+
+```
+added: 2, skipped: 5, total issues: 7
 ```
 
-## 每个工作区绑定一个 GitHub source
+`--dry-run` 用 `+`(将新增)和 `=`(将跳过)标记打印同样的差异,且
+永不改动文件。
 
-第一次成功 sync 会在 `runtime/backlog-sync.yaml` 中把该工作区绑定到一个
-GitHub `owner/repo` source。后续显式值必须仍指向同一仓库；不同 source 会在
-拉取和写入前失败。owner 和仓库名按大小写不敏感比较。
+## 配置:`.roll/local.yaml`
+
+一次真正成功的 sync 之后,解析出的仓库、标签和时间戳会被持久化,后续
+运行可省略 `--repo`:
 
 ```yaml
 backlog_sync:
   repo: seanyao/roll-meta
   direction: issues-to-backlog
   labels: []
-  last_sync_at: 2026-07-21T10:00:00Z
+  last_sync_at: 2026-05-28T10:00:00Z
 ```
 
-每个工作区拥有独立的 source 绑定和 sync 时间戳。
+| 字段            | 含义 |
+|-----------------|------|
+| `repo`          | 无 flag 时的默认 `owner/repo`。 |
+| `direction`     | v1 始终是 `issues-to-backlog`。 |
+| `labels`        | 默认标签过滤;显式 `--label` 会覆盖它。 |
+| `last_sync_at`  | 上一次成功 sync 的时间戳。 |
 
-## 不支持
+显式 flag 始终覆盖配置。若 `.roll/local.yaml` 没有 `backlog_sync:` 块,
+首次 sync 必须传 `--repo`。
 
-一个工作区绑定多个 GitHub Issue source、双向回写、Projects 或 Milestones
-映射、PR 关联、非 GitHub provider 和自定义映射规则不属于该命令。
+## v1 不做
+
+双向回写、Projects/Milestones 映射、PR 关联、非 GitHub 平台、自定义
+映射规则,均不在 v1 范围内。

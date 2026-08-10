@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop cycle model-swap` subcommand for pending model-swap candidates.
+ */
+/**
  * US-CYCLE-012 — `roll loop cycle model-swap [<card>] [--adjudicate] [--json]`.
  *   • no card (or --list): list every card carrying a pending swap candidate.
  *   • <card> (no flag): write/refresh the candidate file (idempotent) and print.

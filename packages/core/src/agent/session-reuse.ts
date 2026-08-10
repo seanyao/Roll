@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves the warm-context session-reuse adapter for a routed agent.
  * lever-4 — cross-card WARM-CONTEXT adapter port (agent-AGNOSTIC).
  *
  * Warm-context (reusing a routed agent's prior session on the NEXT same-agent

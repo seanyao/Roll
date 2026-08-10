@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the machine-global Conventions page.
+ */
+/**
  * US-DOSSIER-033 — the Conventions machine-global page.
  *
  * Conventions is the rulebook every AI agent on this machine is governed by,

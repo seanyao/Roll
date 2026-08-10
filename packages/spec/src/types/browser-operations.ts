@@ -1,4 +1,7 @@
 /**
+ * @responsibility Declares the browser operation contracts and policy boundary.
+ */
+/**
  * US-BROW-001 — Browser operation contracts and policy boundary.
  *
  * Closed request/result contract, lane enum, and permitted action vocabulary.

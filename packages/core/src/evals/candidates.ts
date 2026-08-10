@@ -1,4 +1,5 @@
 /**
+ * @responsibility Ranks evaluation candidates from recorded feedback signals.
  * Eval candidates — 连续低分 → 待人确认候选 (Goodhart 护栏, US-CORE-013).
  *
  * Direct port of the SIGNAL-emission half of `lib/loop_result_eval.py`

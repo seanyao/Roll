@@ -14,6 +14,28 @@ Quickly select the right skill or tool.
 | **"Run several Actions in parallel"** | `roll-build` | Auto-determines parallelism after splitting Actions |
 | **"What shipped / what's queued?"** | `roll status` / `roll loop cycle` / story reports | CLI-first delivery state, cycle trace, and story-scoped evidence |
 | **"Debug this page"** | `roll-debug` | Deep diagnosis, collect logs/network/DOM |
+| **"Retrieve an external page"** / **"Help with an anti-bot page or CAPTCHA"** | `roll-browse` | Isolated external acquisition with owner-mediated takeover; it is not project diagnosis or acceptance evidence |
+
+## roll-browse — External Page Acquisition
+
+Use `roll-browse` only to retrieve material from an external page, including an
+anti-bot page or a CAPTCHA that needs the owner's help. Run its sanctioned
+`browse.sh` wrapper and keep the returned material as notes, not delivery
+evidence.
+
+Its hard boundaries are:
+
+- Chrome mode, owner profiles, cookies, and CDP attachment are prohibited.
+- An external retrieval result is never acceptance or visual evidence.
+- Roll never installs or upgrades browser-act automatically; missing tooling
+  stops and tells the owner where to install it.
+- Login takeover uses a URL credential controlled by the owner. Roll never
+  takes, persists, forwards, or handles that URL or any credential.
+
+For a page this project owns, use `roll-debug` instead: it diagnoses the
+project's console, network, DOM, and source. `roll-browse` acquires material
+from an external page. Ownership beats protection: an owned staging page behind
+a login wall is still a `roll-debug` case, not a `roll-browse` case.
 
 ## Support Skills
 
@@ -131,10 +153,11 @@ The notes are part of `.roll/` and therefore commit-tracked, so the
 quality trail is reproducible across machines and visible to anyone
 reading the project history.
 
-`roll loop status` 状态盘底部会汇总评审分趋势:`review-score: mean 7.8 /
-min 4 / redo 2 (last 14)`,`redo` 包含 `regression` 判定和 `ok` 但分
-数 < 6 的低置信交付,共同标记需要回看的 cycle 数量。评审分由全新独立会话
-的同行 Reviewer 产出,工作 agent 绝不自评。
+`roll loop status` summarizes the Review Score trend at the bottom of its
+status panel: `review-score: mean 7.8 / min 4 / redo 2 (last 14)`. `redo`
+includes `regression` outcomes and low-confidence `ok` outcomes with a score
+below 6, marking cycles worth revisiting. A peer Reviewer from a fresh,
+independent session produces the score; the working agent never scores itself.
 
 ## Adding a New Skill
 

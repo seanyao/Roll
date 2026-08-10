@@ -1,4 +1,7 @@
 /**
+ * @responsibility Creates submodule-aware worktrees for delivery.
+ */
+/**
  * E2 — submodule-aware worktree creation, split out of setup-handlers.ts
  * (REFACTOR-060 module-size guard) so the submodule delivery ladder has its own
  * testable home (mirrors how E3 extracted local-publish.ts).
@@ -20,12 +23,11 @@
  *     observation of it happen where the delivery actually lands. Absent ⇒ the
  *     superproject worktree/repo, byte-identical to today (zero regression).
  */
-import { parseTargetSubmodule } from "@roll/core";
 import { configResolve, projectConfigPath, resolveIntegrationBranch, submoduleWorktreePath } from "@roll/infra";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { storySpecPath } from "./attest-gate.js";
-import { gitmodulesPaths, inferTargetSubmodule, targetSubmoduleFromSpecText } from "../lib/target-submodule.js";
+import { planManagedWorkspaceBootstrap } from "../lib/target-submodule.js";
 import { eventTs } from "./runner-time.js";
 import type { Ports } from "./ports.js";
 
@@ -88,11 +90,7 @@ export function resolveStoryTargetSubmodule(
   ports: Ports,
   story: { id: string; desc?: string },
 ): string | undefined {
-  // (1) explicit backlog tag — the pick-time source, highest precedence.
-  const fromTag = parseTargetSubmodule(story.desc ?? "");
-  if (fromTag !== undefined) return fromTag;
-
-  // (2) explicit spec frontmatter — read the spec once, reuse the text for (3).
+  // Read immutable inputs once, then use the same pure selector as host Delta.
   let specText: string | undefined;
   try {
     const spec = storySpecPath(ports.repoCwd, story.id);
@@ -100,42 +98,18 @@ export function resolveStoryTargetSubmodule(
   } catch {
     /* best-effort: an unreadable spec is treated as "no submodule declared" */
   }
-  if (specText !== undefined) {
-    const fromSpec = targetSubmoduleFromSpecText(specText);
-    if (fromSpec !== undefined) return fromSpec;
-  }
-
-  // (3) inference — literal submodule-path match in the spec, only when the
-  // superproject declares submodules and the spec text is available.
-  if (specText !== undefined) {
-    const paths = readSubmodulePaths(ports.repoCwd);
-    if (paths.length > 0) {
-      const inferred = inferTargetSubmodule(specText, paths);
-      if (inferred !== undefined) return inferred;
-    }
-  }
-
-  // (4) default_submodule config fallback (empty / unset ⇒ skip).
-  const fallback = resolveDefaultSubmodule(ports.repoCwd);
-  if (fallback !== undefined) return fallback;
-
-  // (5) no submodule — a normal superproject story.
-  return undefined;
-}
-
-/**
- * E6 — the superproject's declared submodule paths from `<repoCwd>/.gitmodules`,
- * or `[]` when there is no `.gitmodules` (a plain project — no inference) or it is
- * unreadable. Best-effort: never throws.
- */
-function readSubmodulePaths(repoCwd: string): string[] {
-  const gm = join(repoCwd, ".gitmodules");
-  if (!existsSync(gm)) return [];
+  let gitmodulesText: string | undefined;
   try {
-    return gitmodulesPaths(readFileSync(gm, "utf8"));
+    gitmodulesText = readFileSync(join(ports.repoCwd, ".gitmodules"), "utf8");
   } catch {
-    return [];
+    /* absent/unreadable is a normal non-submodule project */
   }
+  return planManagedWorkspaceBootstrap({
+    storyDescription: story.desc,
+    specText,
+    gitmodulesText,
+    defaultSubmodule: resolveDefaultSubmodule(ports.repoCwd),
+  }).targetSubmodule;
 }
 
 /**
@@ -175,9 +149,11 @@ export interface SubmoduleWorktreeResult {
 export async function createSubmoduleWorktreeIfDeclared(
   ports: Ports,
   ctx: { cycleId: string },
-  story: { id: string; desc?: string },
+  story: { id: string; desc?: string; targetSubmodule?: string },
 ): Promise<SubmoduleWorktreeResult> {
-  const targetSubmodule = resolveStoryTargetSubmodule(ports, story);
+  // The picker carries an explicit backlog tag in CycleContext.  Re-resolving
+  // from only an id here would lose that highest-precedence declaration.
+  const targetSubmodule = story.targetSubmodule ?? resolveStoryTargetSubmodule(ports, story);
   if (targetSubmodule === undefined) return { failed: false };
 
   const base = resolveIntegrationBranch(join(ports.repoCwd, targetSubmodule));

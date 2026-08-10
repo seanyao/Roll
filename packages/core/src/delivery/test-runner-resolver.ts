@@ -1,4 +1,5 @@
 /**
+ * @responsibility Resolves the deterministic per-commit test-gate command for the target project.
  * TestRunnerResolver (FIX-1274) — deterministic, fail-loud selection of the
  * per-commit test-gate command for the TARGET project `roll test` runs in.
  *

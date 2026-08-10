@@ -1,4 +1,7 @@
 /**
+ * @responsibility Connects the owner Chrome for explicitly approved operations.
+ */
+/**
  * US-BROW-008b — owner Chrome connector for explicitly approved operations.
  *
  * This adapter deliberately owns only the short-lived DevTools connection. It

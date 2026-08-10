@@ -1,4 +1,5 @@
 /**
+ * @responsibility Prevents false delivered conclusions when main CI is red after merge.
  * Delivery gate — pure, injectable guard that prevents false "delivered"
  * conclusions when main CI is red after merge.
  *

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll design` subcommand, launching the design skill conversation with a captured transcript.
+ */
+/**
  * `roll design` — explicit thin entry point for the `$roll-design` skill
  * (US-ONBOARD-NUDGE-004, FIX-1055).
  *
@@ -11,8 +14,8 @@
 import { spawn as spawnChild, type SpawnOptions } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { REQUIREMENT_HINT_V1, classifyStatus, t, v2Catalog, v3Catalog, type Lang, type RequirementHintV1, type WorkspaceContextOperationProvenance, type WorkspaceContextScope, type WorkspaceExecutionContextV1 } from "@roll/spec";
-import { authorizesLegacyWorkspaceContextOperation, normalizerFor, newNormalizerState, parseBacklog, type ActivitySignal } from "@roll/core";
+import { classifyStatus, t, v2Catalog, v3Catalog, type Lang } from "@roll/spec";
+import { normalizerFor, newNormalizerState, parseBacklog, type ActivitySignal } from "@roll/core";
 import { currentLang } from "./agent-list.js";
 import { loopGoCommand } from "./loop-go.js";
 import {
@@ -24,10 +27,7 @@ import {
   readSkillBody,
 } from "../lib/interactive-agent.js";
 import { renderDesignReviewPageFromMarkdown } from "../lib/review-page.js";
-import { projectBacklogPath, projectDataPath, projectDataRoot, projectRuntimePath } from "../lib/archive.js";
 import { readRigLifecycleState } from "../runner/agent-liveness.js";
-import { workspaceExecutionEnvironment } from "../runner/agent-spawn.js";
-import { prepareWorkspaceSkillHandoff } from "../runner/workspace-skill-handoff.js";
 
 function lang(): Lang {
   return currentLang();
@@ -37,8 +37,8 @@ function emit(line: string): void {
   process.stderr.write(`${line}\n`);
 }
 
-function readDesignPrompt(fromFile: string | undefined, rest: string[], env: NodeJS.ProcessEnv): string | null {
-  const body = readSkillBody("roll-design", env);
+function readDesignPrompt(fromFile: string | undefined, rest: string[]): string | null {
+  const body = readSkillBody("roll-design");
   if (body === null) return null;
   const parts: string[] = [];
   if (fromFile !== undefined) {
@@ -103,61 +103,8 @@ function parseDesignFlags(args: string[]): ParsedDesignFlags {
   return { agent, fromFile, verbose, raw, rest, error: null };
 }
 
-/** Deterministic structured identities only; prose inference stays out of the host. */
-export function designRequirementHint(args: string[], invocationCwd = process.cwd()): RequirementHintV1 {
-  const parsed = parseDesignFlags(args);
-  const fromFilePath = parsed.fromFile === undefined ? undefined : resolve(invocationCwd, parsed.fromFile);
-  let fromFileText = "";
-  if (fromFilePath !== undefined && isRegularFile(fromFilePath)) {
-    try {
-      fromFileText = readFileSync(fromFilePath, "utf8");
-    } catch {
-      fromFileText = "";
-    }
-  }
-  const text = `${parsed.rest.join(" ")}\n${fromFileText}`;
-  const storyIds = [...new Set(text.match(/\b(?:US|FIX|REFACTOR|IDEA|BUG)(?:-[A-Z0-9]+)+[a-z]?\d*\b/gu) ?? [])];
-  const storySet = new Set(storyIds);
-  const jiraRefs = [...new Set(text.match(/\b[A-Z][A-Z0-9]+-[0-9]+\b/gu) ?? [])]
-    .filter((ref) => !storySet.has(ref));
-  return {
-    schema: REQUIREMENT_HINT_V1,
-    sources: jiraRefs.map((ref) => ({
-      key: { provider: "jira" as const, ref },
-      provenance: "deterministic_extraction" as const,
-    })),
-    storyIds: storyIds.map((storyId) => ({
-      storyId,
-      provenance: "deterministic_extraction" as const,
-    })),
-    repositoryRemotes: [],
-    paths: fromFilePath === undefined || !isRegularFile(fromFilePath)
-      ? []
-      : [{ path: fromFilePath, provenance: "cli_argument" as const }],
-  };
-}
-
 function isRollProject(cwd: string): boolean {
-  const root = projectDataRoot(cwd);
-  return root === cwd
-    ? existsSync(projectBacklogPath(cwd)) && existsSync(projectDataPath(cwd, "features"))
-    : existsSync(root);
-}
-
-function authorityBacklog(cwd: string, context: WorkspaceExecutionContextV1 | undefined): string {
-  return context?.authorities.backlog ?? projectBacklogPath(cwd);
-}
-
-function authorityPath(
-  cwd: string,
-  context: WorkspaceExecutionContextV1 | undefined,
-  authority: "features" | "runtime",
-  ...segments: string[]
-): string {
-  if (context !== undefined) return join(context.authorities[authority], ...segments);
-  return authority === "features"
-    ? projectDataPath(cwd, "features", ...segments)
-    : projectRuntimePath(cwd, ...segments);
+  return existsSync(join(cwd, ".roll"));
 }
 
 function isRegularFile(path: string): boolean {
@@ -169,8 +116,8 @@ function isRegularFile(path: string): boolean {
 }
 
 /** True when `.roll/backlog.md` has at least one Todo card row. */
-function hasTodoBacklog(cwd: string, context?: WorkspaceExecutionContextV1): boolean {
-  const bp = authorityBacklog(cwd, context);
+function hasTodoBacklog(cwd: string): boolean {
+  const bp = join(cwd, ".roll", "backlog.md");
   try {
     const content = readFileSync(bp, "utf8");
     return parseBacklog(content).some((row) => classifyStatus(row.status) === "todo");
@@ -194,14 +141,6 @@ export interface DesignSpawnLive {
 export interface DesignCommandDeps {
   /** Current working directory for project checks. */
   cwd: string;
-  /** Original invocation cwd; input files resolve here, not against Workspace authority. */
-  invocationCwd: string;
-  /** Frozen host-resolved authority for Workspace-native production runs. */
-  workspaceExecution?: WorkspaceExecutionContextV1;
-  /** Missing context is allowed only for an explicitly classified legacy migration. */
-  workspaceContextScope: WorkspaceContextScope;
-  /** Operation-level proof for the legacy migration exception. */
-  workspaceContextOperationProvenance?: WorkspaceContextOperationProvenance;
   /** Environment variables (used for `ROLL_DESIGN_AGENT`). */
   env: NodeJS.ProcessEnv;
   /** Read one interactive selection line. */
@@ -216,81 +155,6 @@ export interface DesignCommandDeps {
   heartbeatMs: number;
 }
 
-const INIT_ONBOARD_DESIGN_AUTHORITY = Symbol("roll.init.onboard.design");
-
-interface LegacyWorkspaceSkillHandoffV1 {
-  readonly schemaVersion: 1;
-  readonly scope: "legacy_migration_only";
-  readonly operation: WorkspaceContextOperationProvenance;
-}
-
-function prepareLegacyWorkspaceSkillHandoff(input: {
-  readonly skillName: string;
-  readonly operation: WorkspaceContextOperationProvenance;
-  readonly skillBody: string;
-}): { readonly skillBody: string; readonly handoffJson: string } {
-  const handoff: LegacyWorkspaceSkillHandoffV1 = {
-    schemaVersion: 1,
-    scope: "legacy_migration_only",
-    operation: input.operation,
-  };
-  const handoffJson = JSON.stringify(handoff);
-  const block = [
-    "[Roll Workspace legacy skill handoff]",
-    `skill: ${input.skillName}`,
-    "scope: legacy_migration_only",
-    `operation: ${JSON.stringify(input.operation)}`,
-    "This run is an explicitly authorized legacy migration input; no canonical Workspace authority exists yet.",
-    "Use the selected legacy project only as onboarding input, then produce a canonical Workspace next action without dual-writing authority.",
-    `handoff-json: ${handoffJson}`,
-    "[/Roll Workspace legacy skill handoff]",
-  ].join("\n");
-  return { skillBody: `${block}\n\n${input.skillBody}`, handoffJson };
-}
-
-const INHERITED_WORKSPACE_AUTHORITY_ENV = [
-  "ROLL_ADVERSARIAL_MARKER",
-  "ROLL_CONTEXT_DATA_V1",
-  "ROLL_EVIDENCE_DIR",
-  "ROLL_FEATURES_DIR",
-  "ROLL_INTEGRATION_INPUTS",
-  "ROLL_LOOP_ALERT",
-  "ROLL_LOOP_DIR",
-  "ROLL_LOOP_GO_ALLOWED_CARDS",
-  "ROLL_LOOP_GO_CHILD",
-  "ROLL_LOOP_GO_GUIDED",
-  "ROLL_LOOP_GO_WORKER",
-  "ROLL_MAIN_PROJECT",
-  "ROLL_MAIN_SLUG",
-  "ROLL_NOTES_DIR",
-  "ROLL_OWNED_GIT_PATHS",
-  "ROLL_WORKSPACE_EXECUTION_CONTEXT",
-  "ROLL_WORKSPACE",
-  "ROLL_STORY_ID",
-  "ROLL_WORKSPACE_BACKLOG_PATH",
-  "ROLL_PROJECT_RUNTIME_DIR",
-  "ROLL_REPOSITORY_ID",
-  "ROLL_REPOSITORY_ALIAS",
-  "ROLL_RUN_DIR",
-  "ROLL_SCREENSHOTS_DIR",
-  "ROLL_SHARED_ROOT",
-  "ROLL_WORKSPACE_CONTEXT_SCOPE",
-  "ROLL_WORKSPACE_LEGACY_HANDOFF",
-] as const;
-
-function legacyWorkspaceHandoffEnvironment(
-  inherited: NodeJS.ProcessEnv,
-  handoffJson: string,
-): NodeJS.ProcessEnv {
-  const env = { ...inherited };
-  for (const key of INHERITED_WORKSPACE_AUTHORITY_ENV) delete env[key];
-  return {
-    ...env,
-    ROLL_WORKSPACE_CONTEXT_SCOPE: "legacy_migration_only",
-    ROLL_WORKSPACE_LEGACY_HANDOFF: handoffJson,
-  };
-}
-
 function formatRunFolder(ts: number, target: string | null): string {
   const d = new Date(ts);
   const iso = d.toISOString();
@@ -300,21 +164,13 @@ function formatRunFolder(ts: number, target: string | null): string {
   return `${stamp}-${slug}`;
 }
 
-function transcriptPath(cwd: string, ts: number, target: string | null, context?: WorkspaceExecutionContextV1): string {
-  if (context !== undefined) {
-    return authorityPath(cwd, context, "runtime", "design", formatRunFolder(ts, target), "transcript.log");
-  }
-  return projectDataRoot(cwd) === cwd
-    ? projectRuntimePath(cwd, "design", formatRunFolder(ts, target), "transcript.log")
-    : projectDataPath(cwd, "runs", "design", formatRunFolder(ts, target), "transcript.log");
+function transcriptPath(cwd: string, ts: number, target: string | null): string {
+  return join(cwd, ".roll", "runs", "design", formatRunFolder(ts, target), "transcript.log");
 }
 
-function lookupEpic(target: string, cwd: string, context?: WorkspaceExecutionContextV1): string | null {
+function lookupEpic(target: string, cwd: string): string | null {
   try {
-    const indexPath = context === undefined
-      ? projectDataPath(cwd, "index.json")
-      : join(context.workspace.canonicalRoot, "index.json");
-    const raw = readFileSync(indexPath, "utf8");
+    const raw = readFileSync(join(cwd, ".roll", "index.json"), "utf8");
     const parsed = JSON.parse(raw) as { stories?: Record<string, string> };
     return parsed.stories?.[target] ?? null;
   } catch {
@@ -322,9 +178,9 @@ function lookupEpic(target: string, cwd: string, context?: WorkspaceExecutionCon
   }
 }
 
-function readBacklogItems(cwd: string, context?: WorkspaceExecutionContextV1): { id: string; desc: string; status: string }[] {
+function readBacklogItems(cwd: string): { id: string; desc: string; status: string }[] {
   try {
-    const content = readFileSync(authorityBacklog(cwd, context), "utf8");
+    const content = readFileSync(join(cwd, ".roll", "backlog.md"), "utf8");
     return parseBacklog(content).map((row) => ({ id: row.id, desc: row.desc, status: row.status }));
   } catch {
     return [];
@@ -345,9 +201,9 @@ function isIdeaTarget(target: string | null): boolean {
 
 function renderDesignReviewPageForTarget(ctx: RunContext, cardsCreated: number): void {
   if (ctx.target === null || ctx.fromFile !== undefined) return;
-  const epic = lookupEpic(ctx.target, ctx.cwd, ctx.workspaceExecution);
+  const epic = lookupEpic(ctx.target, ctx.cwd);
   if (epic === null) return;
-  const base = relative(ctx.cwd, authorityPath(ctx.cwd, ctx.workspaceExecution, "features", epic, ctx.target));
+  const base = join(".roll", "features", epic, ctx.target);
   const md = join(base, "spec.md");
   const absMd = resolve(ctx.cwd, md);
   if (!existsSync(absMd) || !hasDetailedDesign(absMd)) return;
@@ -549,7 +405,7 @@ function createLiveProgress(ctx: RunContext, deps: DesignCommandDeps, opts: { ra
 
   const scanCards = (): void => {
     if (opts.raw) return;
-    for (const item of readBacklogItems(ctx.cwd, ctx.workspaceExecution)) {
+    for (const item of readBacklogItems(ctx.cwd)) {
       if (knownBefore.has(item.id) || emittedCards.has(item.id)) continue;
       emittedCards.add(item.id);
       const { title, problem } = splitCardDescription(item.desc);
@@ -639,8 +495,6 @@ function createLiveProgress(ctx: RunContext, deps: DesignCommandDeps, opts: { ra
 
 const defaultDeps: DesignCommandDeps = {
   cwd: process.cwd(),
-  invocationCwd: process.cwd(),
-  workspaceContextScope: "workspace_required_mutation",
   env: process.env,
   readLine: readLineFromStdin,
   runLoopGo: loopGoCommand,
@@ -722,7 +576,6 @@ function selectAgent(
 
 interface RunContext {
   cwd: string;
-  workspaceExecution?: WorkspaceExecutionContextV1;
   lang: Lang;
   target: string | null;
   fromFile: string | undefined;
@@ -754,14 +607,14 @@ function printStartBlock(ctx: RunContext): void {
 
 function printHandoff(ctx: RunContext, statusCode: number, rawTranscript: string): void {
   const l = ctx.lang;
-  const epic = ctx.target !== null ? lookupEpic(ctx.target, ctx.cwd, ctx.workspaceExecution) : null;
-  const afterBacklog = readBacklogItems(ctx.cwd, ctx.workspaceExecution);
+  const epic = ctx.target !== null ? lookupEpic(ctx.target, ctx.cwd) : null;
+  const afterBacklog = readBacklogItems(ctx.cwd);
   const newCards = afterBacklog.filter((a) => !ctx.beforeBacklog.some((b) => b.id === a.id)).length;
   renderDesignReviewPageForTarget(ctx, newCards);
   let designPath: string | undefined;
   let reviewPagePath: string | undefined;
   if (epic !== null && ctx.target !== null) {
-    const base = relative(ctx.cwd, authorityPath(ctx.cwd, ctx.workspaceExecution, "features", epic, ctx.target));
+    const base = join(".roll", "features", epic, ctx.target);
     const md = join(base, "spec.md");
     const reviewHtml = join(base, "design-review.html");
     const html = join(base, "spec.html");
@@ -805,15 +658,15 @@ function printHandoff(ctx: RunContext, statusCode: number, rawTranscript: string
 
 function newTodoCards(ctx: RunContext): { id: string; desc: string; status: string }[] {
   const beforeIds = new Set(ctx.beforeBacklog.map((b) => b.id));
-  return readBacklogItems(ctx.cwd, ctx.workspaceExecution).filter((row) => !beforeIds.has(row.id) && classifyStatus(row.status) === "todo");
+  return readBacklogItems(ctx.cwd).filter((row) => !beforeIds.has(row.id) && classifyStatus(row.status) === "todo");
 }
 
-function runtimeDir(cwd: string, context?: WorkspaceExecutionContextV1): string {
-  return context?.authorities.runtime ?? projectRuntimePath(cwd);
+function runtimeDir(cwd: string): string {
+  return join(cwd, ".roll", "loop");
 }
 
 function printAgentPoolSummary(ctx: RunContext): void {
-  const state = readRigLifecycleState(runtimeDir(ctx.cwd, ctx.workspaceExecution));
+  const state = readRigLifecycleState(runtimeDir(ctx.cwd));
   const suspended = ctx.installedAgents
     .map((agent) => ({ agent, entry: state.rigs[agent] }))
     .filter((item) => item.entry?.status === "suspended");
@@ -843,16 +696,8 @@ function maybeStartLoopAfterDesign(
   return statusCode;
 }
 
-function runDesignCommand(
-  args: string[],
-  deps: Partial<DesignCommandDeps> = {},
-  legacyAuthority?: symbol,
-): number | Promise<number> {
-  const d: DesignCommandDeps = {
-    ...defaultDeps,
-    ...deps,
-    invocationCwd: deps.invocationCwd ?? deps.cwd ?? defaultDeps.invocationCwd,
-  };
+export function designCommand(args: string[], deps: Partial<DesignCommandDeps> = {}): number | Promise<number> {
+  const d: DesignCommandDeps = { ...defaultDeps, ...deps };
   const l = lang();
 
   if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
@@ -875,52 +720,38 @@ function runDesignCommand(
     return 1;
   }
 
-  if (
-    d.workspaceExecution === undefined &&
-    (
-      legacyAuthority !== INIT_ONBOARD_DESIGN_AUTHORITY ||
-      d.workspaceContextScope !== "legacy_migration_only" ||
-      !authorizesLegacyWorkspaceContextOperation(d.workspaceContextOperationProvenance)
-    )
-  ) {
-    emit("roll design: missing_execution_context");
-    return 1;
-  }
-
   if (!isRollProject(d.cwd)) {
     emit(t(v3Catalog, l, "design.not_roll_project"));
     return 1;
   }
-  const resolvedFromFile = fromFile === undefined ? undefined : resolve(d.invocationCwd, fromFile);
-  if (resolvedFromFile !== undefined && !isRegularFile(resolvedFromFile)) {
-    emit(t(v3Catalog, l, "design.from_file_not_found", resolvedFromFile));
+  if (fromFile !== undefined && !isRegularFile(resolve(d.cwd, fromFile))) {
+    emit(t(v3Catalog, l, "design.from_file_not_found", fromFile));
     return 1;
   }
-  const promptFromFile = d.workspaceExecution === undefined ? fromFile : resolvedFromFile;
 
   // Bound bare design: no target and Todo backlog → bounded help, no spawn.
   if (fromFile === undefined && rest.length === 0) {
-    if (hasTodoBacklog(d.cwd, d.workspaceExecution)) {
+    if (hasTodoBacklog(d.cwd)) {
       process.stdout.write(`${t(v3Catalog, l, "design.bare_backlog_help")}\n`);
       return 0;
     }
     // Empty backlog → fall through (onboarding path may still launch agent).
   }
 
-  const rawPrompt = readDesignPrompt(promptFromFile, rest, d.env);
-  if (rawPrompt === null) {
+  const prompt = readDesignPrompt(fromFile, rest);
+  if (prompt === null) {
     emit(t(v3Catalog, l, "design.skill_missing"));
     return 1;
   }
 
-  const { installed } = discoverInteractiveAgents(agentEnvFromEnv(d.env), d.env);
+  const { installed } = discoverInteractiveAgents(agentEnvFromEnv(d.env));
   if (installed.length === 0) {
     emit(t(v3Catalog, l, "design.no_agent"));
     return 1;
   }
 
   const envAgent = d.env["ROLL_DESIGN_AGENT"];
-  const primary = readPrimaryAgent(d.env);
+  const primary = readPrimaryAgent();
 
   const { agent, error } = selectAgent(installed, forced, envAgent, primary, d.readLine);
   if (error !== null) {
@@ -933,48 +764,28 @@ function runDesignCommand(
     return 1;
   }
 
-  const legacyHandoff = d.workspaceExecution === undefined
-    ? prepareLegacyWorkspaceSkillHandoff({
-        skillName: "roll-design",
-        operation: d.workspaceContextOperationProvenance!,
-        skillBody: rawPrompt,
-      })
-    : undefined;
-  const handoff = d.workspaceExecution === undefined
-    ? { ok: true as const, skillBody: legacyHandoff!.skillBody }
-    : prepareWorkspaceSkillHandoff({
-        skillName: "roll-design",
-        scope: "workspace_required_mutation",
-        context: d.workspaceExecution,
-        skillBody: rawPrompt,
-      });
-  if (!handoff.ok) {
-    emit(`roll design: ${handoff.code}`);
-    return 1;
-  }
-  const cmd = interactiveAgentCommand(agent, handoff.skillBody);
+  const cmd = interactiveAgentCommand(agent, prompt);
   if (cmd === null) {
     emit(t(v2Catalog, l, "init.agent_has_no_interactive_mode_wired", agent, agent));
     return 1;
   }
 
-  const target = promptFromFile ?? (rest.join(" ").trim() || null);
+  const target = fromFile !== undefined ? fromFile : rest.join(" ").trim() || null;
   const startTs = d.now();
-  const runTranscript = transcriptPath(d.cwd, startTs, target, d.workspaceExecution);
+  const runTranscript = transcriptPath(d.cwd, startTs, target);
   mkdirSync(dirname(runTranscript), { recursive: true });
   writeFileSync(runTranscript, "", "utf8");
 
   const ctx: RunContext = {
     cwd: d.cwd,
-    ...(d.workspaceExecution === undefined ? {} : { workspaceExecution: d.workspaceExecution }),
     lang: l,
     target,
-    fromFile: promptFromFile,
+    fromFile,
     agent,
     installedAgents: installed,
     transcriptPath: runTranscript,
     startTs,
-    beforeBacklog: readBacklogItems(d.cwd, d.workspaceExecution),
+    beforeBacklog: readBacklogItems(d.cwd),
   };
 
   printStartBlock(ctx);
@@ -1002,12 +813,7 @@ function runDesignCommand(
   const spawned = d.spawn(
     cmd.bin,
     cmd.args,
-    {
-      cwd: d.cwd,
-      env: legacyHandoff === undefined
-        ? { ...d.env, ...workspaceExecutionEnvironment(d.workspaceExecution) }
-        : legacyWorkspaceHandoffEnvironment(d.env, legacyHandoff.handoffJson),
-    },
+    { cwd: d.cwd, env: d.env as NodeJS.ProcessEnv },
     { onStdout: live.ingestStdout, onStderr: live.ingestStderr },
   );
   if (isPromiseLike(spawned)) {
@@ -1017,25 +823,4 @@ function runDesignCommand(
     });
   }
   return finish(spawned);
-}
-
-/** Public design entry: missing Workspace authority always fails closed. */
-export function designCommand(args: string[], deps: Partial<DesignCommandDeps> = {}): number | Promise<number> {
-  return runDesignCommand(args, deps);
-}
-
-/** Internal lifecycle entry used only by `roll init` before a Workspace exists. */
-export function initOnboardDesignCommand(
-  args: string[],
-  deps: Partial<DesignCommandDeps> = {},
-): number | Promise<number> {
-  return runDesignCommand(args, {
-    ...deps,
-    workspaceContextScope: "legacy_migration_only",
-    workspaceContextOperationProvenance: {
-      surface: "cli",
-      id: "init",
-      operation: "onboard",
-    },
-  }, INIT_ONBOARD_DESIGN_AUTHORITY);
 }

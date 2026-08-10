@@ -5,7 +5,7 @@
 ### curl (recommended)
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | bash
+npm install -g @bipo-ape/roll
 ```
 
 No prerequisites beyond bash 3.2+, curl, and tar — all preinstalled on macOS and Linux.
@@ -13,7 +13,7 @@ No prerequisites beyond bash 3.2+, curl, and tar — all preinstalled on macOS a
 To pin a specific version:
 
 ```bash
-curl -fsSL https://seanyao.github.io/roll/install | ROLL_VERSION=v3.610.1 bash
+npm install -g @bipo-ape/roll
 ```
 
 ### npm

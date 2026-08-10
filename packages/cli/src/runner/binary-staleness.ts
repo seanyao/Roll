@@ -1,4 +1,7 @@
 /**
+ * @responsibility Warns when the roll binary is too old for the loop.
+ */
+/**
  * FIX-366 (part 2, optional/low-cost) — binary-too-old SOFT warning for the loop.
  *
  * When the globally-installed `roll` running the loop falls behind the published
@@ -17,6 +20,7 @@
  * a cosmetic "you're one release behind" hint by a day).
  */
 import { execFile } from "node:child_process";
+import { ROLL_PACKAGE_NAME } from "@roll/core";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -78,12 +82,11 @@ async function fetchRemoteLatest(): Promise<string> {
   const pinned = (process.env["ROLL_VERSION"] ?? "").trim();
   if (pinned !== "") return pinned;
   try {
-    const { stdout } = await execFileAsync(
-      "curl",
-      ["-fsSL", "--max-time", "5", "-H", "Accept: application/vnd.github+json", "https://api.github.com/repos/seanyao/roll/releases/latest"],
-      { encoding: "utf8" },
-    );
-    return /"tag_name"\s*:\s*"([^"]*)"/.exec(stdout)?.[1] ?? "";
+    // US-INSTALL-008: ask npm, not GitHub. The product repo is private now, so
+    // an anonymous Releases lookup 404s — and a probe that can only fail is a
+    // staleness check that silently never fires.
+    const { stdout } = await execFileAsync("npm", ["view", ROLL_PACKAGE_NAME, "version"], { encoding: "utf8" });
+    return stdout.trim();
   } catch {
     return "";
   }

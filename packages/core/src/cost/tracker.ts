@@ -1,4 +1,5 @@
 /**
+ * @responsibility Folds parsed agent usage into per-cycle cost records with guardrails.
  * CostTracker — TS port of the v2 `lib/agent_usage/` plugin contract: parse each
  * agent's usage output into tokens + model + list cost, and fold a parsed usage
  * into the per-cycle {@link CycleCost} record budget guardrails gate on (I11).
@@ -135,11 +136,16 @@ export interface StdoutAgentSpec {
   totalKind: "openai" | "generic";
 }
 
-/** The default models + total-regex flavour for the stdout-scrape agents. The
- *  `openai` total-regex flavour (TOTAL_RE_OPENAI) is retained for the generic
- *  fallback's symmetry, but no pool agent uses it. */
+/** The default models + total-regex flavour for the stdout-scrape agents.
+ *  US-PAIR-014: codex DOES use the `openai` flavour (TOTAL_RE_OPENAI matches its
+ *  "tokens used:" line) — the old comment here claimed "no pool agent uses it"
+ *  while `AGENT_SPECS.codex.usage.stdoutExtractor` said `"openai"`. That
+ *  contradiction was the bug: the registry had no `openai` entry, so
+ *  `extractUsage("codex", …)` returned null every time and codex's cost was
+ *  structurally 0 forever. */
 export const STDOUT_AGENTS: Record<string, StdoutAgentSpec> = {
   kimi: { defaultModel: "kimi-k2", totalKind: "generic" },
+  openai: { defaultModel: "gpt-5-codex", totalKind: "openai" },
 };
 
 /**
@@ -221,8 +227,17 @@ export const piExtract: Extractor = (): AgentUsage | null => null;
 /** The stdout-scrape registry (pi/agy map to their always-null stubs).
  *  `claude-stream` is harness-only — claude is not a pool agent but powers
  *  harness cost tracking. */
-export const REGISTRY: Record<string, Extractor> = {
+/**
+ * US-PAIR-014: typed as `Record<UsageExtractorKind, Extractor>`, NOT
+ * `Record<string, Extractor>`. The loose index signature is what let `openai`
+ * (declared by codex) go unimplemented in silence — a missing kind now fails the
+ * build instead of returning `undefined` and degrading cost to 0 at runtime.
+ * Adding a kind to `UsageExtractorKind` without an extractor here is a compile
+ * error, by design.
+ */
+export const REGISTRY: Record<UsageExtractorKind, Extractor> = {
   "claude-stream": sumClaudeStream,
+  openai: makeStdoutExtractor(STDOUT_AGENTS["openai"]!),
   pi: piExtract,
   kimi: kimiExtract,
   reasonix: reasonixExtract,

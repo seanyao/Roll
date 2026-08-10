@@ -7,18 +7,22 @@
  * the hard read-only constraint (no mutation).
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
-import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import {
   auditWorktrees,
-  inspectOrphanRecoveryProof,
   worktreeAuditCommand,
   type WorktreeAuditDeps,
   type WorktreeAuditOutput,
   type WorktreeAuditRecord,
 } from "../src/commands/worktree-audit.js";
+import { worktreeCleanupCommand } from "../src/commands/worktree-cleanup.js";
+import { allocateManagedPrimaryWorkspace } from "../src/runner/managed-primary-workspace.js";
+import { nodePorts } from "../src/runner/node-ports.js";
+import { executeTerminalCommand } from "../src/runner/terminal-handlers.js";
+import type { RunnerPaths } from "../src/runner/ports.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -957,12 +961,6 @@ describe("FIX-1460 (#1468) orphan loop worktree dirs", () => {
               { cycleId: "cycle-20260718-000000-2", outcome: "gave_up" },
             ])
           : null, // inner.lock etc. → not active
-      inspectOrphanDir: () => ({
-        state: "trusted_generated",
-        fingerprint: "fixture-proof",
-        entries: [".next"],
-        detail: "trusted generated roots: .next",
-      }),
       ...over,
     });
   }
@@ -1021,139 +1019,612 @@ describe("FIX-1460 (#1468) orphan loop worktree dirs", () => {
   });
 });
 
-// ─── FIX-1459: orphan recovery proof must fail closed ──────────────────────
+// ─── US-LOOP-123: shared ManagedWorkspaceSet projection ───────────────────
 
-describe("FIX-1459 orphan recovery proof", () => {
-  const cycleId = "cycle-20260723-120000-1";
+describe("US-LOOP-123 projection-backed audit fixture matrix", () => {
+  const workspace = {
+    schema: 1,
+    runId: "delta-d-1",
+    storyId: "US-LOOP-123",
+    kind: "host_delta",
+    topology: "delta-team",
+    delegationId: "d-1",
+    members: [{
+      repositoryId: "origin:repo",
+      workspaceKey: "delta-d-1",
+      relativeLocator: "delta-d-1",
+      checkoutRef: { kind: "detached", head: "head-1" },
+    }],
+  } as const;
 
-  function fixture(): { repo: string; orphan: string } {
-    const repo = mkdtempSync(join(tmpdir(), "roll-orphan-proof-"));
-    const cleanEnv = { ...process.env };
-    delete cleanEnv["GIT_DIR"];
-    delete cleanEnv["GIT_WORK_TREE"];
-    delete cleanEnv["GIT_INDEX_FILE"];
-    const runGit = (args: string[]): void => {
-      execFileSync("git", ["-C", repo, ...args], {
-        env: cleanEnv,
-        stdio: "ignore",
-      });
-    };
-    runGit(["init", "-b", "main"]);
-    runGit(["config", "user.name", "Roll Test"]);
-    runGit(["config", "user.email", "roll-test@example.invalid"]);
-    writeFileSync(join(repo, "README.md"), "fixture\n", "utf8");
-    runGit(["add", "README.md"]);
-    runGit(["commit", "-m", "fixture"]);
-
-    const orphan = join(repo, ".roll", "loop", "worktrees", cycleId);
-    mkdirSync(orphan, { recursive: true });
-    const events = join(repo, ".roll", "loop", "events.ndjson");
-    mkdirSync(join(repo, ".roll", "loop"), { recursive: true });
-    writeFileSync(events, JSON.stringify({ cycleId, outcome: "delivered" }) + "\n", "utf8");
-    return { repo, orphan };
-  }
-
-  function audit(repo: string): WorktreeAuditRecord {
-    const out = auditWorktrees({ repoRoot: repo, home: tmpdir(), integrationBranch: "HEAD" });
-    const record = out.records.find((candidate) => candidate.cycleId === cycleId);
-    expect(record).toBeDefined();
-    return record as WorktreeAuditRecord;
-  }
-
-  it("preserves delivered orphan residue that may contain tracked or unpublished work", () => {
-    const { repo, orphan } = fixture();
-    try {
-      mkdirSync(join(orphan, "src"), { recursive: true });
-      writeFileSync(join(orphan, "src", "changed.ts"), "export const unpublished = true;\n", "utf8");
-      const record = audit(repo);
-      expect(record.disposition).toBe("preserved_orphan");
-      expect(record.reason).toMatch(/unpublished|untrusted|ambiguous/i);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves delivered orphan residue with linked or external Git ownership metadata", () => {
-    const { repo, orphan } = fixture();
-    try {
-      mkdirSync(join(orphan, ".git"), { recursive: true });
-      writeFileSync(join(orphan, ".git", "config"), "[core]\n\tbare = false\n", "utf8");
-      const record = audit(repo);
-      expect(record.disposition).toBe("preserved_orphan");
-      expect(record.reason).toMatch(/git|linked|external/i);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves delivered generated residue when its material is ambiguous", () => {
-    const { repo, orphan } = fixture();
-    try {
-      mkdirSync(join(orphan, ".next"), { recursive: true });
-      symlinkSync(repo, join(orphan, ".next", "external-link"));
-      const record = audit(repo);
-      expect(record.disposition).toBe("preserved_orphan");
-      expect(record.reason).toMatch(/ambiguous|symlink|untrusted/i);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves a bounded-looking orphan when the worktree root resolves outside the repository", () => {
-    const { repo, orphan } = fixture();
-    const outside = mkdtempSync(join(tmpdir(), "roll-orphan-external-root-"));
-    try {
-      const worktreesRoot = join(repo, ".roll", "loop", "worktrees");
-      rmSync(worktreesRoot, { recursive: true, force: true });
-      const externalOrphan = join(outside, cycleId);
-      mkdirSync(join(externalOrphan, ".next"), { recursive: true });
-      symlinkSync(outside, worktreesRoot, "dir");
-      expect(orphan).toBe(join(worktreesRoot, cycleId));
-      const record = audit(repo);
-      expect(record.disposition).toBe("preserved_orphan");
-      expect(record.reason).toMatch(/external|symlink|boundary|ambiguous/i);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-      rmSync(outside, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves an orphan referenced by differently named relative Git admin metadata", () => {
-    const { repo, orphan } = fixture();
-    try {
-      mkdirSync(join(orphan, ".next"), { recursive: true });
-      const admin = join(repo, ".git", "worktrees", "renamed-admin-entry");
-      mkdirSync(admin, { recursive: true });
-      writeFileSync(join(admin, "gitdir"), relative(admin, join(orphan, ".git")) + "\n", "utf8");
-      const proof = inspectOrphanRecoveryProof(repo, orphan, cycleId);
-      expect(proof.state).toBe("linked_metadata");
-      expect(proof.detail).toMatch(/git|linked|ownership/i);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves an orphan when cycle activity files cannot be read conclusively", () => {
+  it("does not promote an unregistered cycle-looking directory into managed ownership", () => {
+    const events = [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "delivery:merge_confirmed", cycleId: "delta-d-1", storyId: "US-LOOP-123", branch: "roll/delta-d-1", signal: "ancestor", ts: 2 },
+      { type: "attest:gate", cycleId: "delta-d-1", verdict: "produced", reasons: [], ts: 3 },
+    ];
     const out = auditWorktrees(makeDeps({
-      git: (args) => args[0] === "worktree" && args[1] === "list"
-        ? porcelain([{ path: "/fake/repo", head: "abc", branch: "refs/heads/main" }])
-        : "",
-      readDir: () => [cycleId],
-      readFile: (path) => {
-        if (path.endsWith("events.ndjson")) {
-          return JSON.stringify({ cycleId, outcome: "delivered" }) + "\n";
-        }
-        throw new Error("permission denied");
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([
+          { path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" },
+          { path: "/fake/repo/.roll/loop/worktrees/cycle-spoof", head: "spoof" },
+        ]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
       },
-      inspectOrphanDir: () => ({
-        state: "trusted_generated",
-        fingerprint: "fixture-proof",
-        entries: [".next"],
-        detail: "trusted generated roots: .next",
-      }),
     }));
-    const record = out.records.find((candidate) => candidate.cycleId === cycleId);
-    expect(record?.disposition).toBe("preserved_orphan");
-    expect(record?.active).toBe(true);
+    expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).toBe("preserve_active");
+    expect(out.records.find((record) => record.path.endsWith("cycle-spoof"))?.owner).toBe("external");
+    expect(out).toMatchSnapshot();
+  });
+
+  it("accepts a host Delta's rendered attestation report for safe cleanup", () => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },
+      { type: "delta:terminal", delegationId: "d-1", storyId: "US-LOOP-123", runId: "delta-d-1", outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", ts: 2 },
+      { type: "delivery:reconciled", cycleId: "delta-d-1", storyId: "US-LOOP-123", state: "delivered_external", mergedBy: "external", mergeCommit: "main-head", signal: "backlog_attest", delegationId: "d-1", runId: "delta-d-1", ts: 3 },
+      { type: "attest:host_delta", cycleId: "delta-d-1", storyId: "US-LOOP-123", delegationId: "d-1", reportPath: ".roll/features/US-LOOP-123/latest/US-LOOP-123-report.html", ts: 4 },
+      { type: "worktree:release_requested", runId: "delta-d-1", reason: "delivered", operationId: "release-1", expectedHeads: [{ relativeLocator: "delta-d-1", head: "head-1" }], ts: 5 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") return "https://github.com/example/repo.git";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).toBe("safe_to_release");
+  });
+
+  it("accepts a stored SSH repository URL for a delivered primary and submodule when their live HTTPS URLs match", () => {
+    const remoteWorkspace = {
+      ...workspace,
+      members: [
+        {
+          ...workspace.members[0],
+          repositoryId: "git@github.com:BIPOSVC/ape-roll.git",
+        },
+        {
+          repositoryId: "git@github.com:BIPOSVC/ape-roll-skills.git",
+          workspaceKey: "delta-d-1",
+          relativeLocator: "delta-d-1.submodules/skills",
+          checkoutRef: { kind: "detached" as const, head: "skills-head" },
+        },
+      ],
+    } as const;
+    const events = [
+      { type: "worktree:allocated", workspace: remoteWorkspace, ts: 1 },
+      { type: "delta:terminal", delegationId: "d-1", storyId: "US-LOOP-123", runId: "delta-d-1", outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", ts: 2 },
+      { type: "delivery:reconciled", cycleId: "delta-d-1", storyId: "US-LOOP-123", state: "delivered_external", mergedBy: "external", mergeCommit: "main-head", signal: "backlog_attest", delegationId: "d-1", runId: "delta-d-1", ts: 3 },
+      { type: "attest:host_delta", cycleId: "delta-d-1", storyId: "US-LOOP-123", delegationId: "d-1", reportPath: ".roll/features/US-LOOP-123/latest/US-LOOP-123-report.html", ts: 4 },
+      {
+        type: "worktree:release_requested",
+        runId: "delta-d-1",
+        reason: "delivered",
+        operationId: "release-1",
+        expectedHeads: [
+          { relativeLocator: "delta-d-1", head: "head-1" },
+          { relativeLocator: "delta-d-1.submodules/skills", head: "skills-head" },
+        ],
+        ts: 5,
+      },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[1] === "/fake/repo" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[1] === "/fake/repo/skills" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1.submodules/skills", head: "skills-head" }]);
+        if (args[0] === "-C" && args[2] === "rev-parse") return args[1];
+        if (args[0] === "-C" && args[2] === "remote") return args[1] === "/fake/repo"
+          ? "https://github.com/BIPOSVC/ape-roll.git"
+          : "https://github.com/BIPOSVC/ape-roll-skills.git";
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+
+    const members = out.records.filter((record) => record.runId === "delta-d-1");
+    expect(members).toHaveLength(2);
+    expect(members.every((record) => record.repositoryIdentity === "expected")).toBe(true);
+    expect(members.every((record) => record.releaseVerdict === "safe_to_release")).toBe(true);
+  });
+
+  it("retains support for the existing short repository identity", () => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") return "https://github.com/example/repo.git";
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.memberLocator === "delta-d-1")?.repositoryIdentity).toBe("expected");
+  });
+
+  it.each([
+    ["different remote", "git@github.com:BIPOSVC/ape-roll.git", "https://github.com/BIPOSVC/other.git"],
+    ["missing remote", "git@github.com:BIPOSVC/ape-roll.git", undefined],
+    ["forged identity", "not-a-repository-identity", "https://github.com/BIPOSVC/ape-roll.git"],
+  ])("fails closed for a %s repository identity", (_caseName, repositoryId, remoteUrl) => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId }] }, ts: 1 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") {
+          if (remoteUrl === undefined) throw new Error("no origin");
+          return remoteUrl;
+        }
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    }));
+    const record = out.records.find((candidate) => candidate.memberLocator === "delta-d-1");
+    expect(record?.repositoryIdentity).toBe("foreign");
+    expect(record?.releaseVerdict).not.toBe("safe_to_release");
+  });
+
+  it("keeps a host Delta directory when delivery has no independent attestation evidence", () => {
+    const events = [
+      { type: "worktree:allocated", workspace: { ...workspace, members: [{ ...workspace.members[0], repositoryId: "repo-3b4cca" }] }, ts: 1 },
+      { type: "delta:terminal", delegationId: "d-1", storyId: "US-LOOP-123", runId: "delta-d-1", outcome: "handoff_ready", terminalBinding: "handoff_only", reservationSource: "delivery-reservation", ts: 2 },
+      { type: "delivery:reconciled", cycleId: "delta-d-1", storyId: "US-LOOP-123", state: "delivered_external", mergedBy: "external", mergeCommit: "main-head", signal: "backlog_attest", delegationId: "d-1", runId: "delta-d-1", ts: 3 },
+      { type: "worktree:release_requested", runId: "delta-d-1", reason: "delivered", operationId: "release-1", expectedHeads: [{ relativeLocator: "delta-d-1", head: "head-1" }], ts: 4 },
+    ];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree" || (args[0] === "-C" && args[2] === "worktree")) return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        if (args[0] === "-C" && args[2] === "rev-parse") return "/fake/repo";
+        if (args[0] === "-C" && args[2] === "remote") return "https://github.com/example/repo.git";
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.path.endsWith("delta-d-1"))?.releaseVerdict).not.toBe("safe_to_release");
+  });
+
+  it("inspects a submodule through its own registration and never counts the container", () => {
+    const submoduleWorkspace = {
+      ...workspace,
+      members: [
+        workspace.members[0],
+        {
+          repositoryId: "origin:submodule",
+          workspaceKey: "delta-d-1",
+          relativeLocator: "delta-d-1.submodules/packages/sub",
+          checkoutRef: { kind: "detached", head: "sub-head" },
+        },
+      ],
+    } as const;
+    const calls: string[][] = [];
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? JSON.stringify({ type: "worktree:allocated", workspace: submoduleWorkspace, ts: 1 }) : null,
+      git: (args) => {
+        calls.push(args);
+        if (args[0] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C" && args[2] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1.submodules/packages/sub", head: "sub-head" }]);
+        return "";
+      },
+    }));
+    // The registration belongs to the submodule repository, not the detached
+    // checkout and never the superproject.  This keeps a broken submodule
+    // registration from being masked by the primary worktree list.
+    expect(calls.some((args) => args[0] === "-C" && args[1] === "/fake/repo/packages/sub" && args[2] === "worktree")).toBe(true);
+    expect(out.records.some((record) => record.path.endsWith(".submodules"))).toBe(false);
+    expect(out.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("registered");
+  });
+
+  it("marks a failed submodule registration probe unknown and fails inspection loud", () => {
+    const submoduleWorkspace = {
+      ...workspace,
+      members: [
+        workspace.members[0],
+        {
+          repositoryId: "origin:submodule",
+          workspaceKey: "delta-d-1",
+          relativeLocator: "delta-d-1.submodules/packages/sub",
+          checkoutRef: { kind: "detached", head: "sub-head" },
+        },
+      ],
+    } as const;
+    const out = auditWorktrees(makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? JSON.stringify({ type: "worktree:allocated", workspace: submoduleWorkspace, ts: 1 }) : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([{ path: "/fake/repo/.roll/loop/worktrees/delta-d-1", head: "head-1" }]);
+        if (args[0] === "-C") throw new Error("submodule registration unavailable");
+        return "";
+      },
+    }));
+    expect(out.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("unknown");
+    expect(out.inspectionUnavailable).toBe(true);
+  });
+});
+
+describe("US-LOOP-125 real submodule workspace fixtures", () => {
+  function git(cwd: string, args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  }
+
+  function runtimePaths(root: string, key: string): RunnerPaths {
+    const runtime = join(root, ".roll", "loop");
+    return {
+      eventsPath: join(runtime, "events.ndjson"),
+      runsPath: join(runtime, "runs.jsonl"),
+      alertsPath: join(runtime, "alerts.log"),
+      lockPath: join(runtime, "inner.lock"),
+      heartbeatPath: join(runtime, "heartbeat"),
+      worktreePath: join(runtime, "worktrees", `cycle-${key}`),
+    };
+  }
+
+  /**
+   * This fixture deliberately enters through the production allocator and
+   * terminal command boundary.  In particular, it never creates a cycle
+   * worktree or writes an allocation/release event itself: the events and both
+   * repository registrations are the runtime's own output.
+   */
+  async function fixture(topology: "solo" | "full-delta-team") {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "roll-125-submodule-")));
+    const main = join(root, "main");
+    const source = join(root, "sub-source");
+    mkdirSync(main, { recursive: true });
+    mkdirSync(source, { recursive: true });
+    for (const repo of [main, source]) {
+      git(repo, ["init", "-q", "-b", "main"]);
+      git(repo, ["config", "user.email", "test@example.invalid"]);
+      git(repo, ["config", "user.name", "Roll test"]);
+      writeFileSync(join(repo, "README.md"), `${repo}\n`);
+      git(repo, ["add", "README.md"]);
+      git(repo, ["commit", "-qm", "seed"]);
+    }
+    git(main, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "packages/sub"]);
+    git(main, ["commit", "-qam", "add submodule"]);
+
+    const key = `125-${topology === "solo" ? "ordinary" : "full-delta"}`;
+    mkdirSync(join(main, ".roll", "loop"), { recursive: true });
+    const paths = runtimePaths(main, key);
+    const ports = nodePorts({
+      repoCwd: main,
+      paths,
+      skillBody: "fixture",
+      routeDeps: { readSlot: () => "claude", firstInstalled: () => "claude" },
+    });
+    ports.events.ensureEventFiles(paths.eventsPath, paths.runsPath);
+    const ctx = {
+      cycleId: key,
+      branch: `loop/${key}`,
+      loop: "fixture",
+      storyId: "US-LOOP-125",
+      targetSubmodule: "packages/sub",
+      ...(topology === "full-delta-team" ? { selectedProfile: "designed" as const } : {}),
+    };
+    expect(ports.reserveStory(ctx.storyId, {
+      pid: process.pid,
+      claimedAt: Date.now(),
+      source: "cycle",
+      runId: ctx.cycleId,
+    })).toMatchObject({ claimed: true });
+    expect(await allocateManagedPrimaryWorkspace(ports, ctx, ctx.branch)).toMatchObject({
+      event: { type: "worktree_created" },
+      ctxPatch: { targetSubmodule: "packages/sub" },
+    });
+
+    const primaryPath = paths.worktreePath;
+    const submodulePath = join(main, ".roll", "loop", "worktrees", `cycle-${key}.submodules`, "packages", "sub");
+    // Re-initializing the primary checkout is a normal production operation;
+    // the sibling member must retain its own Git working-tree identity after it.
+    git(main, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "packages/sub"]);
+    git(submodulePath, ["config", "user.email", "test@example.invalid"]);
+    git(submodulePath, ["config", "user.name", "Roll test"]);
+    expect(git(submodulePath, ["rev-parse", "--show-toplevel"])).toBe(realpathSync(submodulePath));
+    const markDeliveredAndAttested = async () => {
+      // These are the same production terminal event commands that the cycle
+      // driver executes.  The fixture does not append raw NDJSON lifecycle
+      // records and leaves release_requested to cleanup_worktree below.
+      await executeTerminalCommand({
+        kind: "emit_event",
+        event: { type: "delivery:merge_confirmed", cycleId: key, storyId: ctx.storyId, branch: ctx.branch, signal: "ancestor", ts: 0 },
+      }, ports, ctx);
+      await executeTerminalCommand({
+        kind: "emit_event",
+        event: { type: "attest:gate", cycleId: key, verdict: "produced", reasons: [], ts: 0 },
+      }, ports, ctx);
+    };
+    const terminalRelease = async () => executeTerminalCommand({ kind: "cleanup_worktree", branch: ctx.branch }, ports, ctx);
+    return { root, main, key, primaryPath, submodulePath, markDeliveredAndAttested, terminalRelease };
+  }
+
+  it.each(["solo", "full-delta-team"] as const)("audits every real %s member without a .submodules phantom", async (topology) => {
+    const f = await fixture(topology);
+    try {
+      await f.markDeliveredAndAttested();
+      const out = auditWorktrees({ repoRoot: f.main, home: f.root });
+      const members = out.records.filter((record) => record.runId === f.key);
+      expect(members).toHaveLength(2);
+      expect(members.map((record) => record.memberLocator).sort()).toEqual([
+        `cycle-${f.key}`,
+        `cycle-${f.key}.submodules/packages/sub`,
+      ]);
+      expect(members.every((record) => record.registration === "registered" && record.repositoryIdentity === "expected")).toBe(true);
+      expect(members.every((record) => record.releaseVerdict === "preserve_active")).toBe(true);
+      expect(out.records.some((record) => record.path.endsWith(`${f.key}.submodules`))).toBe(false);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes public audit and cleanup JSON for a production-allocated Full Delta submodule set", async () => {
+    const f = await fixture("full-delta-team");
+    const originalLimit = process.env["ROLL_BRANCH_CANARY_MAX"];
+    const writes: string[] = [];
+    try {
+      await f.markDeliveredAndAttested();
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(String(chunk));
+        return true;
+      });
+      const auditExit = worktreeAuditCommand(["--json", "--repo", f.main], {
+        home: f.root,
+        nowISO: () => "2026-08-01T00:00:00.000Z",
+      });
+      expect(auditExit).toBe(0);
+      const auditJson = writes.join("");
+      writes.length = 0;
+
+      process.env["ROLL_BRANCH_CANARY_MAX"] = "0";
+      const cleanupExit = await worktreeCleanupCommand(["--dry-run", "--json", "--repo", f.main], {
+        home: f.root,
+        nowISO: () => "2026-08-01T00:00:00.000Z",
+      });
+      expect(cleanupExit).toBe(0);
+      const cleanupJson = writes.join("");
+
+      // Stable public command contracts: both members exactly once, no
+      // `.submodules` container, and cleanup plans one indivisible set.
+      const stable = (text: string): string => text.replaceAll(f.root, "<ROOT>").replace(/[0-9a-f]{40,64}/g, "<OID>");
+      expect(stable(auditJson)).toMatchSnapshot("full-delta-submodule-audit-json");
+      expect(stable(cleanupJson)).toMatchSnapshot("full-delta-submodule-cleanup-json");
+    } finally {
+      vi.restoreAllMocks();
+      if (originalLimit === undefined) delete process.env["ROLL_BRANCH_CANARY_MAX"];
+      else process.env["ROLL_BRANCH_CANARY_MAX"] = originalLimit;
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for a changed or unregistered production-allocated submodule member", async () => {
+    const changed = await fixture("solo");
+    const missing = await fixture("full-delta-team");
+    try {
+      await changed.markDeliveredAndAttested();
+      await missing.markDeliveredAndAttested();
+      const originalSubHead = git(changed.submodulePath, ["rev-parse", "HEAD"]);
+      writeFileSync(join(changed.submodulePath, "changed.txt"), "changed\n");
+      git(changed.submodulePath, ["add", "changed.txt"]);
+      git(changed.submodulePath, ["commit", "-qm", "changed member head"]);
+      const changedAudit = auditWorktrees({ repoRoot: changed.main, home: changed.root });
+      const changedMember = changedAudit.records.find((record) => record.memberLocator?.endsWith("packages/sub"));
+      expect(changedMember?.head).not.toBe(originalSubHead);
+      expect(changedAudit.records.filter((record) => record.runId === changed.key).every((record) => record.releaseVerdict !== "safe_to_release")).toBe(true);
+
+      git(join(missing.main, "packages", "sub"), ["worktree", "remove", "--force", missing.submodulePath]);
+      const missingAudit = auditWorktrees({ repoRoot: missing.main, home: missing.root });
+      expect(missingAudit.records.find((record) => record.memberLocator?.endsWith("packages/sub"))?.registration).toBe("missing");
+      expect(missingAudit.records.filter((record) => record.runId === missing.key).every((record) => record.releaseVerdict !== "safe_to_release")).toBe(true);
+    } finally {
+      rmSync(changed.root, { recursive: true, force: true });
+      rmSync(missing.root, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes changed heads through the production terminal release path", async () => {
+    const f = await fixture("full-delta-team");
+    try {
+      writeFileSync(join(f.primaryPath, "primary-change.txt"), "primary\n");
+      git(f.primaryPath, ["add", "primary-change.txt"]);
+      git(f.primaryPath, ["commit", "-qm", "primary delivery"]);
+
+      writeFileSync(join(f.submodulePath, "sub-change.txt"), "subordinate\n");
+      git(f.submodulePath, ["add", "sub-change.txt"]);
+      git(f.submodulePath, ["commit", "-qm", "subordinate delivery"]);
+      const subHead = git(f.submodulePath, ["rev-parse", "HEAD"]);
+      const primaryHead = git(f.primaryPath, ["rev-parse", "HEAD"]);
+      await f.markDeliveredAndAttested();
+      await f.terminalRelease();
+
+      const events = readFileSync(join(f.main, ".roll", "loop", "events.ndjson"), "utf8")
+        .split("\n")
+        .flatMap((line) => line === "" ? [] : [JSON.parse(line) as { type: string; expectedHeads?: Array<{ relativeLocator: string; head: string }> }]);
+      const release = events.find((event) => event.type === "worktree:release_requested");
+      expect(release?.expectedHeads).toEqual([
+        { relativeLocator: `cycle-${f.key}`, head: primaryHead },
+        { relativeLocator: `cycle-${f.key}.submodules/packages/sub`, head: subHead },
+      ]);
+      expect(existsSync(f.primaryPath)).toBe(false);
+      expect(existsSync(f.submodulePath)).toBe(false);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+});
+
+describe("US-LOOP-123 unavailable inspection", () => {
+  it("does not reinterpret a failed branch enumeration as zero capacity", () => {
+    const out = auditWorktrees(makeDeps({
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([]);
+        if (args[0] === "branch") throw new Error("branch enumeration unavailable");
+        return "";
+      },
+    }));
+    expect(out.inspectionUnavailable).toBe(true);
+  });
+
+  it("does not reinterpret a real failed worktree discovery as an empty audit", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "roll-audit-nonrepo-"));
+    try {
+      const out = auditWorktrees({ repoRoot, home: "/home/user" });
+      expect(out.inspectionUnavailable).toBe(true);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("FIX-1521 released worktree registration", () => {
+  const workspace = {
+    schema: 1,
+    runId: "delta-fix1521",
+    storyId: "FIX-1521",
+    kind: "host_delta",
+    topology: "delta-team",
+    delegationId: "fix1521",
+    members: [{
+      repositoryId: "origin:repo",
+      workspaceKey: "delta-fix1521",
+      relativeLocator: "delta-fix1521",
+      checkoutRef: { kind: "detached", head: "head-1" },
+    }],
+  } as const;
+
+  function depsFor(events: readonly object[]): WorktreeAuditDeps {
+    return makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson")
+        ? events.map((event) => JSON.stringify(event)).join("\n")
+        : null,
+      git: (args) => args[0] === "worktree" ? porcelain([]) : "",
+    });
+  }
+
+  it("does not flag a fully released, deregistered member as inspection unavailable", () => {
+    const events = [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "worktree:release_requested", runId: "delta-fix1521", reason: "delivered", operationId: "rel-1", expectedHeads: [{ relativeLocator: "delta-fix1521", head: "head-1" }], ts: 2 },
+      { type: "worktree:released", runId: "delta-fix1521", operationId: "rel-1", expectedHeads: [{ relativeLocator: "delta-fix1521", head: "head-1" }], ts: 3 },
+    ];
+    const out = auditWorktrees(depsFor(events));
+    const released = out.records.find((record) => record.runId === "delta-fix1521");
+
+    expect(released?.runState).toBe("released");
+    expect(released?.registration).toBe("missing");
+    expect(out.inspectionUnavailable).toBeUndefined();
+  });
+
+  it("still flags a missing member whose run is not released", () => {
+    const events = [
+      { type: "worktree:allocated", workspace, ts: 1 },
+      { type: "worktree:release_requested", runId: "delta-fix1521", reason: "delivered", operationId: "rel-1", expectedHeads: [{ relativeLocator: "delta-fix1521", head: "head-1" }], ts: 2 },
+    ];
+    const out = auditWorktrees(depsFor(events));
+    const pending = out.records.find((record) => record.runId === "delta-fix1521");
+
+    expect(pending?.runState).toBe("release_requested");
+    expect(pending?.registration).toBe("missing");
+    expect(out.inspectionUnavailable).toBe(true);
+  });
+});
+
+describe("US-LOOP-123 CLI audit snapshots", () => {
+  function capture(locale: "en" | "zh", fn: () => number): string {
+    const originalWrite = process.stdout.write;
+    const originalLocale = process.env["ROLL_LANG"];
+    let output = "";
+    process.env["ROLL_LANG"] = locale;
+    process.stdout.write = (chunk: string | Uint8Array): boolean => {
+      output += String(chunk);
+      return true;
+    };
+    try {
+      fn();
+    } finally {
+      process.stdout.write = originalWrite;
+      if (originalLocale === undefined) delete process.env["ROLL_LANG"];
+      else process.env["ROLL_LANG"] = originalLocale;
+    }
+    return output;
+  }
+
+  it("freezes EN and ZH output for a healthy handoff, an external lookalike, and an absent legacy cycle", () => {
+    const workspace = {
+      schema: 1,
+      runId: "delta-handoff",
+      storyId: "US-LOOP-123",
+      kind: "host_delta",
+      topology: "delta-team",
+      delegationId: "handoff",
+      members: [{
+        repositoryId: "origin:repo",
+        workspaceKey: "delta-handoff",
+        relativeLocator: "delta-handoff",
+        checkoutRef: { kind: "detached", head: "handoff-head" },
+      }],
+    } as const;
+    const events = [
+      { type: "cycle:start", cycleId: "cycle-20260718-000000-1", storyId: "US-LEGACY", ts: 1 },
+      { type: "worktree:allocated", workspace, ts: 2 },
+      { type: "delta:terminal", delegationId: "handoff", outcome: "handoff_ready", terminalBinding: "handoff_only", deliveryDisposition: "owner_continue", ts: 3 },
+    ];
+    const deps = makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? events.map((event) => JSON.stringify(event)).join("\n") : null,
+      git: (args) => {
+        if (args[0] === "worktree") return porcelain([
+          { path: "/fake/repo/.roll/loop/worktrees/delta-handoff", head: "handoff-head" },
+          { path: "/fake/repo/.roll/loop/worktrees/cycle-lookalike", head: "external-head" },
+        ]);
+        if (args[0] === "status") return "";
+        if (args[0] === "rev-list") return "0";
+        return "";
+      },
+    });
+
+    const audit = auditWorktrees(deps);
+    expect(audit.records).toHaveLength(2);
+    expect(capture("en", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
+    expect(capture("zh", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
+  });
+
+  it("freezes EN and ZH output for an unregistered projected member", () => {
+    const workspace = {
+      schema: 1,
+      runId: "delta-unregistered",
+      storyId: "US-LOOP-123",
+      kind: "host_delta",
+      topology: "delta-team",
+      delegationId: "unregistered",
+      members: [{
+        repositoryId: "origin:repo",
+        workspaceKey: "delta-unregistered",
+        relativeLocator: "delta-unregistered",
+        checkoutRef: { kind: "detached", head: "missing-head" },
+      }],
+    } as const;
+    const deps = makeDeps({
+      readFile: (path) => path.endsWith("events.ndjson") ? JSON.stringify({ type: "worktree:allocated", workspace, ts: 1 }) : null,
+      git: (args) => args[0] === "worktree" ? porcelain([]) : "",
+    });
+
+    expect(capture("en", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
+    expect(capture("zh", () => worktreeAuditCommand(["--repo", "/fake/repo"], deps))).toMatchSnapshot();
   });
 });

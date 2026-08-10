@@ -1,3 +1,6 @@
+/**
+ * @responsibility Maintains warm agent sessions for the loop.
+ */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isWarmSessionEntry, type WarmSessionEntry } from "@roll/core";

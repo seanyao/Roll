@@ -101,7 +101,9 @@ describe("gatherAuditSnapshot — read-only fact assembly", () => {
 describe("consistencyAuditCommand — shadow contract (AC5/AC6)", () => {
   it("writes the dated report, prints a summary, and exits 0 despite fail-level drift", async () => {
     const { proj } = project();
+    const prevCwd = process.cwd();
     const prevRt = process.env["ROLL_PROJECT_RUNTIME_DIR"];
+    process.chdir(proj);
     delete process.env["ROLL_PROJECT_RUNTIME_DIR"];
     const out: string[] = [];
     const realWrite = process.stdout.write.bind(process.stdout);
@@ -109,9 +111,10 @@ describe("consistencyAuditCommand — shadow contract (AC5/AC6)", () => {
     process.stdout.write = (c: string | Uint8Array): boolean => (out.push(String(c)), true);
     let rc: number;
     try {
-      rc = await consistencyAuditCommand([], { projectDir: proj, slug: "o/r", fetchInfo: fakeFetch, localMainAhead: async () => 2, nowSec: NOW });
+      rc = await consistencyAuditCommand([], { slug: "o/r", fetchInfo: fakeFetch, localMainAhead: async () => 2, nowSec: NOW });
     } finally {
       process.stdout.write = realWrite;
+      process.chdir(prevCwd);
       if (prevRt !== undefined) process.env["ROLL_PROJECT_RUNTIME_DIR"] = prevRt;
     }
     expect(rc).toBe(0); // drift present, exit still 0 — shadow mode
@@ -132,14 +135,17 @@ describe("consistencyAuditCommand — shadow contract (AC5/AC6)", () => {
 
   it("no slug (gh absent) → all evidence lanes unknown, still exit 0", async () => {
     const { proj } = project();
+    const prevCwd = process.cwd();
+    process.chdir(proj);
     const realWrite = process.stdout.write.bind(process.stdout);
     // @ts-expect-error capture-only
     process.stdout.write = (): boolean => true;
     let rc: number;
     try {
-      rc = await consistencyAuditCommand(["--json"], { projectDir: proj, fetchInfo: async () => undefined, slug: undefined, nowSec: NOW });
+      rc = await consistencyAuditCommand(["--json"], { fetchInfo: async () => undefined, slug: undefined, nowSec: NOW });
     } finally {
       process.stdout.write = realWrite;
+      process.chdir(prevCwd);
     }
     expect(rc).toBe(0);
   });

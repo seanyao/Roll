@@ -1,3 +1,6 @@
+/**
+ * @responsibility Declares the capture evidence type vocabulary.
+ */
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import type { JsonSchema } from "./json-schema.js";

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Reduces a cycle's raw event stream into layered timeline entries.
  * US-ATTEST-014 — the shared cycle-trace extractor (loop-fmt 三层口径).
  *
  * One reducer turns a cycle's raw {@link RollEvent} stream into a layered,

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll loop pause|resume` subcommand, the PAUSE gate and the run-state read.
+ */
+/**
  * `roll loop pause|resume` — the PAUSE gate, and the run-state read that goes with it.
  *
  * US-LOOP-119: renamed from `loop-sched.ts`. The old name described what the file
@@ -31,33 +34,19 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { agentSecretEnvNames } from "../runner/agent-spawn.js";
 import { clearRootCauseFailure } from "../runner/failure-attribution.js";
-import {
-  emitBacklogTargetError,
-  resolveBacklogCommandTarget,
-  stripBacklogScopeArgs,
-  type BacklogOperation,
-  type BacklogTargetDecision,
-  type BacklogTargetResolver,
-  type ResolvedBacklogTarget,
-} from "./backlog-target.js";
 import { loopControlRunnerReadout, staleLoopRunnerMessage } from "./loop-runner-readout.js";
 
 // ─── injectable deps ────────────────────────────────────────────────────────
 // US-LOOP-117: this interface used to carry a Scheduler seam, a launchd dir, a
 // generated-runner exec hook, tmux probes and helper cleanup — everything `loop
-// on/off/now/test` needed. Only Workspace-aware state, `pause`, and `resume`
-// remain. The optional resolver keeps unit seams that exercise repo-local
-// compatibility independent from the installed Workspace registry.
+// on/off/now/test` needed. Only `pause`/`resume` remain, and they need one thing:
+// which project this is.
 export interface LoopSchedDeps {
   identity: () => Promise<{ path: string; slug: string }>;
-  resolveTarget?: BacklogTargetResolver;
 }
 
 function realDeps(): LoopSchedDeps {
-  return {
-    identity: () => projectIdentity(),
-    resolveTarget: resolveBacklogCommandTarget,
-  };
+  return { identity: () => projectIdentity() };
 }
 
 // US-LOOP-117: the loop-helper reaper (pid discovery, cwd matching, tmux kill)
@@ -94,30 +83,6 @@ function writeExecutable(path: string, content: string): void {
 
 function pauseMarkerPath(projectPath: string, slug: string): string {
   return join(projectPath, ".roll", "loop", `PAUSE-${slug}`);
-}
-
-function workspacePauseMarkerPath(target: ResolvedBacklogTarget): string {
-  return join(target.runtimeRoot, `PAUSE-${target.workspaceId}`);
-}
-
-function invalidWorkspaceTarget(): Extract<BacklogTargetDecision, { readonly ok: false }> {
-  return { ok: false, code: "invalid_target", candidates: [] };
-}
-
-function resolveWorkspaceStateTarget(
-  args: readonly string[],
-  operation: BacklogOperation,
-  deps: LoopSchedDeps,
-): BacklogTargetDecision | null {
-  if (deps.resolveTarget === undefined) return null;
-  const scoped = stripBacklogScopeArgs(args);
-  if (!scoped.ok || scoped.args.length > 0) return invalidWorkspaceTarget();
-  return deps.resolveTarget(args, operation);
-}
-
-function singleWorkspaceTarget(decision: BacklogTargetDecision): ResolvedBacklogTarget | null {
-  if (!decision.ok || "aggregate" in decision) return null;
-  return decision;
 }
 
 // ─── loop run state ─────────────────────────────────────────────────────────
@@ -168,96 +133,6 @@ function syncGoalPaused(projectPath: string, reason: string): void {
 }
 
 // ─── commands ─────────────────────────────────────────────────────────────────
-
-type WorkspaceCapacityReadout =
-  | { state: "acquired"; agent: string; model: string }
-  | { state: "waiting"; agent: string; model: string; retryAt: number; suspect: boolean };
-
-function workspaceCapacityReadout(runtimeRoot: string): WorkspaceCapacityReadout | null {
-  const path = join(runtimeRoot, "events.ndjson");
-  if (!existsSync(path)) return null;
-  try {
-    const rows = readFileSync(path, "utf8").trimEnd().split("\n").reverse();
-    for (const row of rows) {
-      if (row.trim() === "") continue;
-      const event = JSON.parse(row) as Record<string, unknown>;
-      const type = event["type"];
-      if (type === "workspace:capacity_released") return null;
-      if (type === "workspace:capacity_acquired" || type === "workspace:capacity_heartbeat") {
-        return {
-          state: "acquired",
-          agent: String(event["agent"] ?? ""),
-          model: String(event["model"] ?? ""),
-        };
-      }
-      if (type === "workspace:waiting_capacity") {
-        return {
-          state: "waiting",
-          agent: String(event["agent"] ?? ""),
-          model: String(event["model"] ?? ""),
-          retryAt: Number(event["retryAt"] ?? 0),
-          suspect: event["suspect"] === true,
-        };
-      }
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function renderWorkspaceCapacity(readout: WorkspaceCapacityReadout | null, lang: "en" | "zh"): string {
-  if (readout === null) return "";
-  const model = readout.model === "" ? "default" : readout.model;
-  if (readout.state === "acquired") {
-    return lang === "zh"
-      ? `  容量=已获取 agent=${readout.agent} model=${model}`
-      : `  capacity=acquired agent=${readout.agent} model=${model}`;
-  }
-  const retry = Number.isFinite(readout.retryAt) && readout.retryAt > 0
-    ? new Date(readout.retryAt).toISOString()
-    : "unknown";
-  return lang === "zh"
-    ? `  容量=等待 agent=${readout.agent} model=${model} retry=${retry}${readout.suspect ? " suspect=true" : ""}`
-    : `  capacity=waiting agent=${readout.agent} model=${model} retry=${retry}${readout.suspect ? " suspect=true" : ""}`;
-}
-
-/** Read Workspace run state without reviving scheduler/backend concepts. */
-export async function loopWorkspaceStatusCommand(
-  args: string[],
-  deps: LoopSchedDeps = realDeps(),
-): Promise<number> {
-  const decision = resolveWorkspaceStateTarget(args, "read", deps);
-  if (decision === null) return 1;
-  if (!decision.ok) return emitBacklogTargetError(decision);
-  const targets = "aggregate" in decision ? decision.aggregate : [decision];
-  const lang = resolveLang({
-    rollLang: process.env["ROLL_LANG"],
-    lcAll: process.env["LC_ALL"],
-    lang: process.env["LANG"],
-  }) === "zh" ? "zh" : "en";
-  const rows = targets.map((target) => {
-    const runtimeRoot = join(target.workspaceRoot, "runtime");
-    const marker = join(runtimeRoot, `PAUSE-${target.workspaceId}`);
-    const state = existsSync(marker) ? "paused" : "active";
-    const capacity = renderWorkspaceCapacity(workspaceCapacityReadout(runtimeRoot), lang);
-    return `${target.workspaceId}  ${state}  session-driven  ${runtimeRoot}${capacity}`;
-  });
-  process.stdout.write(rows.join("\n") + (rows.length === 0 ? "" : "\n"));
-  return 0;
-}
-
-function workspacePause(target: ResolvedBacklogTarget): number {
-  mkdirSync(target.runtimeRoot, { recursive: true });
-  const marker = workspacePauseMarkerPath(target);
-  const already = existsSync(marker);
-  if (!already) writeFileSync(marker, `${new Date().toISOString()}\n`);
-  process.stdout.write(
-    `${already ? "Workspace loop already paused" : "Workspace loop paused"}: ${target.workspaceId} (${target.canonicalRoot})\n` +
-      `  runtime: ${target.runtimeRoot}\n`,
-  );
-  return 0;
-}
 
 
 /**
@@ -324,13 +199,7 @@ export function listRollLaneLabels(slug: string): string[] {
 // scheduling at all there is no backend to choose, so SchedulerBackendName,
 // the lease/heartbeat/liveness probes and `roll loop fallback` are all deleted.
 
-export async function loopPauseCommand(args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
-  const workspaceDecision = resolveWorkspaceStateTarget(args, "mutation", deps);
-  if (workspaceDecision !== null) {
-    if (!workspaceDecision.ok) return emitBacklogTargetError(workspaceDecision);
-    const target = singleWorkspaceTarget(workspaceDecision);
-    return target === null ? emitBacklogTargetError(invalidWorkspaceTarget()) : workspacePause(target);
-  }
+export async function loopPauseCommand(_args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
   const id = await deps.identity();
   const marker = pauseMarkerPath(id.path, id.slug);
   mkdirSync(dirname(marker), { recursive: true });
@@ -358,43 +227,7 @@ export async function loopPauseCommand(args: string[], deps: LoopSchedDeps = rea
 }
 
 /** `roll loop resume` — remove the PAUSE marker, reset failure/heal counters. */
-export async function loopResumeCommand(args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
-  const workspaceDecision = resolveWorkspaceStateTarget(args, "mutation", deps);
-  if (workspaceDecision !== null) {
-    if (!workspaceDecision.ok) return emitBacklogTargetError(workspaceDecision);
-    const target = singleWorkspaceTarget(workspaceDecision);
-    if (target === null) return emitBacklogTargetError(invalidWorkspaceTarget());
-    const marker = workspacePauseMarkerPath(target);
-    const existed = existsSync(marker);
-    const pauseBody = existed ? readPauseMarker(marker) : "";
-    rmSync(marker, { force: true });
-    for (const counter of [
-      join(target.runtimeRoot, "consecutive-fails"),
-      join(target.runtimeRoot, `consecutive-idle-${target.workspaceId}`),
-    ]) {
-      if (existsSync(counter)) writeFileSync(counter, "0", "utf8");
-    }
-    const rootCauseKey = rootCauseKeyFromPauseMarker(pauseBody);
-    if (rootCauseKey !== null) clearRootCauseFailure(target.runtimeRoot, rootCauseKey);
-    const stateFile = join(target.runtimeRoot, `state-${target.workspaceId}.yaml`);
-    if (existsSync(stateFile)) {
-      const lines = readFileSync(stateFile, "utf8").split("\n").filter((line) => !line.startsWith("heal_count_head_"));
-      writeFileSync(stateFile, lines.join("\n"), "utf8");
-    }
-    rmSync(join(target.runtimeRoot, "heal"), { recursive: true, force: true });
-    if (existed) {
-      new EventBus().appendEvent(join(target.runtimeRoot, "events.ndjson"), {
-        type: "loop:resumed",
-        loop: "ci",
-        ts: Math.floor(Date.now() / 1000),
-      });
-    }
-    process.stdout.write(
-      `${existed ? "Workspace loop resumed" : "Workspace loop was not paused"}: ${target.workspaceId} (${target.canonicalRoot})\n` +
-        `  runtime: ${target.runtimeRoot}\n`,
-    );
-    return 0;
-  }
+export async function loopResumeCommand(_args: string[], deps: LoopSchedDeps = realDeps()): Promise<number> {
   const id = await deps.identity();
   const runner = loopControlRunnerReadout(id.path);
   process.stdout.write(`roll loop resume: runner ${runner.bin} v${runner.runningVersion}\n`);
@@ -501,3 +334,4 @@ function readPauseMarker(marker: string): string {
 // ─── US-LOOP-116: `loop now` and its legacy self-heal are gone ──────────────
 // `now` meant "fire what the timer would fire". There is no timer, the entry
 // point was cut in US-LOOP-113, and nothing routed here.
+

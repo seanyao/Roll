@@ -1,4 +1,5 @@
 /**
+ * @responsibility Detects green PRs missing acceptance reports and classifies the repair.
  * FIX-1058 — evidence-repair recovery for green PRs missing acceptance reports.
  *
  * When a loop PR is CI green and has an accepted evaluator result but lacks a

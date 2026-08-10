@@ -1,4 +1,5 @@
 /**
+ * @responsibility Derives dossier ladder and spectrum states from snapshot facts.
  * US-OBS-016 — dossier ladder / spectrum functions moved to @roll/core.
  *
  * Pure derivation functions: delivery ladder, spectrum state, legacy count.

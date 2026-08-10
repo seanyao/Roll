@@ -1,4 +1,7 @@
 /**
+ * @responsibility Orchestrates the golden-path showcase as a pure testable core.
+ */
+/**
  * US-SHOW-001 — the golden-path showcase orchestration core (pure + testable).
  *
  * `roll showcase` is roll's canonical end-to-end self-proof: against a throwaway
@@ -19,7 +22,7 @@
  * fails LOUDLY; a missing evidence-chain link makes the verdict FAIL with the
  * exact reason — never a faked chain.
  */
-import { isHeterogeneous } from "@roll/core";
+import { heterogeneousByModel, isHeterogeneous } from "@roll/core";
 
 /** The three real-agent roles the showcase casts (all distinct, heterogeneous). */
 export interface ShowcaseCasting {
@@ -58,9 +61,17 @@ export interface CastingCheck {
  * builder's vendor, defeats the whole point of cross-agent verification). Pure:
  * names → check, no I/O. The command turns `ok:false` into a hard exit.
  */
-export function validateCasting(casting: ShowcaseCasting): CastingCheck {
+export function validateCasting(
+  casting: ShowcaseCasting,
+  /** US-PAIR-015: agent → resolved model. Supplied → heterogeneity is judged on the
+   *  MODEL's vendor, so a trio whose entries all resolve to one model is correctly
+   *  rejected. Omitted → legacy name comparison (can over-count). */
+  resolveModel?: (agent: string) => string,
+): CastingCheck {
   const violations: CastingViolation[] = [];
   const { builder, reviewer, scorer } = casting;
+  const hetero = (a: string, b: string): boolean =>
+    resolveModel !== undefined ? heterogeneousByModel(b, a, resolveModel) : isHeterogeneous(a, b);
 
   for (const [role, name] of [["builder", builder], ["reviewer", reviewer], ["scorer", scorer]] as const) {
     if (name === undefined || name.trim() === "") {
@@ -73,7 +84,7 @@ export function validateCasting(casting: ShowcaseCasting): CastingCheck {
 
   if (reviewer === builder) {
     violations.push({ code: "reviewer-equals-builder", message: `strict-diversity showcase requires reviewer (${reviewer}) to differ from builder (${builder})` });
-  } else if (!isHeterogeneous(reviewer, builder)) {
+  } else if (!hetero(reviewer, builder)) {
     violations.push({
       code: "reviewer-not-hetero",
       message: `reviewer (${reviewer}) shares a vendor with builder (${builder}) — cross-agent review needs a different vendor`,
@@ -81,7 +92,7 @@ export function validateCasting(casting: ShowcaseCasting): CastingCheck {
   }
   if (scorer === builder) {
     violations.push({ code: "scorer-equals-builder", message: `strict-diversity showcase requires scorer (${scorer}) to differ from builder (${builder})` });
-  } else if (!isHeterogeneous(scorer, builder)) {
+  } else if (!hetero(scorer, builder)) {
     violations.push({
       code: "scorer-not-hetero",
       message: `scorer (${scorer}) shares a vendor with builder (${builder}) — pair scoring needs a different vendor`,

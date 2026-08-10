@@ -1,4 +1,7 @@
 /**
+ * @responsibility Resolves and reads a skill's SKILL.md body with frontmatter stripped.
+ */
+/**
  * Resolve + read a skill's SKILL.md body, frontmatter stripped — the prompt the
  * loop / dream agent runs. Shared by `loop run-once` (roll-loop) and `dream
  * run-once` (roll-.dream) so the resolution order has a single source of truth.

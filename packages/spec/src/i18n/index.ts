@@ -1,4 +1,7 @@
 /**
+ * @responsibility Re-exports the shared i18n catalogs and language resolution helpers.
+ */
+/**
  * Roll i18n engine — TS port of lib/i18n.sh (v2 oracle, US-SCAF-001).
  *
  * Behavioral contract (diff-tested against bash `msg`):

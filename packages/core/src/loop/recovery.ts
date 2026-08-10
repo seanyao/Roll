@@ -1,4 +1,5 @@
 /**
+ * @responsibility Decides crash recovery and startup preflight from observed debris.
  * Loop crash-recovery & startup preflight — pure decision layer
  * (US-LOOP-002 / v2 FIX-037/040/045/104/114/125/143, invariants I2 / F2 / C2).
  *

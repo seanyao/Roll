@@ -1,8 +1,10 @@
 /**
+ * @responsibility Runs the `roll config` read surface, porting the help, --list, and key-read paths from the bash oracle.
+ */
+/**
  * `roll config` read surface — TS port of cmd_config's help/--list/key-read
- * paths (US-CLI-003). Writes and the compact facades (loop-window /
- * loop-schedule / dream-time) stay on the bash fallback via the registry
- * router until their cards come up.
+ * paths (US-CLI-003). The write surface and dream-time compact facade share
+ * the same registry in config.ts.
  */
 import { CONFIG_KEYS, yamlReadFlat, yamlReadNested } from "@roll/infra";
 import { homedir } from "node:os";
@@ -13,47 +15,34 @@ import { join } from "node:path";
 // registry; importing CONFIG_KEYS keeps `roll config` and the infra config
 // model in lockstep (scope / store / default) — one place to add a key.
 
-export const CONFIG_FACADE_KEYS = ["loop-window", "loop-schedule", "dream-time"];
+export const CONFIG_FACADE_KEYS = ["dream-time"];
 
 /**
  * Keys still stored and printed that nothing reads. Shared with the write path in
  * config.ts so the two can never disagree about which keys are dead.
  */
 export const INACTIVE_KEYS = new Set([
-  "loop_active_start",
-  "loop_active_end",
-  "loop_schedule.period_minutes",
-  "loop_schedule.offset_minute",
   "loop_dream_hour",
   "loop_dream_minute",
 ]);
 
 const HELP = `Usage: roll config <key>                 print current value + source
-       roll config --list                list all loop/dream config keys
+       roll config --list                list all config keys
        roll config <key> <value> [--global|--project]   set a value
-                                                                  统一调度配置
-Read / list / set loop and dream config keys without hand-editing yaml.
+                                                                  配置读写
+Read / list / set config keys without hand-editing yaml.
 Default write scope is --project (.roll/local.yaml); --global writes
-~/.roll/config.yaml. The window/period/time keys below are INACTIVE — they are
-still stored and printed, but nothing reads them.
-读 / 列 / 写 loop、dream 配置 key，免去手工编辑 yaml。默认写 --project
-（.roll/local.yaml）；--global 写 ~/.roll/config.yaml。下面的窗口/周期/时刻 key
-都已**失效**：仍然会存、会打印，但没有任何东西读它们。
+~/.roll/config.yaml. Legacy dream-time keys are INACTIVE — reads, writes, and
+--list disclose that nothing reads them.
+读 / 列 / 写配置 key，免去手工编辑 yaml。默认写 --project
+（.roll/local.yaml）；--global 写 ~/.roll/config.yaml。历史 dream 时刻 key
+已**失效**：读、写、--list 都会说明没有任何东西读它们。
 
-Supported keys (range):
-  loop_active_start              0-23    (inactive) stored hour, unread
-  loop_active_end                1-24    (inactive) stored hour, unread
-  loop_schedule.period_minutes   1-1440  (inactive) stored minutes, unread
-  loop_schedule.offset_minute    0-59    (inactive) stored offset, unread
+Legacy inactive keys (range):
   loop_dream_hour                0-23    (inactive) stored hour, unread
   loop_dream_minute              0-59    (inactive) stored minute, unread
 
-Compact facades (write multiple keys at once):
-  roll config loop-window 9-18              loop_active_start + loop_active_end
-  roll config loop-schedule 30/7            period_minutes + offset_minute
-  roll config dream-time 03:20              loop_dream_hour + loop_dream_minute
-  (these three write values nothing reads — delivery is driven by "roll loop go"
-   in a session you open, and a scan by "roll dream run-once")
+Run "roll dream run-once" when you want a scan.
 
 Language (REFACTOR-049: roll lang → roll config lang):
   roll config lang                          show current language + source
@@ -62,11 +51,9 @@ Language (REFACTOR-049: roll lang → roll config lang):
   roll config lang --reset                  clear preference (follow locale)
 
 Examples:
-  roll config loop_dream_hour
+  roll config integration_branch
   roll config --list
-  roll config loop_schedule.period_minutes 30
-  roll config loop_dream_hour 3 --global
-  roll config dream-time 03:20
+  roll config publish_mode local
 `;
 
 function rollConfigPath(): string {

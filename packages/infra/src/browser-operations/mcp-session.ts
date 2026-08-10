@@ -1,4 +1,7 @@
 /**
+ * @responsibility Pins a Chrome DevTools MCP session for managed browser operations.
+ */
+/**
  * US-BROW-016 — pinned Chrome DevTools MCP session for managed browser
  * operations.
  *

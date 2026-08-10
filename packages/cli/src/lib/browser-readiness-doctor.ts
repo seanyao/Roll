@@ -1,4 +1,7 @@
 /**
+ * @responsibility Reports browser-operations readiness for doctor and browser doctor.
+ */
+/**
  * US-BROW-003 — browser operations readiness for `roll doctor --tools` and
  * `roll browser doctor`.
  *

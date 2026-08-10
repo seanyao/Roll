@@ -1,0 +1,123 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`US-LOOP-123 CLI canary and cleanup snapshots > freezes EN and ZH canary reports with distinct leak safety and managed capacity 1`] = `
+"# ALERT — loop auto-paused: leak-safety canary tripped (US-LOOP-096 / FIX-1273)
+
+**Leak-safety count**: 2 (anomalous ephemeral branches 1 + anomalous managed worktrees 1) > threshold 1
+**Managed capacity**: 2 retained member(s) (1 healthy, 1 anomalous). Healthy handoff is capacity, not a leak.
+
+**Anomalous ephemeral branches**:
+  - branch loop/unattached
+
+**Anomalous managed worktrees (with audit disposition)**:
+  - worktree /repo/.roll/loop/worktrees/stale [preserved_needs_review]
+
+**Healthy retained capacity**:
+  - /repo/.roll/loop/worktrees/handoff [handoff_ready]
+
+**Safe recovery**: 0 worktree(s) audit as \`disposable_candidate\`.
+  1. Inspect + plan (no mutation): \`roll worktree cleanup --dry-run\`
+  2. Apply the audited minimal set:  \`roll worktree cleanup --apply\`
+  3. Resume the loop explicitly:     \`roll loop resume\`
+  Preserved (unpublished / dirty / active / external) worktrees are NEVER removed.
+"
+`;
+
+exports[`US-LOOP-123 CLI canary and cleanup snapshots > freezes EN and ZH canary reports with distinct leak safety and managed capacity 2`] = `
+"# ALERT — loop 自动暂停：泄漏安全 canary 已触发（US-LOOP-096 / FIX-1273）
+
+**泄漏安全计数**：2（异常临时分支 1 + 异常受管工作树 1）> 阈值 1
+**受管容量**：2 个保留成员（健康 1，异常 1）。健康 handoff 只占容量，不算泄漏。
+
+**异常临时分支**：
+  - 分支 loop/unattached
+
+**异常受管工作树（含审计处置）**：
+  - 工作树 /repo/.roll/loop/worktrees/stale [preserved_needs_review]
+
+**健康保留容量**：
+  - /repo/.roll/loop/worktrees/handoff [handoff_ready]
+
+**安全恢复**：0 个工作树审计为 \`disposable_candidate\`。
+  1. 检查并规划（不修改）：\`roll worktree cleanup --dry-run\`
+  2. 应用经审计的最小集合：\`roll worktree cleanup --apply\`
+  3. 显式恢复 loop：\`roll loop resume\`
+  保留的（未发布 / 脏 / 活跃 / 外部）工作树绝不会被删除。
+"
+`;
+
+exports[`US-LOOP-123 CLI canary and cleanup snapshots > freezes EN and ZH cleanup dry-runs and fresh-inspection refusals 1`] = `
+"Worktree cleanup (dry-run)
+
+  leak-safety count: 0 (threshold 1)
+  managed capacity: 1 retained member(s)
+  cleanup capacity: 1 ephemeral branch(es) + 1 loop worktree(s)
+
+counted ephemeral branches
+  loop/cycle-clean
+
+counted loop worktrees
+  /fake/repo/.roll/loop/worktrees/cycle-clean  [disposable_candidate]
+
+minimal candidate set (2 → 1)
+  worktree /fake/repo/.roll/loop/worktrees/cycle-clean  refs/heads/loop/cycle-clean cycle-clean  [disposable_candidate]
+
+Dry run — no git state changed.
+Apply the audited set with: roll worktree cleanup --apply
+"
+`;
+
+exports[`US-LOOP-123 CLI canary and cleanup snapshots > freezes EN and ZH cleanup dry-runs and fresh-inspection refusals 2`] = `
+"Worktree cleanup (apply)
+
+refused — fail closed, no substitution (1)
+  /fake/repo/.roll/loop/worktrees/cycle-clean  dirty: tracked changes appeared after planning
+"
+`;
+
+exports[`US-LOOP-123 CLI canary and cleanup snapshots > freezes EN and ZH cleanup dry-runs and fresh-inspection refusals 3`] = `
+"工作树清理（演练）
+
+  泄漏安全计数: 0 (阈值 1)
+  受管容量: 1 个保留成员
+  清理容量：1 个临时分支 + 1 个 loop 工作树
+
+计入清理容量的临时分支
+  loop/cycle-clean
+
+计入清理容量的 loop 工作树
+  /fake/repo/.roll/loop/worktrees/cycle-clean  [disposable_candidate]
+
+最小候选集（2 → 1）
+  工作树 /fake/repo/.roll/loop/worktrees/cycle-clean  refs/heads/loop/cycle-clean cycle-clean  [disposable_candidate]
+
+演练——未修改 Git 状态。
+使用此命令应用经审计的集合：roll worktree cleanup --apply
+"
+`;
+
+exports[`US-LOOP-123 CLI canary and cleanup snapshots > freezes EN and ZH cleanup dry-runs and fresh-inspection refusals 4`] = `
+"工作树清理（执行）
+
+已拒绝——故障关闭，绝不替换（1）
+  /fake/repo/.roll/loop/worktrees/cycle-clean  dirty: tracked changes appeared after planning
+"
+`;
+
+exports[`US-LOOP-123 conservative projection release > preserves untracked dirt and a changed projection member at apply time 1`] = `
+[
+  {
+    "path": "/repo/.roll/loop/worktrees/cycle-1",
+    "reason": "dirty: untracked files appeared after planning",
+  },
+]
+`;
+
+exports[`US-LOOP-127 dispatch WorkspaceSet release lifecycle > refuses the complete WorkspaceSet before Git removal when release intent is not durable 1`] = `
+[
+  {
+    "path": "/repo/.roll/loop/worktrees/cycle-1",
+    "reason": "lifecycle-write-failed: could not durably request workspace release",
+  },
+]
+`;

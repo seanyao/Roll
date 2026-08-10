@@ -1,4 +1,7 @@
 /**
+ * @responsibility Gathers and renders the `roll doctor language` check.
+ */
+/**
  * US-LANG-002 — `roll doctor language` gatherer and renderer.
  *
  * Walks the active convention / skill / guide surface, runs the pure

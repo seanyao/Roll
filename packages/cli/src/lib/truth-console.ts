@@ -1,4 +1,7 @@
 /**
+ * @responsibility Builds the Truth Console single-page project control board.
+ */
+/**
  * US-DOSSIER-011/043 — the Truth Console: index.html is a single-page
  * project control board (Now · Backlog · Loop · Release · Casting · Charter).
  *

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Quantifies shadow drift between declared fact sources before any fix.
  * US-TRUTH-002 — Shadow Consistency Audit (pure rules over snapshots).
  *
  * Quantifies real drift between the fact sources declared in US-TRUTH-000's
@@ -22,18 +23,6 @@
 import { DEFAULT_GRACE_WINDOW_SEC } from "@roll/spec";
 import type { DeliveryRecord } from "@roll/spec";
 import { queryStoryDelivery, deriveBacklogStatus, type StoryDeliveryTruth } from "../truth/query.js";
-
-export interface WorkspaceContextAuditGateSnapshot {
-  readonly violations: number;
-  readonly scannedSurfaces: number;
-  readonly allowlisted: number;
-}
-
-/** Pure release-gate projection for the US-WS-039 static authority audit. */
-export function workspaceContextAuditReleaseGap(snapshot: WorkspaceContextAuditGateSnapshot): string | null {
-  if (snapshot.violations === 0) return null;
-  return `Workspace context audit reports ${snapshot.violations} violation(s) across ${snapshot.scannedSurfaces} registered surface file(s) (${snapshot.allowlisted} governed exception(s))`;
-}
 
 /** PR/merge evidence as the gatherer resolved it; absence in the map = probe
  *  did not resolve (→ unknown, never fail). */

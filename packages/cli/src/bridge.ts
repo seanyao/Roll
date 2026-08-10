@@ -1,4 +1,7 @@
 /**
+ * @responsibility Routes CLI subcommands to their TypeScript handlers and prints usage for unregistered commands.
+ */
+/**
  * CLI bridge — US-SCAF-004 / US-PORT-021.
  *
  * Commands route TS-first: a subcommand registered in the ported table runs its
@@ -8,27 +11,13 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveLang, t, v3Catalog } from "@roll/spec";
+import { resolveLang } from "@roll/spec";
 import { networkNeeds, requireNetwork } from "./lib/require-network.js";
-import {
-  aliasHelpDecision,
-  canonicalTopLevelCommand,
-  cliOperationForArgs,
-  isWorkspaceSelectorAlias,
-  publicCommands,
-  WORKSPACE_SELECTOR_ALIAS,
-  type WorkspaceSelectorOperationDecision,
-  type CliCommandOperationRegistration,
-} from "./lib/command-surface.js";
+import { publicCommands } from "./lib/command-surface.js";
 import { renderFrontDoor } from "./lib/front-door.js";
-import {
-  hasCanonicalWorkspaceSelectorBeforeSentinel,
-  isCanonicalWorkspaceSelectorToken,
-} from "./lib/workspace-selector.js";
 import { isSnapshotStale, loadTruthSnapshot, renderNowMs } from "./lib/truth-read.js";
 import { renderState } from "./render.js";
 import { treeVersion } from "./commands/version.js";
-import { resolveCurrent } from "./commands/lang.js";
 
 /** A ported subcommand: receives args after the subcommand, returns exit code. */
 export type Handler = (args: string[]) => number | Promise<number>;
@@ -48,31 +37,12 @@ const hidden = new Set<string>();
 // render locale-resolved / grouped help (e.g. `roll loop --help`) while still
 // going through the central read-only enforcement.
 type HelpSpec = string | (() => string);
-export interface RejectedCliRoute {
-  readonly route: readonly string[];
-  readonly message: string;
-}
 const helpText = new Map<string, HelpSpec>();
-const commandOperations = new Map<string, readonly CliCommandOperationRegistration[]>();
-const rejectedCommandRoutes = new Map<string, readonly RejectedCliRoute[]>();
 
-export function registerPorted(command: string, handler: Handler, opts?: {
-  hidden?: boolean;
-  help?: HelpSpec;
-  operations?: readonly CliCommandOperationRegistration[];
-  rejectedRoutes?: readonly RejectedCliRoute[];
-}): void {
+export function registerPorted(command: string, handler: Handler, opts?: { hidden?: boolean; help?: HelpSpec }): void {
   ported.set(command, handler);
   if (opts?.hidden === true) hidden.add(command);
   if (opts?.help !== undefined) helpText.set(command, opts.help);
-  if (opts?.operations !== undefined) commandOperations.set(command, [...opts.operations]);
-  if (opts?.rejectedRoutes !== undefined) rejectedCommandRoutes.set(command, [...opts.rejectedRoutes]);
-}
-
-/** Actual operation metadata attached to live bridge registrations. */
-export function registeredCliOperations(): CliCommandOperationRegistration[] {
-  return [...commandOperations.values()].flat().sort((left, right) =>
-    `${left.command}:${left.operation}`.localeCompare(`${right.command}:${right.operation}`));
 }
 
 /** Commands with bridge-enforced help (FIX-239 AC3's table). */
@@ -107,99 +77,6 @@ export function repoRoot(): string {
 
 export interface RunResult {
   status: number;
-}
-
-export interface CanonicalWorkspaceAliasTokens {
-  readonly args: readonly string[];
-  readonly aliasUsed: boolean;
-}
-
-export type ParsedWorkspaceSelectorArgs =
-  | { readonly ok: true; readonly selector?: string; readonly remaining: readonly string[] }
-  | { readonly ok: false; readonly code: "duplicate_workspace_selector" | "workspace_selector_missing_value" };
-
-/** Rewrite only exact pre-sentinel alias tokens; order and all other bytes stay stable. */
-export function canonicalizeWorkspaceAliasTokens(args: readonly string[]): CanonicalWorkspaceAliasTokens {
-  let aliasUsed = false;
-  let optionsEnded = false;
-  const canonical = args.map((arg) => {
-    if (optionsEnded) return arg;
-    if (arg === "--") {
-      optionsEnded = true;
-      return arg;
-    }
-    if (isWorkspaceSelectorAlias(arg)) {
-      aliasUsed = true;
-      return WORKSPACE_SELECTOR_ALIAS.canonical;
-    }
-    return arg;
-  });
-  return { args: canonical, aliasUsed };
-}
-
-/** Validate and remove the canonical selector while preserving post-sentinel literals. */
-export function parseCanonicalWorkspaceSelectorArgs(args: readonly string[]): ParsedWorkspaceSelectorArgs {
-  const selectorIndices: number[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--") break;
-    if (isCanonicalWorkspaceSelectorToken(arg)) selectorIndices.push(index);
-  }
-  if (selectorIndices.length > 1) return { ok: false, code: "duplicate_workspace_selector" };
-  const index = selectorIndices[0];
-  if (index === undefined) return { ok: true, remaining: [...args] };
-  const selector = args[index + 1];
-  if (selector === undefined || selector.startsWith("-")) {
-    return { ok: false, code: "workspace_selector_missing_value" };
-  }
-  return {
-    ok: true,
-    selector,
-    remaining: [...args.slice(0, index), ...args.slice(index + 2)],
-  };
-}
-
-function jsonFlag(args: readonly string[]): boolean {
-  for (const arg of args) {
-    if (arg === "--") return false;
-    if (arg === "--json") return true;
-  }
-  return false;
-}
-
-function emitWorkspaceSelectorError(
-  code: Extract<ParsedWorkspaceSelectorArgs, { readonly ok: false }>["code"],
-  operation: WorkspaceSelectorOperationDecision,
-  args: readonly string[],
-): RunResult {
-  const lang = resolveCurrent();
-  const message = t(v3Catalog, lang, `workspace.selector.error.${code}`);
-  const nextAction = t(v3Catalog, lang, `workspace.selector.next.${code}`);
-  if (jsonFlag(args)) {
-    process.stderr.write(`${JSON.stringify({
-      schema: "roll.workspace-selector-error/v1",
-      error: { code, message, command: operation.canonicalCommand, nextAction },
-    }, null, 2)}\n`);
-  } else {
-    process.stderr.write(`${t(v3Catalog, lang, "workspace.selector.error.line", operation.canonicalCommand, code, message)}\n`);
-    process.stderr.write(`${nextAction}\n`);
-  }
-  return { status: 1 };
-}
-
-function renderHelp(command: string, help: HelpSpec): string {
-  const text = typeof help === "function" ? help() : help;
-  const aliases = aliasHelpDecision(command, commandOperations.get(command) ?? []);
-  if (aliases === undefined) return text;
-  const lang = resolveCurrent();
-  const lines: string[] = [];
-  for (const alias of aliases.commandAliases) {
-    lines.push(t(v3Catalog, lang, "workspace.alias.help.command", alias, aliases.canonicalCommand));
-  }
-  for (const alias of aliases.workspaceSelectorAliases) {
-    lines.push(t(v3Catalog, lang, "workspace.alias.help.selector", alias, WORKSPACE_SELECTOR_ALIAS.canonical));
-  }
-  return lines.length === 0 ? text : `${text.trimEnd()}\n\n${lines.join("\n")}`;
 }
 
 /** Top-level usage — TS-native (no bash). REFACTOR-056: the command list is
@@ -259,51 +136,16 @@ export async function dispatch(
   // without real network IO. Production passes nothing → the real guard runs.
   gate: (commandName: string) => Promise<{ ok: boolean }> = (name) => requireNetwork(name, process.cwd()),
 ): Promise<RunResult> {
-  const [rawCommand, ...rawRest] = argv;
-  const command = rawCommand === undefined ? undefined : canonicalTopLevelCommand(rawCommand);
-  const normalized = canonicalizeWorkspaceAliasTokens(rawRest);
-  const rest = [...normalized.args];
+  const [command, ...rest] = argv;
   if (command !== undefined) {
     const handler = ported.get(command);
     if (handler !== undefined) {
       // FIX-238/239: the contract half the bridge owns — help is read-only.
       const help = helpText.get(command);
-      if (help !== undefined && (rest[0] === "help" || rest[0] === "--help" || rest[0] === "-h")) {
-        const text = renderHelp(command, help);
+      if (help !== undefined && (rest[0] === "--help" || rest[0] === "-h")) {
+        const text = typeof help === "function" ? help() : help;
         process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
         return { status: 0 };
-      }
-      const operations = commandOperations.get(command) ?? [];
-      const rejected = (rejectedCommandRoutes.get(command) ?? [])
-        .filter((entry) => entry.route.every((token, index) => rest[index] === token))
-        .sort((left, right) => right.route.length - left.route.length)[0];
-      if (rejected !== undefined) {
-        process.stderr.write(rejected.message.endsWith("\n") ? rejected.message : `${rejected.message}\n`);
-        return { status: 1 };
-      }
-      const operation = cliOperationForArgs(command, rest, operations);
-      if (operations.length > 0 && operation === undefined) {
-        const route = rest.slice(0, 2).join(" ") || "<root>";
-        process.stderr.write(`roll ${command}: unknown or unregistered route '${route}'\n`);
-        return { status: 1 };
-      }
-      const hasWorkspaceSelector = hasCanonicalWorkspaceSelectorBeforeSentinel(rest);
-      if (hasWorkspaceSelector && operation !== undefined && !operation.supportsWorkspaceSelector) {
-        process.stderr.write(`roll ${command}: operation '${operation.operation}' does not accept --workspace\n`);
-        return { status: 1 };
-      }
-      if (operation?.supportsWorkspaceSelector === true) {
-        const selectorOperation: WorkspaceSelectorOperationDecision = {
-          id: `${operation.command}.${operation.operation}`,
-          operation: operation.operation,
-          command: operation.command,
-          route: operation.route,
-          canonicalCommand: operation.canonicalCommand,
-          exampleArgs: operation.exampleArgs,
-          acceptsWorkspaceSelector: true,
-        };
-        const parsed = parseCanonicalWorkspaceSelectorArgs(rest);
-        if (!parsed.ok) return emitWorkspaceSelectorError(parsed.code, selectorOperation, rest);
       }
       // FIX-298: the network guard is the FIRST checkpoint for any command that
       // needs the network. ONE declarative model (networkNeeds) + ONE shared

@@ -1,54 +1,5 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`diff-test: roll update == bash oracle > curl happy path → download/extract + setup + changelog, curl argv frozen 1`] = `
-{
-  "status": 1,
-  "stderr": "<TMP>: <SH-NOTFOUND:cp>
-[roll] Extraction failed. The downloaded archive may be corrupted.
-",
-  "stdout": "[roll] Current version: roll v<VER>
-[roll] Upgrading via curl...
-
-[roll] [roll] Downloading roll v<VER> ...
-[roll] [roll] Extracting ...
-",
-}
-`;
-
-exports[`diff-test: roll update == bash oracle > curl happy path → download/extract + setup + changelog, curl argv frozen 2`] = `
-"-fsSL
-https://github.com/seanyao/roll/archive/refs/tags/v9.9.9.tar.gz
--o
-<TMP>/roll.tar.gz
-"
-`;
-
-exports[`diff-test: roll update == bash oracle > curl version-resolve failure → exit 1 (en) 1`] = `
-{
-  "status": 1,
-  "stderr": "[roll] Failed to resolve latest version from GitHub.
-You can pin a version with ROLL_VERSION=vX.Y.Z
-",
-  "stdout": "[roll] Current version: roll v<VER>
-[roll] Upgrading via curl...
-
-",
-}
-`;
-
-exports[`diff-test: roll update == bash oracle > curl version-resolve failure → exit 1 (zh) 1`] = `
-{
-  "status": 1,
-  "stderr": "[roll] Failed to resolve latest version from GitHub.
-You can pin a version with ROLL_VERSION=vX.Y.Z
-",
-  "stdout": "[roll] 当前版本: roll v<VER>
-[roll] 正在通过 curl 升级...
-
-",
-}
-`;
-
 exports[`diff-test: roll update == bash oracle > npm happy path → upgrade + setup + changelog (en) 1`] = `
 {
   "status": 0,

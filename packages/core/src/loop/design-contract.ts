@@ -1,4 +1,5 @@
 /**
+ * @responsibility Declares the designer contract a designed story must write before execution.
  * US-V4-006 — the Designer contract for `designed` execution.
  *
  * A `designed` Story writes a design artifact before execute/evaluate. The designer

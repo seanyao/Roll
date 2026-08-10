@@ -1,3 +1,6 @@
+/**
+ * @responsibility Installs and manages the repository git hooks.
+ */
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -34,6 +37,10 @@ const HOOK_DESCRIPTIONS: Record<string, { en: string; zh: string }> = {
   "pre-push": {
     en: "local CI gate before push",
     zh: "push 前本地 CI 闸",
+  },
+  "post-commit": {
+    en: "append tcr:committed observation fact",
+    zh: "追加 tcr:committed 观测事实",
   },
   "commit-msg": {
     en: "commit message validation",

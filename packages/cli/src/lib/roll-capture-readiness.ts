@@ -1,3 +1,6 @@
+/**
+ * @responsibility Checks roll-capture readiness and repairs the install.
+ */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

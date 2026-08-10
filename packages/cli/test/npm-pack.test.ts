@@ -138,7 +138,7 @@ describe("npm pack → install → run (release packaging)", () => {
 
       // 3c. Pure-TS handler: `config --list` emits the key table.
       const config = run(bin, ["config", "--list"], prefix);
-      expect(config).toContain("loop_active_start");
+      expect(config).toContain("integration_branch");
 
       // 3d. TS handler that reads PACKAGED data: `config prices show` loads the
       //     lib/prices/*.json snapshots via the repoRoot() walk from the

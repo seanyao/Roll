@@ -1,4 +1,5 @@
 /**
+ * @responsibility Plans the publish-PR wait-merge-close delivery path as decisions and commands.
  * PRLifecycle — TS port of the v2 loop "publish a cycle PR / dedup open PRs /
  * wait for merge / GC merged cycle branches" delivery path.
  *

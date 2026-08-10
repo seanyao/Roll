@@ -1,3 +1,6 @@
+/**
+ * @responsibility Reads and appends run records.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import type { CycleCommand, CycleContext, ReconcileRunRow } from "@roll/core";
 import {
@@ -86,8 +89,6 @@ export function buildRunRow(
     tcr_count: ctx.tcrCount ?? 0,
     outcome: cmd.outcome,
   };
-  const workspaceId = ctx.workspaceExecution?.workspace.workspaceId ?? ctx.repositoryExecution?.workspaceId;
-  if (workspaceId !== undefined && workspaceId !== "") row["workspace_id"] = workspaceId;
   // FIX-213: stamp the cycle's terminal time (same clock the cycle:end event
   // uses) as a canonical ISO-8601 UTC string + the cycle duration. Without
   // these the dashboard could not bucket the row by day — the runs row was the

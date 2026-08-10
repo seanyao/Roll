@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { cycleStep, initialCycleState, type CycleContext, type CycleEvent } from "@roll/core";
-import { AGENT_CAPACITY_LEASE_SCHEMA } from "@roll/spec";
 import { lanesSection } from "../src/commands/doctor.js";
 import { launchAgentsDir, listRollLaneLabels } from "../src/commands/loop-state.js";
 
@@ -89,27 +88,6 @@ describe("FIX-247 — gate-killed work is pushed, listed, and deliberately not a
       { type: "worktree_created" },
       { type: "story_picked", storyId: "FIX-X" },
       { type: "route_resolved", agent: "pi", model: "" },
-      {
-        type: "capacity_acquired",
-        spawnId: "C-247:agent:1",
-        lease: {
-          schema: AGENT_CAPACITY_LEASE_SCHEMA,
-          key: { agent: "pi", model: "", contextKey: "pi:default" },
-          owner: {
-            leaseId: "lease-C-247",
-            ownerToken: "owner-C-247",
-            workspaceId: "workspace-C-247",
-            storyId: "FIX-X",
-            cycleId: "C-247",
-            spawnId: "C-247:agent:1",
-            host: "fixture",
-            pid: 247,
-            processStartedAtMs: 247,
-          },
-          acquiredAtMs: 247,
-          heartbeatAtMs: 247,
-        },
-      },
       { type: "agent_exited", exit: 0, timedOut: false },
       { type: "facts_captured", facts: { usedWorktree: true, agentExit: 1, timedOut: false, commitsAhead } },
     ];

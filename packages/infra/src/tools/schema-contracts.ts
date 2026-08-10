@@ -1,3 +1,6 @@
+/**
+ * @responsibility Defines the shared tool JSON-schema contracts.
+ */
 import type { JsonSchema } from "@roll/spec";
 
 const STRING: JsonSchema = { type: "string" };
@@ -21,29 +24,13 @@ export function toolResultSchema(output: JsonSchema): JsonSchema {
       endedAt: NUMBER,
       durationMs: NUMBER,
       attempt: INTEGER,
-      correlation: objectSchema({ workspaceId: NON_EMPTY_STRING, storyId: NON_EMPTY_STRING, repoId: NON_EMPTY_STRING }, ["workspaceId"]),
     },
     ["invocationId", "toolId", "caller", "startedAt", "endedAt", "durationMs"],
   );
   const warnings: JsonSchema = { type: "array", items: STRING };
   const error = objectSchema(
     {
-      code: {
-        type: "string",
-        enum: [
-          "not_found",
-          "init_failed",
-          "policy_denied",
-          "budget_exhausted",
-          "sandbox_denied",
-          "timeout",
-          "adapter_error",
-          "invalid_input",
-          "missing_execution_context",
-          "invalid_execution_context",
-          "unknown",
-        ],
-      },
+      code: { type: "string", enum: ["not_found", "init_failed", "policy_denied", "budget_exhausted", "sandbox_denied", "timeout", "adapter_error", "invalid_input", "unknown"] },
       message: STRING,
       retryable: BOOLEAN,
       detail: true,

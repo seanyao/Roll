@@ -1,4 +1,5 @@
 /**
+ * @responsibility Owns the managed browser run aggregate state machine and idempotency.
  * US-BROW-004a — Managed run service core.
  *
  * BrowserOperationRun aggregate: owns lane, idempotency key, temporary-profile

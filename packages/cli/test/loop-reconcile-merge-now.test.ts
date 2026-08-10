@@ -117,7 +117,7 @@ describe("US-DELIV-003 — self-driven merge execution", () => {
       // Seed branch ref so the git subcommands don't fail.
       execSync(`git checkout -q -b loop/${CYCLE}`, { cwd: p });
 
-      const d = deps(p, fakeProvider({ 42: { kind: "open", ci: "green", checkedAt: "2026-07-12T22:00:00Z" } }));
+      const d = deps(p, fakeProvider({ 42: { kind: "open", ci: "green", checks: [{ name: "test-ts", conclusion: "success" }], checkedAt: "2026-07-12T22:00:00Z" } }));
       const code = await loopReconcileCommand([], d);
       expect(code).toBe(0);
 
@@ -157,7 +157,7 @@ describe("US-DELIV-003 — self-driven merge execution", () => {
       ]);
       execSync(`git checkout -q -b loop/${CYCLE}`, { cwd: p });
 
-      const d = deps(p, fakeProvider({ 42: { kind: "open", ci: "green", checkedAt: "2026-07-12T22:00:00Z" } }));
+      const d = deps(p, fakeProvider({ 42: { kind: "open", ci: "green", checks: [{ name: "test-ts", conclusion: "success" }], checkedAt: "2026-07-12T22:00:00Z" } }));
       const code = await loopReconcileCommand(["--dry-run"], d);
       expect(code).toBe(0);
 

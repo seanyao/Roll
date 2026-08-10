@@ -1,6 +1,8 @@
+/**
+ * @responsibility Declares the tool contract types.
+ */
 /** Tool contracts (Tool Use capability layer). */
 import type { JsonSchema } from "./json-schema.js";
-import type { WorkspaceExecutionContextV1 } from "./workspace.js";
 export type ToolId = string & { readonly __brand?: "ToolId" };
 
 export type ToolKind =
@@ -101,12 +103,6 @@ export type ToolPolicy = {
   maxInvocationsPerCycle?: number;
 };
 
-export type ToolContextCorrelation = {
-  workspaceId: string;
-  storyId?: string;
-  repoId?: string;
-};
-
 export type ToolInvocation<I = unknown> = {
   invocationId: string;
   toolId: ToolId;
@@ -114,8 +110,6 @@ export type ToolInvocation<I = unknown> = {
   caller: ToolCaller;
   policy: ToolPolicy;
   ts: number;
-  context?: WorkspaceExecutionContextV1;
-  repoId?: string;
 };
 
 export type ToolErrorCode =
@@ -127,8 +121,6 @@ export type ToolErrorCode =
   | "timeout"
   | "adapter_error"
   | "invalid_input"
-  | "missing_execution_context"
-  | "invalid_execution_context"
   | "unknown";
 
 export type ToolError = {
@@ -146,7 +138,6 @@ export type ToolMeta = {
   endedAt: number;
   durationMs: number;
   attempt?: number;
-  correlation?: ToolContextCorrelation;
 };
 
 export type ToolResult<O = unknown> =
@@ -155,7 +146,6 @@ export type ToolResult<O = unknown> =
 
 export type ToolCost = {
   toolId: ToolId;
-  correlation?: ToolContextCorrelation;
   invocations: number;
   durationMs?: number;
   failures?: number;

@@ -244,3 +244,4 @@ describe("loop gc — US-PORT-022", () => {
 // US-LOOP-117: `roll loop test` is gone. It smoke-tested the GENERATED launchd
 // runner and hard-required it ("Run 'roll loop on' first") — a runner nothing can
 // generate any more. `roll loop go --max-cycles 1` is the honest equivalent.
+

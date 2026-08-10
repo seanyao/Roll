@@ -1,4 +1,7 @@
 /**
+ * @responsibility Probes the DevTools environment without mutating it.
+ */
+/**
  * US-BROW-003 — non-mutating DevTools environment probes.
  *
  * These probes ONLY observe. They never install a package, never write

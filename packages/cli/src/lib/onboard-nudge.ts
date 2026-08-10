@@ -1,4 +1,7 @@
 /**
+ * @responsibility Detects PRD and empty-backlog design-handoff signals.
+ */
+/**
  * US-ONBOARD-NUDGE-001 — PRD + empty-backlog design-handoff signal detection.
  *
  * Pure, deterministic library: detects whether a project has requirement/design

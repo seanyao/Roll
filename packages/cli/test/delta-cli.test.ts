@@ -10,7 +10,7 @@ import { auditImportClosure } from "./delta-import-audit.js";
 
 // ── tsRun helper ─────────────────────────────────────────────────────────────
 
-function tsRun(argv: string[]): { stdout: string; stderr: string; code: number } {
+async function tsRun(argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   const out: string[] = [];
   const err: string[] = [];
   const realOut = process.stdout.write.bind(process.stdout);
@@ -27,7 +27,7 @@ function tsRun(argv: string[]): { stdout: string; stderr: string; code: number }
   };
   let code: number;
   try {
-    code = deltaCommand(argv);
+    code = await deltaCommand(argv);
   } finally {
     process.stdout.write = realOut;
     process.stderr.write = realErr;
@@ -57,8 +57,8 @@ function scrub(output: string): string {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("US-DELTA-003 — delta CLI parser and help", () => {
-  it("roll delta help prints EN usage with all subcommands and exits 0", () => {
-    const r = tsRun(["help"]);
+  it("roll delta help prints EN usage with all subcommands and exits 0", async () => {
+    const r = await tsRun(["help"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("prepare");
     expect(r.stdout).toContain("validate");
@@ -69,11 +69,11 @@ describe("US-DELTA-003 — delta CLI parser and help", () => {
     expect(scrub(r.stdout)).toMatchSnapshot();
   });
 
-  it("roll delta help is localized to zh when ROLL_LANG=zh", () => {
+  it("roll delta help is localized to zh when ROLL_LANG=zh", async () => {
     const prev = process.env["ROLL_LANG"];
     try {
       process.env["ROLL_LANG"] = "zh";
-      const r = tsRun(["help"]);
+      const r = await tsRun(["help"]);
       expect(r.code).toBe(0);
       // Chinese output contains CJK characters
       expect(r.stdout).not.toBe("");
@@ -85,15 +85,15 @@ describe("US-DELTA-003 — delta CLI parser and help", () => {
     }
   });
 
-  it("roll delta with no subcommand prints usage (same as help)", () => {
-    const r = tsRun([]);
+  it("roll delta with no subcommand prints usage (same as help)", async () => {
+    const r = await tsRun([]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("prepare");
     expect(r.stdout).toContain("validate");
   });
 
-  it("roll delta unknown subcommand exits 1 with structured error", () => {
-    const r = tsRun(["unknown-cmd"]);
+  it("roll delta unknown subcommand exits 1 with structured error", async () => {
+    const r = await tsRun(["unknown-cmd"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("unknown");
     expect(r.stderr).toContain("unknown-cmd");
@@ -101,14 +101,14 @@ describe("US-DELTA-003 — delta CLI parser and help", () => {
     expect(r.stderr).toContain("prepare");
   });
 
-  it("roll delta prepare rejects unknown flag", () => {
-    const r = tsRun(["prepare", "US-TEST", "--nonexistent"]);
+  it("roll delta prepare rejects unknown flag", async () => {
+    const r = await tsRun(["prepare", "US-TEST", "--nonexistent"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta prepare with --cycle rejected (host-guided has no cycle)", () => {
-    const r = tsRun([
+  it("roll delta prepare with --cycle rejected (host-guided has no cycle)", async () => {
+    const r = await tsRun([
       "prepare", "US-TEST",
       "--trigger", "host-guided",
       "--topology", "delta-team",
@@ -121,45 +121,45 @@ describe("US-DELTA-003 — delta CLI parser and help", () => {
     expect(r.stderr).toContain("cycle");
   });
 
-  it("roll delta prepare missing required flag returns error", () => {
-    const r = tsRun(["prepare", "US-TEST"]);
+  it("roll delta prepare missing required flag returns error", async () => {
+    const r = await tsRun(["prepare", "US-TEST"]);
     // Missing --trigger/--topology/--profile/--preset/--resolution
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta validate rejects unknown stage", () => {
-    const r = tsRun(["validate", "--delegation", "d-123", "--stage", "nonexistent"]);
+  it("roll delta validate rejects unknown stage", async () => {
+    const r = await tsRun(["validate", "--delegation", "d-123", "--stage", "nonexistent"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta conclude rejects unknown disposition", () => {
-    const r = tsRun(["conclude", "--delegation", "d-123", "--delivery-disposition", "bad_value"]);
+  it("roll delta conclude rejects unknown disposition", async () => {
+    const r = await tsRun(["conclude", "--delegation", "d-123", "--delivery-disposition", "bad_value"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta status without --story or --delegation shows error", () => {
-    const r = tsRun(["status"]);
+  it("roll delta status without --story or --delegation shows error", async () => {
+    const r = await tsRun(["status"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta validate missing --delegation returns error", () => {
-    const r = tsRun(["validate", "--stage", "designer"]);
+  it("roll delta validate missing --delegation returns error", async () => {
+    const r = await tsRun(["validate", "--stage", "designer"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta conclude missing --delegation returns error", () => {
-    const r = tsRun(["conclude", "--delivery-disposition", "owner_continue"]);
+  it("roll delta conclude missing --delegation returns error", async () => {
+    const r = await tsRun(["conclude", "--delivery-disposition", "owner_continue"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("roll delta --json error format is precise {ok:false,error,detail} on stderr, stdout empty", () => {
-    const r = tsRun(["prepare", "US-TEST", "--json"]);
+  it("roll delta --json error format is precise {ok:false,error,detail} on stderr, stdout empty", async () => {
+    const r = await tsRun(["prepare", "US-TEST", "--json"]);
     expect(r.code).toBe(1);
     // stdout must be empty under --json error
     expect(r.stdout).toBe("");
@@ -175,70 +175,70 @@ describe("US-DELTA-003 — delta CLI parser and help", () => {
 
   // ─── Fix #6: CLI parser consistency — duplicate, unexpected positional, missing value ──
 
-  it("prepare rejects duplicate --trigger flag", () => {
-    const r = tsRun(["prepare", "US-TEST", "--trigger", "host-guided", "--trigger", "loop-autonomous"]);
+  it("prepare rejects duplicate --trigger flag", async () => {
+    const r = await tsRun(["prepare", "US-TEST", "--trigger", "host-guided", "--trigger", "loop-autonomous"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("duplicate");
     expect(r.stdout).toBe("");
   });
 
-  it("validate rejects duplicate --stage flag", () => {
-    const r = tsRun(["validate", "--delegation", "d-123", "--stage", "designer", "--stage", "builder"]);
+  it("validate rejects duplicate --stage flag", async () => {
+    const r = await tsRun(["validate", "--delegation", "d-123", "--stage", "designer", "--stage", "builder"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("duplicate");
   });
 
-  it("status rejects duplicate --story flag", () => {
-    const r = tsRun(["status", "--story", "US-X", "--story", "US-Y"]);
+  it("status rejects duplicate --story flag", async () => {
+    const r = await tsRun(["status", "--story", "US-X", "--story", "US-Y"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
     expect(r.stderr).toContain("duplicate");
   });
 
-  it("prepare rejects missing value for --trigger (flag set to true)", () => {
-    const r = tsRun(["prepare", "US-TEST", "--trigger", "--topology", "delta-team"]);
+  it("prepare rejects missing value for --trigger (flag set to true)", async () => {
+    const r = await tsRun(["prepare", "US-TEST", "--trigger", "--topology", "delta-team"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("validate rejects missing value for --stage (flag set to true)", () => {
-    const r = tsRun(["validate", "--delegation", "d-123", "--stage", "--json"]);
+  it("validate rejects missing value for --stage (flag set to true)", async () => {
+    const r = await tsRun(["validate", "--delegation", "d-123", "--stage", "--json"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
   });
 
-  it("conclude rejects unexpected positional arg", () => {
-    const r = tsRun(["conclude", "extra-arg", "--delegation", "d-123"]);
-    expect(r.code).toBe(1);
-    expect(r.stderr).not.toBe("");
-    expect(r.stderr).toContain("unexpected");
-  });
-
-  it("validate rejects unexpected positional arg", () => {
-    const r = tsRun(["validate", "extra-arg", "--delegation", "d-123", "--stage", "designer"]);
+  it("conclude rejects unexpected positional arg", async () => {
+    const r = await tsRun(["conclude", "extra-arg", "--delegation", "d-123"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
     expect(r.stderr).toContain("unexpected");
   });
 
-  it("status rejects unexpected positional arg", () => {
-    const r = tsRun(["status", "extra-arg", "--story", "US-X"]);
+  it("validate rejects unexpected positional arg", async () => {
+    const r = await tsRun(["validate", "extra-arg", "--delegation", "d-123", "--stage", "designer"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
     expect(r.stderr).toContain("unexpected");
   });
 
-  it("prepare rejects unexpected positional arg beyond story-id", () => {
-    const r = tsRun(["prepare", "US-TEST", "extra"]);
+  it("status rejects unexpected positional arg", async () => {
+    const r = await tsRun(["status", "extra-arg", "--story", "US-X"]);
     expect(r.code).toBe(1);
     expect(r.stderr).not.toBe("");
     expect(r.stderr).toContain("unexpected");
   });
 
-  it("status --story + --delegation is allowed (delegation priority per Architecture adjudication)", () => {
+  it("prepare rejects unexpected positional arg beyond story-id", async () => {
+    const r = await tsRun(["prepare", "US-TEST", "extra"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toBe("");
+    expect(r.stderr).toContain("unexpected");
+  });
+
+  it("status --story + --delegation is allowed (delegation priority per Architecture adjudication)", async () => {
     // This test verifies that the command does NOT reject the combination.
     // It will likely fail to find the delegation (no frame exists), but it must NOT be a parser error.
-    const r = tsRun(["status", "--story", "US-X", "--delegation", "d-Y", "--json"]);
+    const r = await tsRun(["status", "--story", "US-X", "--delegation", "d-Y", "--json"]);
     // Must NOT be a parser/flag-combination error (which would produce error on stderr)
     // It may be 0 with a note or >0 with a delegation_not_found, but never a flag-rejection.
     const stderr = r.stderr;
@@ -247,14 +247,14 @@ describe("US-DELTA-003 — delta CLI parser and help", () => {
     expect(stderr).not.toContain("duplicate");
   });
 
-  it("status with unknown flag rejects", () => {
-    const r = tsRun(["status", "--story", "US-X", "--unknown-flag"]);
+  it("status with unknown flag rejects", async () => {
+    const r = await tsRun(["status", "--story", "US-X", "--unknown-flag"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("unknown");
   });
 
-  it("validate with unknown flag rejects", () => {
-    const r = tsRun(["validate", "--delegation", "d-123", "--stage", "designer", "--unknown-flag"]);
+  it("validate with unknown flag rejects", async () => {
+    const r = await tsRun(["validate", "--delegation", "d-123", "--stage", "designer", "--unknown-flag"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("unknown");
   });
@@ -266,7 +266,7 @@ describe("US-DELTA-003 — import closure audit helper (fixture-based)", () => {
   const path = require("node:path") as typeof import("node:path");
   const fixturesDir = path.resolve(__dirname, "fixtures");
 
-  it("traverses side-effect imports (import '...')", () => {
+  it("traverses side-effect imports (import '...')", async () => {
     const entry = path.join(fixturesDir, "import-audit-side-effect", "main.ts");
     const result = auditImportClosure(entry, { rejectDynamicImport: false, rejectNonNodeRequire: false });
     const names = result.files.map((f) => path.basename(f));
@@ -276,7 +276,7 @@ describe("US-DELTA-003 — import closure audit helper (fixture-based)", () => {
     expect(result.violations).toEqual([]);
   });
 
-  it("traverses export * from re-exports", () => {
+  it("traverses export * from re-exports", async () => {
     const entry = path.join(fixturesDir, "import-audit-export-star", "main.ts");
     const result = auditImportClosure(entry, { rejectDynamicImport: false, rejectNonNodeRequire: false });
     const names = result.files.map((f) => path.basename(f));
@@ -286,7 +286,7 @@ describe("US-DELTA-003 — import closure audit helper (fixture-based)", () => {
     expect(result.violations).toEqual([]);
   });
 
-  it("resolves directory/index.ts", () => {
+  it("resolves directory/index.ts", async () => {
     const entry = path.join(fixturesDir, "import-audit-index-dir", "main.ts");
     const result = auditImportClosure(entry, { rejectDynamicImport: false, rejectNonNodeRequire: false });
     const names = result.files.map((f) => path.basename(f));
@@ -296,17 +296,17 @@ describe("US-DELTA-003 — import closure audit helper (fixture-based)", () => {
     expect(result.violations).toEqual([]);
   });
 
-  it("fail-closed on dynamic import()", () => {
+  it("fail-closed on dynamic import()", async () => {
     const entry = path.join(fixturesDir, "import-audit-dynamic-import", "main.ts");
     expect(() => auditImportClosure(entry)).toThrow(/dynamic import\(\)/);
   });
 
-  it("fail-closed on non-node: require()", () => {
+  it("fail-closed on non-node: require()", async () => {
     const entry = path.join(fixturesDir, "import-audit-require", "main.ts");
     expect(() => auditImportClosure(entry)).toThrow(/require\(\)/);
   });
 
-  it("fail-closed on unresolvable local import", () => {
+  it("fail-closed on unresolvable local import", async () => {
     // Create a temp file that imports a nonexistent module
     const fs = require("node:fs") as typeof import("node:fs");
     const path = require("node:path") as typeof import("node:path");
@@ -326,7 +326,7 @@ describe("US-DELTA-003 — import closure audit helper (fixture-based)", () => {
 // ── Architectural negative guard (unified helper) ────────────────────────────
 
 describe("US-DELTA-003 — import closure audit (unified helper on real source)", () => {
-  it("recursive import closure from commands/index.ts: no forbidden patterns, fail-closed", () => {
+  it("recursive import closure from commands/index.ts: no forbidden patterns, fail-closed", async () => {
     const path = require("node:path") as typeof import("node:path");
     const fs = require("node:fs") as typeof import("node:fs");
 

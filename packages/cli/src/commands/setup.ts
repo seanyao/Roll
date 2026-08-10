@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the `roll setup` subcommand, porting the v2 setup flow and its step record buffer.
+ */
+/**
  * `roll setup` — TS port of bin/roll cmd_setup (1410-1476) plus the helpers it
  * drives: the P1-3.4 submodule guard (1419-1424), the per-step `_record` buffer
  * + `_state_to_marker` (1428-1441), `_run_setup_step` / `_setup_snapshot`
@@ -51,7 +54,13 @@ import {
   selectPrimaryAgent,
 } from "../lib/interactive-agent.js";
 import { collectExternalTools, defaultExternalToolDeps, resolveRequirement, type ExternalToolState } from "../lib/external-tools.js";
-import { installRollCapture, renderRollCaptureInstallResult } from "../lib/roll-capture-install.js";
+import {
+  installRollCapture,
+  renderRollCaptureInstallResult,
+  renderRollCaptureUpdatePrompt,
+  renderRollCaptureUpdateResult,
+  updateRollCapture,
+} from "../lib/roll-capture-install.js";
 import {
   collectRollCaptureReadiness,
   defaultRollCaptureReadinessDeps,
@@ -326,10 +335,14 @@ export async function setupCommand(args: string[]): Promise<number> {
   let force = false;
   let reselect = false;
   let noCaptureInstall = false;
+  let updateCapture = false;
+  let updateYes = false;
   for (const a of args) {
     if (a === "--force" || a === "-f") force = true;
     else if (a === "--reselect") reselect = true;
     else if (a === "--no-capture-install") noCaptureInstall = true;
+    else if (a === "--update-capture") updateCapture = true;
+    else if (a === "--yes") updateYes = true;
     else {
       // FIX-238 AC2: name the offending argument (the v2 oracle quirk that
       // dropped it is retired — an empty-name error was useless).
@@ -337,6 +350,26 @@ export async function setupCommand(args: string[]): Promise<number> {
       // bash exits 1; mirror via a real return so the caller propagates it.
       return 1;
     }
+  }
+
+  if (updateCapture) {
+    if (force || reselect || noCaptureInstall) {
+      err("--update-capture cannot be combined with setup synchronization options");
+      return 1;
+    }
+    const lang = msgLang();
+    const result = await updateRollCapture({
+      yes: updateYes,
+      interactive: process.stdin.isTTY === true,
+      readLine: readLineFromStdin,
+      onConfirmationRequired: (details) => process.stdout.write(renderRollCaptureUpdatePrompt(details, lang)),
+    });
+    process.stdout.write(`${renderRollCaptureUpdateResult(result, lang)}\n`);
+    return result.status === "updated" || result.status === "no-update" || result.status === "declined" || result.status === "skipped" ? 0 : 1;
+  }
+  if (updateYes) {
+    err("--yes is only valid with --update-capture");
+    return 1;
   }
 
   if (!existsSync(rollPkgConventions())) {

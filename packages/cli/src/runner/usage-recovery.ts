@@ -1,4 +1,7 @@
 /**
+ * @responsibility Recovers session-file usage for interrupted cycles.
+ */
+/**
  * Session-file usage recovery (cli adapters over core's pure summers).
  *
  * FIX-303 broadened this from pi-only to the agents whose `-p` stdout carries no

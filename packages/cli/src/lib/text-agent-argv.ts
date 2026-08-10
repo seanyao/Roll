@@ -1,4 +1,7 @@
 /**
+ * @responsibility Maps an agent name and prompt to one-shot text-mode launch argv.
+ */
+/**
  * Text-mode agent argv: map an agent name + prompt to the `{ bin, args }` that
  * launches it in one-shot "print the answer" mode. Shared by the loop's PR-heal
  * worktree agent and any other non-interactive text spawn. Returns null for an

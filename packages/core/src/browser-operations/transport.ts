@@ -1,4 +1,6 @@
-/** US-BROW-002 — the only authority for the managed DevTools transport.
+/**
+ * @responsibility Authorizes the managed DevTools transport and its version check.
+ * US-BROW-002 — the only authority for the managed DevTools transport.
  *  US-BROW-010 — deterministic version check and atomic update (BrowserTransportVersion). */
 import type {
   BrowserDenialReason,

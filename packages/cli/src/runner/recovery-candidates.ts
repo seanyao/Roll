@@ -1,3 +1,6 @@
+/**
+ * @responsibility Finds recovery candidates from the event stream.
+ */
 import type { RollEvent } from "@roll/spec";
 
 /**

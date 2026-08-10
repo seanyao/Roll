@@ -1,20 +1,12 @@
-import type { CycleContext, CycleEvent, IssueInitOutcome, ObservedCommit, OpenPrReferenceInput, PendingCapacitySpawn, RouteDeps, RunKey } from "@roll/core";
-import type {
-  AgentCapacityAcquireResult,
-  AgentCapacityOwnershipResult,
-  CycleRepositoryExecutionContext,
-  RepositoryExecutionContext,
-  RepositoryExecutionEvent,
-  RepositoryExecutionEventPayload,
-  IssueExecutionEvent,
-  IssueExecutionEventPayload,
-  RollEvent,
-  WorkspaceIssueInitFailureCode,
-} from "@roll/spec";
-import type { ContextStageHostPort } from "./context-stage-host.js";
+/**
+ * @responsibility Defines the runner port adapter types for injected dependencies.
+ */
+import type { CycleContext, CycleEvent, ObservedCommit, OpenPrReferenceInput, RouteDeps, RunKey } from "@roll/core";
+import type { RollEvent } from "@roll/spec";
 import type { CaptureMarker, Clock, ScreenshotResult } from "@roll/infra";
 import type { AgentSpawn } from "./agent-spawn.js";
 import type { ReachResult } from "./agent-liveness.js";
+import type { LeaseEntry } from "@roll/core";
 
 /** The injectable wall clock (epoch seconds) — infra's {@link Clock}. */
 export type ProcessClock = Clock;
@@ -32,6 +24,21 @@ export interface GitPort {
   fetchOrigin(repoCwd: string, branch: string): Promise<{ fetched: boolean }>;
   /** `_worktree_create` — STRICT add (exit code propagated). */
   worktreeAdd(repoCwd: string, path: string, branch: string, base: string): Promise<{ code: number }>;
+  /** US-LOOP-124 allocation identity check. Production supplies a fresh base
+   * SHA and repository identity; legacy test ports omit it. */
+  managedWorktreeFacts?(repoCwd: string, base: string): Promise<{ baseSha: string; repositoryId: string } | undefined>;
+  /** US-LOOP-124 managed release: fresh compare-and-revalidate followed by a
+   * non-force remove.  Optional only for legacy unit doubles. */
+  managedWorktreeRelease?(
+    repoCwd: string,
+    path: string,
+    expectedHead: string,
+    repositoryId: string,
+    options?: { readonly allowVerifiedSubmoduleForce?: boolean },
+  ): Promise<{ code: number; reason?: string }>;
+  managedWorktreeInspect?(repoCwd: string, path: string): Promise<{ repositoryId: string; head: string; registered: boolean; clean: boolean } | undefined>;
+  /** Proves that a retry sees neither a registration nor an on-disk target. */
+  managedWorktreeAbsent?(repoCwd: string, path: string): Promise<boolean>;
   /** E2: create the cycle worktree ON a git SUBMODULE of the superproject
    *  (`git -C <super>/<sub> worktree add --detach <cycleWorktreePath>/<sub> <base>`)
    *  so it shares the submodule's object store/refs. Validates the submodule is
@@ -133,6 +140,26 @@ export interface GitPort {
    *  unknown branch (the caller simply drops the pin). Optional so fakes that do
    *  not implement it keep the pre-US-CYCLE-009 (unpinned) behavior. */
   remoteBranchTip?(repoCwd: string, branch: string): Promise<string | undefined>;
+  /** US-CYCLE-013 §5 — the executable latest-main check: rebase the recorded
+   *  builderHead onto `onto` (main's new tip) in a TEMPORARY verification
+   *  worktree and run the recorded test command. Returns the verdict + evidence
+   *  refs. `conflict`/`test_failed`/`unknown`/`timeout` route to serial
+   *  recovery; only `continue` may pin a rebased candidate. Optional — the
+   *  freshness path is behind ROLL_CYCLE_HANDOFF_V1=1 (default off). */
+  verifyRebaseTemp?(
+    repoCwd: string,
+    base: string,
+    head: string,
+    onto: string,
+    worktreePath: string,
+    testCmd: string[],
+  ): Promise<{ verdict: "continue" | "conflict" | "test_failed" | "unknown" | "timeout"; evidenceRefs: string[] }>;
+  /** US-CYCLE-013 §5 — create a durable, immutable pin ref
+   *  `refs/roll/rebase-candidates/<cycle>/<sourceAttempt>` at the rebased head.
+   *  Optional — freshness path only. */
+  createPinRef?(repoCwd: string, ref: string, sha: string): Promise<{ code: number }>;
+  /** US-CYCLE-013 §5 — check a candidate pin out in an owned workspace. */
+  checkoutPin?(worktreeCwd: string, ref: string): Promise<{ code: number }>;
 }
 
 /** GitHub facet — the publish-plan executor + slug resolution. */
@@ -151,99 +178,6 @@ export interface GithubPort {
   openPrTitles(repoCwd: string): Promise<OpenPrReferenceInput[]>;
 }
 
-/** Low-level Node adapters receive the resolved repository context. Public
- * runner ports below accept only repoId, so cwd/path strings can never become a
- * competing repository identity. */
-export interface RepositoryPortAdapters {
-  readonly git: {
-    commitsAhead(repository: RepositoryExecutionContext): Promise<number>;
-    tcrCount(repository: RepositoryExecutionContext): Promise<number>;
-    recentCommits(repository: RepositoryExecutionContext): Promise<ObservedCommit[]>;
-    dirty(repository: RepositoryExecutionContext): Promise<boolean>;
-    headSha?(repository: RepositoryExecutionContext): Promise<string>;
-    push(repository: RepositoryExecutionContext, branch: string): Promise<{ code: number }>;
-  };
-  readonly verification?: {
-    runRepository(
-      repository: RepositoryExecutionContext,
-      command: readonly string[],
-      env: Readonly<Record<string, string>>,
-    ): Promise<RepositoryCommandResult>;
-    runIntegration(
-      execution: CycleRepositoryExecutionContext,
-      cwdRepoId: string,
-      command: readonly string[],
-      env: Readonly<Record<string, string>>,
-    ): Promise<RepositoryCommandResult>;
-  };
-  readonly provider: {
-    repoSlug(repository: RepositoryExecutionContext): Promise<string | undefined>;
-    prState(repository: RepositoryExecutionContext, branch: string): Promise<string>;
-    prMergeInfo(
-      repository: RepositoryExecutionContext,
-      branch: string,
-    ): Promise<{ state: string; mergedAt?: string; mergeCommit?: string } | undefined>;
-  };
-}
-
-export interface RepositoryCommandResult {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-export interface BoundRepositoryPorts {
-  readonly context: (repoId: string) => RepositoryExecutionContext;
-  readonly git: {
-    commitsAhead(repoId: string): Promise<number>;
-    tcrCount(repoId: string): Promise<number>;
-    recentCommits(repoId: string): Promise<ObservedCommit[]>;
-    dirty(repoId: string): Promise<boolean>;
-    headSha(repoId: string): Promise<string>;
-    push(repoId: string, branch: string): Promise<{ code: number }>;
-  };
-  readonly verification: {
-    runRepository(
-      repoId: string,
-      command: readonly string[],
-      env?: Readonly<Record<string, string>>,
-    ): Promise<RepositoryCommandResult>;
-    runIntegration(
-      cwdRepoId: string,
-      command: readonly string[],
-      env?: Readonly<Record<string, string>>,
-    ): Promise<RepositoryCommandResult>;
-  };
-  readonly provider: {
-    repoSlug(repoId: string): Promise<string | undefined>;
-    prState(repoId: string, branch: string): Promise<string>;
-    prMergeInfo(
-      repoId: string,
-      branch: string,
-    ): Promise<{ state: string; mergedAt?: string; mergeCommit?: string } | undefined>;
-  };
-  readonly events: {
-    append(repoId: string, payload: RepositoryExecutionEventPayload): RepositoryExecutionEvent;
-    appendIssue(payload: IssueExecutionEventPayload): IssueExecutionEvent;
-  };
-}
-
-export interface RepositoryPorts {
-  prepare(request: {
-    readonly storyId: string;
-    readonly cycleId: string;
-  }): Promise<
-    | { readonly kind: "prepared"; readonly outcome: IssueInitOutcome }
-    | {
-        readonly kind: "failed";
-        readonly code: WorkspaceIssueInitFailureCode;
-        readonly repairJournal: string | null;
-      }
-  >;
-  resolve(storyId: string): Promise<CycleRepositoryExecutionContext | undefined>;
-  bind(ctx: CycleContext): BoundRepositoryPorts;
-}
-
 /** Process facet — lock + heartbeat (infra/process.ts). */
 export interface ProcessPort {
   acquireLock(
@@ -258,6 +192,16 @@ export interface ProcessPort {
 export interface EventsPort {
   ensureEventFiles(eventsPath: string, runsPath: string): void;
   appendEvent(eventsPath: string, event: RollEvent): void;
+  /**
+   * US-CYCLE-013 — fsynced append for scheduler decision events (admission /
+   * promotion / queue). The durable append is the linearization point; the
+   * injected store must fsync before returning (fail loud otherwise).
+   */
+  appendEventSynced?(eventsPath: string, event: RollEvent): void;
+  /** US-CYCLE-013 — read the durable event stream (handoff projections + the
+   *  resumed-tail validation read it). Absent ⇒ the driver falls back to a real
+   *  EventBus read. */
+  readHandoffEvents?(eventsPath: string): RollEvent[];
   upsertRun(runsPath: string, key: RunKey, row: Record<string, unknown>): void;
   appendAlert(alertsPath: string, message: string): void;
 }
@@ -330,8 +274,7 @@ export interface RoutePort {
   };
 }
 
-/** Evidence frame facet — opens the canonical per-cycle evidence directory for
- * either a legacy project card or a Workspace Issue. */
+/** Evidence frame facet — opens `.roll/features/<epic>/<ID>/<run-id>/`. */
 export interface EvidencePort {
   openFrame(projectCwd: string, storyId: string, runId: string): string;
 }
@@ -344,14 +287,6 @@ export interface CapturePort {
 /** Acceptance evidence facet — renders the final report into a run frame. */
 export interface AttestPort {
   render(projectCwd: string, storyId: string, runDir: string): Promise<number>;
-}
-
-export interface AgentCapacityPort {
-  readonly heartbeatIntervalMs: number;
-  acquire(pending: PendingCapacitySpawn, ctx: CycleContext): AgentCapacityAcquireResult;
-  heartbeat(leaseId: string, ownerToken: string): AgentCapacityOwnershipResult;
-  release(leaseId: string, ownerToken: string): AgentCapacityOwnershipResult;
-  releaseCurrent(cycleId: string): AgentCapacityOwnershipResult;
 }
 
 export type DepsExec = (
@@ -368,13 +303,12 @@ export type DepsExec = (
 export interface Ports {
   git: GitPort;
   github: GithubPort;
-  /** Workspace repository operations, keyed only by stable repoId. Absent for
-   * pre-Workspace runner construction; never synthesized from repoCwd. */
-  repositories?: RepositoryPorts;
   process: ProcessPort;
-  capacity: AgentCapacityPort;
   events: EventsPort;
   backlog: BacklogPort;
+  /** The Story reservation boundary. Kept injectable so command tests never
+   * create host filesystem leases; nodePorts binds the atomic core primitive. */
+  reserveStory?(storyId: string, entry: LeaseEntry): { claimed: boolean; existingSource?: string };
   /** FIX-306: the runner-owned `.roll` metadata commit (never the sandboxed agent). */
   metadata: MetadataPort;
   route: RoutePort;
@@ -382,9 +316,6 @@ export interface Ports {
   capture: CapturePort;
   attest: AttestPort;
   agentSpawn: AgentSpawn;
-  /** Context-enabled Workspaces restore an exact Story Snapshot here before a
-   * consuming agent stage starts. Absence means Context is disabled. */
-  contextStage?: ContextStageHostPort;
   /** Test seam for credential readiness checks; production uses process.env. */
   agentCredentialEnv?: NodeJS.ProcessEnv;
   /** Test seam for agent profile dotfile readers; production uses the OS home dir. */
@@ -458,8 +389,6 @@ export interface RunnerPaths {
   alertsPath: string;
   lockPath: string;
   heartbeatPath: string;
-  /** Story-claim ledger. Absent preserves the legacy events-adjacent path. */
-  storyLeasePath?: string;
   /** The cycle worktree path. */
   worktreePath: string;
 }
@@ -475,6 +404,4 @@ export interface ExecuteResult {
    *  and clock/spawn-free) — real tcr count + parsed cost. The driver folds
    *  this into liveCtx so the later append_run / cycle:end carry truthful data. */
   ctxPatch?: Partial<CycleContext>;
-  /** Exact capacity release completed; the driver can drop its residual lease. */
-  capacityReleased?: boolean;
 }

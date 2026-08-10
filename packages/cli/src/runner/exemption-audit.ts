@@ -1,4 +1,7 @@
 /**
+ * @responsibility Audits existing screenshot exemptions read-only.
+ */
+/**
  * US-EVID-027 — read-only audit of EXISTING screenshot exemptions.
  *
  * The new exemption discipline (US-EVID-025) is forward-enforcing; this lists

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Gates the cycle on the acceptance-report evidence chain.
+ */
+/**
  * FIX-207 — the acceptance-report (attest) gate.
  *
  * Skill 10.6 ("write the verification report") was a TEXT instruction: a cycle
@@ -37,7 +40,7 @@ import { execFileSync } from "node:child_process";
 import { type Dirent, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cardArchiveDir, projectDataPath, reportFileName } from "../lib/archive.js";
+import { cardArchiveDir, reportFileName } from "../lib/archive.js";
 import { hasVisualEvidenceAc } from "../lib/design-visual-evidence.js";
 import { evidenceDeltaSummary, evidenceModeExemptsScreenshot, evidenceModeForSpec, parseEvaluationContract } from "../lib/evaluation-contract.js";
 import { physicalTerminalFromSpecText } from "../lib/physical-terminal.js";
@@ -134,7 +137,7 @@ export function acMapCandidates(worktreeCwd: string, storyId: string, persistent
  * fail-loud instead of silently picking the alphabetical-first.
  */
 export function storySpecMatches(worktreeCwd: string, storyId: string): string[] {
-  const featuresDir = projectDataPath(worktreeCwd, "features");
+  const featuresDir = join(worktreeCwd, ".roll", "features");
   const matches: string[] = [];
   let entries: Dirent[];
   try {
@@ -215,7 +218,7 @@ const STORY_ID_DIR_RE = /^(US-[A-Z]+-\d+[a-z]?|FIX-\d+[a-z]?|REFACTOR-\d+[a-z]?|
  * shadow, not a duplicate); only DISTINCT epic homes count as a collision.
  */
 export function findDuplicateStoryIds(worktreeCwd: string): DuplicateStoryId[] {
-  const featuresDir = projectDataPath(worktreeCwd, "features");
+  const featuresDir = join(worktreeCwd, ".roll", "features");
   const homes = new Map<string, string[]>(); // id -> distinct epic spec homes
   let epics: Dirent[];
   try {
@@ -425,7 +428,7 @@ function epicForSpec(specPath: string): string | null {
  */
 export function screenshotExemptEpics(worktreeCwd: string): string[] {
   try {
-    const p = projectDataPath(worktreeCwd, "policy.yaml");
+    const p = join(worktreeCwd, ".roll", "policy.yaml");
     if (!existsSync(p)) return [];
     return parseScreenshotExemptEpics(readFileSync(p, "utf8"));
   } catch {
@@ -1348,7 +1351,7 @@ function verificationReportHasAcceptanceContent(worktreeCwd: string, storyId: st
 /** Read `loop_safety.attest_gate` from `<repoCwd>/.roll/policy.yaml`; default hard. */
 export function readAttestGateMode(repoCwd: string): AttestMode {
   try {
-    const p = projectDataPath(repoCwd, "policy.yaml");
+    const p = join(repoCwd, ".roll", "policy.yaml");
     if (!existsSync(p)) return "hard";
     return parsePolicy(readFileSync(p, "utf8")).loopSafety.attestGate === "hard" ? "hard" : "soft";
   } catch {

@@ -1,4 +1,7 @@
 /**
+ * @responsibility Runs the cross-agent pairing CLI surface (`pair`).
+ */
+/**
  * Cross-Agent Pairing CLI surface.
  *   `roll pair status` (US-PAIR-002) — observability: who is in the pairing pool,
  *     their vendor + capability, and why an agent is excluded. Observability is a
@@ -44,19 +47,10 @@ export function pairCommand(args: string[]): number | Promise<number> {
     process.stdout.write(HELP);
     return 0;
   }
-  if ((args[0] === "legacy" && args[1] === "init") || args[0] === "init") return pairInit();
   if (args[0] === "status") return pairStatus(args.slice(1));
   if (args[0] === "score") return pairScore(args.slice(1));
   process.stderr.write(`[roll] unknown pair subcommand: ${args[0]}\n`);
   process.stderr.write(HELP);
-  return 1;
-}
-
-function pairInit(): number {
-  process.stderr.write(
-    "[roll] `roll pair init` is retired. Bind reviewers with .roll/agents.yaml defaults.story.roles.evaluate.\n" +
-      "[roll] `roll pair init` 已退役；请在 .roll/agents.yaml 的 defaults.story.roles.evaluate 绑定评审者。\n",
-  );
   return 1;
 }
 

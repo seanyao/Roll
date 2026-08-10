@@ -38,6 +38,31 @@ To satisfy the hook, run your tests immediately before committing. If you use TC
 
 ## CI E2E Gate
 
+PR CI also publishes a named `doc-drift` check. It fetches `origin/main`,
+compares the PR with `merge-base HEAD origin/main`, and evaluates the shared,
+registry-driven verdict from [`policy/rules.yaml`](../../policy/rules.yaml).
+With `gates.doc_drift: soft`, a hit is observable as an annotation and exits 0;
+there is no exemption path. A missing base or invalid registry fails closed. CI
+never writes `.roll` events. In this repository shape the result remains advisory
+for manual GitHub UI merges: it records a result, not a trusted merge decision.
+
+Hard doc-drift mode is not enabled. It remains blocked on a trusted owner
+authorization and calibration design; a peer session, TTY, or `actor` field does
+not authenticate an owner. Flipping the mode to hard is tracked as US-RULE-006,
+which is on Hold: the loop must not auto-pick it, and activation requires a
+trusted-owner authorization and calibration design first. If that design is
+completed and the registry enables hard mode, the named check can join
+Roll-driven exact-SHA merge gating alongside `test-ts`. The audit reports only
+that the **registered N** rules are live, not complete repository coverage; see
+the generated [responsibility maps](../../docs/maps/) for the source-derived
+ownership view.
+[`policy/rules-inventory.yaml`](../../policy/rules-inventory.yaml) is the audited
+coverage predicate over rule-candidate files: declared roots, include patterns,
+and reasoned exclusions, with every candidate classified registered or
+out-of-scope. Coverage is that audited predicate plus its exclusions — never a
+keyword-search completeness claim; the audit fails on unclassified candidates
+and orphan anchors rather than assuming every rule is already registered.
+
 The template CI workflow (`.github/workflows/ci.yml`) runs E2E tests as a
 separate job that must pass before merge. If E2E fails:
 

@@ -1,4 +1,5 @@
 /**
+ * @responsibility Gates releases on consistency drift unless a recorded waiver applies.
  * US-TRUTH-005 — the release consistency gate + recorded waivers (pure).
  *
  * The shadow audit (US-TRUTH-002) quantified drift; once its false positives
