@@ -87,7 +87,7 @@ See [Evidence lifecycle](guide/en/acceptance-evidence.md#lifecycle-in-three-stag
 
 Builder cycles keep the main checkout read-only. Leaked dirty or ahead work is quarantined on `rescue/leaked-*` refs with a manifest under `.roll/loop/quarantine/`.
 
-Failure attribution is `env`, `harness`, `card`, or `unknown`. Repeated non-card failures pause dispatch and write a diagnostic snapshot with a playbook. Rebuild polluted skip accounting with `roll loop pardon-skip-list`.
+Failure attribution is `env/harness/card/unknown`. Repeated non-card failures pause dispatch and write a diagnostic snapshot with a playbook. Rebuild polluted skip accounting with `roll loop pardon-skip-list`.
 
 ## Safety Boundaries
 
