@@ -10,50 +10,90 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer commit supersedes the same PR or branch verification run. Keep runs
+# for separate PRs independent so their required checks remain observable.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The required gate: the TypeScript workspace suites. `main` is the v3 engine.
   test-ts:
     if: "!startsWith(github.event.head_commit.message, '[release]')"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       # No `version:` — pnpm/action-setup reads `packageManager` from package.json.
       - uses: pnpm/action-setup@v4
+      # Self-hosted runners expose PNPM_HOME but do not always retain it in PATH
+      # after the setup action. GITHUB_PATH applies it to every later step.
+      - name: Keep pnpm available to later steps
+        run: echo "$PNPM_HOME" >> "$GITHUB_PATH"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # The story-id guard resolves the built CLI entry point, so build before
+      # invoking it in a fresh checkout.
       - run: pnpm -r build
-      - name: Context critical acceptance
-        run: pnpm --filter @roll/cli exec vitest run test/context.critical.e2e.test.ts
-      - name: Context focused layer regression
-        run: |
-          pnpm --filter @roll/spec exec vitest run test/context.test.ts
-          pnpm --filter @roll/core exec vitest run test/context-execution-plan.test.ts test/context
-          pnpm --filter @roll/infra exec vitest run test/context
-          pnpm --filter @roll/cli exec vitest run test/context-command.difftest.test.ts test/context-command.e2e.test.ts test/context-skill-handoff.test.ts test/context-snapshot-handoff.e2e.test.ts test/context-agent-handoff.e2e.test.ts
-      - name: Strict skill audit
-        run: node skills/scripts/audit-skills.mjs --strict
-      - name: Workspace context authority audit
-        run: node scripts/audit-workspace-context.mjs --json | tee workspace-context-audit.json
-      - name: Workspace context operation case closure
-        run: |
-          node scripts/generate-workspace-context-validation-cases.mjs
-          git diff --exit-code -- docs/generated/workspace-context-validation-cases.json
-          pnpm --filter @roll/cli exec vitest run test/workspace-context-case-map.test.ts test/workspace-context-operation-evidence.test.ts test/workspace-context.critical.e2e.test.ts
-          pnpm --filter @roll/infra exec vitest run test/workspace-context-operation-evidence.test.ts
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: workspace-context-audit
-          path: workspace-context-audit.json
-      - run: pnpm test:e2e
       # FIX-340 — story-id uniqueness guard. A no-op in the public repo (the
       # `.roll/features` corpus lives in the roll-meta repo, absent here → exit
       # 0), but it runs in any checkout that DOES carry the data and reds on a
       # duplicate id; the logic itself is proven by the workspace unit tests.
       - run: node scripts/lint-story-ids.mjs
-      - run: pnpm -r test
+      # US-RULE-001 — rules registry audit: every registered redline's
+      # enforcement point + verification test must exist, contain its marker,
+      # and (for the test) sit somewhere vitest actually discovers; every
+      # `RL-` marker outside policy/rules.yaml and test paths must be
+      # registered. Runs after build (needs @roll/spec's compiled parser) and
+      # before the workspace test command, per the story's AC.
+      - run: node scripts/audit-rules.mjs
+      # US-RULE-005 / US-RULE-011 — maps are source-derived developer
+      # documentation. --check verifies without writing: bad declaration,
+      # stale map bytes, missing inventory and overlap are distinct findings.
+      - run: node scripts/gen-module-maps.mjs --check
+      # US-RULE-013 — invariant projections (docs/generated fragments, the
+      # verification/architecture sentinel regions, and
+      # packages/spec/src/generated/invariants.ts) are derived from the v2
+      # projection fields in policy/rules.yaml. --check verifies every output is
+      # fresh and the sentinel regions are intact (needs @roll/spec built).
+      - run: node scripts/gen-rule-projections.mjs --check
+      # The root gate builds the workspace, runs the role-taxonomy audit and
+      # orphan-snapshot guard, then executes every package's Vitest suite.
+      # `npm pack` runs root prepack from inside npm. Keep action-setup's pnpm
+      # binary on that child process's PATH on self-hosted runners as well.
+      - run: |
+          export PATH="$PNPM_HOME:$PATH"
+          ROLL_TEST_SKIP_BUILD=1 pnpm test
+
+  # US-RULE-004c — a separately named, registry-backed observation. In soft
+  # mode a hit annotates the PR and exits 0; switching policy/rules.yaml to
+  # hard makes this same named check fail and joins Roll-driven merge gating.
+  doc-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      # Make the PR integration base explicit. The command fails closed if this
+      # fetch or the merge-base cannot yield the one real baseline.
+      - run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: node --input-type=module -e 'import { runCiDocDriftCheck } from "./packages/cli/dist/lib/ci-doc-drift.js"; process.exitCode = runCiDocDriftCheck(process.cwd()).exitCode'
