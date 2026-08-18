@@ -44,6 +44,8 @@ Then it takes the next task.
 is no timer, no background service, no scheduled run. Work happens because you
 opened a terminal and ran `roll loop go`. If you never run it, nothing happens.
 
+![roll status on Roll's own repository — 1,137 tasks merged through PRs, health numbers up front](docs/assets/readme/roll-demo.gif)
+
 ## Before you start
 
 You need four things:
@@ -136,6 +138,30 @@ Reading it:
 
 While a task is being built, `roll loop watch` shows it live. Both are read-only —
 Ctrl-C closes the view and nothing else.
+
+## Built with Roll
+
+Roll is developed by its own loop. Every commit on `main` went through the same
+task → agent → test → review → PR pipeline described above. The numbers below are
+read off this repository's own git history and delivery ledger (2026-08-18):
+
+| | |
+|---|---|
+| **Time span** | 116 days (2026-04-17 → 2026-08-10) |
+| **Commits** | 3,478 across 106 active days (~33 per active day) |
+| **Pull requests** | 1,506 (#1 … #1,537) |
+| **Code churn** | +686,541 / −214,527 lines over the whole history |
+| **Current tree** | ~324k lines of TS/JS in 1,033 files (~141k source, ~183k tests) |
+| **Working hours** | median daily commit span 20.3h · 74% of active days span ≥12h · 24% of commits land on weekends |
+| **Agent spend** | 435 delivered stories over 805 rounds, ~163M input / ~38M output tokens, ~$2.8k estimated — as reported by `roll metrics` itself |
+
+The per-story ledger behind the spend row is the same view you get on your own
+project — rounds, tokens, cost, score, and PR per story:
+
+![roll metrics — per-story delivery ledger with rounds, tokens, cost and score](docs/assets/readme/roll-metrics.png)
+
+*(The metrics view currently ships in zh — the numbers are the project's own
+live ledger.)*
 
 ## Questions people ask first
 
